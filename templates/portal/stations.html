@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><body><main><h1>{{ department.name }} stations</h1><ul>{% for station in stations %}<li><a href="{% url 'portal-station-manage' station.id %}">{{ station.name }}</a></li>{% endfor %}</ul><form method="post">{% csrf_token %}{{ form.as_p }}<button>Create station</button></form></main></body></html>

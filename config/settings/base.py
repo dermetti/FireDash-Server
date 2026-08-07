@@ -20,8 +20,12 @@ INSTALLED_APPS = [
     "django_otp.plugins.otp_totp",
     "apps.accounts",
     "apps.organizations",
+    "apps.personnel",
+    "apps.tablets",
+    "apps.assignments",
     "apps.authorization",
     "apps.audit",
+    "apps.portal",
     "apps.health",
 ]
 

@@ -1,0 +1,130 @@
+from datetime import datetime
+
+from django.db import transaction
+from django.utils import timezone
+
+from apps.assignments.models import PersonnelStationAssignment, TabletVehicleAssignment
+from apps.organizations.models import Department, Station, Vehicle
+from apps.personnel.models import Person
+from apps.tablets.models import Tablet
+
+
+class AssignmentError(ValueError):
+    pass
+
+
+def _now(value: datetime | None) -> datetime:
+    return value or timezone.now()
+
+
+def _validate_operational_department(department: Department) -> None:
+    if department.status != Department.Status.ACTIVE:
+        raise AssignmentError("Department is not operationally active.")
+
+
+def _validate_person_station(person: Person, station: Station) -> None:
+    _validate_operational_department(person.department)
+    if not person.active or not station.active or person.department_id != station.department_id:
+        raise AssignmentError(
+            "Person and station must be active and belong to the same department."
+        )
+
+
+def _validate_tablet_vehicle(tablet: Tablet, vehicle: Vehicle) -> None:
+    _validate_operational_department(tablet.department)
+    if not tablet.active or not vehicle.active or tablet.department_id != vehicle.department_id:
+        raise AssignmentError(
+            "Tablet and vehicle must be active and belong to the same department."
+        )
+    if not vehicle.station.active:
+        raise AssignmentError("Vehicle station is not operationally active.")
+
+
+def _current_home(person: Person):
+    return (
+        PersonnelStationAssignment.objects.select_for_update()
+        .filter(
+            person=person,
+            assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
+            valid_until__isnull=True,
+            ended_at__isnull=True,
+        )
+        .first()
+    )
+
+
+@transaction.atomic
+def create_person_with_home(
+    *, department: Department, station: Station, actor, effective_at: datetime | None = None
+) -> Person:
+    if department.id != station.department_id:
+        raise AssignmentError("Person and home station must belong to the same department.")
+    _validate_operational_department(department)
+    if not station.active:
+        raise AssignmentError("Home station is not operationally active.")
+    person = Person.objects.create(department=department)
+    PersonnelStationAssignment.objects.create(
+        person=person,
+        station=station,
+        assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
+        valid_from=_now(effective_at),
+        created_by=actor,
+    )
+    ensure_current_home(person)
+    return person
+
+
+@transaction.atomic
+def transfer_home(
+    *, person: Person, station: Station, actor, effective_at: datetime | None = None
+) -> PersonnelStationAssignment:
+    person = Person.objects.select_for_update().select_related("department").get(pk=person.pk)
+    _validate_person_station(person, station)
+    effective = _now(effective_at)
+    current = _current_home(person)
+    if current is None:
+        raise AssignmentError("Active people require one current HOME assignment before transfer.")
+    if current.station_id == station.id:
+        raise AssignmentError("Person already has this home station.")
+    current.valid_until = effective
+    current.ended_at = timezone.now()
+    current.ended_by = actor
+    current.save(update_fields=("valid_until", "ended_at", "ended_by"))
+    assignment = PersonnelStationAssignment.objects.create(
+        person=person,
+        station=station,
+        assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
+        valid_from=effective,
+        created_by=actor,
+    )
+    ensure_current_home(person)
+    return assignment
+
+
+@transaction.atomic
+def assign_tablet_vehicle(
+    *, tablet: Tablet, vehicle: Vehicle, actor, effective_at: datetime | None = None
+) -> TabletVehicleAssignment:
+    tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
+    _validate_tablet_vehicle(tablet, vehicle)
+    current = (
+        TabletVehicleAssignment.objects.select_for_update()
+        .filter(tablet=tablet, valid_until__isnull=True, ended_at__isnull=True)
+        .first()
+    )
+    if current is not None:
+        current.valid_until = _now(effective_at)
+        current.ended_at = timezone.now()
+        current.ended_by = actor
+        current.save(update_fields=("valid_until", "ended_at", "ended_by"))
+    return TabletVehicleAssignment.objects.create(
+        tablet=tablet,
+        vehicle=vehicle,
+        valid_from=_now(effective_at),
+        created_by=actor,
+    )
+
+
+def ensure_current_home(person: Person) -> None:
+    if person.active and _current_home(person) is None:
+        raise AssignmentError("Every active person must have exactly one current HOME assignment.")

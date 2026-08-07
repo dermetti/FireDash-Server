@@ -167,6 +167,7 @@ venv.bak/
 *.p12
 *.pfx
 /graphify-out/
+secrets.txt
 
 # Spyder project settings
 .spyderproject

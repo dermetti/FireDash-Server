@@ -14,6 +14,17 @@ def _hash(value: str) -> str:
     return salted_hmac("fire-backend-auth", value).hexdigest()
 
 
+def create_setup_token_for_user(*, user, actor) -> tuple[AccountSetupToken, str]:
+    raw_token = secrets.token_urlsafe(32)
+    token = AccountSetupToken.objects.create(
+        user=user,
+        token_hash=_hash(raw_token),
+        expires_at=timezone.now() + timedelta(hours=24),
+        created_by=actor,
+    )
+    return token, raw_token
+
+
 def create_setup_token(*, actor, email: str, display_name: str) -> tuple[AccountSetupToken, str]:
     user_model = get_user_model()
     with transaction.atomic():
@@ -21,13 +32,7 @@ def create_setup_token(*, actor, email: str, display_name: str) -> tuple[Account
         user.set_unusable_password()
         user.is_active = False
         user.save(update_fields=("password", "is_active"))
-        raw_token = secrets.token_urlsafe(32)
-        token = AccountSetupToken.objects.create(
-            user=user,
-            token_hash=_hash(raw_token),
-            expires_at=timezone.now() + timedelta(hours=24),
-            created_by=actor,
-        )
+        token, raw_token = create_setup_token_for_user(user=user, actor=actor)
     return token, raw_token
 
 

@@ -18,6 +18,16 @@ def active_department_ids(user):
     ).values_list("id", flat=True)
 
 
+def managed_department_ids(user):
+    """Management scope ignores resource state; operational scope does not."""
+    if not user.is_authenticated:
+        return Department.objects.none().values_list("id", flat=True)
+    return Department.objects.filter(
+        memberships__user=user,
+        memberships__active=True,
+    ).values_list("id", flat=True)
+
+
 def active_station_ids(user):
     if not user.is_authenticated:
         return Station.objects.none().values_list("id", flat=True)
@@ -34,9 +44,7 @@ def active_station_ids(user):
 
 
 def can_manage_department(user, department: Department) -> bool:
-    return department.status == Department.Status.ACTIVE and department.id in active_department_ids(
-        user
-    )
+    return department.id in managed_department_ids(user)
 
 
 def can_manage_station(user, station: Station) -> bool:

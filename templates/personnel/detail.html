@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><body>
+<main><h1>{{ person.display_name }}</h1><form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Save</button></form>
+<form method="post" action="{% url 'personnel-eligibility' person.department_id person.id %}">{% csrf_token %}<label>Commander eligible <input type="checkbox" name="eligible" {% if person.incident_commander_eligible %}checked{% endif %}></label><button>Update</button></form>
+<form method="post" action="{% url 'personnel-email' person.department_id person.id %}">{% csrf_token %}<input type="email" name="email" value="{{ person.incident_commander_email|default:'' }}"><button>Set commander email</button></form>
+<form method="post" action="{% url 'personnel-verify-email' person.department_id person.id %}">{% csrf_token %}<button>Verify commander email</button></form>
+<form method="post" action="{% url 'personnel-offboard' person.department_id person.id %}">{% csrf_token %}<button>Offboard</button></form>
+<form method="post" action="{% url 'personnel-anonymize' person.department_id person.id %}">{% csrf_token %}<button>Anonymize</button></form></main>
+</body></html>

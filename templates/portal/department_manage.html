@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><body><main><h1>{{ department.name }} administrators</h1><ul>{% for membership in memberships %}<li>{{ membership.user.display_name }}</li>{% endfor %}</ul><form method="post">{% csrf_token %}{{ form.as_p }}<button>Create department administrator</button></form></main></body></html>

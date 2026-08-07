@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><body><main><h1>Departments</h1><ul>{% for department in departments %}<li><a href="{% url 'portal-system-department' department.id %}">{{ department.name }}</a> ({{ department.status }})</li>{% endfor %}</ul><form method="post">{% csrf_token %}{{ form.as_p }}<button>Create department</button></form></main></body></html>

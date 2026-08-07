@@ -22,10 +22,17 @@ from apps.accounts.services import (
 )
 from apps.audit.services import record_event
 
+AUTH_PAGE_CSP = (
+    "default-src 'self'; base-uri 'none'; form-action 'self'; "
+    "frame-ancestors 'none'; img-src 'self' data:; object-src 'none'"
+)
+
 
 def _no_store(response: HttpResponse) -> HttpResponse:
     response["Cache-Control"] = "no-store"
-    response["Referrer-Policy"] = "no-referrer"
+    response["Referrer-Policy"] = "origin"
+    # Do not sandbox these top-level pages: it gives form POSTs an opaque Origin.
+    response["Content-Security-Policy"] = AUTH_PAGE_CSP
     return response
 
 
@@ -33,7 +40,7 @@ def _no_store(response: HttpResponse) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def account_login(request: HttpRequest) -> HttpResponse:
     if request.user.is_authenticated:
-        return redirect("health-live")
+        return redirect("dashboard")
     form = LoginForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         email = form.cleaned_data["email"].casefold()
@@ -96,7 +103,7 @@ def mfa_enroll(request: HttpRequest) -> HttpResponse:
                 target_type="user",
                 target_uuid=user.id,
             )
-            return redirect("health-live")
+            return redirect("dashboard")
     else:
         form = TokenForm()
     image = qrcode.make(device.config_url).get_image()
@@ -138,7 +145,7 @@ def mfa_verify(request: HttpRequest) -> HttpResponse:
                 target_type="user",
                 target_uuid=user.id,
             )
-            return redirect("health-live")
+            return redirect("dashboard")
         else:
             record_auth_failure(
                 scope=AuthenticationThrottle.Scope.MFA,
@@ -222,7 +229,7 @@ def reauthenticate(request: HttpRequest) -> HttpResponse:
                 target_type="user",
                 target_uuid=current_user.id,
             )
-            return redirect("health-live")
+            return redirect("dashboard")
         record_event(
             action="authentication.reauthentication_failed",
             request=request,

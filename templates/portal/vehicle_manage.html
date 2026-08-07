@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><body><main><h1>{{ vehicle.display_name }}</h1>{% if form %}<form method="post">{% csrf_token %}{{ form.as_p }}<button>Save vehicle</button></form>{% endif %}</main></body></html>

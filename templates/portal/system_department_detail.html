@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><body><main><h1>{{ department.name }}</h1><form method="post">{% csrf_token %}<input type="hidden" name="action" value="status">{{ status_form.as_p }}<button>Change status</button></form><form method="post">{% csrf_token %}<input type="hidden" name="action" value="provision">{{ admin_form.as_p }}<button>Create first department administrator</button></form></main></body></html>

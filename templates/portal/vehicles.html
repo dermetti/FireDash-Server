@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><body><main><h1>{{ station.name }} vehicles</h1><ul>{% for vehicle in vehicles %}<li><a href="{% url 'portal-vehicle-manage' vehicle.id %}">{{ vehicle.display_name }}</a></li>{% endfor %}</ul>{% if form %}<form method="post">{% csrf_token %}{{ form.as_p }}<button>Create vehicle</button></form>{% endif %}</main></body></html>

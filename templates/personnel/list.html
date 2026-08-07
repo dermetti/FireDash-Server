@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="en"><body>
+<main><h1>{{ department.name }} personnel</h1>
+<ul>{% for person in people %}<li><a href="{% url 'personnel-detail' department.id person.id %}">{{ person.display_name }}</a></li>{% endfor %}</ul>
+<form method="post">{% csrf_token %}{{ form.as_p }}<label>Home station ID <input name="home_station_id" required></label><button type="submit">Create</button></form></main>
+</body></html>
