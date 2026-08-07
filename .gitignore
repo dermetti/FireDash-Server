@@ -60,6 +60,7 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+/staticfiles/
 
 # Flask stuff:
 instance/
@@ -150,12 +151,22 @@ activemq-data/
 # Environments
 .env
 .envrc
+/.env.*
+!/.env.example
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Local secrets and generated knowledge graph
+/secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+/graphify-out/
 
 # Spyder project settings
 .spyderproject

@@ -1,0 +1,13 @@
+[Unit]
+Description=FireDash Gunicorn socket
+
+[Socket]
+ListenStream=/run/fire-backend/gunicorn.sock
+SocketUser=fire_backend
+SocketGroup=www-data
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

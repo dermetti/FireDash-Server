@@ -1,0 +1,35 @@
+[Unit]
+Description=FireDash Django application
+Requires=fire-backend.socket
+After=network-online.target fire-backend.socket
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=fire_backend
+Group=fire_backend
+WorkingDirectory=/opt/fire-backend
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+EnvironmentFile=/etc/fire-backend/fire-backend.env
+ExecStart=/opt/fire-backend/venv/bin/gunicorn --config deploy/gunicorn/gunicorn.conf.py config.wsgi:application
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/fire-backend
+
+[Install]
+WantedBy=multi-user.target
