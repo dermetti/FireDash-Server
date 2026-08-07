@@ -15,16 +15,24 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "rest_framework",
+    "django_otp",
+    "django_otp.plugins.otp_totp",
     "apps.accounts",
+    "apps.organizations",
+    "apps.authorization",
+    "apps.audit",
     "apps.health",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "apps.audit.middleware.RequestContextMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django_otp.middleware.OTPMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -68,12 +76,23 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SESSION_COOKIE_SECURE = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_AGE = int(get_env("ADMIN_SESSION_MAX_AGE_SECONDS", default="28800"))
 CSRF_COOKIE_SECURE = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 SECURE_REFERRER_POLICY = "same-origin"
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 CSRF_TRUSTED_ORIGINS = get_list("DJANGO_CSRF_TRUSTED_ORIGINS")
+
+PRE_MFA_SESSION_MAX_AGE_SECONDS = int(get_env("PRE_MFA_SESSION_MAX_AGE_SECONDS", default="600"))
+AUTH_THROTTLE_MAX_FAILURES = int(get_env("AUTH_THROTTLE_MAX_FAILURES", default="5"))
+AUTH_THROTTLE_WINDOW_SECONDS = int(get_env("AUTH_THROTTLE_WINDOW_SECONDS", default="900"))
+AUTH_THROTTLE_LOCKOUT_SECONDS = int(get_env("AUTH_THROTTLE_LOCKOUT_SECONDS", default="900"))
+RECENT_REAUTH_MAX_AGE_SECONDS = int(get_env("RECENT_REAUTH_MAX_AGE_SECONDS", default="900"))
+
+# Gunicorn is reachable only through the local Nginx Unix socket.
+TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))
 
 LOGGING = {
     "version": 1,

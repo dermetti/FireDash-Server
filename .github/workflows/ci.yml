@@ -15,12 +15,12 @@ jobs:
         image: postgis/postgis:16-3.4
         env:
           POSTGRES_DB: fire_backend
-          POSTGRES_USER: application_runtime
-          POSTGRES_PASSWORD: fire_backend_ci
+          POSTGRES_USER: database_owner
+          POSTGRES_PASSWORD: database_owner_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U application_runtime -d fire_backend"
+          --health-cmd "pg_isready -U database_owner -d fire_backend"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -28,8 +28,8 @@ jobs:
       DJANGO_SETTINGS_MODULE: config.settings.test
       DJANGO_SECRET_KEY: ci-test-secret-not-for-production
       POSTGRES_DB: fire_backend
-      POSTGRES_USER: application_runtime
-      POSTGRES_PASSWORD: fire_backend_ci
+      POSTGRES_USER: database_owner
+      POSTGRES_PASSWORD: database_owner_ci
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "5432"
     steps:
@@ -39,6 +39,10 @@ jobs:
           python-version: "3.13"
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements/dev.txt
+      - name: Create runtime database role
+        env:
+          PGPASSWORD: database_owner_ci
+        run: psql -h 127.0.0.1 -U database_owner -d fire_backend -c "CREATE ROLE application_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD 'application_runtime_ci';"
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run
       - name: Django checks

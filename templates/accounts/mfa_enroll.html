@@ -1,0 +1,4 @@
+<!doctype html>
+<html lang="en"><body>
+<main><h1>Set up authenticator</h1><img alt="Authenticator setup QR code" src="data:image/png;base64,{{ qr_code }}"><form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Verify</button></form></main>
+</body></html>

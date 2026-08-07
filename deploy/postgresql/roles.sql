@@ -7,4 +7,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE database_owner IN SCHEMA public
 ALTER DEFAULT PRIVILEGES FOR ROLE database_owner IN SCHEMA public
     GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO application_runtime;
 
--- Phase 2 replaces the broad audit-event privileges with its append-only grants and trigger.
+REVOKE ALL ON TABLE audit_event FROM PUBLIC;
+REVOKE UPDATE, DELETE, TRUNCATE ON TABLE audit_event FROM application_runtime;
+GRANT SELECT, INSERT ON TABLE audit_event TO application_runtime;

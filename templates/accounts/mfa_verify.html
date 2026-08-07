@@ -1,0 +1,4 @@
+<!doctype html>
+<html lang="en"><body>
+<main><h1>Verify authenticator code</h1><form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Sign in</button></form></main>
+</body></html>
