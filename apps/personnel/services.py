@@ -82,11 +82,24 @@ def _mark_visible_station_scopes(*, person: Person, actor) -> None:
         )
 
 
-def _require_manage_person(user, person: Person) -> None:
-    if not (
-        _is_department_admin(user, person.department_id) or _has_home_station_scope(user, person)
-    ):
-        raise PermissionDenied("Personnel is outside the administrator's scope.")
+def _require_department_person_admin(user, person: Person) -> None:
+    if not _is_department_admin(user, person.department_id):
+        raise PermissionDenied("Department administrator scope is required.")
+
+
+def _station_can_manage_visible_person(*, user, person: Person, station: Station) -> bool:
+    now = timezone.now()
+    return (
+        station.id in active_station_ids(user)
+        and PersonnelStationAssignment.objects.filter(
+            person=person,
+            station=station,
+            valid_from__lte=now,
+            ended_at__isnull=True,
+        )
+        .filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now))
+        .exists()
+    )
 
 
 def _normalize_email(value: str) -> str:
@@ -103,10 +116,8 @@ def create_person(
     first_name: str,
     last_name: str,
 ) -> Person:
-    if not _is_department_admin(actor, department.id) and home_station.id not in active_station_ids(
-        actor
-    ):
-        raise PermissionDenied("Home station is outside the administrator's scope.")
+    if not _is_department_admin(actor, department.id):
+        raise PermissionDenied("Only department administrators can create personnel.")
     if department.id != home_station.department_id or not home_station.active:
         raise PersonnelError("Home station must be active and in the personnel department.")
     display_name = f"{first_name.strip()} {last_name.strip()}".strip()
@@ -149,7 +160,7 @@ def update_person(
     *, actor, person: Person, personnel_number: str | None, first_name: str, last_name: str
 ) -> Person:
     person = Person.objects.select_for_update().get(pk=person.pk)
-    _require_manage_person(actor, person)
+    _require_department_person_admin(actor, person)
     if person.lifecycle_status != Person.LifecycleStatus.ACTIVE:
         raise PersonnelError("Only active personnel can be edited.")
     person.personnel_number = personnel_number or None
@@ -173,9 +184,16 @@ def update_person(
 
 
 @transaction.atomic
-def set_commander_eligibility(*, actor, person: Person, eligible: bool) -> Person:
+def set_commander_eligibility(
+    *, actor, person: Person, eligible: bool, station: Station | None = None
+) -> Person:
     person = Person.objects.select_for_update().get(pk=person.pk)
-    _require_manage_person(actor, person)
+    if not _is_department_admin(actor, person.department_id) and not (
+        station
+        and station.department_id == person.department_id
+        and _station_can_manage_visible_person(user=actor, person=person, station=station)
+    ):
+        raise PermissionDenied("Personnel is outside the administrator's scope.")
     if person.lifecycle_status != Person.LifecycleStatus.ACTIVE:
         raise PersonnelError("Only active personnel can be commander eligible.")
     person.incident_commander_eligible = eligible
@@ -204,7 +222,7 @@ def set_commander_eligibility(*, actor, person: Person, eligible: bool) -> Perso
 @transaction.atomic
 def set_commander_email(*, actor, person: Person, email: str) -> Person:
     person = Person.objects.select_for_update().get(pk=person.pk)
-    _require_manage_person(actor, person)
+    _require_department_person_admin(actor, person)
     if not person.incident_commander_eligible:
         raise PersonnelError("Commander eligibility is required before setting commander email.")
     person.incident_commander_email = _normalize_email(email)
@@ -232,7 +250,7 @@ def set_commander_email(*, actor, person: Person, email: str) -> Person:
 @transaction.atomic
 def verify_commander_email(*, actor, person: Person) -> Person:
     person = Person.objects.select_for_update().get(pk=person.pk)
-    _require_manage_person(actor, person)
+    _require_department_person_admin(actor, person)
     if not person.incident_commander_eligible or not person.incident_commander_email:
         raise PersonnelError(
             "Eligible personnel with an email address are required for verification."

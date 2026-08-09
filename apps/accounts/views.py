@@ -5,6 +5,7 @@ import qrcode
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
@@ -66,6 +67,8 @@ def account_login(request: HttpRequest) -> HttpResponse:
                 request.session.cycle_key()
                 request.session["pending_mfa_user_id"] = str(user.id)
                 request.session["pending_mfa_started_at"] = timezone_now_timestamp()
+                if request.headers.get("HX-Request") == "true":
+                    return render(request, "accounts/_mfa_form.html", {"form": TokenForm()})
                 return redirect(
                     "accounts-mfa-verify" if user.mfa_enabled else "accounts-mfa-enroll"
                 )
@@ -89,12 +92,20 @@ def mfa_enroll(request: HttpRequest) -> HttpResponse:
     )
     if request.method == "POST":
         form = TokenForm(request.POST)
-        if form.is_valid() and device.verify_token(form.cleaned_data["token"]):
+        account = str(user.id)
+        if is_throttled(
+            scope=AuthenticationThrottle.Scope.MFA,
+            account=account,
+            source_ip=getattr(request, "client_ip", None),
+        ):
+            messages.error(request, "Authentication is temporarily unavailable.")
+        elif form.is_valid() and device.verify_token(form.cleaned_data["token"]):
             device.confirmed = True
             device.save(update_fields=("confirmed",))
             user.mfa_enabled = True
             user.save(update_fields=("mfa_enabled",))
             login(request, user)
+            request.session["recent_reauthentication_at"] = timezone_now_timestamp()
             clear_pre_mfa_session(request.session)
             record_event(
                 action="authentication.mfa_enrolled",
@@ -104,6 +115,20 @@ def mfa_enroll(request: HttpRequest) -> HttpResponse:
                 target_uuid=user.id,
             )
             return redirect("dashboard")
+        else:
+            record_auth_failure(
+                scope=AuthenticationThrottle.Scope.MFA,
+                account=account,
+                source_ip=getattr(request, "client_ip", None),
+            )
+            record_event(
+                action="authentication.mfa_enrollment_failed",
+                request=request,
+                actor_user=user,
+                target_type="user",
+                target_uuid=user.id,
+            )
+            messages.error(request, "Invalid verification code.")
     else:
         form = TokenForm()
     image = qrcode.make(device.config_url).get_image()
@@ -137,6 +162,7 @@ def mfa_verify(request: HttpRequest) -> HttpResponse:
             device := TOTPDevice.objects.filter(user=user, confirmed=True).first()
         ) and device.verify_token(form.cleaned_data["token"]):
             login(request, user)
+            request.session["recent_reauthentication_at"] = timezone_now_timestamp()
             clear_pre_mfa_session(request.session)
             record_event(
                 action="authentication.login_succeeded",
@@ -160,7 +186,12 @@ def mfa_verify(request: HttpRequest) -> HttpResponse:
                 target_uuid=user.id,
             )
             messages.error(request, "Invalid verification code.")
-    return _no_store(render(request, "accounts/mfa_verify.html", {"form": form}))
+    template = (
+        "accounts/_mfa_form.html"
+        if request.headers.get("HX-Request") == "true"
+        else "accounts/mfa_verify.html"
+    )
+    return _no_store(render(request, template, {"form": form}))
 
 
 @never_cache
@@ -206,21 +237,36 @@ def account_logout(request: HttpRequest) -> HttpResponse:
         target_uuid=request.user.id,
     )
     logout(request)
-    return redirect("accounts-login")
+    return _no_store(redirect("accounts-login"))
 
 
 @login_required
 @never_cache
 @require_http_methods(["GET", "POST"])
 def reauthenticate(request: HttpRequest) -> HttpResponse:
-    current_user = User.objects.get(pk=request.user.pk)
+    user_id = request.user.pk
+    if user_id is None:
+        raise PermissionDenied("An authenticated user is required.")
+    current_user = User.objects.get(pk=user_id)
+    pending_token = request.GET.get("pending") or request.POST.get("pending")
+    operation = ""
+    if pending_token:
+        from apps.accounts.reauth import pending_action
+
+        pending = pending_action(request, pending_token)
+        if pending is not None:
+            operation = pending.url
     form = ReauthenticationForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        user = authenticate(
-            request, username=current_user.email, password=form.cleaned_data["password"]
-        )
         device = TOTPDevice.objects.filter(user=current_user, confirmed=True).first()
-        if user and device and device.verify_token(form.cleaned_data["token"]):
+        account = str(current_user.id)
+        if is_throttled(
+            scope=AuthenticationThrottle.Scope.MFA,
+            account=account,
+            source_ip=getattr(request, "client_ip", None),
+        ):
+            messages.error(request, "Authentication is temporarily unavailable.")
+        elif device and device.verify_token(form.cleaned_data["token"]):
             request.session["recent_reauthentication_at"] = timezone_now_timestamp()
             record_event(
                 action="authentication.reauthenticated",
@@ -229,13 +275,29 @@ def reauthenticate(request: HttpRequest) -> HttpResponse:
                 target_type="user",
                 target_uuid=current_user.id,
             )
+            if pending_token and operation:
+                pending_action(request, pending_token, consume=True)
+                # The operator must submit the sensitive action again; no POST body is replayed.
+                return redirect(operation)
             return redirect("dashboard")
-        record_event(
-            action="authentication.reauthentication_failed",
-            request=request,
-            actor_user=current_user,
-            target_type="user",
-            target_uuid=current_user.id,
+        else:
+            record_auth_failure(
+                scope=AuthenticationThrottle.Scope.MFA,
+                account=account,
+                source_ip=getattr(request, "client_ip", None),
+            )
+            record_event(
+                action="authentication.reauthentication_failed",
+                request=request,
+                actor_user=current_user,
+                target_type="user",
+                target_uuid=current_user.id,
+            )
+            messages.error(request, "Invalid TOTP code.")
+    return _no_store(
+        render(
+            request,
+            "accounts/reauthenticate.html",
+            {"form": form, "pending_token": pending_token, "operation": operation},
         )
-        messages.error(request, "Reauthentication failed.")
-    return _no_store(render(request, "accounts/reauthenticate.html", {"form": form}))
+    )

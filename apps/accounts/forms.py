@@ -26,5 +26,4 @@ class SetupForm(forms.Form):
 
 
 class ReauthenticationForm(forms.Form):
-    password = forms.CharField(widget=forms.PasswordInput)
-    token = forms.CharField(min_length=6, max_length=12)
+    token = forms.CharField(min_length=6, max_length=12, label="TOTP Code")

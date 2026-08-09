@@ -1,6 +1,29 @@
-<!doctype html>
-<html lang="en"><body>
-<main><h1>{{ department.name }} personnel</h1>
-<ul>{% for person in people %}<li><a href="{% url 'personnel-detail' department.id person.id %}">{{ person.display_name }}</a></li>{% endfor %}</ul>
-<form method="post">{% csrf_token %}{{ form.as_p }}<label>Home station ID <input name="home_station_id" required></label><button type="submit">Create</button></form></main>
-</body></html>
+{% extends "base.html" %}
+{% block title %}{{ department.name }} Personnel{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+{% endblock %}
+{% block content %}
+<h1>{{ department.name }} Personnel</h1>
+<div class="row">
+  <div class="col-md-8">
+    <div class="list-group mb-4">
+      {% for person in people %}
+      <a href="{% url 'personnel-detail' department.id person.id %}" class="list-group-item list-group-item-action d-flex justify-content-between">
+        {{ person.display_name }} <span class="badge bg-{% if person.lifecycle_status == 'ACTIVE' %}success{% else %}secondary{% endif %}">{{ person.lifecycle_status }}</span>
+      </a>
+      {% empty %}
+      <div class="list-group-item text-muted">No personnel records.</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% if department_admin %}<div class="col-md-4">
+    <div class="card"><div class="card-body">
+    <h5>Create Personnel</h5>
+    <form method="post">{% csrf_token %}{{ form.as_p }}
+     {% include "components/searchable_selector.html" with selector_id="home-station" label="Home Station" field_name="home_station_id" endpoint=station_selector_endpoint options=station_options %}
+    <button class="btn btn-primary mt-2" type="submit">Create</button></form>
+    </div></div>
+  </div>{% endif %}
+</div>
+{% endblock %}

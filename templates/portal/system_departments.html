@@ -1,2 +1,19 @@
-<!doctype html>
-<html lang="en"><body><main><h1>Departments</h1><ul>{% for department in departments %}<li><a href="{% url 'portal-system-department' department.id %}">{{ department.name }}</a> ({{ department.status }})</li>{% endfor %}</ul><form method="post">{% csrf_token %}{{ form.as_p }}<button>Create department</button></form></main></body></html>
+{% extends "base.html" %}
+{% block title %}System Departments{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+{% endblock %}
+{% block content %}
+<h1>Departments</h1>
+<div class="list-group mb-4">
+  {% for department in departments %}
+  <a href="{% url 'portal-system-department' department.id %}" class="list-group-item list-group-item-action d-flex justify-content-between">
+    {{ department.name }} <span class="badge bg-{% if department.status == 'ACTIVE' %}success{% elif department.status == 'SUSPENDED' %}warning{% else %}secondary{% endif %}">{{ department.status }}</span>
+  </a>
+  {% endfor %}
+</div>
+<div class="card"><div class="card-body">
+<h5>Create Department</h5>
+<form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Create</button></form>
+</div></div>
+{% endblock %}

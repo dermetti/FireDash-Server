@@ -75,6 +75,43 @@ def test_adoption_context_changes_cannot_open_challenge():
         raise AssertionError("A challenge must be bound to the tablet identity.")
 
 
+def test_adoption_context_reconstructed_from_preview_values_opens_challenge():
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    context = AdoptionChallengeContext(
+        uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), "c" * 64, timezone.now() + timedelta(minutes=5)
+    )
+    preview = {
+        "adoption_request_id": str(context.adoption_request_id),
+        "expires_at": context.expires_at.isoformat(),
+        "tablet_id": str(context.tablet_id),
+        "hpke_ciphersuite": "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM",
+        "hpke_public_key_fingerprint": context.public_key_fingerprint,
+        "installation_uuid": str(context.installation_uuid),
+        "protocol": ADOPTION_PROTOCOL,
+    }
+    reconstructed = AdoptionChallengeContext(
+        adoption_request_id=uuid.UUID(preview["adoption_request_id"]),
+        installation_uuid=uuid.UUID(preview["installation_uuid"]),
+        tablet_id=uuid.UUID(preview["tablet_id"]),
+        public_key_fingerprint=preview["hpke_public_key_fingerprint"],
+        expires_at=context.expires_at,
+    )
+    encapsulated_key, ciphertext = hpke_seal(
+        plaintext=b"n" * 32, recipient_public_key=private_key.public_key(), context=context
+    )
+
+    assert reconstructed.info() == context.info()
+    assert (
+        hpke_open(
+            encapsulated_key=encapsulated_key,
+            ciphertext=ciphertext,
+            recipient_private_key=private_key,
+            context=reconstructed,
+        )
+        == b"n" * 32
+    )
+
+
 def test_credential_verifier_is_constant_time_hash_comparison(settings):
     credential = generate_credential()
     installation = AppInstallation(

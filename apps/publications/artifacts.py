@@ -108,6 +108,7 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
         "artifact_kek_version": settings.PUBLICATION_KEK_VERSION,
         "artifact_signature": signature,
         "artifact_signature_algorithm": "Ed25519",
+        "artifact_signing_key_version": settings.PUBLICATION_SIGNING_KEY_VERSION,
     }
 
 

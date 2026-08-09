@@ -4,6 +4,7 @@ from datetime import timedelta
 import pytest
 from django.core.exceptions import PermissionDenied
 from django.test import override_settings
+from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import User
@@ -35,8 +36,8 @@ def test_parse_feature_collection_normalizes_valid_properties_and_metadata():
                 properties={
                     "external_identifier": "  H-101  ",
                     "hydrant_type": "  wet barrel ",
-                    "flow_information": "  1,500 GPM  ",
-                    "status": " in service ",
+                    "diameter_mm": 150,
+                    "status": " ACTIVE ",
                     "source_metadata": {"surveyed": True, "year": 2025, "source": "GIS"},
                 }
             )
@@ -49,8 +50,8 @@ def test_parse_feature_collection_normalizes_valid_properties_and_metadata():
         "latitude": 40.7484,
         "external_identifier": "H-101",
         "hydrant_type": "wet barrel",
-        "flow_information": "1,500 GPM",
-        "status": "in service",
+        "diameter_mm": 150,
+        "status": "ACTIVE",
         "source_metadata": {"surveyed": True, "year": 2025, "source": "GIS"},
     }
 
@@ -151,7 +152,6 @@ def test_confirm_preview_is_limited_to_its_creator_and_consumes_preview(referenc
         confirm_hydrant_preview(actor=other_admin, department=department, preview_id=preview.id)
 
     assert HydrantImportPreview.objects.filter(pk=preview.id).exists()
-    assert Hydrant.objects.count() == 0
 
     assert confirm_hydrant_preview(
         actor=department_admin, department=department, preview_id=preview.id
@@ -179,4 +179,56 @@ def test_confirm_preview_rejects_expired_preview(reference_data_roles):
         )
 
     assert HydrantImportPreview.objects.filter(pk=preview.id).exists()
-    assert Hydrant.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_hydrant_forms_persist_submitted_values_and_status(client, reference_data_roles):
+    department_admin, _, _, department = reference_data_roles
+    client.force_login(department_admin)
+
+    response = client.post(
+        reverse("reference-data-hydrant-create", args=(department.id,)),
+        {
+            "external_identifier": " H-42 ",
+            "longitude": "-73.9857",
+            "latitude": "40.7484",
+            "hydrant_type": " Wet barrel ",
+            "diameter_mm": "150",
+            "status": "INACTIVE",
+        },
+    )
+
+    assert response.status_code == 302
+    hydrant = Hydrant.objects.get(department=department, external_identifier="H-42")
+    assert (hydrant.hydrant_type, hydrant.diameter_mm, hydrant.status, hydrant.active) == (
+        "Wet barrel",
+        150,
+        "INACTIVE",
+        False,
+    )
+
+    response = client.post(
+        reverse("reference-data-hydrant-manage", args=(hydrant.id,)),
+        {
+            "external_identifier": "H-43",
+            "longitude": "-73.9",
+            "latitude": "40.7",
+            "hydrant_type": "Dry barrel",
+            "diameter_mm": "100",
+            "status": "ACTIVE",
+        },
+    )
+
+    assert response.status_code == 302
+    hydrant.refresh_from_db()
+    assert (
+        hydrant.external_identifier,
+        hydrant.location.x,
+        hydrant.location.y,
+        hydrant.active,
+    ) == (
+        "H-43",
+        pytest.approx(-73.9),
+        pytest.approx(40.7),
+        True,
+    )

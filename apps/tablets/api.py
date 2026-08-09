@@ -18,7 +18,12 @@ from rest_framework import authentication, exceptions, permissions, serializers,
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.publications.manifests import ManifestError, authorized_publications, request_manifest
+from apps.publications.manifests import (
+    ManifestError,
+    authorized_publications,
+    publication_signing_public_key,
+    request_manifest,
+)
 from apps.tablets.models import AdoptionRequest, AppInstallation
 from apps.tablets.services import TabletError, check_in, complete_adoption, create_adoption_request
 
@@ -77,7 +82,7 @@ class InstallationBearerScheme(OpenApiAuthenticationExtension):
         return {"type": "http", "scheme": "bearer", "bearerFormat": "installation credential"}
 
 
-class AdoptionPreviewSerializer(serializers.Serializer):
+class AdoptionPreviewSerializer(serializers.Serializer[dict[str, object]]):
     token = serializers.CharField(max_length=256, trim_whitespace=False)
     installation_uuid = serializers.UUIDField()
     app_version = serializers.CharField(max_length=64)
@@ -91,7 +96,7 @@ class AdoptionPreviewSerializer(serializers.Serializer):
             raise serializers.ValidationError("Must be valid base64.") from error
 
 
-class AdoptionCompleteSerializer(serializers.Serializer):
+class AdoptionCompleteSerializer(serializers.Serializer[dict[str, object]]):
     adoption_request_id = serializers.UUIDField()
     challenge_response = serializers.CharField()
     confirmed = serializers.BooleanField()
@@ -103,13 +108,31 @@ class AdoptionCompleteSerializer(serializers.Serializer):
             raise serializers.ValidationError("Must be valid base64.") from error
 
 
+class AdoptionPreviewResponseSerializer(serializers.Serializer[dict[str, object]]):
+    adoption_request_id = serializers.UUIDField()
+    encrypted_challenge = serializers.CharField()
+    expires_at = serializers.DateTimeField()
+    tablet_id = serializers.UUIDField()
+    hpke_ciphersuite = serializers.CharField()
+    hpke_public_key_fingerprint = serializers.CharField()
+    protocol = serializers.CharField()
+
+
+class SigningKeyResponseSerializer(serializers.Serializer[dict[str, object]]):
+    algorithm = serializers.CharField()
+    version = serializers.CharField()
+    public_key = serializers.CharField()
+
+
 def _problem_from_service(error: Exception) -> exceptions.APIException:
     exception = exceptions.PermissionDenied(str(error))
     exception.default_code = "tablet-authorization"
     return exception
 
 
-@extend_schema(request=AdoptionPreviewSerializer, responses={201: OpenApiTypes.OBJECT})
+@extend_schema(
+    request=AdoptionPreviewSerializer, responses={201: AdoptionPreviewResponseSerializer}
+)
 class AdoptionPreviewView(APIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
@@ -121,6 +144,9 @@ class AdoptionPreviewView(APIView):
             challenge = create_adoption_request(**serializer.validated_data)
         except TabletError as error:
             raise _problem_from_service(error) from error
+        invitation = challenge.request.invitation
+        if invitation is None:
+            raise exceptions.APIException("Adoption request is missing its invitation.")
         return Response(
             {
                 "adoption_request_id": str(challenge.request.id),
@@ -128,12 +154,18 @@ class AdoptionPreviewView(APIView):
                     "ascii"
                 ),
                 "expires_at": challenge.request.expires_at,
+                "tablet_id": str(invitation.tablet_id),
+                "hpke_ciphersuite": challenge.request.hpke_ciphersuite,
+                "hpke_public_key_fingerprint": challenge.request.hpke_public_key_fingerprint,
+                "protocol": "tablet-adoption-v1",
             },
             status=status.HTTP_201_CREATED,
         )
 
 
-@extend_schema(request=AdoptionPreviewSerializer, responses={201: OpenApiTypes.OBJECT})
+@extend_schema(
+    request=AdoptionPreviewSerializer, responses={201: AdoptionPreviewResponseSerializer}
+)
 class ReactivationPreviewView(AdoptionPreviewView):
     def post(self, request):
         serializer = AdoptionPreviewSerializer(data=request.data)
@@ -142,6 +174,9 @@ class ReactivationPreviewView(AdoptionPreviewView):
             challenge = create_adoption_request(**serializer.validated_data, reactivation=True)
         except TabletError as error:
             raise _problem_from_service(error) from error
+        invitation = challenge.request.reactivation_invitation
+        if invitation is None:
+            raise exceptions.APIException("Reactivation request is missing its invitation.")
         return Response(
             {
                 "adoption_request_id": str(challenge.request.id),
@@ -149,6 +184,10 @@ class ReactivationPreviewView(AdoptionPreviewView):
                     "ascii"
                 ),
                 "expires_at": challenge.request.expires_at,
+                "tablet_id": str(invitation.app_installation.tablet_id),
+                "hpke_ciphersuite": challenge.request.hpke_ciphersuite,
+                "hpke_public_key_fingerprint": challenge.request.hpke_public_key_fingerprint,
+                "protocol": "tablet-adoption-v1",
             },
             status=status.HTTP_201_CREATED,
         )
@@ -202,7 +241,10 @@ class InstallationAPIView(APIView):
 
     @property
     def installation(self) -> AppInstallation:
-        return self.request.user.installation
+        user = self.request.user
+        if not isinstance(user, InstallationPrincipal):
+            raise exceptions.NotAuthenticated("Installation authentication is required.")
+        return user.installation
 
 
 @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
@@ -255,6 +297,24 @@ class ConfigurationView(InstallationAPIView):
             raise _problem_from_service(error) from error
 
 
+@extend_schema(responses={200: SigningKeyResponseSerializer})
+class SigningKeyView(InstallationAPIView):
+    def get(self, request, version: str):
+        if version != settings.PUBLICATION_SIGNING_KEY_VERSION:
+            raise exceptions.NotFound("Signing key version is not available.")
+        try:
+            public_key = publication_signing_public_key()
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
+        return Response(
+            {
+                "algorithm": "Ed25519",
+                "version": version,
+                "public_key": base64.b64encode(public_key).decode("ascii"),
+            }
+        )
+
+
 @extend_schema(responses={200: OpenApiTypes.OBJECT, 202: None, 304: None})
 class ManifestView(InstallationAPIView):
     def get(self, request):
@@ -302,7 +362,15 @@ class DownloadView(InstallationAPIView):
         if manifest.unavailable or manifest.payload is None:
             raise exceptions.PermissionDenied("Publication is not available for this installation.")
         _, _, publications = authorized_publications(installation=self.installation)
-        authorized_ids = {dataset["publication_id"] for dataset in manifest.payload["datasets"]}
+        datasets = manifest.payload.get("datasets")
+        if not isinstance(datasets, list):
+            raise exceptions.PermissionDenied("Manifest datasets are invalid.")
+        authorized_ids = {
+            manifest_publication_id
+            for dataset in datasets
+            if isinstance(dataset, dict)
+            and isinstance((manifest_publication_id := dataset.get("publication_id")), str)
+        }
         publication = next(
             (
                 item

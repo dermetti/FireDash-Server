@@ -10,7 +10,7 @@ from uuid import UUID
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from apps.audit.services import record_event
@@ -267,25 +267,46 @@ def create_adoption_request(
     )
 
 
-def _fail_request(request: AdoptionRequest) -> None:
-    request.failed_attempt_count += 1
-    request.save(update_fields=("failed_attempt_count",))
+@transaction.atomic
+def _record_failed_attempt(*, request_id: UUID) -> None:
+    now = timezone.now()
+    request = (
+        AdoptionRequest.objects.select_for_update(of=("self",))
+        .select_related("invitation", "reactivation_invitation")
+        .get(pk=request_id)
+    )
+    if request.completed_at:
+        return
+    if request.expires_at <= now:
+        return
+    AdoptionRequest.objects.filter(pk=request_id).update(
+        failed_attempt_count=models.F("failed_attempt_count") + 1
+    )
+    request.refresh_from_db(fields=("failed_attempt_count",))
     invitation = request.reactivation_invitation or request.invitation
     if invitation is not None:
-        invitation.failed_attempt_count += 1
+        inv_model = type(invitation)
+        inv_model.objects.filter(pk=invitation.pk).update(
+            failed_attempt_count=models.F("failed_attempt_count") + 1
+        )
+        invitation.refresh_from_db(fields=("failed_attempt_count",))
         if invitation.failed_attempt_count >= MAX_FAILED_ATTEMPTS:
-            invitation.revoked_at = timezone.now()
-            invitation.save(update_fields=("failed_attempt_count", "revoked_at"))
-        else:
-            invitation.save(update_fields=("failed_attempt_count",))
+            inv_model.objects.filter(pk=invitation.pk).update(revoked_at=now)
+    record_event(
+        action="tablet.adoption_proof_failed",
+        target_type="adoption_request",
+        target_uuid=request.id,
+        metadata={
+            "failed_attempt_count": request.failed_attempt_count,
+            "request_id": str(request.id),
+        },
+    )
 
 
 @transaction.atomic
-def complete_adoption(
-    *, request_id: UUID, challenge_response: bytes, confirmed: bool
-) -> tuple[AppInstallation, str]:
+def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation, str]:
     request = (
-        AdoptionRequest.objects.select_for_update()
+        AdoptionRequest.objects.select_for_update(of=("self",))
         .select_related(
             "invitation__tablet__department",
             "reactivation_invitation__app_installation__tablet__department",
@@ -293,8 +314,22 @@ def complete_adoption(
         .get(pk=request_id)
     )
     invitation = request.reactivation_invitation or request.invitation
+    if invitation is not None:
+        lock_model = type(invitation)
+        invitation = lock_model.objects.select_for_update(of=("self",)).get(pk=invitation.pk)
+    now = timezone.now()
+    if request.completed_at:
+        raise TabletError("Adoption request has already been completed.")
+    if request.expires_at <= now:
+        raise TabletError("Adoption request is expired.")
+    if request.failed_attempt_count >= MAX_FAILED_ATTEMPTS:
+        raise TabletError("Adoption request has reached the maximum failed attempts.")
     if invitation is None:
         raise TabletError("Adoption request has no invitation.")
+    if invitation.used_at:
+        raise TabletError("Invitation has already been used.")
+    if invitation.revoked_at:
+        raise TabletError("Invitation has been revoked.")
     installation = (
         request.reactivation_invitation.app_installation
         if request.reactivation_invitation
@@ -307,21 +342,7 @@ def complete_adoption(
         if adoption_invitation is None:
             raise TabletError("Adoption request has no invitation.")
         tablet = adoption_invitation.tablet
-    now = timezone.now()
-    if (
-        not confirmed
-        or request.completed_at
-        or request.expires_at <= now
-        or invitation.used_at
-        or invitation.revoked_at
-        or request.failed_attempt_count >= MAX_FAILED_ATTEMPTS
-    ):
-        _fail_request(request)
-        raise TabletError("Adoption request is invalid or expired.")
     _require_operational_tablet(tablet)
-    if not hmac.compare_digest(bytes(request.expected_hmac_digest), challenge_response):
-        _fail_request(request)
-        raise TabletError("Adoption proof is invalid.")
     credential = generate_credential()
     if installation is None:
         AppInstallation.objects.filter(
@@ -382,6 +403,38 @@ def complete_adoption(
         metadata={"hpke_key_fingerprint": installation.hpke_key_fingerprint},
     )
     return installation, credential
+
+
+def complete_adoption(
+    *, request_id: UUID, challenge_response: bytes, confirmed: bool
+) -> tuple[AppInstallation, str]:
+    if not confirmed:
+        raise TabletError("Adoption was not confirmed.")
+    request = AdoptionRequest.objects.select_related(
+        "invitation__tablet__department",
+        "reactivation_invitation__app_installation__tablet__department",
+    ).get(pk=request_id)
+    invitation = request.reactivation_invitation or request.invitation
+    if invitation is None:
+        raise TabletError("Adoption request has no invitation.")
+    now = timezone.now()
+    if request.completed_at:
+        raise TabletError("Adoption request has already been completed.")
+    if request.expires_at <= now:
+        raise TabletError("Adoption request is expired.")
+    if request.failed_attempt_count >= MAX_FAILED_ATTEMPTS:
+        raise TabletError("Adoption request has reached the maximum failed attempts.")
+    if invitation is None:
+        raise TabletError("Adoption request has no invitation.")
+    if invitation.used_at:
+        raise TabletError("Invitation has already been used.")
+    if invitation.revoked_at:
+        raise TabletError("Invitation has been revoked.")
+    proof_valid = hmac.compare_digest(bytes(request.expected_hmac_digest), challenge_response)
+    if not proof_valid:
+        _record_failed_attempt(request_id=request_id)
+        raise TabletError("Adoption proof is invalid.")
+    return _complete_successful_adoption(request_id=request_id)
 
 
 @transaction.atomic

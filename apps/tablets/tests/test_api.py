@@ -1,13 +1,18 @@
+import base64
 import hashlib
 import hmac
+import uuid
 from datetime import timedelta
 
 import pytest
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from django.conf import settings
 from django.test import Client, override_settings
 from django.utils import timezone
 
+from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE, serialize_p256_public_key
@@ -21,7 +26,8 @@ from apps.tablets.services import generate_credential, verify_credential
 @pytest.fixture
 def api_context(db):
     now = timezone.now()
-    department = Department.objects.create(name="API", short_code="API")
+    user = User.objects.create_user("api@example.test", "API User", "safe-password")
+    department = Department.objects.create(name="API", short_code="API", created_by=user)
     station = Station.objects.create(department=department, name="Station", short_code="STA")
     vehicle = Vehicle.objects.create(
         department=department, station=station, display_name="Engine 1"
@@ -44,11 +50,15 @@ def api_context(db):
         adopted_at=now,
         authorization_valid_until=now + timedelta(days=1),
     )
-    TabletVehicleAssignment.objects.create(tablet=tablet, vehicle=vehicle, valid_from=now)
+    TabletVehicleAssignment.objects.create(
+        tablet=tablet, vehicle=vehicle, valid_from=now, created_by=user
+    )
     scope = DatasetScopeState.objects.create(
         department=department, dataset_type_code="department_hydrants", source_revision=1
     )
+    pub_id = uuid.uuid4()
     publication = DatasetPublication.objects.create(
+        id=pub_id,
         department=department,
         dataset_type_code="department_hydrants",
         scope_state=scope,
@@ -58,7 +68,7 @@ def api_context(db):
         status=DatasetPublication.Status.PUBLISHED,
         artifact_ready=True,
         artifact_status=DatasetPublication.ArtifactStatus.READY,
-        artifact_path=f"{scope.id}.bin",
+        artifact_path=f"{department.id}/{pub_id}/artifact.bin",
         artifact_size=12,
         artifact_sha256="b" * 64,
         artifact_nonce=b"n" * 12,
@@ -68,6 +78,7 @@ def api_context(db):
         artifact_kek_version="1",
         artifact_signature=b"s" * 64,
         artifact_signature_algorithm="Ed25519",
+        artifact_signing_key_version="1",
     )
     DatasetKeyGrant.objects.create(
         publication=publication,
@@ -101,7 +112,27 @@ def test_configuration_and_manifest_use_bearer_installation_scope(api_context, t
     assert manifest.json()["datasets"][0]["publication_id"] == str(publication.id)
     assert manifest.json()["datasets"][0]["download_url"].endswith(f"/{publication.id}/download")
     assert manifest.json()["signature_algorithm"] == "Ed25519"
+    assert manifest.json()["datasets"][0]["content_encryption_nonce"] == base64.b64encode(
+        b"n" * 12
+    ).decode("ascii")
     assert manifest["ETag"]
+
+    signing_public_path = tmp_path / "signing-public"
+    signing_public_path.write_bytes(
+        Ed25519PrivateKey.from_private_bytes(b"s" * 32)
+        .public_key()
+        .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    )
+    with override_settings(PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH=signing_public_path):
+        signing_key = client.get("/api/v1/tablet/signing-keys/1", **_authorization(credential))
+    assert signing_key.status_code == 200
+    assert signing_key.json() == {
+        "algorithm": "Ed25519",
+        "version": "1",
+        "public_key": base64.b64encode(signing_public_path.read_bytes()).decode("ascii"),
+    }
+    unknown_key = client.get("/api/v1/tablet/signing-keys/unknown", **_authorization(credential))
+    assert unknown_key.status_code == 404
 
     not_modified = client.get(
         "/api/v1/tablet/manifest",
@@ -123,8 +154,13 @@ def test_manifest_pending_is_an_rfc9457_problem(api_context):
     assert response.json()["manifest_request_id"]
 
 
-def test_download_uses_only_server_generated_uuid_filename_and_etag(api_context):
-    client, _, credential, publication = api_context
+def test_download_uses_only_server_generated_uuid_filename_and_etag(api_context, tmp_path):
+    client, installation, credential, publication = api_context
+    signing_path = tmp_path / "signing"
+    signing_path.write_bytes(b"s" * 32)
+    request_manifest(installation=installation)
+    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+        process_next_signed_manifest()
     response = client.get(
         f"/api/v1/tablet/datasets/{publication.id}/download", **_authorization(credential)
     )

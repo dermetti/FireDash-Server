@@ -1,2 +1,12 @@
-<!doctype html>
-<html lang="en"><body><main><h1>Hydrant</h1><form method="post">{% csrf_token %}{{ form.as_p }}<button>Save</button></form></main></body></html>
+{% extends "base.html" %}
+{% block title %}Hydrant{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+<li class="nav-item"><a class="nav-link" href="{% url 'reference-data-hydrants' hydrant.department_id %}">Hydrants</a></li>
+{% endblock %}
+{% block content %}
+<h1>Hydrant: {{ hydrant.external_identifier|default:"Unnamed" }}</h1>
+<div class="card"><div class="card-body">
+<form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Save</button></form>
+</div></div>
+{% endblock %}

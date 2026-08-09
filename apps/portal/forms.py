@@ -9,7 +9,10 @@ class DepartmentForm(forms.Form):
 class StationForm(forms.Form):
     name = forms.CharField(max_length=255)
     short_code = forms.CharField(max_length=64)
-    address = forms.CharField(required=False, widget=forms.Textarea)
+    street = forms.CharField(max_length=255, required=False)
+    house_number = forms.CharField(max_length=32, required=False)
+    postal_code = forms.CharField(max_length=32, required=False)
+    city = forms.CharField(max_length=255, required=False)
     active = forms.BooleanField(required=False, initial=True)
 
 
@@ -23,6 +26,15 @@ class VehicleForm(forms.Form):
 class AdministratorForm(forms.Form):
     email = forms.EmailField(max_length=254)
     display_name = forms.CharField(max_length=255)
+
+
+class StationScopeForm(forms.Form):
+    user_id = forms.UUIDField()
+    station_id = forms.UUIDField()
+
+
+class RevokeStationScopeForm(forms.Form):
+    assignment_id = forms.UUIDField()
 
 
 class DepartmentStatusForm(forms.Form):

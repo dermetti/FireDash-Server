@@ -12,14 +12,26 @@ from apps.tablets.models import Tablet
 
 @transaction.atomic
 def create_station(
-    *, actor, department, name: str, short_code: str, address: str = "", active: bool = True
+    *,
+    actor,
+    department,
+    name: str,
+    short_code: str,
+    street: str = "",
+    house_number: str = "",
+    postal_code: str = "",
+    city: str = "",
+    active: bool = True,
 ) -> Station:
     require_department_admin(actor, department)
     station = Station.objects.create(
         department=department,
         name=name.strip(),
         short_code=short_code.strip(),
-        address=address.strip(),
+        street=street.strip(),
+        house_number=house_number.strip(),
+        postal_code=postal_code.strip(),
+        city=city.strip(),
         active=active,
     )
     record_event(
@@ -35,19 +47,42 @@ def create_station(
 
 @transaction.atomic
 def update_station(
-    *, actor, station: Station, name: str, short_code: str, address: str, active: bool
+    *,
+    actor,
+    station: Station,
+    name: str,
+    short_code: str,
+    street: str = "",
+    house_number: str = "",
+    postal_code: str = "",
+    city: str = "",
+    active: bool,
 ) -> Station:
     require_department_admin(actor, station.department)
     if not active and station.active:
         deactivate_station(station=station)
     else:
-        station.name, station.short_code, station.address, station.active = (
+        station.name, station.short_code, station.active = (
             name.strip(),
             short_code.strip(),
-            address.strip(),
             active,
         )
-        station.save(update_fields=("name", "short_code", "address", "active", "updated_at"))
+        station.street = street.strip()
+        station.house_number = house_number.strip()
+        station.postal_code = postal_code.strip()
+        station.city = city.strip()
+        station.save(
+            update_fields=(
+                "name",
+                "short_code",
+                "street",
+                "house_number",
+                "postal_code",
+                "city",
+                "active",
+                "updated_at",
+            )
+        )
     record_event(
         action="organization.station_updated",
         actor_user=actor,
@@ -68,6 +103,7 @@ def create_vehicle(
     display_name: str,
     call_sign: str = "",
     asset_identifier: str = "",
+    active: bool = True,
 ) -> Vehicle:
     require_department_admin(actor, department)
     if station.department_id != department.id or not station.active:
@@ -78,6 +114,7 @@ def create_vehicle(
         display_name=display_name.strip(),
         call_sign=call_sign.strip(),
         asset_identifier=asset_identifier.strip(),
+        active=active,
     )
     record_event(
         action="organization.vehicle_created",

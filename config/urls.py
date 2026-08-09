@@ -14,5 +14,6 @@ urlpatterns = [
     path("", include("apps.portal.urls")),
     path("", include("apps.personnel.urls")),
     path("", include("apps.publications.urls")),
+    path("", include("apps.tablets.urls")),
     path("health/", include("apps.health.urls")),
 ]

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ tablet.display_name|default:"Tablet" }}{% endblock %}
+{% block content %}
+<p class="mb-2"><a href="{% url 'tablet-list' department.id %}">&larr; Tablets</a></p>
+<h1>{{ tablet.display_name|default:"Unnamed tablet" }}</h1>
+<dl class="row mb-4">
+  <dt class="col-sm-3">Asset number</dt><dd class="col-sm-9">{{ tablet.asset_number|default:"Not assigned" }}</dd>
+  <dt class="col-sm-3">Status</dt><dd class="col-sm-9">{{ tablet.status }}</dd>
+  <dt class="col-sm-3">Active</dt><dd class="col-sm-9">{{ tablet.active|yesno:"Yes,No" }}</dd>
+  <dt class="col-sm-3">Created</dt><dd class="col-sm-9">{{ tablet.created_at }}</dd>
+</dl>
+<h2 class="h4">App Installations</h2>
+<div class="table-responsive"><table class="table table-sm"><thead><tr><th>Status</th><th>Version</th><th>Adopted</th><th>Last check-in</th><th>Authorization valid until</th></tr></thead><tbody>
+  {% for installation in installations %}<tr><td>{{ installation.status }}</td><td>{{ installation.app_version }}</td><td>{{ installation.adopted_at }}</td><td>{{ installation.last_successful_check_in_at|default:"Never" }}</td><td>{{ installation.authorization_valid_until }}</td></tr>
+  {% empty %}<tr><td colspan="5" class="text-muted">No app installations.</td></tr>
+  {% endfor %}
+</tbody></table></div>
+{% endblock %}

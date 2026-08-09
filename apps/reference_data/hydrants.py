@@ -12,7 +12,7 @@ class HydrantImportError(ValueError):
 SUPPORTED_PROPERTIES = {
     "external_identifier",
     "hydrant_type",
-    "flow_information",
+    "diameter_mm",
     "status",
     "source_metadata",
 }
@@ -24,7 +24,7 @@ class NormalizedHydrant:
     latitude: float
     external_identifier: str
     hydrant_type: str
-    flow_information: str
+    diameter_mm: int | None
     status: str
     source_metadata: dict[str, str | int | bool]
 
@@ -34,7 +34,7 @@ class NormalizedHydrant:
             "latitude": self.latitude,
             "external_identifier": self.external_identifier,
             "hydrant_type": self.hydrant_type,
-            "flow_information": self.flow_information,
+            "diameter_mm": self.diameter_mm,
             "status": self.status,
             "source_metadata": self.source_metadata,
         }
@@ -82,7 +82,7 @@ def _parse_feature(feature: object) -> NormalizedHydrant:
         latitude=float(latitude),
         external_identifier=_bounded_string(properties.get("external_identifier", ""), 255),
         hydrant_type=_bounded_string(properties.get("hydrant_type", ""), 128),
-        flow_information=_bounded_string(properties.get("flow_information", ""), 255),
+        diameter_mm=_bounded_int(properties.get("diameter_mm")),
         status=_bounded_string(properties.get("status", ""), 128),
         source_metadata=_metadata(properties.get("source_metadata", {})),
     )
@@ -92,6 +92,17 @@ def _bounded_string(value: object, maximum: int) -> str:
     if not isinstance(value, str) or len(value.strip()) > maximum:
         raise HydrantImportError("Hydrant property is invalid or too long.")
     return value.strip()
+
+
+def _bounded_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | str):
+        raise HydrantImportError("Hydrant diameter must be an integer.")
+    try:
+        return int(value)
+    except ValueError:
+        raise HydrantImportError("Hydrant diameter must be an integer.") from None
 
 
 def _metadata(value: object) -> dict[str, str | int | bool]:

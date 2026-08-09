@@ -71,7 +71,7 @@ def _build_hydrants(*, department, station, source_revision: int) -> dict[str, o
     if station is not None:
         raise PublicationBuildError("Hydrant builder requires a department scope.")
     status_rows = list(
-        Hydrant.objects.filter(department=department, active=True)
+        Hydrant.objects.filter(department=department, status="ACTIVE")
         .values("status")
         .annotate(count=Count("id"))
         .order_by("status")[: MAX_HYDRANT_STATUS_BUCKETS + 1]
@@ -159,7 +159,7 @@ def _artifact_hydrants(*, department, station, source_revision: int) -> bytes:
     if station is not None:
         raise PublicationBuildError("Hydrant artifact requires a department scope.")
     features = []
-    for hydrant in Hydrant.objects.filter(department=department, active=True).order_by("id"):
+    for hydrant in Hydrant.objects.filter(department=department, status="ACTIVE").order_by("id"):
         features.append(
             {
                 "type": "Feature",
@@ -171,7 +171,7 @@ def _artifact_hydrants(*, department, station, source_revision: int) -> bytes:
                 "properties": {
                     "external_identifier": hydrant.external_identifier,
                     "hydrant_type": hydrant.hydrant_type,
-                    "flow_information": hydrant.flow_information,
+                    "diameter_mm": hydrant.diameter_mm,
                     "status": hydrant.status,
                 },
             }
@@ -287,7 +287,7 @@ def build_change_summary(
 ) -> dict[str, int]:
     previous_summary = previous if isinstance(previous, dict) else {}
     fields_by_type = {
-        "department_hydrants": ("active_count",),
+        "department_hydrants": ("active_count", "diameter_mm_summary"),
         "department_fire_plans": ("active_document_count", "total_accepted_bytes", "total_pages"),
         "station_personnel": (
             "person_count",

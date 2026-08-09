@@ -1,9 +1,32 @@
-<!doctype html>
-<html lang="en"><body>
-<main><h1>{{ person.display_name }}</h1><form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Save</button></form>
-<form method="post" action="{% url 'personnel-eligibility' person.department_id person.id %}">{% csrf_token %}<label>Commander eligible <input type="checkbox" name="eligible" {% if person.incident_commander_eligible %}checked{% endif %}></label><button>Update</button></form>
-<form method="post" action="{% url 'personnel-email' person.department_id person.id %}">{% csrf_token %}<input type="email" name="email" value="{{ person.incident_commander_email|default:'' }}"><button>Set commander email</button></form>
-<form method="post" action="{% url 'personnel-verify-email' person.department_id person.id %}">{% csrf_token %}<button>Verify commander email</button></form>
-<form method="post" action="{% url 'personnel-offboard' person.department_id person.id %}">{% csrf_token %}<button>Offboard</button></form>
-<form method="post" action="{% url 'personnel-anonymize' person.department_id person.id %}">{% csrf_token %}<button>Anonymize</button></form></main>
-</body></html>
+{% extends "base.html" %}
+{% block title %}{{ person.display_name }}{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+<li class="nav-item"><a class="nav-link" href="{% url 'personnel-list' person.department_id %}">Personnel</a></li>
+{% endblock %}
+{% block content %}
+<h1>{{ person.display_name }}</h1>
+<p class="text-muted">{{ person.personnel_number|default:"" }}</p>
+<div class="row">
+   {% if department_admin %}<div class="col-md-6">
+    <div class="card mb-3"><div class="card-body">
+    <h5>Edit</h5>
+    <form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Save</button></form>
+    </div></div>
+   </div>{% endif %}
+  <div class="col-md-6">
+    <div class="card mb-3"><div class="card-body">
+    <h5>Commander</h5>
+    <form method="post" action="{% url 'personnel-eligibility' person.department_id person.id %}">{% csrf_token %}{% if nav_station %}<input type="hidden" name="station_id" value="{{ nav_station.id }}">{% endif %}<div class="form-check"><input type="checkbox" name="eligible" class="form-check-input" {% if person.incident_commander_eligible %}checked{% endif %}><label class="form-check-label">Commander eligible</label></div><button class="btn btn-sm btn-outline-primary mt-2">Update</button></form>
+    {% if department_admin %}
+    <form method="post" action="{% url 'personnel-email' person.department_id person.id %}" class="mt-3">{% csrf_token %}<label class="form-label">Commander email</label><input type="email" name="email" class="form-control" value="{{ person.incident_commander_email|default:'' }}"><button class="btn btn-sm btn-outline-primary mt-2">Set email</button></form>
+    <form method="post" action="{% url 'personnel-verify-email' person.department_id person.id %}" class="mt-2">{% csrf_token %}<button class="btn btn-sm btn-outline-success">Verify email</button></form>
+    {% endif %}</div></div>
+    <div class="card"><div class="card-body">
+    <h5>Lifecycle</h5>
+    <form method="post" action="{% url 'personnel-offboard' person.department_id person.id %}">{% csrf_token %}<button class="btn btn-warning btn-sm">Offboard</button></form>
+    <form method="post" action="{% url 'personnel-anonymize' person.department_id person.id %}" class="mt-2">{% csrf_token %}<button class="btn btn-danger btn-sm">Anonymize</button></form>
+    </div></div>
+  </div>
+</div>
+{% endblock %}

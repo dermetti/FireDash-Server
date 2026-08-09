@@ -10,6 +10,11 @@ urlpatterns = [
     path("tablet/configuration", api.ConfigurationView.as_view(), name="api-tablet-configuration"),
     path("tablet/manifest", api.ManifestView.as_view(), name="api-tablet-manifest"),
     path(
+        "tablet/signing-keys/<str:version>",
+        api.SigningKeyView.as_view(),
+        name="api-tablet-signing-key",
+    ),
+    path(
         "tablet/reactivation/preview",
         api.ReactivationPreviewView.as_view(),
         name="api-reactivation-preview",

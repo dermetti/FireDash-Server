@@ -40,6 +40,7 @@ def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded):
         PUBLICATION_ARTIFACT_MAX_BYTES=1024,
         PUBLICATION_KEK_CREDENTIAL_PATH=kek_path,
         PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path,
+        PUBLICATION_SIGNING_KEY_VERSION="43",
         PUBLICATION_KEK_VERSION="42",
     ):
         metadata = build_encrypted_artifact(publication=publication, plaintext=b"safe data")
@@ -59,6 +60,7 @@ def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded):
     assert metadata["artifact_size"] == len(ciphertext)
     assert metadata["artifact_sha256"] == hashlib.sha256(ciphertext).hexdigest()
     assert len(nonce) == 12
+    assert metadata["artifact_signing_key_version"] == "43"
     cek = keywrap.aes_key_unwrap(kek, wrapped_cek)
     assert AESGCM(cek).decrypt(nonce, ciphertext, None) == b"safe data"
 

@@ -1,2 +1,18 @@
-<!doctype html>
-<html lang="en"><body><main><h1>{{ fire_plan.object_name }}</h1><p>{{ fire_plan.page_count }} pages</p><form method="post">{% csrf_token %}{{ form.as_p }}<button>Save</button></form></main></body></html>
+{% extends "base.html" %}
+{% block title %}{{ fire_plan.object_name }}{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+<li class="nav-item"><a class="nav-link" href="{% url 'reference-data-fire-plans' fire_plan.department_id %}">Fire Plans</a></li>
+{% endblock %}
+{% block content %}
+<h1>{{ fire_plan.object_name }}</h1>
+<dl class="row">
+  <dt class="col-sm-3">Reference</dt><dd class="col-sm-9">{{ fire_plan.object_reference|default:"—" }}</dd>
+  <dt class="col-sm-3">Pages</dt><dd class="col-sm-9">{{ fire_plan.page_count }}</dd>
+  <dt class="col-sm-3">Size</dt><dd class="col-sm-9">{{ fire_plan.file_size|filesizeformat }}</dd>
+  <dt class="col-sm-3">Active</dt><dd class="col-sm-9"><span class="badge bg-{% if fire_plan.active %}success{% else %}secondary{% endif %}">{{ fire_plan.active|yesno:"Yes,No" }}</span></dd>
+</dl>
+<div class="card"><div class="card-body">
+<form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Update</button></form>
+</div></div>
+{% endblock %}

@@ -25,6 +25,15 @@ TRUSTED_PROXY_IPS=127.0.0.1,::1
 
 `DJANGO_SECRET_KEY`, database credentials, signing keys, key-encryption keys, and backup credentials must never be committed or logged. Signing and key-encryption credentials are introduced in Phase 7 through systemd credentials.
 
+The publication worker receives only `PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH`, containing the
+32-byte Ed25519 private seed. The web service receives only
+`PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH`, containing the matching 32-byte raw Ed25519
+public key, and must not be able to read the private credential. Both deployments use the same
+`PUBLICATION_SIGNING_KEY_VERSION`. The authenticated tablet endpoint
+`/api/v1/tablet/signing-keys/{version}` distributes only the configured current public key.
+Rotate the private key, public key, and version atomically; the current single-key configuration
+does not retain prior public keys for historical artifact verification.
+
 Only the local Nginx proxy may appear in `TRUSTED_PROXY_IPS`. Nginx overwrites inbound `X-Forwarded-For`; application code must not trust a header received directly from a client.
 
 ## Phase 8/9 operational configuration

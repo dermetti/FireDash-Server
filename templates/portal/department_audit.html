@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ department.name }} Audit{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+{% endblock %}
+{% block content %}
+<h1>{{ department.name }} Audit Log</h1>
+<div class="mb-3">
+  <label class="form-label">Filter by station</label>
+  <select class="form-select" style="max-width:300px" onchange="window.location=this.value">
+    <option value="?station=__all__" {% if selected_station == '__all__' %}selected{% endif %}>All stations</option>
+    {% for station in stations %}
+    <option value="?station={{ station.id }}" {% if selected_station == station.id|stringformat:'s' %}selected{% endif %}>{{ station.name }}</option>
+    {% endfor %}
+  </select>
+</div>
+<div class="table-responsive">
+<table class="table table-sm table-hover">
+<thead><tr><th>Timestamp</th><th>Action</th><th>Actor</th><th>Station</th><th>Target</th></tr></thead>
+<tbody>
+{% for event in events %}
+<tr>
+  <td class="text-nowrap small">{{ event.timestamp|date:"Y-m-d H:i" }}</td>
+  <td><code class="small">{{ event.action }}</code></td>
+  <td class="small">{{ event.actor_user.display_name|default:"—" }}</td>
+  <td class="small">{{ event.station.name|default:"—" }}</td>
+  <td class="small">{{ event.target_type }}:{{ event.target_uuid|truncatechars:8 }}</td>
+</tr>
+{% empty %}
+<tr><td colspan="5" class="text-muted">No audit events.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endblock %}

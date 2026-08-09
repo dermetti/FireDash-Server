@@ -1,0 +1,8 @@
+<div class="mb-3" x-data>
+  <label class="form-label" for="{{ selector_id }}">{{ label }}</label>
+  <input class="form-control form-control-sm mb-1" type="search" name="q" placeholder="Search {{ label|lower }}" aria-label="Search {{ label|lower }}" hx-get="{{ endpoint }}" hx-trigger="input changed delay:250ms" hx-target="#{{ selector_id }}" hx-include="this">
+  <select id="{{ selector_id }}" name="{{ field_name }}" class="form-select" required>
+    <option value="">Select {{ label|lower }}...</option>
+    {% include "components/_selector_options.html" with options=options %}
+  </select>
+</div>

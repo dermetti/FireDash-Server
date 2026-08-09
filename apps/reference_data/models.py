@@ -7,15 +7,20 @@ from apps.organizations.models import Department
 
 
 class Hydrant(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        INACTIVE = "INACTIVE", "Inactive"
+        UNKNOWN = "UNKNOWN", "Unknown"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="hydrants")
     external_identifier = models.CharField(max_length=255, blank=True)
     location = models.PointField(srid=4326)
     hydrant_type = models.CharField(max_length=128, blank=True)
     flow_information = models.CharField(max_length=255, blank=True)
-    status = models.CharField(max_length=128, blank=True)
+    diameter_mm = models.PositiveIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=128, blank=True, default="ACTIVE")
     source_metadata = models.JSONField(default=dict)
-    active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -27,7 +32,11 @@ class Hydrant(models.Model):
                 name="unique_hydrant_external_identifier_per_department",
             )
         ]
-        indexes = [models.Index(fields=("department", "active"))]
+        indexes = [models.Index(fields=("department", "status"))]
+
+    @property
+    def active(self) -> bool:
+        return self.status == self.Status.ACTIVE
 
 
 class FirePlan(models.Model):

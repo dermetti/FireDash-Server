@@ -1,8 +1,66 @@
-<!doctype html>
-<html lang="en"><body>
-<main><h1>FireDash administration</h1>
-<nav><a href="{% url 'accounts-reauthenticate' %}">Reauthenticate</a><form method="post" action="{% url 'accounts-logout' %}">{% csrf_token %}<button>Sign out</button></form></nav>
-{% if is_system_admin %}<section><h2>System administration</h2><a href="{% url 'portal-system-departments' %}">Departments</a></section>{% endif %}
-<section><h2>Department administration</h2><ul>{% for department in departments %}<li>{{ department.name }}: <a href="{% url 'portal-department-manage' department.id %}">Administrators</a> <a href="{% url 'portal-stations' department.id %}">Stations</a> <a href="{% url 'personnel-list' department.id %}">Personnel</a> <a href="{% url 'personnel-retention-policy' department.id %}">Retention policy</a> <a href="{% url 'reference-data-hydrants' department.id %}">Hydrants</a> <a href="{% url 'reference-data-fire-plans' department.id %}">Fire plans</a> <a href="{% url 'publications-list' department.id %}">Publications</a></li>{% empty %}<li>No department administration scope.</li>{% endfor %}</ul></section>
-<section><h2>Station administration</h2><ul>{% for station in stations %}<li>{{ station.name }}: <a href="{% url 'portal-station-manage' station.id %}">Station</a> <a href="{% url 'portal-vehicles' station.id %}">Vehicles</a> <a href="{% url 'personnel-list' station.department_id %}">Personnel</a></li>{% empty %}<li>No station administration scope.</li>{% endfor %}</ul></section>
-</main></body></html>
+{% extends "base.html" %}
+{% block title %}FireDash Administration{% endblock %}
+{% block nav_links %}
+{% if is_system_admin %}<li class="nav-item"><span class="nav-link text-warning">System Admin</span></li>{% endif %}
+{% if departments %}<li class="nav-item"><span class="nav-link text-info">Department Admin</span></li>{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="row">
+  {% if is_system_admin %}
+  <div class="col-md-4 mb-4">
+    <div class="card border-danger">
+      <div class="card-header bg-danger text-white"><h5 class="mb-0">System Administration</h5></div>
+      <div class="card-body">
+        <a href="{% url 'portal-system-departments' %}" class="btn btn-outline-danger btn-sm w-100 mb-2">Manage Departments</a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if departments %}
+  <div class="col-md-4 mb-4">
+    <div class="card border-primary">
+      <div class="card-header bg-primary text-white"><h5 class="mb-0">Department Administration</h5></div>
+      <div class="card-body">
+        {% for department in departments %}
+        <div class="mb-3">
+          <strong>{{ department.name }}</strong>
+          <div class="d-grid gap-1 mt-1">
+            <a href="{% url 'portal-department-manage' department.id %}" class="btn btn-outline-primary btn-sm">Administrators</a>
+            <a href="{% url 'portal-stations' department.id %}" class="btn btn-outline-primary btn-sm">Stations</a>
+            <a href="{% url 'personnel-list' department.id %}" class="btn btn-outline-primary btn-sm">Personnel</a>
+            <a href="{% url 'personnel-retention-policy' department.id %}" class="btn btn-outline-primary btn-sm">Retention Policy</a>
+            <a href="{% url 'reference-data-hydrants' department.id %}" class="btn btn-outline-primary btn-sm">Hydrants</a>
+            <a href="{% url 'reference-data-fire-plans' department.id %}" class="btn btn-outline-primary btn-sm">Fire Plans</a>
+            <a href="{% url 'portal-department-audit' department.id %}" class="btn btn-outline-primary btn-sm">Audit</a>
+            <a href="{% url 'publications-list' department.id %}" class="btn btn-outline-primary btn-sm">Publications</a>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if stations %}
+  <div class="col-md-4 mb-4">
+    <div class="card border-info">
+      <div class="card-header bg-info text-white"><h5 class="mb-0">Station Administration</h5></div>
+      <div class="card-body">
+        {% for station in stations %}
+        <div class="mb-3">
+          <strong>{{ station.name }}</strong> <small class="text-muted">({{ station.department.name }})</small>
+          <div class="d-grid gap-1 mt-1">
+            <a href="{% url 'portal-station-manage' station.id %}" class="btn btn-outline-info btn-sm">Station Details</a>
+            <a href="{% url 'portal-vehicles' station.id %}" class="btn btn-outline-info btn-sm">Vehicles</a>
+            <a href="{% url 'personnel-list' station.department_id %}" class="btn btn-outline-info btn-sm">Personnel</a>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

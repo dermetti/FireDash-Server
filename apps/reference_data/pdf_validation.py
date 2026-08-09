@@ -1,5 +1,5 @@
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from django.conf import settings
@@ -65,6 +65,8 @@ def _inspect_pdf(path: Path) -> tuple[int, int, str]:
                 raise PdfValidationError("PDF page limit exceeded.")
             if _contains_prohibited_content(document.Root):
                 raise PdfValidationError("PDF contains prohibited active or external content.")
+    except pikepdf.PasswordError:
+        raise PdfValidationError("Encrypted PDFs are not accepted.") from None
     except PdfValidationError:
         raise
     except Exception as error:
@@ -81,10 +83,18 @@ def _contains_prohibited_content(value: object, seen: set[tuple[int, int]] | Non
         if objgen in seen:
             return False
         seen.add(objgen)
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if str(key) in PROHIBITED_NAMES or _contains_prohibited_content(item, seen):
-                return True
-    elif isinstance(value, list | tuple):
+    if isinstance(value, Mapping) or hasattr(value, "items"):
+        try:
+            for key, item in value.items():
+                if str(key) in PROHIBITED_NAMES or _contains_prohibited_content(item, seen):
+                    return True
+            return False
+        except TypeError:
+            pass
+    if isinstance(value, list | tuple):
         return any(_contains_prohibited_content(item, seen) for item in value)
-    return False
+    if isinstance(value, str | bytes):
+        return False
+    if not isinstance(value, Iterable):
+        return False
+    return any(_contains_prohibited_content(item, seen) for item in value)

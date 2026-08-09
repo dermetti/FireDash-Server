@@ -1,4 +1,20 @@
-<!doctype html>
-<html lang="en"><body>
-<main><h1>Reauthenticate</h1><form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Confirm</button></form></main>
-</body></html>
+{% extends "base.html" %}
+{% block title %}Reauthenticate{% endblock %}
+{% block head %}<style>.reauth-card{max-width:420px;margin:2rem auto;}</style>{% endblock %}
+{% block content %}
+<div class="reauth-card">
+<div class="card shadow">
+  <div class="card-header bg-warning"><h5 class="mb-0">Reauthentication Required</h5></div>
+  <div class="card-body">
+    {% if operation %}<p class="text-muted small">Confirm your identity to continue: <code>{{ operation }}</code></p>{% endif %}
+    <p class="small">Enter your TOTP code to confirm your administrative session.</p>
+    <form method="post">
+      {% csrf_token %}
+      {% if pending_token %}<input type="hidden" name="pending" value="{{ pending_token }}">{% endif %}
+      <div class="mb-3">{{ form.as_p }}</div>
+      <button class="btn btn-warning w-100">Confirm</button>
+    </form>
+  </div>
+</div>
+</div>
+{% endblock %}

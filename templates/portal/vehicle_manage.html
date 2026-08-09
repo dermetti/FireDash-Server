@@ -1,2 +1,15 @@
-<!doctype html>
-<html lang="en"><body><main><h1>{{ vehicle.display_name }}</h1>{% if form %}<form method="post">{% csrf_token %}{{ form.as_p }}<button>Save vehicle</button></form>{% endif %}</main></body></html>
+{% extends "base.html" %}
+{% block title %}{{ vehicle.display_name }}{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+<li class="nav-item"><a class="nav-link" href="{% url 'portal-vehicles' vehicle.station_id %}">Vehicles</a></li>
+{% endblock %}
+{% block content %}
+<h1>{{ vehicle.display_name }}</h1>
+<p class="text-muted">{{ vehicle.station.name }} &middot; {{ vehicle.station.department.name }}</p>
+{% if form %}
+<div class="card"><div class="card-body">
+<form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Save</button></form>
+</div></div>
+{% endif %}
+{% endblock %}

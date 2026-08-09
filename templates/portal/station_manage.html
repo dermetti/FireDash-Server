@@ -1,2 +1,30 @@
-<!doctype html>
-<html lang="en"><body><main><h1>{{ station.name }}</h1><a href="{% url 'portal-vehicles' station.id %}">Vehicles</a>{% if department_admin %}<form method="post">{% csrf_token %}<input type="hidden" name="action" value="station">{{ form.as_p }}<button>Save station</button></form><h2>Station administrators</h2><ul>{% for assignment in assignments %}<li>{{ assignment.user.display_name }}</li>{% endfor %}</ul><form method="post">{% csrf_token %}<input type="hidden" name="action" value="provision">{{ admin_form.as_p }}<button>Create station administrator</button></form>{% endif %}</main></body></html>
+{% extends "base.html" %}
+{% block title %}{{ station.name }}{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+<li class="nav-item"><a class="nav-link" href="{% url 'portal-stations' station.department_id %}">Stations</a></li>
+<li class="nav-item"><a class="nav-link" href="{% url 'portal-vehicles' station.id %}">Vehicles</a></li>
+{% endblock %}
+{% block content %}
+<div class="row">
+  <div class="col-md-6">
+    <h1>{{ station.name }} <small class="text-muted">({{ station.short_code }})</small></h1>
+    <p class="text-muted">{{ station.department.name }}</p>
+    {% if department_admin %}
+    <div class="card mb-3"><div class="card-body">
+    <h5>Edit Station</h5>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="station">{{ form.as_p }}<button class="btn btn-primary">Save</button></form>
+    </div></div>
+    {% endif %}
+  </div>
+  {% if department_admin %}
+  <div class="col-md-6">
+    <div class="card mb-3"><div class="card-body">
+    <h5>Station Administrators</h5>
+    <ul class="list-group mb-3">{% for assignment in assignments %}<li class="list-group-item">{{ assignment.user.display_name }}</li>{% empty %}<li class="list-group-item text-muted">No station administrators.</li>{% endfor %}</ul>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="provision">{{ admin_form.as_p }}<button class="btn btn-outline-primary">Create Administrator</button></form>
+    </div></div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

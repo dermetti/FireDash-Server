@@ -131,9 +131,8 @@ def hydrant_manage(request: HttpRequest, hydrant_id) -> HttpResponse:
             "longitude": hydrant.location.x,
             "latitude": hydrant.location.y,
             "hydrant_type": hydrant.hydrant_type,
-            "flow_information": hydrant.flow_information,
+            "diameter_mm": hydrant.diameter_mm,
             "status": hydrant.status,
-            "active": hydrant.active,
         },
     )
     if request.method == "POST" and form.is_valid():

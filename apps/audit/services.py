@@ -15,7 +15,7 @@ def record_event(
     station: Station | None = None,
     target_type: str,
     target_uuid: uuid.UUID | None = None,
-    metadata: dict[str, str | int | bool] | None = None,
+    metadata: dict[str, str | int | bool | None] | None = None,
 ) -> AuditEvent:
     request_id = getattr(request, "request_id", uuid.uuid4())
     return AuditEvent.objects.create(

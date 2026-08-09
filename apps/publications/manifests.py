@@ -5,12 +5,15 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from apps.assignments.models import TabletVehicleAssignment
+from apps.publications.artifacts import ArtifactError, _credential
 from apps.publications.feature_services import is_feature_enabled
 from apps.publications.models import DatasetKeyGrant, DatasetPublication, SignedManifest
 from apps.publications.registry import get_dataset_definition
@@ -25,7 +28,7 @@ class ManifestError(ValueError):
 class ManifestRequest:
     payload: dict[str, object] | None
     unavailable: bool
-    request_id: object | None = None
+    request_id: UUID | None = None
 
 
 def canonical_manifest_payload(payload: dict[str, object]) -> bytes:
@@ -41,6 +44,19 @@ def attach_manifest_signature(*, payload: dict[str, object], signature: bytes) -
     return signed
 
 
+def publication_signing_public_key() -> bytes:
+    """Load the separately provisioned public half without accessing worker credentials."""
+    try:
+        public_key = _credential(
+            settings.PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH, "signing public key"
+        )
+    except ArtifactError as error:
+        raise ManifestError(str(error)) from error
+    if len(public_key) != 32:
+        raise ManifestError("Publication Ed25519 public key must be exactly 32 bytes.")
+    return public_key
+
+
 def manifest_state_hash(
     *,
     installation: AppInstallation,
@@ -51,6 +67,7 @@ def manifest_state_hash(
     """Hash the authorization and publication state that coalesces manifest work."""
     state = {
         "generation": generation,
+        "signing_key_version": settings.PUBLICATION_SIGNING_KEY_VERSION,
         "authorization_valid_until": installation.authorization_valid_until.isoformat(),
         "configuration": {
             "installation_id": str(installation.id),
@@ -59,20 +76,33 @@ def manifest_state_hash(
             "station_id": str(vehicle.station_id),
             "vehicle_id": str(vehicle.id),
         },
-        "datasets": [
-            {
-                "publication_id": str(publication.id),
-                "type": publication.dataset_type_code,
-                "version": publication.version_number,
-                "schema_version": publication.schema_version,
-                "artifact_size": publication.artifact_size,
-                "ciphertext_sha256": publication.artifact_sha256,
-                "content_encryption_algorithm": publication.artifact_encryption_algorithm,
-            }
-            for publication in publications
-        ],
+        "datasets": [_publication_manifest_entry(publication) for publication in publications],
     }
     return hashlib.sha256(canonical_manifest_payload(state)).hexdigest()
+
+
+def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, object]:
+    nonce = publication.artifact_nonce
+    wrapped_cek = publication.artifact_wrapped_cek
+    signature = publication.artifact_signature
+    if nonce is None or wrapped_cek is None or signature is None:
+        raise ManifestError("Ready publication is missing cryptographic metadata.")
+    return {
+        "publication_id": str(publication.id),
+        "type": publication.dataset_type_code,
+        "version": publication.version_number,
+        "schema_version": publication.schema_version,
+        "artifact_size": publication.artifact_size,
+        "ciphertext_sha256": publication.artifact_sha256,
+        "content_encryption_algorithm": publication.artifact_encryption_algorithm,
+        "content_encryption_nonce": base64.b64encode(nonce).decode("ascii"),
+        "content_key_wrapped_for_kek": base64.b64encode(wrapped_cek).decode("ascii"),
+        "content_key_wrapping_algorithm": publication.artifact_wrapping_algorithm,
+        "content_key_kek_version": publication.artifact_kek_version,
+        "artifact_signature": base64.b64encode(signature).decode("ascii"),
+        "artifact_signature_algorithm": publication.artifact_signature_algorithm,
+        "artifact_signing_key_version": publication.artifact_signing_key_version,
+    }
 
 
 def _authorization_context(*, installation: AppInstallation, now):
@@ -196,8 +226,10 @@ def request_manifest(
                 app_installation=installation, state_hash=state_hash
             )
         if manifest.status == SignedManifest.Status.READY:
+            if manifest.signature is None:
+                raise ManifestError("Ready manifest has no signature.")
             payload = dict(manifest.payload)
-            payload["signature"] = base64.b64encode(bytes(manifest.signature)).decode("ascii")
+            payload["signature"] = base64.b64encode(manifest.signature).decode("ascii")
             payload["signature_algorithm"] = manifest.signature_algorithm
             payload["signing_key_version"] = manifest.signing_key_version
             return ManifestRequest(payload=payload, unavailable=False, request_id=manifest.id)

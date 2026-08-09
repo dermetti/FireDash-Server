@@ -31,16 +31,13 @@ def managed_department_ids(user):
 def active_station_ids(user):
     if not user.is_authenticated:
         return Station.objects.none().values_list("id", flat=True)
-    department_stations = Station.objects.filter(
-        department_id__in=active_department_ids(user), active=True
-    )
     assigned_stations = Station.objects.filter(
         admin_assignments__user=user,
         admin_assignments__active=True,
         active=True,
         department__status=Department.Status.ACTIVE,
     )
-    return (department_stations | assigned_stations).values_list("id", flat=True).distinct()
+    return assigned_stations.values_list("id", flat=True).distinct()
 
 
 def can_manage_department(user, department: Department) -> bool:

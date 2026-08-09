@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytest
+from django.urls import reverse
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
@@ -78,3 +79,41 @@ def test_anonymization_removes_identifying_fields_after_retention(department_adm
     assert anonymized.first_name is None
     assert anonymized.last_name is None
     assert anonymized.personnel_number is None
+
+
+@pytest.mark.django_db
+def test_personnel_create_and_update_forms_persist_submitted_values(client, department_admin):
+    actor, department, station = department_admin
+    client.force_login(actor)
+
+    response = client.post(
+        reverse("personnel-list", args=(department.id,)),
+        {
+            "personnel_number": " 42 ",
+            "first_name": " Alex ",
+            "last_name": " Member ",
+            "home_station_id": station.id,
+        },
+    )
+
+    assert response.status_code == 302
+    person = Person.objects.get(department=department, personnel_number="42")
+    assert (person.first_name, person.last_name, person.display_name, person.active) == (
+        "Alex",
+        "Member",
+        "Alex Member",
+        True,
+    )
+
+    response = client.post(
+        reverse("personnel-detail", args=(department.id, person.id)),
+        {"personnel_number": "43", "first_name": "Taylor", "last_name": "Updated"},
+    )
+
+    assert response.status_code == 302
+    person.refresh_from_db()
+    assert (person.personnel_number, person.display_name, person.active) == (
+        "43",
+        "Taylor Updated",
+        True,
+    )

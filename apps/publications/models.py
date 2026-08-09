@@ -123,6 +123,7 @@ class DatasetPublication(models.Model):
     artifact_kek_version = models.CharField(max_length=64, blank=True)
     artifact_signature = models.BinaryField(null=True, blank=True)
     artifact_signature_algorithm = models.CharField(max_length=32, blank=True)
+    artifact_signing_key_version = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -171,16 +172,15 @@ class DatasetPublication(models.Model):
             )
         except DatasetRegistryError as error:
             raise ValidationError({"dataset_type_code": str(error)}) from error
+        errors = {}
         if self.station_id and self.station and self.station.department_id != self.department_id:
-            raise ValidationError({"station": "Station must belong to the publication department."})
+            errors["station"] = "Station must belong to the publication department."
         if self.schema_version != definition.current_schema_version:
-            raise ValidationError(
-                {"schema_version": "Schema version is not supported for this dataset."}
-            )
-        if self.schema_version not in definition.supported_schema_versions:
-            raise ValidationError(
-                {"schema_version": "Schema version is not supported for this dataset."}
-            )
+            errors["schema_version"] = "Schema version is not supported for this dataset."
+        elif self.schema_version not in definition.supported_schema_versions:
+            errors["schema_version"] = "Schema version is not supported for this dataset."
+        if errors:
+            raise ValidationError(errors)
         try:
             validate_change_summary(self.change_summary)
         except ValidationError as error:
@@ -203,6 +203,7 @@ class DatasetPublication(models.Model):
                 self.artifact_kek_version,
                 self.artifact_signature,
                 self.artifact_signature_algorithm == "Ed25519",
+                self.artifact_signing_key_version,
             )
         )
         if self.artifact_status == self.ArtifactStatus.READY and not metadata_complete:

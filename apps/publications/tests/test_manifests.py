@@ -1,7 +1,9 @@
 import base64
+import uuid
 from datetime import timedelta
 
 import pytest
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import keywrap
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -58,7 +60,9 @@ def grant_context(db):
         department=department, dataset_type_code="department_hydrants", source_revision=1
     )
     cek, kek = b"c" * 32, b"k" * 32
+    pub_id = uuid.uuid4()
     publication = DatasetPublication.objects.create(
+        id=pub_id,
         department=department,
         dataset_type_code="department_hydrants",
         scope_state=scope,
@@ -68,7 +72,7 @@ def grant_context(db):
         status=DatasetPublication.Status.PUBLISHED,
         artifact_ready=True,
         artifact_status=DatasetPublication.ArtifactStatus.READY,
-        artifact_path="manifest/artifact.bin",
+        artifact_path=f"{department.id}/{pub_id}/artifact.bin",
         artifact_size=100,
         artifact_sha256="a" * 64,
         artifact_nonce=b"n" * 12,
@@ -78,6 +82,7 @@ def grant_context(db):
         artifact_kek_version="1",
         artifact_signature=b"s" * 64,
         artifact_signature_algorithm="Ed25519",
+        artifact_signing_key_version="1",
     )
     return installation, publication, private_key, cek, kek
 
@@ -100,11 +105,16 @@ def test_web_manifest_queues_grant_without_reading_kek_and_worker_fulfills_it(
         PUBLICATION_KEK_CREDENTIAL_PATH=kek_path,
         PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path,
     ):
-        grant = process_next_dataset_key_grant()
+        processed_grant = process_next_dataset_key_grant()
         signed_manifest = process_next_signed_manifest()
-    assert grant is not None and grant.status == DatasetKeyGrant.Status.READY
+    assert processed_grant is not None
+    assert processed_grant.status == DatasetKeyGrant.Status.READY
+    assert processed_grant.hpke_encapsulated_key is not None
+    assert processed_grant.hpke_wrapped_content_key is not None
     assert signed_manifest is not None and signed_manifest.status == SignedManifest.Status.READY
-    Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key().verify(
+    assert signed_manifest.signature is not None
+    public_key = Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key()
+    public_key.verify(
         bytes(signed_manifest.signature), canonical_manifest_payload(signed_manifest.payload)
     )
 
@@ -112,6 +122,34 @@ def test_web_manifest_queues_grant_without_reading_kek_and_worker_fulfills_it(
     assert not result.unavailable and result.payload is not None
     assert result.payload["signature_algorithm"] == "Ed25519"
     assert result.payload["signing_key_version"] == "1"
+    datasets = result.payload["datasets"]
+    assert isinstance(datasets, list) and len(datasets) == 1
+    dataset = datasets[0]
+    assert isinstance(dataset, dict)
+    assert dataset["content_encryption_nonce"] == base64.b64encode(b"n" * 12).decode("ascii")
+    assert dataset["content_key_wrapped_for_kek"] == base64.b64encode(
+        keywrap.aes_key_wrap(kek, cek)
+    ).decode("ascii")
+    assert dataset["content_key_wrapping_algorithm"] == "AES-KW-RFC3394"
+    assert dataset["content_key_kek_version"] == "1"
+    assert dataset["artifact_signature"] == base64.b64encode(b"s" * 64).decode("ascii")
+    assert dataset["artifact_signature_algorithm"] == "Ed25519"
+    assert dataset["artifact_signing_key_version"] == "1"
+    signed_payload = {key: value for key, value in result.payload.items() if key != "signature"}
+    public_key.verify(
+        base64.b64decode(str(result.payload["signature"])),
+        canonical_manifest_payload(signed_payload),
+    )
+    signed_datasets = signed_payload["datasets"]
+    assert isinstance(signed_datasets, list) and len(signed_datasets) == 1
+    signed_dataset = signed_datasets[0]
+    assert isinstance(signed_dataset, dict)
+    signed_dataset["content_encryption_nonce"] = "tampered"
+    with pytest.raises(InvalidSignature):
+        public_key.verify(
+            base64.b64decode(str(result.payload["signature"])),
+            canonical_manifest_payload(signed_payload),
+        )
     context = HPKEContext(
         publication_id=publication.id,
         installation_id=installation.id,
@@ -125,8 +163,8 @@ def test_web_manifest_queues_grant_without_reading_kek_and_worker_fulfills_it(
     )
     assert (
         hpke_open(
-            encapsulated_key=bytes(grant.hpke_encapsulated_key),
-            ciphertext=bytes(grant.hpke_wrapped_content_key),
+            encapsulated_key=processed_grant.hpke_encapsulated_key,
+            ciphertext=processed_grant.hpke_wrapped_content_key,
             recipient_private_key=private_key,
             context=context,
         )
@@ -134,8 +172,8 @@ def test_web_manifest_queues_grant_without_reading_kek_and_worker_fulfills_it(
     )
     with pytest.raises(HPKEError, match="authentication failed"):
         hpke_open(
-            encapsulated_key=bytes(grant.hpke_encapsulated_key),
-            ciphertext=bytes(grant.hpke_wrapped_content_key),
+            encapsulated_key=processed_grant.hpke_encapsulated_key,
+            ciphertext=processed_grant.hpke_wrapped_content_key,
             recipient_private_key=private_key,
             context=HPKEContext(**{**context.__dict__, "version_number": 8}),
         )

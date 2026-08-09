@@ -119,3 +119,25 @@ def revoke_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
         target_type="station_admin_assignment",
         target_uuid=assignment.id,
     )
+
+
+@transaction.atomic
+def grant_station_admin(*, actor, user, station: Station) -> StationAdminAssignment:
+    require_department_admin(actor, station.department)
+    assignment, created = StationAdminAssignment.objects.get_or_create(
+        user=user,
+        station=station,
+        active=True,
+        defaults={"created_by": actor},
+    )
+    if not created:
+        return assignment
+    record_event(
+        action="authorization.station_admin_granted",
+        actor_user=actor,
+        department=station.department,
+        station=station,
+        target_type="station_admin_assignment",
+        target_uuid=assignment.id,
+    )
+    return assignment

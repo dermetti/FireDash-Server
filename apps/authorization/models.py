@@ -69,6 +69,11 @@ class DepartmentMembership(models.Model):
                 condition=Q(active=True),
                 name="one_active_department_role",
             ),
+            models.UniqueConstraint(
+                fields=("user", "role"),
+                condition=Q(active=True),
+                name="one_active_department_admin",
+            ),
             models.CheckConstraint(
                 condition=Q(role="DEPARTMENT_ADMIN"), name="membership_role_is_department_admin"
             ),

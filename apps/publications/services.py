@@ -296,7 +296,7 @@ def finalize_publication_job(
     *, job_id, summary: dict[str, object], artifact: dict[str, object]
 ) -> PublicationJob:
     job = (
-        PublicationJob.objects.select_for_update()
+        PublicationJob.objects.select_for_update(of=("self",))
         .select_related("department", "station")
         .get(pk=job_id)
     )
@@ -468,7 +468,7 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
 @transaction.atomic
 def publish_publication(*, actor, publication: DatasetPublication) -> DatasetPublication:
     publication = (
-        DatasetPublication.objects.select_for_update()
+        DatasetPublication.objects.select_for_update(of=("self",))
         .select_related("department", "station")
         .get(pk=publication.pk)
     )
@@ -521,7 +521,7 @@ def publish_publication(*, actor, publication: DatasetPublication) -> DatasetPub
 @transaction.atomic
 def reject_publication(*, actor, publication: DatasetPublication) -> DatasetPublication:
     publication = (
-        DatasetPublication.objects.select_for_update()
+        DatasetPublication.objects.select_for_update(of=("self",))
         .select_related("department", "station")
         .get(pk=publication.pk)
     )
@@ -584,7 +584,7 @@ def request_rebuild(
 @transaction.atomic
 def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPublication:
     publication = (
-        DatasetPublication.objects.select_for_update()
+        DatasetPublication.objects.select_for_update(of=("self",))
         .select_related("department", "station")
         .get(pk=publication.pk)
     )

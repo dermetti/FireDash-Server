@@ -1,2 +1,22 @@
-<!doctype html>
-<html lang="en"><body><main><h1>{{ department.name }} stations</h1><ul>{% for station in stations %}<li><a href="{% url 'portal-station-manage' station.id %}">{{ station.name }}</a></li>{% endfor %}</ul><form method="post">{% csrf_token %}{{ form.as_p }}<button>Create station</button></form></main></body></html>
+{% extends "base.html" %}
+{% block title %}{{ department.name }} Stations{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+<li class="nav-item"><a class="nav-link" href="{% url 'portal-department-manage' department.id %}">Department</a></li>
+{% endblock %}
+{% block content %}
+<h1>{{ department.name }} Stations</h1>
+<div class="list-group mb-4">
+  {% for station in stations %}
+  <a href="{% url 'portal-station-manage' station.id %}" class="list-group-item list-group-item-action d-flex justify-content-between">
+    {{ station.name }} <span class="badge bg-{% if station.active %}success{% else %}secondary{% endif %}">{{ station.short_code }}</span>
+  </a>
+  {% empty %}
+  <div class="list-group-item text-muted">No stations.</div>
+  {% endfor %}
+</div>
+<div class="card"><div class="card-body">
+<h5>Create Station</h5>
+<form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Create</button></form>
+</div></div>
+{% endblock %}

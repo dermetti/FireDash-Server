@@ -22,4 +22,5 @@ def problem_exception_handler(exc, context):
         "request_id": str(getattr(request, "request_id", "")),
     }
     response["Content-Type"] = "application/problem+json"
+    response.content_type = "application/problem+json"
     return response

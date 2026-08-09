@@ -10,9 +10,12 @@ class HydrantForm(forms.Form):
     longitude = forms.FloatField(min_value=-180, max_value=180)
     latitude = forms.FloatField(min_value=-90, max_value=90)
     hydrant_type = forms.CharField(max_length=128, required=False)
-    flow_information = forms.CharField(max_length=255, required=False)
-    status = forms.CharField(max_length=128, required=False)
-    active = forms.BooleanField(required=False, initial=True)
+    diameter_mm = forms.IntegerField(min_value=1, required=False)
+    status = forms.ChoiceField(
+        choices=[("ACTIVE", "Active"), ("INACTIVE", "Inactive"), ("UNKNOWN", "Unknown")],
+        required=True,
+        initial="ACTIVE",
+    )
 
 
 class FirePlanUploadForm(forms.Form):

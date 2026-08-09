@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ department.name }} Tablets{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="mb-0">{{ department.name }} Tablets</h1>
+</div>
+<form method="get" class="row g-2 mb-3">
+  <div class="col-sm-6 col-md-5"><label class="visually-hidden" for="tablet-query">Search tablets</label><input id="tablet-query" class="form-control" name="q" value="{{ query }}" placeholder="Search name or asset number"></div>
+  <div class="col-sm-4 col-md-3"><label class="visually-hidden" for="tablet-status">Status</label><select id="tablet-status" class="form-select" name="status"><option value="">All statuses</option>{% for value, label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+  <div class="col-sm-2"><button class="btn btn-outline-primary w-100">Filter</button></div>
+</form>
+<div class="list-group">
+  {% for tablet in tablets %}
+  <a href="{% url 'tablet-detail' department.id tablet.id %}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+    <span><strong>{{ tablet.display_name|default:"Unnamed tablet" }}</strong>{% if tablet.asset_number %}<span class="text-muted ms-2">{{ tablet.asset_number }}</span>{% endif %}</span>
+    <span><span class="badge bg-secondary">{{ tablet.status }}</span>{% for installation in tablet.current_installations %}<span class="badge bg-info text-dark ms-1">App {{ installation.status }}</span>{% endfor %}</span>
+  </a>
+  {% empty %}
+  <div class="list-group-item text-muted">No tablets match the selected filters.</div>
+  {% endfor %}
+</div>
+{% endblock %}

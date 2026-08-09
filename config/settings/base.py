@@ -36,10 +36,12 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "apps.audit.middleware.RequestContextMiddleware",
+    "apps.accounts.middleware.ReauthRedirectMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.accounts.cache.AuthenticatedNoStoreMiddleware",
     "django_otp.middleware.OTPMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -59,6 +61,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "apps.portal.context_processors.navigation",
             ],
         },
     },
@@ -79,6 +82,7 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = get_env("DJANGO_STATIC_ROOT", default="/var/lib/fire-backend/static")
+STATICFILES_DIRS = [BASE_DIR / "static"]
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 SESSION_COOKIE_SECURE = True
@@ -154,6 +158,12 @@ PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = Path(
     get_env(
         "PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH",
         default="/run/credentials/fire-publication-worker.service/publication-signing-key",
+    )
+)
+PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH = Path(
+    get_env(
+        "PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH",
+        default="/run/credentials/fire-backend.service/publication-signing-public-key",
     )
 )
 PUBLICATION_KEK_VERSION = get_env("PUBLICATION_KEK_VERSION", default="1")

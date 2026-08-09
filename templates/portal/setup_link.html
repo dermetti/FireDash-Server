@@ -1,2 +1,10 @@
-<!doctype html>
-<html lang="en"><body><main><h1>One-time account setup link</h1><p>{{ setup_url }}</p><p>This link is displayed once and must not be copied into logs.</p></main></body></html>
+{% extends "base.html" %}
+{% block title %}Setup Link{% endblock %}
+{% block content %}
+<div class="card"><div class="card-body text-center">
+<h5>Account Setup Link</h5>
+<p class="text-muted">Share this single-use link with the new administrator:</p>
+<div class="alert alert-info"><strong>{{ setup_url }}</strong></div>
+<a href="{% url 'dashboard' %}" class="btn btn-outline-secondary">Return to Dashboard</a>
+</div></div>
+{% endblock %}

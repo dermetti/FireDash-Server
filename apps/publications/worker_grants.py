@@ -61,7 +61,7 @@ def process_next_dataset_key_grant() -> DatasetKeyGrant | None:
 @transaction.atomic
 def build_claimed_dataset_key_grant(*, grant_id) -> DatasetKeyGrant:
     grant = (
-        DatasetKeyGrant.objects.select_for_update()
+        DatasetKeyGrant.objects.select_for_update(of=("self",))
         .select_related(
             "publication__department", "publication__station", "app_installation__tablet"
         )
@@ -80,7 +80,10 @@ def build_claimed_dataset_key_grant(*, grant_id) -> DatasetKeyGrant:
         kek = _credential(settings.PUBLICATION_KEK_CREDENTIAL_PATH, "KEK")
         if len(kek) != 32:
             raise KeyGrantError("Publication KEK must be exactly 32 bytes.")
-        cek = keywrap.aes_key_unwrap(kek, bytes(publication.artifact_wrapped_cek))
+        wrapped_cek = publication.artifact_wrapped_cek
+        if wrapped_cek is None:
+            raise KeyGrantError("Ready publication has no wrapped content-encryption key.")
+        cek = keywrap.aes_key_unwrap(kek, wrapped_cek)
         context = HPKEContext(
             publication_id=publication.id,
             installation_id=installation.id,
@@ -160,6 +163,19 @@ def _manifest_payload(*, installation, vehicle, publications, grants, generation
                 "encrypted_size": publication.artifact_size,
                 "ciphertext_sha256": publication.artifact_sha256,
                 "content_encryption_algorithm": publication.artifact_encryption_algorithm,
+                "content_encryption_nonce": base64.b64encode(
+                    bytes(publication.artifact_nonce)
+                ).decode("ascii"),
+                "content_key_wrapped_for_kek": base64.b64encode(
+                    bytes(publication.artifact_wrapped_cek)
+                ).decode("ascii"),
+                "content_key_wrapping_algorithm": publication.artifact_wrapping_algorithm,
+                "content_key_kek_version": publication.artifact_kek_version,
+                "artifact_signature": base64.b64encode(
+                    bytes(publication.artifact_signature)
+                ).decode("ascii"),
+                "artifact_signature_algorithm": publication.artifact_signature_algorithm,
+                "artifact_signing_key_version": publication.artifact_signing_key_version,
                 "download_url": f"/api/v1/tablet/datasets/{publication.id}/download",
                 "key_grant": {
                     "scheme": "HPKE",
@@ -175,6 +191,8 @@ def _manifest_payload(*, installation, vehicle, publications, grants, generation
         )
     return {
         "manifest_generation": generation,
+        "signature_algorithm": "Ed25519",
+        "signing_key_version": settings.PUBLICATION_SIGNING_KEY_VERSION,
         "generated_at": now.isoformat(),
         "authorization_valid_until": installation.authorization_valid_until.isoformat(),
         "configuration": {
@@ -198,7 +216,7 @@ def process_next_signed_manifest() -> SignedManifest | None:
 @transaction.atomic
 def build_claimed_signed_manifest(*, manifest_id) -> SignedManifest:
     manifest = (
-        SignedManifest.objects.select_for_update()
+        SignedManifest.objects.select_for_update(of=("self",))
         .select_related("app_installation")
         .get(pk=manifest_id)
     )

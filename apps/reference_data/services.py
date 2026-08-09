@@ -35,9 +35,8 @@ def create_hydrant(
     latitude: float,
     external_identifier: str = "",
     hydrant_type: str = "",
-    flow_information: str = "",
-    status: str = "",
-    active: bool = True,
+    diameter_mm: int | None = None,
+    status: str = "ACTIVE",
 ) -> Hydrant:
     require_department_admin(actor, department)
     hydrant = Hydrant.objects.create(
@@ -45,10 +44,9 @@ def create_hydrant(
         location=Point(longitude, latitude, srid=4326),
         external_identifier=external_identifier.strip(),
         hydrant_type=hydrant_type.strip(),
-        flow_information=flow_information.strip(),
-        status=status.strip(),
+        diameter_mm=diameter_mm,
+        status=status,
         source_metadata={},
-        active=active,
     )
     record_event(
         action="reference_data.hydrant_created",
@@ -91,8 +89,10 @@ def confirm_hydrant_preview(*, actor, department, preview_id) -> tuple[int, int,
         values = {
             "location": Point(feature.longitude, feature.latitude, srid=4326),
             "hydrant_type": feature.hydrant_type,
-            "flow_information": feature.flow_information,
-            "status": feature.status,
+            "diameter_mm": feature.diameter_mm,
+            "status": feature.status
+            if feature.status in {"ACTIVE", "INACTIVE", "UNKNOWN"}
+            else "ACTIVE",
             "source_metadata": feature.source_metadata,
         }
         if feature.external_identifier:
@@ -122,27 +122,29 @@ def confirm_hydrant_preview(*, actor, department, preview_id) -> tuple[int, int,
 
 
 @transaction.atomic
-def update_hydrant(*, actor, hydrant: Hydrant, active: bool, **values: str) -> Hydrant:
+def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
     require_department_admin(actor, hydrant.department)
     previous_active = hydrant.active
-    for field in ("external_identifier", "hydrant_type", "flow_information", "status"):
+    for field in ("external_identifier", "hydrant_type", "status"):
         if field in values:
-            setattr(hydrant, field, values[field].strip())
-    hydrant.active = active
+            setattr(hydrant, field, str(values[field]).strip())
+    if "diameter_mm" in values:
+        hydrant.diameter_mm = values["diameter_mm"] or None
     hydrant.save()
+    new_active = hydrant.active
     record_event(
         action=(
             "reference_data.hydrant_activated"
-            if active and not previous_active
+            if new_active and not previous_active
             else "reference_data.hydrant_deactivated"
-            if not active and previous_active
+            if not new_active and previous_active
             else "reference_data.hydrant_updated"
         ),
         actor_user=actor,
         department=hydrant.department,
         target_type="hydrant",
         target_uuid=hydrant.id,
-        metadata={"active": active},
+        metadata={"status": hydrant.status, "diameter_mm": hydrant.diameter_mm},
     )
     mark_dirty(department=hydrant.department, dataset_type_code="department_hydrants", actor=actor)
     return hydrant

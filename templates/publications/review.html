@@ -1,10 +1,24 @@
-<!doctype html>
-<html lang="en"><body>
-<main>
-<h1>Publication review</h1>
-{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
-<p><a href="{% url 'publications-list' publication.department_id %}">Back to publications</a></p>
-<dl><dt>Dataset</dt><dd>{{ publication.dataset_type_code }}</dd><dt>Scope</dt><dd>{{ publication.department.name }}{% if publication.station %}, {{ publication.station.name }}{% endif %}</dd><dt>Version</dt><dd>{{ publication.version_number }}</dd><dt>Status</dt><dd>{{ publication.status }}</dd><dt>Source revision</dt><dd>{{ publication.source_revision }}</dd><dt>Build summary</dt><dd><pre>{{ publication.build_summary }}</pre></dd>{% if publication.build_error %}<dt>Build error</dt><dd>{{ publication.build_error }}</dd>{% endif %}</dl>
-{% if publication.status == 'READY_FOR_REVIEW' %}<form method="post">{% csrf_token %}<button name="action" value="publish">Publish</button><button name="action" value="reject">Reject</button></form>{% elif publication.status == 'SUPERSEDED' %}<form method="post">{% csrf_token %}<button name="action" value="rollback">Restore this version</button></form>{% endif %}
-</main>
-</body></html>
+{% extends "base.html" %}
+{% block title %}Publication Review{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+<li class="nav-item"><a class="nav-link" href="{% url 'publications-list' publication.department_id %}">Publications</a></li>
+{% endblock %}
+{% block content %}
+<h1>Publication Review</h1>
+<div class="card mb-4"><div class="card-body">
+<dl class="row">
+  <dt class="col-sm-3">Dataset</dt><dd class="col-sm-9">{{ publication.dataset_type_code }}</dd>
+  <dt class="col-sm-3">Department</dt><dd class="col-sm-9">{{ publication.department.name }}</dd>
+  <dt class="col-sm-3">Station</dt><dd class="col-sm-9">{{ publication.station.name|default:"—" }}</dd>
+  <dt class="col-sm-3">Version</dt><dd class="col-sm-9">v{{ publication.version_number }}</dd>
+  <dt class="col-sm-3">Status</dt><dd class="col-sm-9"><span class="badge bg-{% if publication.status == 'PUBLISHED' %}success{% elif publication.status == 'READY_FOR_REVIEW' %}warning{% elif publication.status == 'BUILDING' %}info{% else %}secondary{% endif %}">{{ publication.status }}</span></dd>
+  <dt class="col-sm-3">Built</dt><dd class="col-sm-9">{{ publication.created_at }}</dd>
+</dl>
+</div></div>
+<div class="d-flex gap-2">
+  <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="publish"><button class="btn btn-success">Publish</button></form>
+  <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="reject"><button class="btn btn-danger">Reject</button></form>
+  <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="rollback"><button class="btn btn-outline-secondary">Rollback</button></form>
+</div>
+{% endblock %}

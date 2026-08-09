@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
+from django.db import DatabaseError, transaction
 from django.forms import ChoiceField
 from django.utils import timezone
 
@@ -22,10 +22,12 @@ from apps.publications.forms import RebuildRequestForm
 from apps.publications.models import (
     DatasetPublication,
     DatasetScopeState,
+    DatasetTypeRegistry,
     PublicationActivation,
     PublicationJob,
 )
 from apps.publications.registry import (
+    DATASET_REGISTRY,
     DatasetRegistryError,
     get_dataset_definition,
     validate_dataset_scope,
@@ -69,7 +71,9 @@ def publication_context(db):
 
 
 def ready_publication(*, department, scope, version_number, actor):
+    publication_id = uuid.uuid4()
     return DatasetPublication.objects.create(
+        id=publication_id,
         department=department,
         dataset_type_code="department_hydrants",
         scope_state=scope,
@@ -79,14 +83,14 @@ def ready_publication(*, department, scope, version_number, actor):
         status=DatasetPublication.Status.READY_FOR_REVIEW,
         artifact_ready=True,
         artifact_status=DatasetPublication.ArtifactStatus.READY,
-        **artifact_metadata(),
+        **artifact_metadata(department_id=department.id, publication_id=publication_id),
         created_by=actor,
     )
 
 
-def artifact_metadata():
+def artifact_metadata(*, department_id, publication_id):
     return {
-        "artifact_path": "test/artifact.bin",
+        "artifact_path": f"{department_id}/{publication_id}/artifact.bin",
         "artifact_size": 1,
         "artifact_sha256": "a" * 64,
         "artifact_nonce": b"n" * 12,
@@ -96,6 +100,7 @@ def artifact_metadata():
         "artifact_kek_version": "test",
         "artifact_signature": b"s" * 64,
         "artifact_signature_algorithm": "Ed25519",
+        "artifact_signing_key_version": "test",
     }
 
 
@@ -131,15 +136,16 @@ def test_registry_and_model_validation_enforce_registered_scopes(publication_con
         department=department,
         station=other_station,
         dataset_type_code="station_personnel",
-        scope_state=scope,
         version_number=1,
         schema_version=99,
         source_revision=0,
     )
     with pytest.raises(ValidationError) as error:
-        invalid_publication.full_clean()
-    assert "station" in error.value.message_dict
-    assert "schema_version" in error.value.message_dict
+        invalid_publication.full_clean(exclude={"build_summary", "change_summary", "scope_state"})
+    assert error.value.message_dict == {
+        "station": ["Station must belong to the publication department."],
+        "schema_version": ["Schema version is not supported for this dataset."],
+    }
 
 
 @pytest.mark.django_db(transaction=True)
@@ -178,7 +184,11 @@ def test_claim_finalize_stale_job_obsoletes_build_and_queues_current_revision(pu
 
     mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
     stale = finalize_publication_job(
-        job_id=job.id, summary=hydrant_summary(job.source_revision), artifact=artifact_metadata()
+        job_id=job.id,
+        summary=hydrant_summary(job.source_revision),
+        artifact=artifact_metadata(
+            department_id=department.id, publication_id=job.build_publication_id
+        ),
     )
     stale.refresh_from_db()
     assert stale.build_publication is not None
@@ -201,7 +211,11 @@ def test_finalize_current_claim_marks_publication_ready_and_clears_dirty_scope(p
     assert job is not None
     assert job.build_publication is not None
     finalized = finalize_publication_job(
-        job_id=job.id, summary=hydrant_summary(job.source_revision), artifact=artifact_metadata()
+        job_id=job.id,
+        summary=hydrant_summary(job.source_revision),
+        artifact=artifact_metadata(
+            department_id=department.id, publication_id=job.build_publication_id
+        ),
     )
     finalized.refresh_from_db()
     assert finalized.build_publication is not None
@@ -243,14 +257,13 @@ def test_recover_stale_job_requeues_then_exhausts_attempt_limit(publication_cont
 
 
 @pytest.mark.django_db(transaction=True)
-def test_metadata_only_publications_cannot_be_published_until_phase7(publication_context):
+def test_ready_artifact_publications_can_be_published_after_phase7(publication_context):
     admin, _, department, _, _ = publication_context
     scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
     publication = ready_publication(
         department=department, scope=scope, version_number=1, actor=admin
     )
-    with pytest.raises(PublicationError, match="artifacts are not available until Phase 7"):
-        publish_publication(actor=admin, publication=publication)
+    published = publish_publication(actor=admin, publication=publication)
     rejected = reject_publication(
         actor=admin,
         publication=ready_publication(
@@ -259,9 +272,10 @@ def test_metadata_only_publications_cannot_be_published_until_phase7(publication
     )
     scope.refresh_from_db()
 
+    assert published.status == DatasetPublication.Status.PUBLISHED
+    assert scope.current_published_publication == published
     assert rejected.status == DatasetPublication.Status.REJECTED
-    assert scope.current_published_publication is None
-    assert PublicationActivation.objects.count() == 0
+    assert PublicationActivation.objects.count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -278,7 +292,7 @@ def test_publication_actions_require_department_admin(publication_context):
         request_rebuild(
             actor=outsider, department=department, dataset_type_code="department_hydrants"
         )
-    with pytest.raises(PublicationError, match="Only a review-ready"):
+    with pytest.raises(PublicationError, match="Only a superseded"):
         rollback_publication(actor=admin, publication=publication)
 
 
@@ -322,6 +336,13 @@ def test_internal_dataset_is_not_a_production_rebuild_choice():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_flush_restores_dataset_type_registry_projection():
+    call_command("flush", interactive=False)
+
+    assert set(DatasetTypeRegistry.objects.values_list("code", flat=True)) == set(DATASET_REGISTRY)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_expire_temporary_assignments_command_ends_expired_assignments(publication_context, capsys):
     admin, _, department, station, _ = publication_context
     person = Person.objects.create(department=department)
@@ -361,20 +382,20 @@ def test_registry_projection_trigger_enforces_scope_and_station_ownership(public
         department=department, dataset_type_code="test_department_incidents"
     )
     assert scope.dataset_type_code == "test_department_incidents"
-    with transaction.atomic():
-        with pytest.raises(IntegrityError, match="Dataset type station scope is invalid"):
+    with pytest.raises(DatabaseError, match="Dataset type station scope is invalid"):
+        with transaction.atomic():
             DatasetScopeState.objects.create(
                 department=department,
                 station=station,
                 dataset_type_code="test_department_incidents",
             )
-    with transaction.atomic():
-        with pytest.raises(IntegrityError, match="Station must belong to the scope department"):
+    with pytest.raises(DatabaseError, match="Station must belong to the scope department"):
+        with transaction.atomic():
             DatasetScopeState.objects.create(
                 department=department, station=other_station, dataset_type_code="station_personnel"
             )
-    with transaction.atomic():
-        with pytest.raises(IntegrityError, match="Unknown dataset type code"):
+    with pytest.raises(DatabaseError, match="Unknown dataset type code"):
+        with transaction.atomic():
             DatasetScopeState.objects.create(
                 department=department, dataset_type_code="not_registered"
             )

@@ -1,6 +1,7 @@
 -r base.txt
 bandit==1.8.6
-django-stubs==5.2.2
+django-stubs==5.2.9
+djangorestframework-stubs==3.16.5
 factory-boy==3.3.3
 mypy==1.17.1
 pip-audit==2.9.0

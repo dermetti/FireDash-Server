@@ -1,2 +1,25 @@
-<!doctype html>
-<html lang="en"><body><main><h1>{{ department.name }} fire plans</h1><ul>{% for fire_plan in fire_plans %}<li><a href="{% url 'reference-data-fire-plan-detail' fire_plan.id %}">{{ fire_plan.object_name }}</a></li>{% empty %}<li>No fire plans.</li>{% endfor %}</ul><h2>Upload fire plan</h2><form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button>Upload</button></form></main></body></html>
+{% extends "base.html" %}
+{% block title %}{{ department.name }} Fire Plans{% endblock %}
+{% block nav_links %}
+<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
+{% endblock %}
+{% block content %}
+<h1>{{ department.name }} Fire Plans</h1>
+<div class="row">
+  <div class="col-md-4">
+    <div class="card"><div class="card-body">
+    <h5>Upload</h5>
+    <form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Upload</button></form>
+    </div></div>
+  </div>
+  <div class="col-md-8">
+    <div class="list-group">
+      {% for plan in fire_plans %}
+      <a href="{% url 'reference-data-fire-plan-detail' plan.id %}" class="list-group-item list-group-item-action d-flex justify-content-between">{{ plan.object_name }} <span class="badge bg-{% if plan.active %}success{% else %}secondary{% endif %}">{{ plan.file_size|filesizeformat }}</span></a>
+      {% empty %}
+      <div class="list-group-item text-muted">No fire plans.</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
