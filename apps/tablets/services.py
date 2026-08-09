@@ -48,6 +48,7 @@ class AdoptionChallengeContext:
     tablet_id: UUID
     public_key_fingerprint: str
     expires_at: datetime
+    mode: str
 
     def info(self) -> bytes:
         return _canonical_context(self).encode("ascii")
@@ -67,6 +68,7 @@ def _canonical_context(context: AdoptionChallengeContext) -> str:
             "hpke_ciphersuite": HPKE_CIPHERSUITE,
             "hpke_public_key_fingerprint": context.public_key_fingerprint,
             "installation_uuid": str(context.installation_uuid),
+            "mode": context.mode,
             "protocol": ADOPTION_PROTOCOL,
             "tablet_id": str(context.tablet_id),
         },
@@ -246,7 +248,12 @@ def create_adoption_request(
         expires_at=expires_at,
     )
     context = AdoptionChallengeContext(
-        request.id, installation_uuid, tablet.id, fingerprint, expires_at
+        request.id,
+        installation_uuid,
+        tablet.id,
+        fingerprint,
+        expires_at,
+        "reactivation" if reactivation else "adoption",
     )
     nonce = secrets.token_bytes(32)
     expected = hmac.digest(nonce, context.info(), "sha256")
@@ -406,7 +413,7 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
 
 
 def complete_adoption(
-    *, request_id: UUID, challenge_response: bytes, confirmed: bool
+    *, request_id: UUID, challenge_response: bytes, confirmed: bool, reactivation: bool = False
 ) -> tuple[AppInstallation, str]:
     if not confirmed:
         raise TabletError("Adoption was not confirmed.")
@@ -415,6 +422,8 @@ def complete_adoption(
         "reactivation_invitation__app_installation__tablet__department",
     ).get(pk=request_id)
     invitation = request.reactivation_invitation or request.invitation
+    if (request.reactivation_invitation is not None) != reactivation:
+        raise TabletError("Adoption request mode does not match the completion endpoint.")
     if invitation is None:
         raise TabletError("Adoption request has no invitation.")
     now = timezone.now()

@@ -126,6 +126,9 @@ def test_web_manifest_queues_grant_without_reading_kek_and_worker_fulfills_it(
     assert isinstance(datasets, list) and len(datasets) == 1
     dataset = datasets[0]
     assert isinstance(dataset, dict)
+    # The tablet wire contract intentionally calls persisted artifact_size encrypted_size.
+    assert dataset["encrypted_size"] == publication.artifact_size
+    assert "artifact_size" not in dataset
     assert dataset["content_encryption_nonce"] == base64.b64encode(b"n" * 12).decode("ascii")
     assert dataset["content_key_wrapped_for_kek"] == base64.b64encode(
         keywrap.aes_key_wrap(kek, cek)

@@ -21,9 +21,36 @@ AUTH_THROTTLE_WINDOW_SECONDS=900
 AUTH_THROTTLE_LOCKOUT_SECONDS=900
 RECENT_REAUTH_MAX_AGE_SECONDS=900
 TRUSTED_PROXY_IPS=127.0.0.1,::1
+REFERENCE_DATA_QUARANTINE_ROOT=/var/lib/fire-backend/quarantine
+REFERENCE_DATA_SANITIZER_OUTPUT_ROOT=/var/lib/fire-backend/sanitizer-output
+REFERENCE_DATA_ACCEPTED_ROOT=/var/lib/fire-backend/fire-plans
+MAX_PDF_INPUT_BYTES=104857600
+MAX_PDF_OUTPUT_BYTES=157286400
+MAX_PDF_PAGES=500
+MAX_HYDRANT_IMPORT_FEATURES=20000
+PDF_SANITIZER_TIMEOUT_SECONDS=60
+PDF_SANITIZER_MEMORY_MAX_BYTES=536870912
+PDF_SANITIZER_WRAPPER=/usr/local/lib/fire-backend/fire-pdf-sanitize
+PUBLICATION_WORKER_BATCH_SIZE=10
+PUBLICATION_JOB_HEARTBEAT_TIMEOUT_SECONDS=300
+PUBLICATION_JOB_MAX_ATTEMPTS=3
+TEMPORARY_ASSIGNMENT_EXPIRY_BATCH_SIZE=100
+PUBLICATION_BUILD_SUMMARY_MAX_ITEMS=10000
+PUBLICATION_ARTIFACT_ROOT=/var/lib/fire-backend/publications
+PUBLICATION_ARTIFACT_TEMP_ROOT=/var/lib/fire-backend/publications-tmp
+PUBLICATION_ARTIFACT_MAX_BYTES=104857600
+PUBLICATION_ARTIFACT_STALE_SECONDS=3600
+PUBLICATION_KEK_VERSION=1
+PUBLICATION_SIGNING_KEY_VERSION=1
 ```
 
 `DJANGO_SECRET_KEY`, database credentials, signing keys, key-encryption keys, and backup credentials must never be committed or logged. Signing and key-encryption credentials are introduced in Phase 7 through systemd credentials.
+
+`PUBLICATION_KEK_CREDENTIAL_PATH`, `PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH`, and
+`PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH` default to the credential paths configured by
+the systemd units. Do not set them to files readable by the web-service account. `DJANGO_DEBUG`
+is development-only and defaults to `False` in production; do not set it in the production
+environment file.
 
 The publication worker receives only `PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH`, containing the
 32-byte Ed25519 private seed. The web service receives only

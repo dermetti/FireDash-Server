@@ -14,7 +14,9 @@ pip-audit -r requirements/base.txt
 
 Local development uses `config.settings.development`. Tests use `config.settings.test` and require
 the dedicated `firedash_test` role through `TEST_POSTGRES_USER`, `TEST_POSTGRES_PASSWORD`,
-`TEST_POSTGRES_HOST`, `TEST_POSTGRES_PORT`, and optional `TEST_POSTGRES_DB`. Django creates the
-database from the `firedash_test_template` PostGIS template; never grant `CREATEDB` to an
-application runtime or production role. Production uses `config.settings.production` and must
-receive all required values through `/etc/fire-backend/fire-backend.env`.
+`TEST_POSTGRES_HOST`, `TEST_POSTGRES_PORT`, and optional `TEST_POSTGRES_DB`. The role has
+`CREATEDB` solely to create disposable databases from the non-connectable
+`firedash_test_template` PostGIS template. Create both with
+`deploy/postgresql/bootstrap.sql`; never grant `CREATEDB` to an application runtime or production
+role. Production uses `config.settings.production` and must receive all required values through
+`/etc/fire-backend/fire-backend.env`.

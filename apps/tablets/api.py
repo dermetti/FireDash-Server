@@ -115,6 +115,7 @@ class AdoptionPreviewResponseSerializer(serializers.Serializer[dict[str, object]
     tablet_id = serializers.UUIDField()
     hpke_ciphersuite = serializers.CharField()
     hpke_public_key_fingerprint = serializers.CharField()
+    mode = serializers.CharField()
     protocol = serializers.CharField()
 
 
@@ -122,6 +123,41 @@ class SigningKeyResponseSerializer(serializers.Serializer[dict[str, object]]):
     algorithm = serializers.CharField()
     version = serializers.CharField()
     public_key = serializers.CharField()
+
+
+class AdoptionCompleteResponseSerializer(serializers.Serializer[dict[str, object]]):
+    installation_id = serializers.UUIDField()
+    credential = serializers.CharField()
+    authorization_valid_until = serializers.DateTimeField()
+
+
+class CheckInResponseSerializer(serializers.Serializer[dict[str, object]]):
+    status = serializers.CharField()
+    server_time = serializers.DateTimeField()
+    authorization_valid_until = serializers.DateTimeField()
+
+
+class StatusResponseSerializer(serializers.Serializer[dict[str, object]]):
+    status = serializers.CharField()
+    authorization_valid_until = serializers.DateTimeField()
+    purge_provisioned_data = serializers.BooleanField()
+
+
+class ConfigurationResponseSerializer(serializers.Serializer[dict[str, object]]):
+    installation_id = serializers.UUIDField()
+    tablet_id = serializers.UUIDField()
+    department_id = serializers.UUIDField()
+    station_id = serializers.UUIDField()
+    vehicle_id = serializers.UUIDField()
+
+
+class ManifestPendingResponseSerializer(serializers.Serializer[dict[str, object]]):
+    type = serializers.URLField()
+    title = serializers.CharField()
+    status = serializers.IntegerField()
+    detail = serializers.CharField()
+    request_id = serializers.CharField()
+    manifest_request_id = serializers.UUIDField()
 
 
 def _problem_from_service(error: Exception) -> exceptions.APIException:
@@ -157,6 +193,7 @@ class AdoptionPreviewView(APIView):
                 "tablet_id": str(invitation.tablet_id),
                 "hpke_ciphersuite": challenge.request.hpke_ciphersuite,
                 "hpke_public_key_fingerprint": challenge.request.hpke_public_key_fingerprint,
+                "mode": "adoption",
                 "protocol": "tablet-adoption-v1",
             },
             status=status.HTTP_201_CREATED,
@@ -187,16 +224,20 @@ class ReactivationPreviewView(AdoptionPreviewView):
                 "tablet_id": str(invitation.app_installation.tablet_id),
                 "hpke_ciphersuite": challenge.request.hpke_ciphersuite,
                 "hpke_public_key_fingerprint": challenge.request.hpke_public_key_fingerprint,
+                "mode": "reactivation",
                 "protocol": "tablet-adoption-v1",
             },
             status=status.HTTP_201_CREATED,
         )
 
 
-@extend_schema(request=AdoptionCompleteSerializer, responses={201: OpenApiTypes.OBJECT})
+@extend_schema(
+    request=AdoptionCompleteSerializer, responses={201: AdoptionCompleteResponseSerializer}
+)
 class AdoptionCompleteView(APIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
+    reactivation = False
 
     def post(self, request):
         serializer = AdoptionCompleteSerializer(data=request.data)
@@ -206,6 +247,7 @@ class AdoptionCompleteView(APIView):
                 request_id=serializer.validated_data["adoption_request_id"],
                 challenge_response=serializer.validated_data["challenge_response"],
                 confirmed=serializer.validated_data["confirmed"],
+                reactivation=self.reactivation,
             )
         except (TabletError, AppInstallation.DoesNotExist) as error:
             raise _problem_from_service(error) from error
@@ -219,10 +261,13 @@ class AdoptionCompleteView(APIView):
         )
 
 
-@extend_schema(request=AdoptionCompleteSerializer, responses={201: OpenApiTypes.OBJECT})
+@extend_schema(
+    request=AdoptionCompleteSerializer, responses={201: AdoptionCompleteResponseSerializer}
+)
 class ReactivationCompleteView(AdoptionCompleteView):
     authentication_classes = [InstallationBearerAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    reactivation = True
 
     def post(self, request):
         serializer = AdoptionCompleteSerializer(data=request.data)
@@ -247,7 +292,7 @@ class InstallationAPIView(APIView):
         return user.installation
 
 
-@extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
+@extend_schema(request=None, responses={200: CheckInResponseSerializer})
 class CheckInView(InstallationAPIView):
     def post(self, request):
         try:
@@ -263,7 +308,7 @@ class CheckInView(InstallationAPIView):
         )
 
 
-@extend_schema(responses={200: OpenApiTypes.OBJECT})
+@extend_schema(responses={200: StatusResponseSerializer})
 class StatusView(InstallationAPIView):
     def get(self, request):
         installation = self.installation
@@ -288,7 +333,7 @@ def _configuration(installation: AppInstallation) -> dict[str, str]:
     }
 
 
-@extend_schema(responses={200: OpenApiTypes.OBJECT})
+@extend_schema(responses={200: ConfigurationResponseSerializer})
 class ConfigurationView(InstallationAPIView):
     def get(self, request):
         try:
@@ -315,7 +360,9 @@ class SigningKeyView(InstallationAPIView):
         )
 
 
-@extend_schema(responses={200: OpenApiTypes.OBJECT, 202: None, 304: None})
+@extend_schema(
+    responses={200: OpenApiTypes.OBJECT, 202: ManifestPendingResponseSerializer, 304: None}
+)
 class ManifestView(InstallationAPIView):
     def get(self, request):
         try:

@@ -27,11 +27,11 @@ jobs:
     env:
       DJANGO_SETTINGS_MODULE: config.settings.test
       DJANGO_SECRET_KEY: ci-test-secret-not-for-production
-      POSTGRES_DB: fire_backend
-      POSTGRES_USER: database_owner
-      POSTGRES_PASSWORD: database_owner_ci
-      POSTGRES_HOST: 127.0.0.1
-      POSTGRES_PORT: "5432"
+      TEST_POSTGRES_DB: test_firedash
+      TEST_POSTGRES_USER: firedash_test
+      TEST_POSTGRES_PASSWORD: firedash_test_ci
+      TEST_POSTGRES_HOST: 127.0.0.1
+      TEST_POSTGRES_PORT: "5432"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,10 +39,17 @@ jobs:
           python-version: "3.13"
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements/dev.txt
-      - name: Create runtime database role
+      - name: Create dedicated PostGIS test role and template
         env:
           PGPASSWORD: database_owner_ci
-        run: psql -h 127.0.0.1 -U database_owner -d fire_backend -c "CREATE ROLE application_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD 'application_runtime_ci';"
+        run: >-
+          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U database_owner -d fire_backend
+          -c "CREATE ROLE firedash_test LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD 'firedash_test_ci';"
+          -c "CREATE DATABASE firedash_test_template OWNER database_owner TEMPLATE template0;"
+          -c "\\connect firedash_test_template"
+          -c "CREATE EXTENSION postgis;"
+          -c "ALTER DATABASE firedash_test_template IS_TEMPLATE true;"
+          -c "ALTER DATABASE firedash_test_template ALLOW_CONNECTIONS false;"
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run
       - name: Django checks

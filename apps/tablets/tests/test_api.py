@@ -203,6 +203,45 @@ def test_check_in_renews_an_active_installation(api_context):
     assert verify_credential(installation=installation, credential=credential)
 
 
+@pytest.mark.parametrize(
+    ("installation_status", "path", "expected_status"),
+    [
+        (AppInstallation.Status.ACTIVE, "/api/v1/tablet/status", 200),
+        (AppInstallation.Status.STALE, "/api/v1/tablet/status", 200),
+        (AppInstallation.Status.REVOKED, "/api/v1/tablet/status", 200),
+        (AppInstallation.Status.REPLACED, "/api/v1/tablet/status", 403),
+        (AppInstallation.Status.ACTIVE, "/api/v1/tablet/check-in", 200),
+        (AppInstallation.Status.STALE, "/api/v1/tablet/check-in", 403),
+        (AppInstallation.Status.REVOKED, "/api/v1/tablet/check-in", 403),
+        (AppInstallation.Status.REPLACED, "/api/v1/tablet/check-in", 403),
+        (AppInstallation.Status.ACTIVE, "/api/v1/tablet/configuration", 200),
+        (AppInstallation.Status.STALE, "/api/v1/tablet/configuration", 403),
+        (AppInstallation.Status.REVOKED, "/api/v1/tablet/configuration", 403),
+        (AppInstallation.Status.REPLACED, "/api/v1/tablet/configuration", 403),
+        (AppInstallation.Status.ACTIVE, "/api/v1/tablet/manifest", 202),
+        (AppInstallation.Status.STALE, "/api/v1/tablet/manifest", 403),
+        (AppInstallation.Status.REVOKED, "/api/v1/tablet/manifest", 403),
+        (AppInstallation.Status.REPLACED, "/api/v1/tablet/manifest", 403),
+    ],
+)
+def test_installation_state_access_matrix(api_context, installation_status, path, expected_status):
+    client, installation, credential, _ = api_context
+    installation.status = installation_status
+    installation.save(update_fields=("status",))
+
+    if path.endswith("check-in"):
+        response = client.post(path, **_authorization(credential))
+    else:
+        response = client.get(path, **_authorization(credential))
+
+    assert response.status_code == expected_status
+    if path.endswith("status") and expected_status == 200:
+        assert response.json()["status"] == installation_status.lower()
+        assert response.json()["purge_provisioned_data"] == (
+            installation_status == AppInstallation.Status.REVOKED
+        )
+
+
 def test_openapi_schema_is_available():
     response = Client().get("/api/v1/schema/")
 

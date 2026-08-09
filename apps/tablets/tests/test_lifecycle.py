@@ -166,10 +166,17 @@ def test_reactivation_requires_valid_token_and_restores_lease(operational_tablet
         hpke_ciphersuite=installation.hpke_ciphersuite,
         reactivation=True,
     )
+    with pytest.raises(TabletError, match="mode"):
+        complete_adoption(
+            request_id=reactivation_challenge.request.id,
+            challenge_response=reactivation_challenge.request.expected_hmac_digest,
+            confirmed=True,
+        )
     reactivated, new_credential = complete_adoption(
         request_id=reactivation_challenge.request.id,
         challenge_response=reactivation_challenge.request.expected_hmac_digest,
         confirmed=True,
+        reactivation=True,
     )
     assert reactivated.status == AppInstallation.Status.ACTIVE
     assert reactivated.reactivated_at is not None

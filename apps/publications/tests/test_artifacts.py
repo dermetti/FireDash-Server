@@ -1,7 +1,9 @@
 import base64
 import hashlib
+import json
 import os
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -63,6 +65,31 @@ def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded):
     assert metadata["artifact_signing_key_version"] == "43"
     cek = keywrap.aes_key_unwrap(kek, wrapped_cek)
     assert AESGCM(cek).decrypt(nonce, ciphertext, None) == b"safe data"
+
+
+def test_artifact_signature_contract_fixture_is_canonical_and_verifiable():
+    fixture_path = Path(__file__).parent / "fixtures" / "artifact_signature_contract.json"
+    fixture = json.loads(fixture_path.read_text(encoding="ascii"))
+    publication = SimpleNamespace(**fixture["publication"])
+    wrapped_cek = base64.b64decode(fixture["wrapped_cek"], validate=True)
+    nonce = base64.b64decode(fixture["nonce"], validate=True)
+    ciphertext = base64.b64decode(fixture["ciphertext"], validate=True)
+
+    with override_settings(PUBLICATION_KEK_VERSION="42"):
+        payload = _signature_payload(
+            publication=publication,
+            wrapped_cek=wrapped_cek,
+            nonce=nonce,
+            ciphertext=ciphertext,
+        )
+
+    assert payload == fixture["canonical_payload"].encode("ascii")
+    assert b'"publication_id"' not in payload
+    public_key = Ed25519PrivateKey.from_private_bytes(
+        base64.b64decode(fixture["private_seed"], validate=True)
+    ).public_key()
+    assert base64.b64encode(public_key.public_bytes_raw()).decode("ascii") == fixture["public_key"]
+    public_key.verify(base64.b64decode(fixture["signature"], validate=True), payload)
 
 
 def test_artifacts_use_distinct_cek_and_nonce(tmp_path):

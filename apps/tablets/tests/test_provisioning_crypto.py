@@ -1,8 +1,9 @@
 import hashlib
 import hmac
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 from django.utils import timezone
 
@@ -24,6 +25,7 @@ def test_adoption_challenge_is_bound_to_canonical_context():
         tablet_id=uuid.uuid4(),
         public_key_fingerprint="a" * 64,
         expires_at=timezone.now() + timedelta(minutes=5),
+        mode="adoption",
     )
     nonce = b"n" * 32
     encapsulated_key, ciphertext = hpke_seal(
@@ -49,7 +51,12 @@ def test_adoption_challenge_is_bound_to_canonical_context():
 def test_adoption_context_changes_cannot_open_challenge():
     private_key = ec.generate_private_key(ec.SECP256R1())
     context = AdoptionChallengeContext(
-        uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), "b" * 64, timezone.now() + timedelta(minutes=5)
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        "b" * 64,
+        timezone.now() + timedelta(minutes=5),
+        "adoption",
     )
     encapsulated_key, ciphertext = hpke_seal(
         plaintext=b"n" * 32, recipient_public_key=private_key.public_key(), context=context
@@ -60,6 +67,7 @@ def test_adoption_context_changes_cannot_open_challenge():
         uuid.uuid4(),
         context.public_key_fingerprint,
         context.expires_at,
+        context.mode,
     )
 
     try:
@@ -75,10 +83,45 @@ def test_adoption_context_changes_cannot_open_challenge():
         raise AssertionError("A challenge must be bound to the tablet identity.")
 
 
+def test_adoption_context_mode_change_cannot_open_challenge():
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    context = AdoptionChallengeContext(
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        "b" * 64,
+        timezone.now() + timedelta(minutes=5),
+        "adoption",
+    )
+    encapsulated_key, ciphertext = hpke_seal(
+        plaintext=b"n" * 32, recipient_public_key=private_key.public_key(), context=context
+    )
+
+    with pytest.raises(ValueError):
+        hpke_open(
+            encapsulated_key=encapsulated_key,
+            ciphertext=ciphertext,
+            recipient_private_key=private_key,
+            context=AdoptionChallengeContext(
+                context.adoption_request_id,
+                context.installation_uuid,
+                context.tablet_id,
+                context.public_key_fingerprint,
+                context.expires_at,
+                "reactivation",
+            ),
+        )
+
+
 def test_adoption_context_reconstructed_from_preview_values_opens_challenge():
     private_key = ec.generate_private_key(ec.SECP256R1())
     context = AdoptionChallengeContext(
-        uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), "c" * 64, timezone.now() + timedelta(minutes=5)
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        "c" * 64,
+        timezone.now() + timedelta(minutes=5),
+        "adoption",
     )
     preview = {
         "adoption_request_id": str(context.adoption_request_id),
@@ -87,6 +130,7 @@ def test_adoption_context_reconstructed_from_preview_values_opens_challenge():
         "hpke_ciphersuite": "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM",
         "hpke_public_key_fingerprint": context.public_key_fingerprint,
         "installation_uuid": str(context.installation_uuid),
+        "mode": context.mode,
         "protocol": ADOPTION_PROTOCOL,
     }
     reconstructed = AdoptionChallengeContext(
@@ -95,7 +139,9 @@ def test_adoption_context_reconstructed_from_preview_values_opens_challenge():
         tablet_id=uuid.UUID(preview["tablet_id"]),
         public_key_fingerprint=preview["hpke_public_key_fingerprint"],
         expires_at=context.expires_at,
+        mode=preview["mode"],
     )
+
     encapsulated_key, ciphertext = hpke_seal(
         plaintext=b"n" * 32, recipient_public_key=private_key.public_key(), context=context
     )
@@ -109,6 +155,27 @@ def test_adoption_context_reconstructed_from_preview_values_opens_challenge():
             context=reconstructed,
         )
         == b"n" * 32
+    )
+
+
+def test_adoption_context_has_a_frozen_mode_bound_canonical_encoding():
+    context = AdoptionChallengeContext(
+        adoption_request_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        installation_uuid=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+        tablet_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        public_key_fingerprint="a" * 64,
+        expires_at=datetime(2026, 8, 9, 12, 39, 56, 789012, tzinfo=UTC),
+        mode="reactivation",
+    )
+
+    assert context.info() == (
+        b'{"adoption_request_id":"11111111-1111-1111-1111-111111111111",'
+        b'"expires_at":"2026-08-09T12:39:56.789012+00:00",'
+        b'"hpke_ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM",'
+        b'"hpke_public_key_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        b'"installation_uuid":"22222222-2222-2222-2222-222222222222",'
+        b'"mode":"reactivation","protocol":"tablet-adoption-v1",'
+        b'"tablet_id":"33333333-3333-3333-3333-333333333333"}'
     )
 
 

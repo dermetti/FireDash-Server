@@ -4,4 +4,9 @@ Install PostgreSQL and the matching PostGIS package on Debian. Bind PostgreSQL t
 
 Run Django migrations using `database_owner`; run Gunicorn using `application_runtime`. Apply `deploy/postgresql/roles.sql` as `database_owner` after migrations so the runtime role receives only required data privileges.
 
-The runtime role must not be a superuser, schema owner, or `BYPASSRLS` role. Phase 2 will add the more restrictive, append-only privileges and trigger for audit events.
+`bootstrap.sql` also creates `firedash_test`, the only role with `CREATEDB`, and a non-connectable
+`firedash_test_template` database with PostGIS enabled. Test settings clone disposable databases
+from that template. Do not use the test role, template, or its password in deployed application
+services.
+
+The runtime role must not be a superuser, schema owner, `CREATEDB`, or `BYPASSRLS` role. Phase 2 will add the more restrictive, append-only privileges and trigger for audit events.
