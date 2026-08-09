@@ -4,7 +4,7 @@ from django import forms
 from django.forms import ChoiceField, ModelChoiceField
 
 from apps.organizations.models import Station
-from apps.publications.registry import DATASET_REGISTRY
+from apps.publications.registry import DATASET_REGISTRY, production_dataset_definitions
 
 
 class RebuildRequestForm(forms.Form):
@@ -15,9 +15,10 @@ class RebuildRequestForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.department = department
         dataset_type_field = cast(ChoiceField, self.fields["dataset_type_code"])
-        station_field = cast(ModelChoiceField[Station], self.fields["station"])
+        station_field = cast("ModelChoiceField[Station]", self.fields["station"])
         dataset_type_field.choices = [
-            (definition.code, definition.display_name) for definition in DATASET_REGISTRY.values()
+            (definition.code, definition.display_name)
+            for definition in production_dataset_definitions()
         ]
         station_field.queryset = Station.objects.filter(department=department, active=True)
 

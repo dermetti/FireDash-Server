@@ -4,7 +4,12 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
+from apps.publications.artifacts import cleanup_stale_artifacts
 from apps.publications.services import process_next_job, recover_stale_jobs
+from apps.publications.worker_grants import (
+    process_next_dataset_key_grant,
+    process_next_signed_manifest,
+)
 
 
 class Command(BaseCommand):
@@ -25,13 +30,27 @@ class Command(BaseCommand):
             )
             if recovered:
                 self.stdout.write(f"Recovered {recovered} stale publication job(s).")
+            cleaned = cleanup_stale_artifacts()
+            if cleaned:
+                self.stdout.write(f"Cleaned {cleaned} stale publication artifact(s).")
             processed = 0
             for _ in range(settings.PUBLICATION_WORKER_BATCH_SIZE):
                 job = process_next_job()
-                if job is None:
+                grant = process_next_dataset_key_grant()
+                manifest = process_next_signed_manifest()
+                if job is None and grant is None and manifest is None:
                     break
-                processed += 1
-                self.stdout.write(f"Processed publication job {job.id}: {job.status}.")
+                if job is not None:
+                    processed += 1
+                    self.stdout.write(f"Processed publication job {job.id}: {job.status}.")
+                if grant is not None:
+                    processed += 1
+                    self.stdout.write(f"Processed dataset key grant {grant.id}: {grant.status}.")
+                if manifest is not None:
+                    processed += 1
+                    self.stdout.write(
+                        f"Processed signed manifest {manifest.id}: {manifest.status}."
+                    )
             if not options["forever"]:
                 return
             if processed == 0:

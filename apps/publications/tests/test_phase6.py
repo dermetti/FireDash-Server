@@ -1,16 +1,24 @@
+import uuid
+from collections.abc import Iterable
 from datetime import timedelta
+from typing import cast
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
+from django.db import IntegrityError, transaction
+from django.forms import ChoiceField
 from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.assignments.models import PersonnelStationAssignment
+from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
 from apps.personnel.models import Person
 from apps.publications.builders import build_summary
+from apps.publications.feature_services import set_department_feature
+from apps.publications.forms import RebuildRequestForm
 from apps.publications.models import (
     DatasetPublication,
     DatasetScopeState,
@@ -69,8 +77,26 @@ def ready_publication(*, department, scope, version_number, actor):
         schema_version=1,
         source_revision=scope.source_revision,
         status=DatasetPublication.Status.READY_FOR_REVIEW,
+        artifact_ready=True,
+        artifact_status=DatasetPublication.ArtifactStatus.READY,
+        **artifact_metadata(),
         created_by=actor,
     )
+
+
+def artifact_metadata():
+    return {
+        "artifact_path": "test/artifact.bin",
+        "artifact_size": 1,
+        "artifact_sha256": "a" * 64,
+        "artifact_nonce": b"n" * 12,
+        "artifact_wrapped_cek": b"w" * 40,
+        "artifact_encryption_algorithm": "AES-256-GCM",
+        "artifact_wrapping_algorithm": "AES-KW-RFC3394",
+        "artifact_kek_version": "test",
+        "artifact_signature": b"s" * 64,
+        "artifact_signature_algorithm": "Ed25519",
+    }
 
 
 def hydrant_summary(source_revision):
@@ -151,7 +177,9 @@ def test_claim_finalize_stale_job_obsoletes_build_and_queues_current_revision(pu
     assert job.build_publication.version_number == 1
 
     mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
-    stale = finalize_publication_job(job_id=job.id, summary=hydrant_summary(job.source_revision))
+    stale = finalize_publication_job(
+        job_id=job.id, summary=hydrant_summary(job.source_revision), artifact=artifact_metadata()
+    )
     stale.refresh_from_db()
     assert stale.build_publication is not None
     stale.build_publication.refresh_from_db()
@@ -173,7 +201,7 @@ def test_finalize_current_claim_marks_publication_ready_and_clears_dirty_scope(p
     assert job is not None
     assert job.build_publication is not None
     finalized = finalize_publication_job(
-        job_id=job.id, summary=hydrant_summary(job.source_revision)
+        job_id=job.id, summary=hydrant_summary(job.source_revision), artifact=artifact_metadata()
     )
     finalized.refresh_from_db()
     assert finalized.build_publication is not None
@@ -215,38 +243,25 @@ def test_recover_stale_job_requeues_then_exhausts_attempt_limit(publication_cont
 
 
 @pytest.mark.django_db(transaction=True)
-def test_publish_reject_and_rollback_record_activation_history(publication_context):
+def test_metadata_only_publications_cannot_be_published_until_phase7(publication_context):
     admin, _, department, _, _ = publication_context
     scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
-    first = publish_publication(
-        actor=admin,
-        publication=ready_publication(
-            department=department, scope=scope, version_number=1, actor=admin
-        ),
+    publication = ready_publication(
+        department=department, scope=scope, version_number=1, actor=admin
     )
-    second = publish_publication(
+    with pytest.raises(PublicationError, match="artifacts are not available until Phase 7"):
+        publish_publication(actor=admin, publication=publication)
+    rejected = reject_publication(
         actor=admin,
         publication=ready_publication(
             department=department, scope=scope, version_number=2, actor=admin
         ),
     )
-    restored = rollback_publication(actor=admin, publication=first)
-    rejected = reject_publication(
-        actor=admin,
-        publication=ready_publication(
-            department=department, scope=scope, version_number=3, actor=admin
-        ),
-    )
     scope.refresh_from_db()
-    second.refresh_from_db()
 
-    assert second.status == DatasetPublication.Status.SUPERSEDED
-    assert restored.status == DatasetPublication.Status.PUBLISHED
     assert rejected.status == DatasetPublication.Status.REJECTED
-    assert scope.current_published_publication == first
-    assert PublicationActivation.objects.count() == 3
-    assert PublicationActivation.objects.filter(action="PUBLISH").count() == 2
-    assert PublicationActivation.objects.get(action="ROLLBACK").previous_publication == second
+    assert scope.current_published_publication is None
+    assert PublicationActivation.objects.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -284,6 +299,7 @@ def test_builders_return_only_registered_summary_fields_without_artifacts(public
         ("department_hydrants", None),
         ("department_fire_plans", None),
         ("station_personnel", station),
+        ("test_department_incidents", None),
     ):
         definition = get_dataset_definition(code)
         summary = build_summary(
@@ -295,6 +311,14 @@ def test_builders_return_only_registered_summary_fields_without_artifacts(public
         assert set(summary) == set(definition.summary_schema)
         assert "artifact" not in " ".join(summary).lower()
         assert all(not isinstance(value, bytes | bytearray) for value in summary.values())
+
+
+def test_internal_dataset_is_not_a_production_rebuild_choice():
+    form = RebuildRequestForm(department=uuid.uuid4())
+    field = cast(ChoiceField, form.fields["dataset_type_code"])
+    choices = {value for value, _label in cast(Iterable[tuple[str, str]], field.choices)}
+
+    assert "test_department_incidents" not in choices
 
 
 @pytest.mark.django_db(transaction=True)
@@ -326,3 +350,45 @@ def test_expire_temporary_assignments_command_ends_expired_assignments(publicati
     assert expired.ended_by is None
     assert current.ended_at is None
     assert "Expired 1 temporary assignment(s)." in capsys.readouterr().out
+
+
+@pytest.mark.django_db(transaction=True)
+def test_registry_projection_trigger_enforces_scope_and_station_ownership(publication_context):
+    admin, _, department, station, other_station = publication_context
+
+    # The fourth, test-only registry record is department scoped without changing SQL checks.
+    scope = DatasetScopeState.objects.create(
+        department=department, dataset_type_code="test_department_incidents"
+    )
+    assert scope.dataset_type_code == "test_department_incidents"
+    with transaction.atomic():
+        with pytest.raises(IntegrityError, match="Dataset type station scope is invalid"):
+            DatasetScopeState.objects.create(
+                department=department,
+                station=station,
+                dataset_type_code="test_department_incidents",
+            )
+    with transaction.atomic():
+        with pytest.raises(IntegrityError, match="Station must belong to the scope department"):
+            DatasetScopeState.objects.create(
+                department=department, station=other_station, dataset_type_code="station_personnel"
+            )
+    with transaction.atomic():
+        with pytest.raises(IntegrityError, match="Unknown dataset type code"):
+            DatasetScopeState.objects.create(
+                department=department, dataset_type_code="not_registered"
+            )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_department_feature_gate_is_audited(publication_context):
+    admin, _, department, _, _ = publication_context
+    feature = set_department_feature(
+        actor=admin, department=department, feature_code="publications", enabled=False
+    )
+    assert not feature.enabled
+    assert AuditEvent.objects.filter(
+        action="publication.feature_updated", department=department
+    ).exists()
+    with pytest.raises(PublicationError, match="has not enabled"):
+        mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)

@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
+: "${RESTIC_PASSWORD_FILE:?RESTIC_PASSWORD_FILE is required}"
+: "${FIRE_RESTORE_SNAPSHOT:?FIRE_RESTORE_SNAPSHOT is required}"
+: "${FIRE_RESTORE_TARGET:?FIRE_RESTORE_TARGET is required}"
+
+case "$FIRE_RESTORE_TARGET" in
+    /var/lib/fire-backend/restore-tests/*) ;;
+    *) echo "FIRE_RESTORE_TARGET must be below /var/lib/fire-backend/restore-tests" >&2; exit 2 ;;
+esac
+
+if [ -e "$FIRE_RESTORE_TARGET" ] && [ "$(find "$FIRE_RESTORE_TARGET" -mindepth 1 -print -quit)" ]; then
+    echo "FIRE_RESTORE_TARGET must be empty." >&2
+    exit 2
+fi
+
+install -d -m 0700 "$FIRE_RESTORE_TARGET"
+restic restore "$FIRE_RESTORE_SNAPSHOT" --target "$FIRE_RESTORE_TARGET"
+echo "Restored snapshot into $FIRE_RESTORE_TARGET. No database was changed."

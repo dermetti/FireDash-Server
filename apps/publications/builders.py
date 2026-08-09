@@ -1,4 +1,8 @@
+import hashlib
+import json
+import zipfile
 from collections.abc import Callable
+from io import BytesIO
 from typing import Any
 
 from django.conf import settings
@@ -10,6 +14,9 @@ from apps.publications.registry import DatasetTypeDefinition
 from apps.reference_data.models import FirePlan, Hydrant
 
 MAX_HYDRANT_STATUS_BUCKETS = 50
+BUILDERS: dict[str, Callable[..., dict[str, object]]] = {}
+ARTIFACT_BUILDERS: dict[str, Callable[..., bytes]] = {}
+VALIDATORS: dict[str, Callable[..., None]] = {}
 
 
 class PublicationBuildError(ValueError):
@@ -19,20 +26,18 @@ class PublicationBuildError(ValueError):
 def build_summary(
     *, definition: DatasetTypeDefinition, department, station, source_revision: int
 ) -> dict[str, object]:
-    builders: dict[str, Callable[..., dict[str, object]]] = {
-        "department_hydrants": _build_hydrants,
-        "department_fire_plans": _build_fire_plans,
-        "station_personnel": _build_personnel,
-    }
     try:
-        summary = builders[definition.builder_service](
+        summary = BUILDERS[definition.builder_service](
             department=department,
             station=station,
             source_revision=source_revision,
         )
     except KeyError as error:
         raise PublicationBuildError("No registered builder is available.") from error
-    validate_summary(definition=definition, summary=summary)
+    try:
+        VALIDATORS[definition.validator_service](definition=definition, summary=summary)
+    except KeyError as error:
+        raise PublicationBuildError("No registered validator is available.") from error
     return summary
 
 
@@ -126,3 +131,178 @@ def _build_personnel(*, department, station, source_revision: int) -> dict[str, 
         "verified_commander_email_count": aggregates["verified_commander_email_count"],
         "source_revision": source_revision,
     }
+
+
+def build_artifact(
+    *, definition: DatasetTypeDefinition, department, station, source_revision: int
+) -> bytes:
+    try:
+        artifact = ARTIFACT_BUILDERS[definition.builder_service](
+            department=department, station=station, source_revision=source_revision
+        )
+    except KeyError as error:
+        raise PublicationBuildError("No registered artifact builder is available.") from error
+    if not isinstance(artifact, bytes):
+        raise PublicationBuildError("Artifact builder returned invalid content.")
+    if len(artifact) > settings.PUBLICATION_ARTIFACT_MAX_BYTES:
+        raise PublicationBuildError("Artifact exceeds the configured size limit.")
+    return artifact
+
+
+def _json_bytes(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+        "utf-8"
+    )
+
+
+def _artifact_hydrants(*, department, station, source_revision: int) -> bytes:
+    if station is not None:
+        raise PublicationBuildError("Hydrant artifact requires a department scope.")
+    features = []
+    for hydrant in Hydrant.objects.filter(department=department, active=True).order_by("id"):
+        features.append(
+            {
+                "type": "Feature",
+                "id": str(hydrant.id),
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [hydrant.location.x, hydrant.location.y],
+                },
+                "properties": {
+                    "external_identifier": hydrant.external_identifier,
+                    "hydrant_type": hydrant.hydrant_type,
+                    "flow_information": hydrant.flow_information,
+                    "status": hydrant.status,
+                },
+            }
+        )
+    return _json_bytes(
+        {
+            "type": "FeatureCollection",
+            "features": features,
+            "schema_version": 1,
+            "source_revision": source_revision,
+        }
+    )
+
+
+def _artifact_personnel(*, department, station, source_revision: int) -> bytes:
+    if station is None or station.department_id != department.id:
+        raise PublicationBuildError("Personnel artifact requires a station in the department.")
+    now = timezone.now()
+    assignments = (
+        PersonnelStationAssignment.objects.filter(
+            station=station,
+            person__department=department,
+            person__active=True,
+            ended_at__isnull=True,
+            valid_from__lte=now,
+        )
+        .filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now))
+        .select_related("person")
+        .order_by("person_id")
+    )
+    people = [
+        {
+            "id": str(a.person_id),
+            "display_name": a.person.display_name,
+            "incident_commander_eligible": a.person.incident_commander_eligible,
+            "commander_email": a.person.incident_commander_email
+            if a.person.email_verified_at
+            else None,
+        }
+        for a in assignments
+    ]
+    return _json_bytes(
+        {"station_id": str(station.id), "source_revision": source_revision, "people": people}
+    )
+
+
+def _artifact_fire_plans(*, department, station, source_revision: int) -> bytes:
+    if station is not None:
+        raise PublicationBuildError("Fire-plan artifact requires a department scope.")
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        manifest = []
+        for plan in FirePlan.objects.filter(department=department, active=True).order_by("id"):
+            document_path = settings.REFERENCE_DATA_ACCEPTED_ROOT / plan.document_key
+            try:
+                document = document_path.read_bytes()
+            except OSError as error:
+                raise PublicationBuildError(
+                    "Accepted fire-plan document is unavailable."
+                ) from error
+            if hashlib.sha256(document).hexdigest() != plan.sha256:
+                raise PublicationBuildError(
+                    "Accepted fire-plan document hash does not match metadata."
+                )
+            archive_name = f"plans/{plan.id}.pdf"
+            archive.writestr(archive_name, document)
+            manifest.append(
+                {
+                    "id": str(plan.id),
+                    "sha256": plan.sha256,
+                    "page_count": plan.page_count,
+                    "path": archive_name,
+                }
+            )
+        archive.writestr(
+            "manifest.json",
+            _json_bytes({"source_revision": source_revision, "fire_plans": manifest}),
+        )
+    return output.getvalue()
+
+
+BUILDERS.update(
+    {
+        "department_hydrants": _build_hydrants,
+        "department_fire_plans": _build_fire_plans,
+        "station_personnel": _build_personnel,
+        "test_department_incidents": lambda *, department, station, source_revision: {
+            "incident_count": 0,
+            "source_revision": source_revision,
+        },
+    }
+)
+VALIDATORS["summary"] = validate_summary
+ARTIFACT_BUILDERS.update(
+    {
+        "department_hydrants": _artifact_hydrants,
+        "department_fire_plans": _artifact_fire_plans,
+        "station_personnel": _artifact_personnel,
+        "test_department_incidents": lambda **_: _json_bytes({"incidents": []}),
+    }
+)
+
+
+def validate_built_summary(*, definition: DatasetTypeDefinition, summary: Any) -> None:
+    try:
+        VALIDATORS[definition.validator_service](definition=definition, summary=summary)
+    except KeyError as error:
+        raise PublicationBuildError("No registered validator is available.") from error
+
+
+def build_change_summary(
+    *, definition: DatasetTypeDefinition, previous: object, current: dict[str, object]
+) -> dict[str, int]:
+    previous_summary = previous if isinstance(previous, dict) else {}
+    fields_by_type = {
+        "department_hydrants": ("active_count",),
+        "department_fire_plans": ("active_document_count", "total_accepted_bytes", "total_pages"),
+        "station_personnel": (
+            "person_count",
+            "commander_eligible_count",
+            "verified_commander_email_count",
+        ),
+    }
+    fields = fields_by_type.get(definition.code, ("item_count",))
+    source_revision = current.get("source_revision")
+    if not isinstance(source_revision, int):
+        raise PublicationBuildError("Builder returned an invalid source revision.")
+    changes: dict[str, int] = {"source_revision": source_revision}
+    for field in fields:
+        before = previous_summary.get(field, 0)
+        after = current.get(field, 0)
+        if isinstance(before, int) and isinstance(after, int):
+            changes[f"{field}_delta"] = after - before
+    return changes

@@ -1,0 +1,24 @@
+{
+  "protocol": "firedash-hpke-v1",
+  "ciphersuite": "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM",
+  "context": {
+    "publication_id": "11111111-1111-1111-1111-111111111111",
+    "installation_id": "22222222-2222-2222-2222-222222222222",
+    "tablet_id": "33333333-3333-3333-3333-333333333333",
+    "department_id": "44444444-4444-4444-4444-444444444444",
+    "station_id": "55555555-5555-5555-5555-555555555555",
+    "dataset_type_code": "station_personnel",
+    "version_number": 7,
+    "schema_version": 1,
+    "ciphertext_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "canonical_info": "{\"ciphertext_sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"installation_id\":\"22222222-2222-2222-2222-222222222222\",\"protocol\":\"firedash-hpke-v1\",\"publication_id\":\"11111111-1111-1111-1111-111111111111\",\"schema_version\":1,\"scope\":{\"dataset_type_code\":\"station_personnel\",\"department_id\":\"44444444-4444-4444-4444-444444444444\",\"station_id\":\"55555555-5555-5555-5555-555555555555\"},\"tablet_id\":\"33333333-3333-3333-3333-333333333333\",\"version_number\":7}",
+  "rfc9180_base_vector": {
+    "private_key": "f3ce7fdae57e1a310d87f1ebbde6f328be0a99cdbcadf4d6589cf29de4b8ffd2",
+    "public_key": "04fe8c19ce0905191ebc298a9245792531f26f0cece2460639e8bc39cb7f706a826a779b4cf969b8a0e539c7f62fb3d30ad6aa8f80e30f1d128aafd68a2ce72ea0",
+    "info": "4f6465206f6e2061204772656369616e2055726e",
+    "enc": "04a92719c6195d5085104f469a8b9814d5838ff72b60501e2c4466e5e67b325ac98536d7b61a1af4b78e5b7f951c0900be863c403ce65c9bfcb9382657222d18c4",
+    "ciphertext": "5ad590bb8baa577f8619db35a36311226a896e7342a6d836d8b7bcd2f20b6c7f9076ac232e3ab2523f39513434",
+    "plaintext": "4265617574792069732074727574682c20747275746820626561757479"
+  }
+}

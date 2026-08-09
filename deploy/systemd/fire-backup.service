@@ -1,0 +1,29 @@
+[Unit]
+Description=FireDash encrypted backup
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/fire-backend/backup.env
+Environment=PGPASSFILE=%d/backup-pgpass
+Environment=RESTIC_PASSWORD_FILE=%d/restic-password
+LoadCredential=backup-pgpass:/etc/fire-backend/credentials/backup-pgpass
+LoadCredential=restic-password:/etc/fire-backend/credentials/restic-password
+ExecStart=/bin/sh /opt/fire-backend/deploy/scripts/fire-backup
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/fire-backend/backup-staging

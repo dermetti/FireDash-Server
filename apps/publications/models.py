@@ -8,6 +8,21 @@ from django.db.models import Q
 from apps.organizations.models import Department, Station
 from apps.publications.registry import DatasetRegistryError, validate_dataset_scope
 
+MAX_CHANGE_SUMMARY_FIELDS = 20
+MAX_CHANGE_SUMMARY_VALUE_LENGTH = 512
+
+
+def validate_change_summary(summary: object) -> None:
+    if not isinstance(summary, dict) or len(summary) > MAX_CHANGE_SUMMARY_FIELDS:
+        raise ValidationError("Change summary exceeds the configured field limit.")
+    if any(
+        not isinstance(key, str)
+        or len(key) > 128
+        or len(str(value)) > MAX_CHANGE_SUMMARY_VALUE_LENGTH
+        for key, value in summary.items()
+    ):
+        raise ValidationError("Change summary contains an invalid value.")
+
 
 class DatasetScopeState(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -47,19 +62,6 @@ class DatasetScopeState(models.Model):
                 nulls_distinct=False,
                 name="unique_dataset_scope_state",
             ),
-            models.CheckConstraint(
-                condition=(
-                    Q(
-                        dataset_type_code__in=(
-                            "department_hydrants",
-                            "department_fire_plans",
-                        ),
-                        station__isnull=True,
-                    )
-                    | Q(dataset_type_code="station_personnel", station__isnull=False)
-                ),
-                name="registered_dataset_scope_state_scope",
-            ),
         ]
 
     def clean(self) -> None:
@@ -72,6 +74,11 @@ class DatasetScopeState(models.Model):
 
 
 class DatasetPublication(models.Model):
+    class ArtifactStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        READY = "READY", "Ready"
+        FAILED = "FAILED", "Failed"
+
     class Status(models.TextChoices):
         BUILDING = "BUILDING", "Building"
         READY_FOR_REVIEW = "READY_FOR_REVIEW", "Ready for review"
@@ -101,6 +108,21 @@ class DatasetPublication(models.Model):
     source_revision = models.PositiveBigIntegerField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.BUILDING)
     build_summary = models.JSONField(default=dict)
+    change_summary = models.JSONField(default=dict)
+    artifact_ready = models.BooleanField(default=False)
+    artifact_status = models.CharField(
+        max_length=12, choices=ArtifactStatus.choices, default=ArtifactStatus.PENDING
+    )
+    artifact_path = models.CharField(max_length=512, blank=True)
+    artifact_size = models.PositiveBigIntegerField(null=True, blank=True)
+    artifact_sha256 = models.CharField(max_length=64, blank=True)
+    artifact_nonce = models.BinaryField(null=True, blank=True)
+    artifact_wrapped_cek = models.BinaryField(null=True, blank=True)
+    artifact_encryption_algorithm = models.CharField(max_length=32, blank=True)
+    artifact_wrapping_algorithm = models.CharField(max_length=32, blank=True)
+    artifact_kek_version = models.CharField(max_length=64, blank=True)
+    artifact_signature = models.BinaryField(null=True, blank=True)
+    artifact_signature_algorithm = models.CharField(max_length=32, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -136,17 +158,9 @@ class DatasetPublication(models.Model):
                 name="one_current_published_dataset_publication",
             ),
             models.CheckConstraint(
-                condition=(
-                    Q(
-                        dataset_type_code__in=(
-                            "department_hydrants",
-                            "department_fire_plans",
-                        ),
-                        station__isnull=True,
-                    )
-                    | Q(dataset_type_code="station_personnel", station__isnull=False)
-                ),
-                name="registered_dataset_publication_scope",
+                condition=~Q(status__in=("READY_FOR_REVIEW", "PUBLISHED"))
+                | Q(artifact_status="READY"),
+                name="review_publication_requires_ready_artifact",
             ),
         ]
 
@@ -161,14 +175,44 @@ class DatasetPublication(models.Model):
             raise ValidationError({"station": "Station must belong to the publication department."})
         if self.schema_version != definition.current_schema_version:
             raise ValidationError(
-                {"schema_version": "Schema version is not current for this dataset."}
+                {"schema_version": "Schema version is not supported for this dataset."}
             )
+        if self.schema_version not in definition.supported_schema_versions:
+            raise ValidationError(
+                {"schema_version": "Schema version is not supported for this dataset."}
+            )
+        try:
+            validate_change_summary(self.change_summary)
+        except ValidationError as error:
+            raise ValidationError({"change_summary": error.message}) from error
         if self.scope_state_id and (
             self.scope_state.department_id != self.department_id
             or self.scope_state.station_id != self.station_id
             or self.scope_state.dataset_type_code != self.dataset_type_code
         ):
             raise ValidationError({"scope_state": "Scope state must match the publication scope."})
+        metadata_complete = all(
+            (
+                self.artifact_path,
+                self.artifact_size is not None,
+                len(self.artifact_sha256) == 64,
+                self.artifact_nonce,
+                self.artifact_wrapped_cek,
+                self.artifact_encryption_algorithm == "AES-256-GCM",
+                self.artifact_wrapping_algorithm == "AES-KW-RFC3394",
+                self.artifact_kek_version,
+                self.artifact_signature,
+                self.artifact_signature_algorithm == "Ed25519",
+            )
+        )
+        if self.artifact_status == self.ArtifactStatus.READY and not metadata_complete:
+            raise ValidationError("Ready artifacts require complete cryptographic metadata.")
+        if self.status in (self.Status.READY_FOR_REVIEW, self.Status.PUBLISHED) and (
+            self.artifact_status != self.ArtifactStatus.READY or not metadata_complete
+        ):
+            raise ValidationError(
+                "Review-ready and published publications require a ready artifact."
+            )
 
 
 class PublicationJob(models.Model):
@@ -227,19 +271,6 @@ class PublicationJob(models.Model):
                 nulls_distinct=False,
                 name="one_active_publication_job_per_scope",
             ),
-            models.CheckConstraint(
-                condition=(
-                    Q(
-                        dataset_type_code__in=(
-                            "department_hydrants",
-                            "department_fire_plans",
-                        ),
-                        station__isnull=True,
-                    )
-                    | Q(dataset_type_code="station_personnel", station__isnull=False)
-                ),
-                name="registered_publication_job_scope",
-            ),
         ]
         indexes = [models.Index(fields=("status", "created_at"), name="pub_job_status_created_idx")]
 
@@ -284,3 +315,97 @@ class PublicationActivation(models.Model):
         on_delete=models.PROTECT,
         related_name="publication_activations",
     )
+
+
+class DatasetKeyGrant(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RUNNING = "RUNNING", "Running"
+        READY = "READY", "Ready"
+        FAILED = "FAILED", "Failed"
+        REVOKED = "REVOKED", "Revoked"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publication = models.ForeignKey(
+        DatasetPublication, on_delete=models.PROTECT, related_name="key_grants"
+    )
+    app_installation = models.ForeignKey(
+        "tablets.AppInstallation", on_delete=models.PROTECT, related_name="dataset_key_grants"
+    )
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    hpke_ciphersuite = models.CharField(max_length=128, blank=True)
+    hpke_encapsulated_key = models.BinaryField(null=True, blank=True)
+    hpke_wrapped_content_key = models.BinaryField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.CharField(max_length=512, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("publication", "app_installation"), name="unique_dataset_key_grant"
+            )
+        ]
+        indexes = [
+            models.Index(fields=("status", "created_at"), name="key_grant_status_created_idx")
+        ]
+
+
+class SignedManifest(models.Model):
+    """Coalesced request and signed result for one installation state."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RUNNING = "RUNNING", "Running"
+        READY = "READY", "Ready"
+        FAILED = "FAILED", "Failed"
+        OBSOLETE = "OBSOLETE", "Obsolete"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    app_installation = models.ForeignKey(
+        "tablets.AppInstallation", on_delete=models.PROTECT, related_name="signed_manifests"
+    )
+    state_hash = models.CharField(max_length=64)
+    generation = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    payload = models.JSONField(default=dict)
+    signature = models.BinaryField(null=True, blank=True)
+    signature_algorithm = models.CharField(max_length=32, blank=True)
+    signing_key_version = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.CharField(max_length=512, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("app_installation", "state_hash"), name="unique_signed_manifest_state"
+            )
+        ]
+        indexes = [models.Index(fields=("status", "created_at"), name="signed_manifest_status_idx")]
+
+
+class DatasetTypeRegistry(models.Model):
+    """Database projection of the immutable application dataset registry."""
+
+    code = models.CharField(primary_key=True, max_length=100)
+    scope = models.CharField(max_length=16)
+    current_schema_version = models.PositiveIntegerField()
+    supported_schema_versions = models.JSONField(default=list)
+    required = models.BooleanField(default=True)
+    feature_code = models.CharField(max_length=100)
+
+
+class DepartmentFeature(models.Model):
+    department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="features")
+    feature_code = models.CharField(max_length=100)
+    enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("department", "feature_code"), name="unique_department_feature"
+            )
+        ]

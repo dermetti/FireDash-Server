@@ -1,0 +1,28 @@
+[Unit]
+Description=FireDash isolated restore test
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/fire-backend/backup.env
+EnvironmentFile=/etc/fire-backend/restore.env
+Environment=RESTIC_PASSWORD_FILE=%d/restic-password
+LoadCredential=restic-password:/etc/fire-backend/credentials/restic-password
+ExecStart=/bin/sh /opt/fire-backend/deploy/scripts/fire-restore
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/fire-backend/restore-tests

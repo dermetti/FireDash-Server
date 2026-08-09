@@ -1,0 +1,11 @@
+[Unit]
+Description=Run FireDash stale installation processing
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=fire-stale-installation.service
+
+[Install]
+WantedBy=timers.target

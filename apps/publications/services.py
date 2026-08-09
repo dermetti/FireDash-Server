@@ -6,7 +6,20 @@ from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
-from apps.publications.builders import PublicationBuildError, build_summary, validate_summary
+from apps.publications.artifacts import (
+    ArtifactError,
+    build_encrypted_artifact,
+    remove_artifact,
+    remove_artifact_path,
+)
+from apps.publications.builders import (
+    PublicationBuildError,
+    build_artifact,
+    build_change_summary,
+    build_summary,
+    validate_built_summary,
+)
+from apps.publications.feature_services import FeatureDisabledError, require_feature
 from apps.publications.models import (
     DatasetPublication,
     DatasetScopeState,
@@ -39,6 +52,11 @@ def _validate_scope(*, department, station, dataset_type_code: str) -> None:
         raise PublicationError(str(error)) from error
     if station is not None and station.department_id != department.id:
         raise PublicationError("Station must belong to the scope department.")
+    try:
+        definition = get_dataset_definition(dataset_type_code)
+        require_feature(department=department, feature_code=definition.feature_code)
+    except (DatasetRegistryError, FeatureDisabledError) as error:
+        raise PublicationError(str(error)) from error
 
 
 def _locked_scope(*, department, station, dataset_type_code: str) -> DatasetScopeState:
@@ -241,6 +259,12 @@ def build_claimed_job(*, job_id) -> PublicationJob:
     job = PublicationJob.objects.select_related("department", "station").get(pk=job_id)
     if job.status != PublicationJob.Status.RUNNING:
         return job
+    if job.build_publication_id is None:
+        return fail_publication_job(
+            job_id=job.id,
+            error_category="worker",
+            error_message="Claim did not allocate a publication.",
+        )
     try:
         definition = get_dataset_definition(job.dataset_type_code)
         _validate_scope(
@@ -252,13 +276,25 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             station=job.station,
             source_revision=job.source_revision,
         )
-    except (DatasetRegistryError, PublicationBuildError, PublicationError) as error:
+        publication = DatasetPublication.objects.get(pk=job.build_publication_id)
+        artifact = build_encrypted_artifact(
+            publication=publication,
+            plaintext=build_artifact(
+                definition=definition,
+                department=job.department,
+                station=job.station,
+                source_revision=job.source_revision,
+            ),
+        )
+    except (DatasetRegistryError, PublicationBuildError, PublicationError, ArtifactError) as error:
         return fail_publication_job(job_id=job.id, error_message=str(error))
-    return finalize_publication_job(job_id=job.id, summary=summary)
+    return finalize_publication_job(job_id=job.id, summary=summary, artifact=artifact)
 
 
 @transaction.atomic
-def finalize_publication_job(*, job_id, summary: dict[str, object]) -> PublicationJob:
+def finalize_publication_job(
+    *, job_id, summary: dict[str, object], artifact: dict[str, object]
+) -> PublicationJob:
     job = (
         PublicationJob.objects.select_for_update()
         .select_related("department", "station")
@@ -278,6 +314,7 @@ def finalize_publication_job(*, job_id, summary: dict[str, object]) -> Publicati
     now = timezone.now()
     publication = DatasetPublication.objects.select_for_update().get(pk=job.build_publication_id)
     if scope.source_revision != job.source_revision:
+        remove_artifact_path(artifact["artifact_path"])
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.save(update_fields=("status",))
         job.status = PublicationJob.Status.OBSOLETE
@@ -304,10 +341,29 @@ def finalize_publication_job(*, job_id, summary: dict[str, object]) -> Publicati
         )
         return job
     definition = get_dataset_definition(job.dataset_type_code)
-    validate_summary(definition=definition, summary=summary)
+    validate_built_summary(definition=definition, summary=summary)
     publication.build_summary = summary
+    previous_publication = scope.latest_built_publication
+    previous_summary = previous_publication.build_summary if previous_publication else {}
+    publication.change_summary = build_change_summary(
+        definition=definition, previous=previous_summary, current=summary
+    )
+    for field, value in artifact.items():
+        setattr(publication, field, value)
+    publication.artifact_status = DatasetPublication.ArtifactStatus.READY
+    publication.artifact_ready = True
     publication.status = DatasetPublication.Status.READY_FOR_REVIEW
-    publication.save(update_fields=("build_summary", "status"))
+    publication.full_clean()
+    publication.save(
+        update_fields=(
+            "build_summary",
+            "change_summary",
+            "artifact_status",
+            "artifact_ready",
+            *artifact.keys(),
+            "status",
+        )
+    )
     scope.latest_built_publication = publication
     scope.dirty_since = None
     scope.save(update_fields=("latest_built_publication", "dirty_since", "updated_at"))
@@ -342,9 +398,16 @@ def fail_publication_job(
     job.error_category = error_category[:32]
     job.save(update_fields=("status", "completed_at", "error_message", "error_category"))
     if job.build_publication_id is not None:
+        publication = DatasetPublication.objects.filter(pk=job.build_publication_id).first()
+        if publication is not None:
+            remove_artifact(publication)
         DatasetPublication.objects.filter(
             pk=job.build_publication_id, status=DatasetPublication.Status.BUILDING
-        ).update(status=DatasetPublication.Status.FAILED, build_error=job.error_message)
+        ).update(
+            status=DatasetPublication.Status.FAILED,
+            artifact_status=DatasetPublication.ArtifactStatus.FAILED,
+            build_error=job.error_message,
+        )
     record_event(
         action="publication.build_failed",
         department=job.department,
@@ -412,6 +475,13 @@ def publish_publication(*, actor, publication: DatasetPublication) -> DatasetPub
     require_department_admin(actor, publication.department)
     if publication.status != DatasetPublication.Status.READY_FOR_REVIEW:
         raise PublicationError("Only a review-ready publication can be published.")
+    _validate_scope(
+        department=publication.department,
+        station=publication.station,
+        dataset_type_code=publication.dataset_type_code,
+    )
+    if publication.artifact_status != DatasetPublication.ArtifactStatus.READY:
+        raise PublicationError("Publication artifact is not ready.")
     scope = _locked_scope(
         department=publication.department,
         station=publication.station,
@@ -458,6 +528,11 @@ def reject_publication(*, actor, publication: DatasetPublication) -> DatasetPubl
     require_department_admin(actor, publication.department)
     if publication.status != DatasetPublication.Status.READY_FOR_REVIEW:
         raise PublicationError("Only a review-ready publication can be rejected.")
+    _validate_scope(
+        department=publication.department,
+        station=publication.station,
+        dataset_type_code=publication.dataset_type_code,
+    )
     publication.status = DatasetPublication.Status.REJECTED
     publication.save(update_fields=("status",))
     record_event(
@@ -516,6 +591,11 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
     require_department_admin(actor, publication.department)
     if publication.status != DatasetPublication.Status.SUPERSEDED:
         raise PublicationError("Only a superseded publication can be restored.")
+    _validate_scope(
+        department=publication.department,
+        station=publication.station,
+        dataset_type_code=publication.dataset_type_code,
+    )
     scope = _locked_scope(
         department=publication.department,
         station=publication.station,

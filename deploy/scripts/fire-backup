@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+: "${BACKUP_PG_DATABASE:?BACKUP_PG_DATABASE is required}"
+: "${BACKUP_PG_USER:?BACKUP_PG_USER is required}"
+: "${BACKUP_PG_HOST:?BACKUP_PG_HOST is required}"
+: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
+: "${RESTIC_PASSWORD_FILE:?RESTIC_PASSWORD_FILE is required}"
+: "${PGPASSFILE:?PGPASSFILE is required}"
+
+umask 077
+staging_root=/var/lib/fire-backend/backup-staging
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+dump_path="$staging_root/postgresql-$stamp.dump"
+
+install -d -m 0700 "$staging_root"
+trap 'rm -f "$dump_path"' EXIT HUP INT TERM
+
+pg_dump --format=custom --file="$dump_path" --host="$BACKUP_PG_HOST" \
+    --port="${BACKUP_PG_PORT:-5432}" --username="$BACKUP_PG_USER" "$BACKUP_PG_DATABASE"
+
+restic backup --tag firedash --tag database --tag "$stamp" "$dump_path"
+restic backup --tag firedash --tag fire-plans /var/lib/fire-backend/fire-plans
+restic backup --tag firedash --tag publications /var/lib/fire-backend/publications
+restic backup --tag firedash --tag credentials /etc/fire-backend/credentials
+restic forget --prune --keep-daily "${RESTIC_KEEP_DAILY:-14}" \
+    --keep-weekly "${RESTIC_KEEP_WEEKLY:-8}" --keep-monthly "${RESTIC_KEEP_MONTHLY:-12}"

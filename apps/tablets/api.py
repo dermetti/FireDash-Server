@@ -1,0 +1,323 @@
+"""Versioned tablet provisioning API views and installation authentication."""
+
+import base64
+import hashlib
+import hmac
+import json
+from dataclasses import dataclass
+from uuid import UUID
+
+from django.conf import settings
+from django.core.exceptions import PermissionDenied
+from django.http import HttpResponse
+from django.utils import timezone
+from drf_spectacular.extensions import OpenApiAuthenticationExtension
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
+from rest_framework import authentication, exceptions, permissions, serializers, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.publications.manifests import ManifestError, authorized_publications, request_manifest
+from apps.tablets.models import AdoptionRequest, AppInstallation
+from apps.tablets.services import TabletError, check_in, complete_adoption, create_adoption_request
+
+
+@dataclass(frozen=True)
+class InstallationPrincipal:
+    installation: AppInstallation
+
+    @property
+    def is_authenticated(self) -> bool:
+        return True
+
+
+class InstallationBearerAuthentication(authentication.BaseAuthentication):
+    """Authenticate opaque installation credentials without exposing a lookup identifier."""
+
+    keyword = "Bearer"
+
+    def authenticate(self, request):
+        header = authentication.get_authorization_header(request).split()
+        if not header:
+            return None
+        if len(header) != 2 or header[0].lower() != b"bearer":
+            raise exceptions.AuthenticationFailed("Invalid installation authorization header.")
+        try:
+            credential = header[1].decode("ascii")
+        except UnicodeDecodeError as error:
+            raise exceptions.AuthenticationFailed("Invalid installation credential.") from error
+
+        digest = hmac.new(
+            settings.SECRET_KEY.encode(), credential.encode(), hashlib.sha256
+        ).hexdigest()
+        # Do not use a client-provided installation identifier to select the credential hash.
+        installation = next(
+            (
+                candidate
+                for candidate in (
+                    AppInstallation.objects.select_related("tablet__department").exclude(
+                        status=AppInstallation.Status.REPLACED
+                    )
+                )
+                if hmac.compare_digest(candidate.credential_hash, digest)
+            ),
+            None,
+        )
+        if installation is None:
+            raise exceptions.AuthenticationFailed("Invalid installation credential.")
+        return InstallationPrincipal(installation), credential
+
+
+class InstallationBearerScheme(OpenApiAuthenticationExtension):
+    target_class = "apps.tablets.api.InstallationBearerAuthentication"
+    name = "InstallationBearer"
+
+    def get_security_definition(self, auto_schema):
+        return {"type": "http", "scheme": "bearer", "bearerFormat": "installation credential"}
+
+
+class AdoptionPreviewSerializer(serializers.Serializer):
+    token = serializers.CharField(max_length=256, trim_whitespace=False)
+    installation_uuid = serializers.UUIDField()
+    app_version = serializers.CharField(max_length=64)
+    hpke_public_key = serializers.CharField()
+    hpke_ciphersuite = serializers.CharField(max_length=128)
+
+    def validate_hpke_public_key(self, value):
+        try:
+            return base64.b64decode(value, validate=True)
+        except ValueError as error:
+            raise serializers.ValidationError("Must be valid base64.") from error
+
+
+class AdoptionCompleteSerializer(serializers.Serializer):
+    adoption_request_id = serializers.UUIDField()
+    challenge_response = serializers.CharField()
+    confirmed = serializers.BooleanField()
+
+    def validate_challenge_response(self, value):
+        try:
+            return base64.b64decode(value, validate=True)
+        except ValueError as error:
+            raise serializers.ValidationError("Must be valid base64.") from error
+
+
+def _problem_from_service(error: Exception) -> exceptions.APIException:
+    exception = exceptions.PermissionDenied(str(error))
+    exception.default_code = "tablet-authorization"
+    return exception
+
+
+@extend_schema(request=AdoptionPreviewSerializer, responses={201: OpenApiTypes.OBJECT})
+class AdoptionPreviewView(APIView):
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = AdoptionPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            challenge = create_adoption_request(**serializer.validated_data)
+        except TabletError as error:
+            raise _problem_from_service(error) from error
+        return Response(
+            {
+                "adoption_request_id": str(challenge.request.id),
+                "encrypted_challenge": base64.b64encode(challenge.encrypted_challenge).decode(
+                    "ascii"
+                ),
+                "expires_at": challenge.request.expires_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@extend_schema(request=AdoptionPreviewSerializer, responses={201: OpenApiTypes.OBJECT})
+class ReactivationPreviewView(AdoptionPreviewView):
+    def post(self, request):
+        serializer = AdoptionPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            challenge = create_adoption_request(**serializer.validated_data, reactivation=True)
+        except TabletError as error:
+            raise _problem_from_service(error) from error
+        return Response(
+            {
+                "adoption_request_id": str(challenge.request.id),
+                "encrypted_challenge": base64.b64encode(challenge.encrypted_challenge).decode(
+                    "ascii"
+                ),
+                "expires_at": challenge.request.expires_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@extend_schema(request=AdoptionCompleteSerializer, responses={201: OpenApiTypes.OBJECT})
+class AdoptionCompleteView(APIView):
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = AdoptionCompleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            installation, credential = complete_adoption(
+                request_id=serializer.validated_data["adoption_request_id"],
+                challenge_response=serializer.validated_data["challenge_response"],
+                confirmed=serializer.validated_data["confirmed"],
+            )
+        except (TabletError, AppInstallation.DoesNotExist) as error:
+            raise _problem_from_service(error) from error
+        return Response(
+            {
+                "installation_id": str(installation.id),
+                "credential": credential,
+                "authorization_valid_until": installation.authorization_valid_until,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@extend_schema(request=AdoptionCompleteSerializer, responses={201: OpenApiTypes.OBJECT})
+class ReactivationCompleteView(AdoptionCompleteView):
+    authentication_classes = [InstallationBearerAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = AdoptionCompleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not AdoptionRequest.objects.filter(
+            pk=serializer.validated_data["adoption_request_id"],
+            reactivation_invitation__app_installation=request.user.installation,
+        ).exists():
+            raise exceptions.PermissionDenied("Reactivation request is not for this installation.")
+        return super().post(request)
+
+
+class InstallationAPIView(APIView):
+    authentication_classes = [InstallationBearerAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    @property
+    def installation(self) -> AppInstallation:
+        return self.request.user.installation
+
+
+@extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
+class CheckInView(InstallationAPIView):
+    def post(self, request):
+        try:
+            installation = check_in(installation=self.installation, credential=request.auth)
+        except (TabletError, PermissionDenied) as error:
+            raise _problem_from_service(error) from error
+        return Response(
+            {
+                "status": "active",
+                "server_time": timezone.now(),
+                "authorization_valid_until": installation.authorization_valid_until,
+            }
+        )
+
+
+@extend_schema(responses={200: OpenApiTypes.OBJECT})
+class StatusView(InstallationAPIView):
+    def get(self, request):
+        installation = self.installation
+        state = installation.status.lower()
+        return Response(
+            {
+                "status": state,
+                "authorization_valid_until": installation.authorization_valid_until,
+                "purge_provisioned_data": installation.status == AppInstallation.Status.REVOKED,
+            }
+        )
+
+
+def _configuration(installation: AppInstallation) -> dict[str, str]:
+    _, vehicle, _ = authorized_publications(installation=installation)
+    return {
+        "installation_id": str(installation.id),
+        "tablet_id": str(installation.tablet_id),
+        "department_id": str(installation.tablet.department_id),
+        "station_id": str(vehicle.station_id),
+        "vehicle_id": str(vehicle.id),
+    }
+
+
+@extend_schema(responses={200: OpenApiTypes.OBJECT})
+class ConfigurationView(InstallationAPIView):
+    def get(self, request):
+        try:
+            return Response(_configuration(self.installation))
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
+
+
+@extend_schema(responses={200: OpenApiTypes.OBJECT, 202: None, 304: None})
+class ManifestView(InstallationAPIView):
+    def get(self, request):
+        try:
+            result = request_manifest(installation=self.installation)
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
+        if result.unavailable:
+            return Response(
+                {
+                    "type": "https://fire-backend.internal/problems/manifest-pending",
+                    "title": "Manifest pending",
+                    "status": status.HTTP_202_ACCEPTED,
+                    "detail": "The authorized manifest is being prepared.",
+                    "request_id": str(getattr(request, "request_id", "")),
+                    "manifest_request_id": str(result.request_id),
+                },
+                status=status.HTTP_202_ACCEPTED,
+                headers={"Retry-After": "5"},
+                content_type="application/problem+json",
+            )
+        if result.payload is None:
+            raise exceptions.PermissionDenied("Manifest is not available for this installation.")
+        payload = result.payload
+        etag_payload = {key: value for key, value in payload.items() if key != "generated_at"}
+        etag = (
+            '"'
+            + hashlib.sha256(
+                json.dumps(etag_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            + '"'
+        )
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+        return Response(payload, headers={"ETag": etag})
+
+
+@extend_schema(responses={200: OpenApiTypes.BINARY, 304: None})
+class DownloadView(InstallationAPIView):
+    def get(self, request, publication_id: UUID):
+        try:
+            manifest = request_manifest(installation=self.installation)
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
+        if manifest.unavailable or manifest.payload is None:
+            raise exceptions.PermissionDenied("Publication is not available for this installation.")
+        _, _, publications = authorized_publications(installation=self.installation)
+        authorized_ids = {dataset["publication_id"] for dataset in manifest.payload["datasets"]}
+        publication = next(
+            (
+                item
+                for item in publications
+                if item.id == publication_id and str(item.id) in authorized_ids
+            ),
+            None,
+        )
+        if publication is None:
+            raise exceptions.NotFound("Publication is not authorized for this installation.")
+        etag = f'"{publication.artifact_sha256}"'
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+        response = HttpResponse(content_type="application/octet-stream")
+        response["ETag"] = etag
+        response["Accept-Ranges"] = "bytes"
+        response["X-Accel-Redirect"] = f"/internal-protected-datasets/{publication.id}.bin"
+        return response

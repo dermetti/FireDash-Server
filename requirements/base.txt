@@ -1,5 +1,7 @@
 Django==5.2.16
+cryptography==50.0.0
 djangorestframework==3.18.0
+drf-spectacular==0.29.0
 django-otp==1.7.0
 gunicorn==23.0.0
 pikepdf==10.3.0

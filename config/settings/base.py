@@ -17,6 +17,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "drf_spectacular",
     "django_otp",
     "django_otp.plugins.otp_totp",
     "apps.accounts",
@@ -131,6 +132,32 @@ TEMPORARY_ASSIGNMENT_EXPIRY_BATCH_SIZE = get_typed_env(
 PUBLICATION_BUILD_SUMMARY_MAX_ITEMS = get_typed_env(
     "PUBLICATION_BUILD_SUMMARY_MAX_ITEMS", int, default=10_000
 )
+PUBLICATION_ARTIFACT_ROOT = Path(
+    get_env("PUBLICATION_ARTIFACT_ROOT", default="/var/lib/fire-backend/publications")
+)
+PUBLICATION_ARTIFACT_TEMP_ROOT = Path(
+    get_env("PUBLICATION_ARTIFACT_TEMP_ROOT", default="/var/lib/fire-backend/publications-tmp")
+)
+PUBLICATION_ARTIFACT_MAX_BYTES = get_typed_env(
+    "PUBLICATION_ARTIFACT_MAX_BYTES", int, default=100 * 1024 * 1024
+)
+PUBLICATION_ARTIFACT_STALE_SECONDS = get_typed_env(
+    "PUBLICATION_ARTIFACT_STALE_SECONDS", int, default=3600
+)
+PUBLICATION_KEK_CREDENTIAL_PATH = Path(
+    get_env(
+        "PUBLICATION_KEK_CREDENTIAL_PATH",
+        default="/run/credentials/fire-publication-worker.service/publication-kek",
+    )
+)
+PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = Path(
+    get_env(
+        "PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH",
+        default="/run/credentials/fire-publication-worker.service/publication-signing-key",
+    )
+)
+PUBLICATION_KEK_VERSION = get_env("PUBLICATION_KEK_VERSION", default="1")
+PUBLICATION_SIGNING_KEY_VERSION = get_env("PUBLICATION_SIGNING_KEY_VERSION", default="1")
 
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))
@@ -140,4 +167,16 @@ LOGGING = {
     "disable_existing_loggers": False,
     "handlers": {"console": {"class": "logging.StreamHandler"}},
     "root": {"handlers": ["console"], "level": "INFO"},
+}
+
+REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "EXCEPTION_HANDLER": "config.api.problem_exception_handler",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "FireDash Provisioning API",
+    "VERSION": "1.0.0",
+    "OAS_VERSION": "3.1.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
