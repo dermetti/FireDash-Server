@@ -10,6 +10,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+
     services:
       postgres:
         image: postgis/postgis:16-3.4
@@ -24,43 +25,86 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
     env:
       DJANGO_SETTINGS_MODULE: config.settings.test
       DJANGO_SECRET_KEY: ci-test-secret-not-for-production
+
       TEST_POSTGRES_DB: test_firedash
       TEST_POSTGRES_USER: firedash_test
       TEST_POSTGRES_PASSWORD: firedash_test_ci
       TEST_POSTGRES_HOST: 127.0.0.1
       TEST_POSTGRES_PORT: "5432"
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements/dev.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/dev.txt
+
       - name: Create dedicated PostGIS test role and template
         env:
           PGPASSWORD: database_owner_ci
-        run: >-
-          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U database_owner -d fire_backend
-          -c "CREATE ROLE firedash_test LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD 'firedash_test_ci';"
-          -c "CREATE DATABASE firedash_test_template OWNER database_owner TEMPLATE template0;"
-          -c "\\connect firedash_test_template"
-          -c "CREATE EXTENSION postgis;"
-          -c "ALTER DATABASE firedash_test_template IS_TEMPLATE true;"
-          -c "ALTER DATABASE firedash_test_template ALLOW_CONNECTIONS false;"
+        run: |
+          psql -v ON_ERROR_STOP=1 \
+            -h 127.0.0.1 \
+            -U database_owner \
+            -d fire_backend \
+            -c "CREATE ROLE firedash_test LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'firedash_test_ci';"
+
+          psql -v ON_ERROR_STOP=1 \
+            -h 127.0.0.1 \
+            -U database_owner \
+            -d fire_backend \
+            -c "CREATE DATABASE firedash_test_template OWNER database_owner TEMPLATE template0;"
+
+          psql -v ON_ERROR_STOP=1 \
+            -h 127.0.0.1 \
+            -U database_owner \
+            -d firedash_test_template \
+            -c "CREATE EXTENSION postgis;" \
+            -c "CREATE EXTENSION btree_gist;"
+
+          psql -v ON_ERROR_STOP=1 \
+            -h 127.0.0.1 \
+            -U database_owner \
+            -d fire_backend \
+            -c "ALTER DATABASE firedash_test_template IS_TEMPLATE true;" \
+            -c "ALTER DATABASE firedash_test_template ALLOW_CONNECTIONS false;"
+
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run
-      - name: Django checks
+
+      - name: Django system check
         run: python manage.py check
+
+      - name: Check formatting
+        run: ruff format --check .
+
       - name: Lint
         run: ruff check .
+
       - name: Type check
-        run: mypy apps config manage.py
+        run: mypy .
+
       - name: Security scan
         run: bandit -r apps config manage.py --exclude "*/tests/*,*/migrations/*"
+
       - name: Dependency audit
-        run: pip-audit -r requirements/base.txt && pip-audit -r requirements/dev.txt
-      - name: Tests
-        run: pytest
+        run: |
+          pip-audit -r requirements/base.txt
+          pip-audit -r requirements/dev.txt
+
+      - name: Run PostgreSQL/PostGIS test suite
+        run: pytest --ds=config.settings.test
+
+      - name: Validate OpenAPI schema
+        run: python manage.py spectacular --validate
