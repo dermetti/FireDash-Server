@@ -1,0 +1,21 @@
+[Unit]
+Description=FireDash PDF sanitizer sandbox policy
+Documentation=man:systemd.exec(5)
+
+[Service]
+# The application invokes the same restrictions through fire-pdf-sanitize.
+# This unit is an auditable policy reference for LXC deployment validation.
+Type=oneshot
+User=fire_pdf_sanitizer
+Group=fire_pdf_sanitizer
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX
+TasksMax=32
+MemoryMax=512M
+CPUQuota=100%%
+TimeoutStartSec=60s
+ExecStart=/usr/bin/false

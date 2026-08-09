@@ -1,0 +1,11 @@
+[Unit]
+Description=Run FireDash publication worker
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=fire-publication-worker.service
+
+[Install]
+WantedBy=timers.target

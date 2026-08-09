@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><body><main><h1>{{ department.name }} fire plans</h1><ul>{% for fire_plan in fire_plans %}<li><a href="{% url 'reference-data-fire-plan-detail' fire_plan.id %}">{{ fire_plan.object_name }}</a></li>{% empty %}<li>No fire plans.</li>{% endfor %}</ul><h2>Upload fire plan</h2><form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button>Upload</button></form></main></body></html>

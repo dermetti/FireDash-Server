@@ -1,3 +1,5 @@
+import os
+
 from config.settings.base import *  # noqa: F403
 from config.settings.base import BASE_DIR
 from config.settings.env import get_bool, get_env, get_typed_env
@@ -11,7 +13,7 @@ STATIC_ROOT = str(BASE_DIR / "staticfiles")
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": "django.contrib.gis.db.backends.postgis",
         "NAME": get_env("POSTGRES_DB", default="fire_backend"),
         "USER": get_env("POSTGRES_USER", default="application_runtime"),
         "PASSWORD": get_env("POSTGRES_PASSWORD", default="fire_backend_dev"),
@@ -19,3 +21,10 @@ DATABASES = {
         "PORT": get_typed_env("POSTGRES_PORT", int, default=5432),
     }
 }
+
+REFERENCE_DATA_QUARANTINE_ROOT = BASE_DIR / ".private" / "quarantine"
+REFERENCE_DATA_SANITIZER_OUTPUT_ROOT = BASE_DIR / ".private" / "sanitizer-output"
+REFERENCE_DATA_ACCEPTED_ROOT = BASE_DIR / ".private" / "fire-plans"
+
+GDAL_LIBRARY_PATH = os.getenv("GDAL_LIBRARY_PATH")
+GEOS_LIBRARY_PATH = os.getenv("GEOS_LIBRARY_PATH")

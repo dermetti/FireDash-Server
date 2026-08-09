@@ -2,6 +2,8 @@ Django==5.2.16
 djangorestframework==3.18.0
 django-otp==1.7.0
 gunicorn==23.0.0
+pikepdf==10.3.0
 psycopg[binary]==3.2.10
 Pillow==12.3.0
+python-magic==0.4.27
 qrcode==8.2

@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><body>
+<main>
+<h1>Publication review</h1>
+{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
+<p><a href="{% url 'publications-list' publication.department_id %}">Back to publications</a></p>
+<dl><dt>Dataset</dt><dd>{{ publication.dataset_type_code }}</dd><dt>Scope</dt><dd>{{ publication.department.name }}{% if publication.station %}, {{ publication.station.name }}{% endif %}</dd><dt>Version</dt><dd>{{ publication.version_number }}</dd><dt>Status</dt><dd>{{ publication.status }}</dd><dt>Source revision</dt><dd>{{ publication.source_revision }}</dd><dt>Build summary</dt><dd><pre>{{ publication.build_summary }}</pre></dd>{% if publication.build_error %}<dt>Build error</dt><dd>{{ publication.build_error }}</dd>{% endif %}</dl>
+{% if publication.status == 'READY_FOR_REVIEW' %}<form method="post">{% csrf_token %}<button name="action" value="publish">Publish</button><button name="action" value="reject">Reject</button></form>{% elif publication.status == 'SUPERSEDED' %}<form method="post">{% csrf_token %}<button name="action" value="rollback">Restore this version</button></form>{% endif %}
+</main>
+</body></html>

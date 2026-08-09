@@ -1,11 +1,15 @@
 from datetime import datetime
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment, TabletVehicleAssignment
+from apps.audit.services import record_event
+from apps.authorization.services import require_department_admin
 from apps.organizations.models import Department, Station, Vehicle
 from apps.personnel.models import Person
+from apps.publications.services import mark_dirty
 from apps.tablets.models import Tablet
 
 
@@ -41,14 +45,16 @@ def _validate_tablet_vehicle(tablet: Tablet, vehicle: Vehicle) -> None:
 
 
 def _current_home(person: Person):
+    now = timezone.now()
     return (
         PersonnelStationAssignment.objects.select_for_update()
         .filter(
             person=person,
             assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
-            valid_until__isnull=True,
+            valid_from__lte=now,
             ended_at__isnull=True,
         )
+        .filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now))
         .first()
     )
 
@@ -79,6 +85,7 @@ def transfer_home(
     *, person: Person, station: Station, actor, effective_at: datetime | None = None
 ) -> PersonnelStationAssignment:
     person = Person.objects.select_for_update().select_related("department").get(pk=person.pk)
+    require_department_admin(actor, person.department)
     _validate_person_station(person, station)
     effective = _now(effective_at)
     current = _current_home(person)
@@ -98,7 +105,97 @@ def transfer_home(
         created_by=actor,
     )
     ensure_current_home(person)
+    mark_dirty(
+        department=person.department,
+        station=current.station,
+        dataset_type_code="station_personnel",
+        actor=actor,
+    )
+    mark_dirty(
+        department=person.department,
+        station=station,
+        dataset_type_code="station_personnel",
+        actor=actor,
+    )
+    record_event(
+        action="personnel.home_station_transferred",
+        actor_user=actor,
+        department=person.department,
+        station=station,
+        target_type="person",
+        target_uuid=person.id,
+    )
     return assignment
+
+
+@transaction.atomic
+def create_temporary_assignment(
+    *, person: Person, station: Station, actor, valid_until, reason: str = ""
+) -> PersonnelStationAssignment:
+    person = Person.objects.select_for_update().select_related("department").get(pk=person.pk)
+    require_department_admin(actor, person.department)
+    _validate_person_station(person, station)
+    now = timezone.now()
+    if valid_until is None or valid_until <= now:
+        raise AssignmentError("Temporary assignments require a future expiry.")
+    assignment = PersonnelStationAssignment.objects.create(
+        person=person,
+        station=station,
+        assignment_type=PersonnelStationAssignment.AssignmentType.TEMPORARY,
+        valid_from=now,
+        valid_until=valid_until,
+        reason=reason.strip(),
+        created_by=actor,
+    )
+    mark_dirty(
+        department=person.department,
+        station=station,
+        dataset_type_code="station_personnel",
+        actor=actor,
+    )
+    record_event(
+        action="personnel.temporary_assignment_created",
+        actor_user=actor,
+        department=person.department,
+        station=station,
+        target_type="personnel_station_assignment",
+        target_uuid=assignment.id,
+    )
+    return assignment
+
+
+@transaction.atomic
+def end_temporary_assignment(*, assignment: PersonnelStationAssignment, actor=None) -> None:
+    assignment = (
+        PersonnelStationAssignment.objects.select_for_update()
+        .select_related("person__department", "station")
+        .get(pk=assignment.pk)
+    )
+    if assignment.assignment_type != PersonnelStationAssignment.AssignmentType.TEMPORARY:
+        raise AssignmentError("Only temporary assignments can be ended through this service.")
+    if assignment.ended_at is not None:
+        return
+    if actor is not None:
+        require_department_admin(actor, assignment.person.department)
+    assignment.ended_at = timezone.now()
+    assignment.ended_by = actor
+    assignment.save(update_fields=("ended_at", "ended_by"))
+    mark_dirty(
+        department=assignment.person.department,
+        station=assignment.station,
+        dataset_type_code="station_personnel",
+        actor=actor,
+    )
+    record_event(
+        action="personnel.temporary_assignment_ended"
+        if actor
+        else "personnel.temporary_assignment_expired",
+        actor_user=actor,
+        department=assignment.person.department,
+        station=assignment.station,
+        target_type="personnel_station_assignment",
+        target_uuid=assignment.id,
+    )
 
 
 @transaction.atomic

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><body>
+<main>
+<h1>Publications: {{ department.name }}</h1>
+{% if messages %}{% for message in messages %}<p>{{ message }}</p>{% endfor %}{% endif %}
+<p><a href="{% url 'portal-dashboard' %}">Dashboard</a></p>
+<section><h2>Request rebuild</h2><form method="post">{% csrf_token %}{{ form.as_p }}<button>Request rebuild</button></form></section>
+<section><h2>Dataset scopes</h2><ul>{% for scope in scopes %}<li>{{ scope.dataset_type_code }}{% if scope.station %} ({{ scope.station.name }}){% endif %}: revision {{ scope.source_revision }}, latest {% if scope.latest_built_publication %}<a href="{% url 'publications-review' scope.latest_built_publication.id %}">v{{ scope.latest_built_publication.version_number }} {{ scope.latest_built_publication.status }}</a>{% else %}none{% endif %}, current {% if scope.current_published_publication %}v{{ scope.current_published_publication.version_number }}{% else %}none{% endif %}</li>{% empty %}<li>No publication scopes have been initialized.</li>{% endfor %}</ul></section>
+<section><h2>Recent jobs</h2><ul>{% for job in jobs %}<li>{{ job.dataset_type_code }}{% if job.station %} ({{ job.station.name }}){% endif %}: {{ job.status }}{% if job.build_publication %}, <a href="{% url 'publications-review' job.build_publication.id %}">v{{ job.build_publication.version_number }}</a>{% endif %}{% if job.error_message %}: {{ job.error_message }}{% endif %}</li>{% empty %}<li>No jobs.</li>{% endfor %}</ul></section>
+<section><h2>Publication history</h2><ul>{% for publication in publications %}<li><a href="{% url 'publications-review' publication.id %}">{{ publication.dataset_type_code }}{% if publication.station %} ({{ publication.station.name }}){% endif %} v{{ publication.version_number }}</a>: {{ publication.status }}</li>{% empty %}<li>No publications.</li>{% endfor %}</ul></section>
+</main>
+</body></html>

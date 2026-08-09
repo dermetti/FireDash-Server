@@ -1,0 +1,3 @@
+# Pin the external PDF engine separately from Python requirements.
+# Update deliberately alongside the PDF-security regression suite.
+qpdf=11.3.0-1+deb12u1

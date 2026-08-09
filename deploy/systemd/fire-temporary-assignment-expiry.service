@@ -1,0 +1,28 @@
+[Unit]
+Description=FireDash temporary assignment expiry processor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=fire_backend
+Group=fire_backend
+WorkingDirectory=/opt/fire-backend
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+EnvironmentFile=/etc/fire-backend/fire-backend.env
+ExecStart=/opt/fire-backend/venv/bin/python manage.py expire_temporary_assignments
+TimeoutStartSec=120s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/fire-backend

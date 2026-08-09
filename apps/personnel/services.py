@@ -1,7 +1,9 @@
 from datetime import timedelta
+from uuid import UUID
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
@@ -10,6 +12,7 @@ from apps.audit.services import record_event
 from apps.authorization.scopes import active_department_ids, active_station_ids
 from apps.organizations.models import Department, Station
 from apps.personnel.models import Person, PersonnelRetentionPolicy
+from apps.publications.services import mark_dirty
 
 
 class PersonnelError(ValueError):
@@ -23,10 +26,14 @@ def visible_to_user(*, user, department_id):
     if not Station.objects.filter(id__in=station_ids, department_id=department_id).exists():
         return Person.objects.none()
     department_people = Person.objects.filter(department_id=department_id)
+    now = timezone.now()
     assigned_people = department_people.filter(
         station_assignments__station_id__in=station_ids,
+        station_assignments__valid_from__lte=now,
         station_assignments__ended_at__isnull=True,
-        station_assignments__valid_until__isnull=True,
+    ).filter(
+        Q(station_assignments__valid_until__isnull=True)
+        | Q(station_assignments__valid_until__gt=now)
     )
     return assigned_people.distinct()
 
@@ -36,13 +43,43 @@ def _is_department_admin(user, department_id) -> bool:
 
 
 def _has_home_station_scope(user, person: Person) -> bool:
-    return PersonnelStationAssignment.objects.filter(
-        person=person,
-        assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
-        station_id__in=active_station_ids(user),
-        ended_at__isnull=True,
-        valid_until__isnull=True,
-    ).exists()
+    now = timezone.now()
+    return (
+        PersonnelStationAssignment.objects.filter(
+            person=person,
+            assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
+            station_id__in=active_station_ids(user),
+            valid_from__lte=now,
+            ended_at__isnull=True,
+        )
+        .filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now))
+        .exists()
+    )
+
+
+def _visible_station_ids(person: Person) -> list[UUID]:
+    now = timezone.now()
+    return list(
+        PersonnelStationAssignment.objects.filter(
+            person=person,
+            station__active=True,
+            valid_from__lte=now,
+            ended_at__isnull=True,
+        )
+        .filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now))
+        .values_list("station_id", flat=True)
+        .distinct()
+    )
+
+
+def _mark_visible_station_scopes(*, person: Person, actor) -> None:
+    for station_id in _visible_station_ids(person):
+        mark_dirty(
+            department=person.department,
+            station=Station.objects.get(pk=station_id),
+            dataset_type_code="station_personnel",
+            actor=actor,
+        )
 
 
 def _require_manage_person(user, person: Person) -> None:
@@ -98,6 +135,12 @@ def create_person(
         target_type="person",
         target_uuid=person.id,
     )
+    mark_dirty(
+        department=department,
+        station=home_station,
+        dataset_type_code="station_personnel",
+        actor=actor,
+    )
     return person
 
 
@@ -125,6 +168,7 @@ def update_person(
         target_type="person",
         target_uuid=person.id,
     )
+    _mark_visible_station_scopes(person=person, actor=actor)
     return person
 
 
@@ -153,6 +197,7 @@ def set_commander_eligibility(*, actor, person: Person, eligible: bool) -> Perso
         target_type="person",
         target_uuid=person.id,
     )
+    _mark_visible_station_scopes(person=person, actor=actor)
     return person
 
 
@@ -180,6 +225,7 @@ def set_commander_email(*, actor, person: Person, email: str) -> Person:
         target_type="person",
         target_uuid=person.id,
     )
+    _mark_visible_station_scopes(person=person, actor=actor)
     return person
 
 
@@ -201,6 +247,7 @@ def verify_commander_email(*, actor, person: Person) -> Person:
         target_type="person",
         target_uuid=person.id,
     )
+    _mark_visible_station_scopes(person=person, actor=actor)
     return person
 
 
@@ -233,6 +280,7 @@ def offboard_person(*, actor, person: Person) -> Person:
     if policy is None:
         raise PersonnelError("A department retention policy is required before offboarding.")
     now = timezone.now()
+    affected_station_ids = _visible_station_ids(person)
     PersonnelStationAssignment.objects.filter(
         person=person, ended_at__isnull=True, valid_until__isnull=True
     ).update(valid_until=now, ended_at=now, ended_by=actor)
@@ -252,6 +300,13 @@ def offboard_person(*, actor, person: Person) -> Person:
         target_type="person",
         target_uuid=person.id,
     )
+    for station_id in affected_station_ids:
+        mark_dirty(
+            department=person.department,
+            station=Station.objects.get(pk=station_id),
+            dataset_type_code="station_personnel",
+            actor=actor,
+        )
     return person
 
 
@@ -286,4 +341,5 @@ def anonymize_person(*, actor, person: Person) -> Person:
         target_type="person",
         target_uuid=person.id,
     )
+    _mark_visible_station_scopes(person=person, actor=actor)
     return person

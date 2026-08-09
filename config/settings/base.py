@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from config.settings.env import get_env, get_list
+from config.settings.env import get_env, get_list, get_typed_env
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -12,6 +12,7 @@ INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
+    "django.contrib.gis",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
@@ -21,6 +22,8 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.organizations",
     "apps.personnel",
+    "apps.publications",
+    "apps.reference_data",
     "apps.tablets",
     "apps.assignments",
     "apps.authorization",
@@ -94,6 +97,40 @@ AUTH_THROTTLE_MAX_FAILURES = int(get_env("AUTH_THROTTLE_MAX_FAILURES", default="
 AUTH_THROTTLE_WINDOW_SECONDS = int(get_env("AUTH_THROTTLE_WINDOW_SECONDS", default="900"))
 AUTH_THROTTLE_LOCKOUT_SECONDS = int(get_env("AUTH_THROTTLE_LOCKOUT_SECONDS", default="900"))
 RECENT_REAUTH_MAX_AGE_SECONDS = int(get_env("RECENT_REAUTH_MAX_AGE_SECONDS", default="900"))
+
+REFERENCE_DATA_QUARANTINE_ROOT = Path(
+    get_env("REFERENCE_DATA_QUARANTINE_ROOT", default="/var/lib/fire-backend/quarantine")
+)
+REFERENCE_DATA_SANITIZER_OUTPUT_ROOT = Path(
+    get_env(
+        "REFERENCE_DATA_SANITIZER_OUTPUT_ROOT", default="/var/lib/fire-backend/sanitizer-output"
+    )
+)
+REFERENCE_DATA_ACCEPTED_ROOT = Path(
+    get_env("REFERENCE_DATA_ACCEPTED_ROOT", default="/var/lib/fire-backend/fire-plans")
+)
+MAX_PDF_INPUT_BYTES = get_typed_env("MAX_PDF_INPUT_BYTES", int, default=100 * 1024 * 1024)
+MAX_PDF_OUTPUT_BYTES = get_typed_env("MAX_PDF_OUTPUT_BYTES", int, default=150 * 1024 * 1024)
+MAX_PDF_PAGES = get_typed_env("MAX_PDF_PAGES", int, default=500)
+MAX_HYDRANT_IMPORT_FEATURES = get_typed_env("MAX_HYDRANT_IMPORT_FEATURES", int, default=20_000)
+PDF_SANITIZER_TIMEOUT_SECONDS = get_typed_env("PDF_SANITIZER_TIMEOUT_SECONDS", int, default=60)
+PDF_SANITIZER_MEMORY_MAX_BYTES = get_typed_env(
+    "PDF_SANITIZER_MEMORY_MAX_BYTES", int, default=512 * 1024 * 1024
+)
+PDF_SANITIZER_WRAPPER = get_env(
+    "PDF_SANITIZER_WRAPPER", default="/usr/local/lib/fire-backend/fire-pdf-sanitize"
+)
+PUBLICATION_WORKER_BATCH_SIZE = get_typed_env("PUBLICATION_WORKER_BATCH_SIZE", int, default=10)
+PUBLICATION_JOB_HEARTBEAT_TIMEOUT_SECONDS = get_typed_env(
+    "PUBLICATION_JOB_HEARTBEAT_TIMEOUT_SECONDS", int, default=300
+)
+PUBLICATION_JOB_MAX_ATTEMPTS = get_typed_env("PUBLICATION_JOB_MAX_ATTEMPTS", int, default=3)
+TEMPORARY_ASSIGNMENT_EXPIRY_BATCH_SIZE = get_typed_env(
+    "TEMPORARY_ASSIGNMENT_EXPIRY_BATCH_SIZE", int, default=100
+)
+PUBLICATION_BUILD_SUMMARY_MAX_ITEMS = get_typed_env(
+    "PUBLICATION_BUILD_SUMMARY_MAX_ITEMS", int, default=10_000
+)
 
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))

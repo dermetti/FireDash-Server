@@ -11,7 +11,7 @@ if not ALLOWED_HOSTS:  # noqa: F405
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": "django.contrib.gis.db.backends.postgis",
         "NAME": get_env("POSTGRES_DB", required=True),  # noqa: F405
         "USER": get_env("POSTGRES_USER", required=True),  # noqa: F405
         "PASSWORD": get_env("POSTGRES_PASSWORD", required=True),  # noqa: F405

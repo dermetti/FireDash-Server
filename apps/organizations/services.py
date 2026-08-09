@@ -11,13 +11,16 @@ from apps.tablets.models import Tablet
 
 
 @transaction.atomic
-def create_station(*, actor, department, name: str, short_code: str, address: str = "") -> Station:
+def create_station(
+    *, actor, department, name: str, short_code: str, address: str = "", active: bool = True
+) -> Station:
     require_department_admin(actor, department)
     station = Station.objects.create(
         department=department,
         name=name.strip(),
         short_code=short_code.strip(),
         address=address.strip(),
+        active=active,
     )
     record_event(
         action="organization.station_created",

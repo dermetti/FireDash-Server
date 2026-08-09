@@ -1,7 +1,7 @@
 # Product Requirements Document  
 ## Fire Department Tablet Provisioning Backend — Beta MVP
 
-**Version:** 3.1  
+**Version:** 3.2  
 **Status:** Ready for implementation  
 **Scope:** Backend and administrative web portal only  
 **Target deployment:** Debian LXC on Proxmox  
@@ -104,6 +104,8 @@ Do not add:
 - Department-admin-controlled stale-tablet reactivation
 - HPKE-based per-installation dataset-key delivery
 - Encrypted dataset artifacts
+- Immutable code-level provisioned-dataset and feature registries
+- Department feature enablement
 - One manifest API for all authorized updates
 - Independent package download endpoints
 - Append-only audit logging
@@ -849,17 +851,61 @@ Requirements:
 - Store outside public static directories
 - Apply file-size, page-count, processing-time, and output-size limits
 
-## 10.18 DatasetScopeState
+## 10.18 Provisioned dataset registry
+
+Provisioned dataset types MUST be defined by an immutable, code-level dataset registry. Every persisted `dataset_type_code` is a registry-validated lowercase snake-case string of at most 100 characters. The registry is reviewed and deployed as application code; it is not editable at runtime, through the administrative interface, or by tablet clients. Dataset types MUST NOT use a PostgreSQL enum or closed Django model-choice migration.
+
+Each `DatasetTypeDefinition` MUST define:
+
+- Stable lowercase snake-case type code
+- Human-readable display name
+- Scope: `department` or `station`
+- Artifact format
+- Current schema version and supported previous schema versions, if any
+- Whether encryption is mandatory
+- Whether the dataset is required for a compatible tablet configuration
+- Minimum compatible tablet app version
+- Whether tablet-side schema migration is supported
+- Whether an incompatible change requires complete replacement
+- Canonical builder and validation services
+- Tablet-visible metadata rules
+
+The initial registered type codes are:
+
+```text
+department_hydrants
+department_fire_plans
+station_personnel
+```
+
+Adding a type requires backend implementation, validation and packaging logic, tablet support, automated tests, and a coordinated application release where necessary. Administrators cannot create arbitrary dataset types or choose a builder, validator, artifact format, scope, or behavior. Builders and validators are always resolved server-side from the registry.
+
+## 10.19 DepartmentFeature
+
+```text
+DepartmentFeature
+- id
+- department
+- feature_code
+- enabled
+- enabled_at
+- enabled_by
+- disabled_at, nullable
+- disabled_by, nullable
+```
+
+`feature_code` MUST correspond to an immutable code-defined feature. A feature may enable one or more registered dataset types. Initial built-in features are `core_hydrants`, `core_fire_plans`, and `core_personnel`; for beta they may be enabled automatically for every department. A future code-defined `wildfire_operation_maps` feature may enable `department_wildfire_operation_maps`.
+
+Feature enablement does not publish data. Disabling a feature removes its datasets from future tablet manifests but does not automatically delete historical publications. Enablement and disablement MUST be audited.
+
+## 10.20 DatasetScopeState
 
 ```text
 DatasetScopeState
 - id
 - department
 - station, nullable
-- dataset_type:
-    DEPARTMENT_HYDRANTS
-    DEPARTMENT_FIRE_PLANS
-    STATION_PERSONNEL
+- dataset_type_code
 - source_revision
 - dirty_since, nullable
 - latest_built_publication, nullable
@@ -869,19 +915,20 @@ DatasetScopeState
 
 Constraints:
 
-- Hydrants and fire plans have no station.
-- Personnel scope requires a station.
-- One state row exists per type and scope.
+- `dataset_type_code` is a registry-validated lowercase snake-case string of at most 100 characters.
+- A department-scoped registered type requires `station = null`; a station-scoped registered type requires a station.
+- Scope must be enforced by both database and application constraints.
+- One state row exists per department, null-safe station value, and dataset type code; PostgreSQL uniqueness must enforce this combination including the null station case.
 - `source_revision` increases whenever tablet-visible canonical data changes.
 
-## 10.19 DatasetPublication
+## 10.21 DatasetPublication
 
 ```text
 DatasetPublication
 - id
 - department
 - station, nullable
-- dataset_type
+- dataset_type_code
 - version_number
 - schema_version
 - source_revision
@@ -910,7 +957,10 @@ DatasetPublication
 
 Rules:
 
-- Every publication receives a new random content-encryption key.
+- `dataset_type_code` must be registered, use the validated string requirements above, and have a scope matching its registered definition.
+- `schema_version` must be valid for the registered type; publication version identifies a content update and does not imply schema compatibility.
+- The server selects the builder and validator from the registry. Clients cannot select a builder, validator, artifact format, or scope.
+- Each artifact-bearing publication receives a new random content-encryption key during Phase 7; Phase 6 metadata-only drafts have no CEK or artifact fields.
 - Published artifacts are immutable.
 - Only encrypted artifacts are downloadable.
 - Content keys are stored only after encryption under a server key-encryption key.
@@ -919,7 +969,7 @@ Rules:
 - The stored artifact filename must be generated from the publication UUID.
 - No user-supplied filename or path may be used for protected downloads.
 
-## 10.20 DatasetKeyGrant
+## 10.22 DatasetKeyGrant
 
 ```text
 DatasetKeyGrant
@@ -948,12 +998,12 @@ Rules:
 - Grants for revoked or replaced installations must be marked revoked.
 - A stale installation cannot receive new grants.
 
-## 10.21 PublicationJob
+## 10.23 PublicationJob
 
 ```text
 PublicationJob
 - id
-- dataset_type
+- dataset_type_code
 - department
 - station, nullable
 - source_revision
@@ -987,12 +1037,14 @@ Requirements:
   - A new job must be queued.
 - Job processing must be idempotent.
 - A crashed `RUNNING` job must be recoverable using heartbeat and timeout rules.
+- The worker must resolve the registry definition, validate the department or station scope, invoke its registered builder and validator, and fail closed for an unknown type.
+- After Phase 7 encryption is available, the worker validates the generated plaintext artifact, passes it to the common publication-encryption service, creates the artifact-bearing draft publication, and verifies that the source revision remains current before finalizing it.
 
 Use PostgreSQL as the job store.
 
 No Redis or Celery is required.
 
-## 10.22 AuditEvent
+## 10.24 AuditEvent
 
 ```text
 AuditEvent
@@ -1042,10 +1094,11 @@ Authorized administrator changes canonical data
 → source revisions are incremented
 → publication jobs are queued after transaction commit
 → workers claim jobs with row-level locks
-→ encrypted draft packages are built
+→ draft lifecycle and source metadata are built in Phase 6
 → draft revision is checked against current source revision
 → valid drafts become READY_FOR_REVIEW
-→ department administrator reviews and publishes
+→ Phase 7 creates and validates encrypted artifacts through the common encryption service
+→ department administrator reviews and publishes the artifact-bearing draft
 → tablets see the new version in their manifests
 ```
 
@@ -1053,12 +1106,16 @@ Use `transaction.on_commit` or an equivalent pattern so jobs are not queued for 
 
 Do not create duplicate pending jobs for the same dataset type and scope.
 
+Phase 6 MUST create lifecycle and metadata-only drafts only. It MUST NOT generate plaintext package files, encrypted artifacts, CEKs, key grants, or signatures. Phase 7 owns actual artifact construction, validation, encryption, CEK storage, HPKE key grants, and manifest signing. A draft cannot be published or tablet-visible until its Phase 7 artifact work has succeeded.
+
+The generic workflow resolves registered dataset types and scope rules. Dataset-specific builders select canonical data and construct and validate their plaintext artifacts; they must use the common lifecycle, authorization, encryption, key-grant, manifest, download, ETag, audit, backup, and rollback services.
+
 ## 11.2 Hydrant changes
 
 Creating, editing, activating, deactivating, or importing hydrants:
 
 ```text
-Marks DEPARTMENT_HYDRANTS dirty
+Marks `department_hydrants` dirty
 → increments source revision
 → queues one department hydrant draft
 ```
@@ -1068,7 +1125,7 @@ Marks DEPARTMENT_HYDRANTS dirty
 Adding, replacing, editing, activating, or deactivating a fire plan:
 
 ```text
-Marks DEPARTMENT_FIRE_PLANS dirty
+Marks `department_fire_plans` dirty
 → increments source revision
 → queues one department fire-plan draft
 ```
@@ -1148,10 +1205,11 @@ The encryption design must ensure:
 - Station-specific personnel keys are granted only to tablets assigned to that station.
 - Copying an encrypted artifact from server storage is insufficient to read it.
 - Copying another tablet’s key grant is insufficient to decrypt it.
+- Remain generic and reusable for every registered dataset type.
 
 ## 12.2 Publication encryption
 
-For every new dataset publication:
+In Phase 7, for every artifact-bearing dataset publication:
 
 1. Generate a new random 256-bit content-encryption key, or CEK.
 2. Generate a unique nonce.
@@ -1265,7 +1323,7 @@ The HPKE operation must bind the wrapped CEK to canonical associated information
 - Publication UUID
 - Installation UUID
 - Tablet UUID
-- Dataset type
+- Dataset type code
 - Department UUID
 - Station UUID where applicable
 - Publication version
@@ -1290,6 +1348,10 @@ The signature must cover canonical serialized data including:
 - Publication identifiers
 - Dataset types and scopes
 - Versions
+- Schema versions
+- Minimum app versions
+- Artifact formats
+- Required-dataset metadata
 - Ciphertext hashes
 - Encryption algorithms
 - HPKE cipher suite
@@ -1713,11 +1775,10 @@ AppInstallation
 
 The tablet must not submit or choose an arbitrary department or station.
 
-The manifest returns:
+The manifest returns every current published registered dataset enabled for the department and authorized by its registered scope:
 
-- Current published department hydrants
-- Current published department fire plans
-- Current published personnel package for the derived station
+- Department-scoped publications for the tablet's department
+- Station-scoped publications for the derived station
 - One HPKE key grant per listed publication
 - Current lease expiry
 - Configuration metadata
@@ -1742,6 +1803,9 @@ The manifest returns:
       "scope": "department",
       "version": 8,
       "schema_version": 1,
+      "required": true,
+      "minimum_app_version": "1.0.0",
+      "artifact_format": "geojson",
       "encrypted_size": 123456,
       "ciphertext_sha256": "hex",
       "content_encryption_algorithm": "AES-256-GCM",
@@ -1758,7 +1822,15 @@ The manifest returns:
 }
 ```
 
-## 19.5 Tablet update behavior
+The manifest signature covers each dataset type code, scope, schema version, required flag, minimum app version, artifact format, publication UUID, version, ciphertext hash, encryption metadata, and installation-specific HPKE grant.
+
+## 19.5 Unsupported dataset behavior
+
+The iOS contract requires an older application receiving an unknown dataset type to skip its download, decryption, and import; continue processing supported datasets; and record a local diagnostic event. It displays an update requirement only when the entry is marked `required`.
+
+An optional unsupported dataset may be skipped. A required dataset with an unsupported schema or unmet minimum app version causes the tablet to report a configuration incompatibility. Unsupported data must not invalidate otherwise supported publications unless required. When server-side compatibility can be determined, the backend MUST NOT send a dataset to an app version known to be incompatible.
+
+## 19.6 Tablet update behavior
 
 The tablet compares publication UUIDs or versions with locally installed versions.
 
@@ -1776,7 +1848,7 @@ A new fire-plan publication requires downloading the complete fire-plan archive.
 
 Incremental per-document fire-plan updates are deferred until after beta.
 
-## 19.6 Protected dataset download
+## 19.7 Protected dataset download
 
 Django must authorize the publication and return an internal redirect.
 
@@ -1817,7 +1889,7 @@ Physical paths must be derived entirely from trusted server configuration and th
 
 The protected storage directory must not contain secrets or unrelated application files.
 
-## 19.7 Download authorization
+## 19.8 Download authorization
 
 Before sending `X-Accel-Redirect`, Django verifies:
 
@@ -1827,10 +1899,10 @@ Before sending `X-Accel-Redirect`, Django verifies:
 - Department is active.
 - Publication is published.
 - Publication belongs to the tablet’s department.
-- Station matches for station-specific personnel.
+- Station matches for every registered station-scoped publication.
 - Publication is present in the installation’s current authorized manifest.
 
-## 19.8 Caching and resumption
+## 19.9 Caching and resumption
 
 Support:
 
@@ -1841,7 +1913,7 @@ Support:
 - Safe retry of interrupted downloads
 - Stable ciphertext hashes
 
-## 19.9 Errors
+## 19.10 Errors
 
 Use `application/problem+json`.
 
@@ -1857,7 +1929,7 @@ Example:
 }
 ```
 
-## 19.10 API documentation
+## 19.11 API documentation
 
 Generate and validate OpenAPI 3.1 using `drf-spectacular`.
 
@@ -1865,7 +1937,13 @@ Do not include real personnel, tokens, email addresses, or filenames in examples
 
 ---
 
-# 20. Dataset formats
+# 20. Dataset formats and schema compatibility
+
+Each registered dataset type has an independently versioned schema. Publication version identifies content updates; schema version identifies the artifact structure and interpretation. Tablet compatibility MUST NOT be inferred from publication version.
+
+Each registry definition specifies its current and supported previous schema versions, minimum app version, tablet-side migration support, and whether an incompatible change requires complete replacement. A breaking schema change MUST increment `schema_version`, define a minimum app version, include interoperability tests, and be documented in OpenAPI or dataset-format documentation.
+
+The generic services are dataset authorization and scope resolution, draft and publication lifecycle, AES-256-GCM encryption, server-side CEK storage, HPKE key grants, manifest signing, protected-download authorization, ETag generation, audit logging, backup, and rollback. Dataset-specific services are canonical-data selection, input validation, artifact construction and format validation, tablet import, and tablet presentation. Dataset-specific builders MUST NOT implement authentication, tablet authorization, encryption, HPKE wrapping, download endpoints, manifest signatures, or file-path construction.
 
 ## 20.1 Hydrants
 
@@ -1925,6 +2003,14 @@ ZIP archive
 ```
 
 The ZIP is encrypted as one publication artifact.
+
+## 20.4 Future wildfire-operation maps
+
+`department_wildfire_operation_maps` is a reserved future, department-scoped registry type for `Waldbrandeinsatzkarten`. It is not a beta importer, administrative interface, package format, or tablet renderer. Possible future formats include a ZIP with georeferenced files and metadata, GeoPackage, MBTiles, GeoJSON with raster assets, or a sanitized PDF package.
+
+Before implementing it, define source-data format, coordinate reference system, layer structure, offline rendering, maximum package size, validation, update frequency, licensing and redistribution restrictions, tablet storage, and supported app and schema versions. The first implementation may be a complete encrypted department snapshot. Later incremental tile or layer synchronization must not change the generic manifest or authorization model.
+
+Every new dataset type requires a security review before enablement covering parser attack surface, archive extraction, file-count and decompressed-size limits, traversal, symbolic links, external references, active content, resource exhaustion, coordinate and geometry validation, sensitive-data minimization, licensing, tablet-storage impact, and encryption/signing interoperability. ZIP-based builders MUST reject absolute paths, `..` components, symbolic links, duplicate names, excessive file counts or expanded size, and unsupported compression methods.
 
 ---
 
@@ -2126,7 +2212,8 @@ Rate-limit:
 - Reject unknown fields.
 - Validate lengths.
 - Normalize email addresses.
-- Use enum allowlists.
+- Use registry and code-defined allowlists.
+- Reject unknown dataset and feature codes; do not permit clients to select dataset scope, builder, validator, artifact format, or protected path.
 - Limit body and upload sizes.
 - Limit GeoJSON features.
 - Validate file signatures.
@@ -2216,6 +2303,7 @@ Audit:
 - Tablet removal
 - Unauthorized access attempts
 - PDF rejection and sanitization failure
+- Department feature enablement and disablement
 
 Audit events must be append-only.
 
@@ -2415,6 +2503,27 @@ cryptographic interoperability tests
 database-role permission tests
 ```
 
+## 27.10 Extensible dataset tests
+
+86. A registered department-scoped type rejects a station.
+87. A registered station-scoped type requires a station.
+88. Unknown dataset type codes are rejected.
+89. Administrators cannot create arbitrary dataset types.
+90. Tablet clients cannot select dataset type, scope, or builder.
+91. A department feature enables a registered dataset type.
+92. Disabling a feature removes its datasets from future manifests.
+93. Feature changes are audited.
+94. An optional unknown dataset does not prevent supported updates.
+95. An unsupported required dataset produces a configuration-incompatibility response.
+96. Publication and schema versions are interpreted independently.
+97. A new registered department-wide dataset uses the existing encryption pipeline.
+98. A new registered dataset uses the existing HPKE key-grant mechanism.
+99. A department-wide dataset is visible to every active authorized tablet in its department.
+100. A department-wide dataset is never visible to another department.
+101. A dataset builder cannot control the protected download path.
+102. ZIP-based builders reject traversal paths and unsafe archive entries.
+103. An unknown registry entry causes its publication job to fail closed.
+
 ---
 
 # 28. Acceptance criteria
@@ -2459,6 +2568,12 @@ The backend MVP is complete when:
 - No backend endpoint accepts incident data.
 - Backups and restores have been tested.
 - All authorization, publication, lease, cryptographic, file-processing, audit, and retention tests pass.
+- Dataset types use immutable registry-validated string codes rather than closed database enums.
+- New types reuse the generic publication, encryption, HPKE, manifest, and download services without administrator-defined behavior.
+- Department and station scope is enforced generically, and every type has an independent schema version.
+- Older tablets safely ignore optional unsupported datasets; required incompatible datasets clearly require an update.
+- Department feature enablement is explicit and audited.
+- A future department-wide wildfire-map dataset can be added without redesigning adoption, authorization, encryption, manifests, or protected downloads.
 
 ---
 
@@ -2523,9 +2638,24 @@ The backend MVP is complete when:
 - PostgreSQL job queue
 - `select_for_update(skip_locked=True)`
 - Draft review
-- Manual publication
+- Publication review and approval workflow; artifact publication occurs in Phase 7
 - Rollback
 - Expired temporary-assignment processing
+
+Phase 6 creates lifecycle and metadata-only drafts. It does not construct artifacts, encrypt data, create CEKs or key grants, or sign publications or manifests.
+
+## Phase 6.1 — Extensible dataset foundation
+
+- Replace fixed dataset-type choices with registry-validated codes
+- Implement immutable code-level dataset and feature registries
+- Add generic department and station scope validation
+- Add independent schema-version and compatibility metadata
+- Add optional and required dataset compatibility handling
+- Add department feature enablement and audit events
+- Refactor the three initial builders to the common builder interface
+- Add tests proving a fourth department-wide dataset uses the existing pipeline
+
+This work is part of beta implementation. The actual wildfire-operation-map importer, package format, administrative interface, and tablet renderer remain post-beta.
 
 ## Phase 7 — Cryptography
 
@@ -2540,6 +2670,8 @@ The backend MVP is complete when:
 - Dataset key grants
 - Signed manifests
 - Swift/Python interoperability tests
+
+Phase 7 is the first phase that constructs and validates artifacts, encrypts them, stores CEKs, creates HPKE grants, and signs publications or manifests. It completes Phase 6 metadata-only drafts into artifact-bearing drafts eligible for publication.
 
 ## Phase 8 — Adoption and leases
 
@@ -2565,8 +2697,6 @@ The backend MVP is complete when:
 - RFC 9457 errors
 - OpenAPI schema
 - End-to-end tests
-
-## Phase 10 — Deployment hardening
 
 - Backups
 - Restore procedure
