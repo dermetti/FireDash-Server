@@ -59,7 +59,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/dev.txt
 
-      - name: Create dedicated PostGIS test role and template
+      - name: Create PostgreSQL roles and PostGIS test template
         env:
           PGPASSWORD: database_owner_ci
         run: |
@@ -67,6 +67,7 @@ jobs:
             -h 127.0.0.1 \
             -U database_owner \
             -d fire_backend \
+            -c "CREATE ROLE application_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'application_runtime_ci';" \
             -c "CREATE ROLE firedash_test LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'firedash_test_ci';"
 
           psql -v ON_ERROR_STOP=1 \
@@ -88,6 +89,18 @@ jobs:
             -d fire_backend \
             -c "ALTER DATABASE firedash_test_template IS_TEMPLATE true;" \
             -c "ALTER DATABASE firedash_test_template ALLOW_CONNECTIONS false;"
+
+      - name: Verify PostgreSQL roles
+        env:
+          PGPASSWORD: database_owner_ci
+        run: |
+          psql -v ON_ERROR_STOP=1 \
+            -h 127.0.0.1 \
+            -U database_owner \
+            -d fire_backend \
+            -c "\du database_owner" \
+            -c "\du application_runtime" \
+            -c "\du firedash_test"
 
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run
