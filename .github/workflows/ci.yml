@@ -121,10 +121,23 @@ jobs:
             fi
           done
 
-          PGPASSWORD=backup_role_ci pg_dump --format=custom \
-            --file=/tmp/fire-backend-ci.dump --host=127.0.0.1 \
-            --username=backup_role fire_backend
-          pg_restore --list /tmp/fire-backend-ci.dump >/dev/null
+          postgres_container="${{ job.services.postgres.id }}"
+
+          docker exec \
+            -e PGPASSWORD=backup_role_ci \
+            "$postgres_container" \
+            pg_dump \
+              --format=custom \
+              --file=/tmp/fire-backend-ci.dump \
+              --host=127.0.0.1 \
+              --username=backup_role \
+              fire_backend
+
+          docker exec \
+            "$postgres_container" \
+            pg_restore \
+              --list /tmp/fire-backend-ci.dump \
+              >/dev/null
 
           if PGPASSWORD=backup_role_ci psql -v ON_ERROR_STOP=1 \
             -h 127.0.0.1 -U backup_role -d fire_backend \
