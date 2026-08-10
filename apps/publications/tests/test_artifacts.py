@@ -24,7 +24,12 @@ from apps.publications.artifacts import (
 
 
 @pytest.mark.parametrize("encoded", [False, True])
-def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded):
+def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded, monkeypatch):
+    monkeypatch.setattr(
+        artifacts,
+        "_set_final_artifact_permissions",
+        lambda path: None,
+    )
     kek, signing_seed = b"k" * 32, b"s" * 32
     kek_path, signing_path = tmp_path / "kek", tmp_path / "signing"
     kek_path.write_bytes(base64.b64encode(kek) if encoded else kek)
@@ -112,7 +117,12 @@ def test_artifact_signature_contract_fixture_is_canonical_and_verifiable():
     public_key.verify(base64.b64decode(fixture["signature"], validate=True), payload)
 
 
-def test_artifacts_use_distinct_cek_and_nonce(tmp_path):
+def test_artifacts_use_distinct_cek_and_nonce(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        artifacts,
+        "_set_final_artifact_permissions",
+        lambda path: None,
+    )
     (tmp_path / "kek").write_bytes(b"k" * 32)
     (tmp_path / "signing").write_bytes(b"s" * 32)
     publication = SimpleNamespace(
