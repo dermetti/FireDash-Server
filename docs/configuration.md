@@ -44,7 +44,7 @@ PUBLICATION_KEK_VERSION=1
 PUBLICATION_SIGNING_KEY_VERSION=1
 ```
 
-`DJANGO_SECRET_KEY`, database credentials, signing keys, key-encryption keys, and backup credentials must never be committed or logged. Signing and key-encryption credentials are introduced in Phase 7 through systemd credentials.
+`DJANGO_SECRET_KEY`, database credentials, signing keys, key-encryption keys, and backup credentials must never be committed or logged. Publication credential source files are root-owned, mode `0600`, beneath the root-only `/etc/fire-backend/credentials` directory. systemd copies them into per-unit runtime credential directories; do not put them in this environment file.
 
 `PUBLICATION_KEK_CREDENTIAL_PATH`, `PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH`, and
 `PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH` default to the credential paths configured by
@@ -52,14 +52,21 @@ the systemd units. Do not set them to files readable by the web-service account.
 is development-only and defaults to `False` in production; do not set it in the production
 environment file.
 
-The publication worker receives only `PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH`, containing the
-32-byte Ed25519 private seed. The web service receives only
-`PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH`, containing the matching 32-byte raw Ed25519
-public key, and must not be able to read the private credential. Both deployments use the same
-`PUBLICATION_SIGNING_KEY_VERSION`. The authenticated tablet endpoint
+The publication worker receives only `PUBLICATION_KEK_CREDENTIAL_PATH` and
+`PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH`, containing the AES-256 KEK and 32-byte Ed25519 private
+seed. The web service receives only `PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH`, containing
+the matching 32-byte raw Ed25519 public key. Its source is
+`/etc/fire-backend/credentials/publication-signing-public-key`, loaded by
+`fire-backend.service` as the `publication-signing-public-key` systemd credential. The web service
+must not be able to read private credential sources or worker runtime credentials. Both deployments
+use the same `PUBLICATION_SIGNING_KEY_VERSION`. The authenticated tablet endpoint
 `/api/v1/tablet/signing-keys/{version}` distributes only the configured current public key.
 Rotate the private key, public key, and version atomically; the current single-key configuration
 does not retain prior public keys for historical artifact verification.
+
+The non-secret `fire_nginx` group contains only `www-data` and `fire_publication`. It grants Nginx
+read/traverse access to final encrypted publication artifacts, not publication temporary files,
+accepted plans, application configuration, or credential sources.
 
 Only the local Nginx proxy may appear in `TRUSTED_PROXY_IPS`. Nginx overwrites inbound `X-Forwarded-For`; application code must not trust a header received directly from a client.
 

@@ -27,18 +27,17 @@ def sanitize(*, quarantined_input: Path, sanitized_output: Path) -> None:
         # The wrapper is fixed and all input/output paths are server-generated private paths.
         subprocess.run(  # nosec B603
             [
+                "/usr/bin/sudo",
+                "-n",
                 str(wrapper),
-                str(quarantined_input),
-                str(sanitized_output),
-                str(settings.PDF_SANITIZER_TIMEOUT_SECONDS),
-                str(settings.PDF_SANITIZER_MEMORY_MAX_BYTES),
+                quarantined_input.parent.name,
             ],
             check=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env={"PATH": "/usr/bin:/bin"},
-            timeout=settings.PDF_SANITIZER_TIMEOUT_SECONDS,
+            timeout=settings.PDF_SANITIZER_TIMEOUT_SECONDS + 5,
         )
     except subprocess.TimeoutExpired as error:
         raise PdfSanitizerTimeout("PDF sanitizer timed out.") from error

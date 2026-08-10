@@ -13,15 +13,15 @@ jobs:
 
     services:
       postgres:
-        image: postgis/postgis:16-3.4
+        image: postgis/postgis:17-3.5
         env:
-          POSTGRES_DB: fire_backend
-          POSTGRES_USER: database_owner
-          POSTGRES_PASSWORD: database_owner_ci
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U database_owner -d fire_backend"
+          --health-cmd "pg_isready -U postgres -d postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -29,6 +29,14 @@ jobs:
     env:
       DJANGO_SETTINGS_MODULE: config.settings.test
       DJANGO_SECRET_KEY: ci-test-secret-not-for-production
+
+      POSTGRES_DB: fire_backend
+      POSTGRES_USER: database_owner
+      POSTGRES_PASSWORD: database_owner_ci
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      DJANGO_ALLOWED_HOSTS: ci.invalid
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://ci.invalid
 
       TEST_POSTGRES_DB: test_firedash
       TEST_POSTGRES_USER: firedash_test
@@ -59,48 +67,71 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/dev.txt
 
-      - name: Create PostgreSQL roles and PostGIS test template
+      - name: Provision PostgreSQL production and test databases
         env:
-          PGPASSWORD: database_owner_ci
+          PGPASSWORD: postgres_ci
         run: |
           psql -v ON_ERROR_STOP=1 \
             -h 127.0.0.1 \
-            -U database_owner \
-            -d fire_backend \
-            -c "CREATE ROLE application_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'application_runtime_ci';" \
-            -c "CREATE ROLE firedash_test LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'firedash_test_ci';"
+            -U postgres \
+            -d postgres \
+            -v database_owner_password=database_owner_ci \
+            -v application_runtime_password=application_runtime_ci \
+            -v backup_role_password=backup_role_ci \
+            -f deploy/postgresql/bootstrap-production.sql
 
           psql -v ON_ERROR_STOP=1 \
             -h 127.0.0.1 \
-            -U database_owner \
-            -d fire_backend \
-            -c "CREATE DATABASE firedash_test_template OWNER database_owner TEMPLATE template0;"
+            -U postgres \
+            -d postgres \
+            -v application_runtime_password=application_runtime_ci \
+            -v firedash_test_password=firedash_test_ci \
+            -f deploy/postgresql/bootstrap-test.sql
 
-          psql -v ON_ERROR_STOP=1 \
-            -h 127.0.0.1 \
-            -U database_owner \
-            -d firedash_test_template \
-            -c "CREATE EXTENSION postgis;" \
-            -c "CREATE EXTENSION btree_gist;"
-
-          psql -v ON_ERROR_STOP=1 \
-            -h 127.0.0.1 \
-            -U database_owner \
-            -d fire_backend \
-            -c "ALTER DATABASE firedash_test_template IS_TEMPLATE true;" \
-            -c "ALTER DATABASE firedash_test_template ALLOW_CONNECTIONS false;"
-
-      - name: Verify PostgreSQL roles
+      - name: Migrate and harden PostgreSQL production database
         env:
           PGPASSWORD: database_owner_ci
         run: |
+          DJANGO_SETTINGS_MODULE=config.settings.production python manage.py migrate
+
           psql -v ON_ERROR_STOP=1 \
             -h 127.0.0.1 \
             -U database_owner \
             -d fire_backend \
-            -c "\du database_owner" \
-            -c "\du application_runtime" \
-            -c "\du firedash_test"
+            -f deploy/postgresql/roles.sql
+
+      - name: Assert PostgreSQL production privileges and backup access
+        env:
+          PGPASSWORD: database_owner_ci
+        run: |
+          role_flags=$(psql -v ON_ERROR_STOP=1 -At \
+            -h 127.0.0.1 -U database_owner -d fire_backend \
+            -c "SELECT rolsuper || ':' || rolcreatedb || ':' || rolcreaterole || ':' || rolreplication || ':' || rolbypassrls FROM pg_roles WHERE rolname = 'application_runtime';")
+          test "$role_flags" = "f:f:f:f:f"
+
+          for statement in \
+            "UPDATE audit_event SET id = id" \
+            "DELETE FROM audit_event" \
+            "TRUNCATE audit_event" \
+            "UPDATE publications_datasettyperegistry SET code = code"; do
+            if PGPASSWORD=application_runtime_ci psql -v ON_ERROR_STOP=1 \
+              -h 127.0.0.1 -U application_runtime -d fire_backend -c "$statement"; then
+              echo "Runtime role unexpectedly executed: $statement" >&2
+              exit 1
+            fi
+          done
+
+          PGPASSWORD=backup_role_ci pg_dump --format=custom \
+            --file=/tmp/fire-backend-ci.dump --host=127.0.0.1 \
+            --username=backup_role fire_backend
+          pg_restore --list /tmp/fire-backend-ci.dump >/dev/null
+
+          if PGPASSWORD=backup_role_ci psql -v ON_ERROR_STOP=1 \
+            -h 127.0.0.1 -U backup_role -d fire_backend \
+            -c "UPDATE audit_event SET id = id"; then
+            echo "backup_role unexpectedly has write access" >&2
+            exit 1
+          fi
 
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run

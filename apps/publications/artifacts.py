@@ -8,12 +8,20 @@ import secrets
 import shutil
 from datetime import timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from cryptography.hazmat.primitives import keywrap
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.conf import settings
 from django.utils import timezone
+
+try:
+    import grp as _grp
+except ImportError:  # pragma: no cover - unavailable on Windows development hosts.
+    _grp = cast(Any, None)
+
+grp: Any = _grp
 
 
 class ArtifactError(ValueError):
@@ -35,6 +43,19 @@ def _credential(path: Path, label: str) -> bytes:
         return decoded if decoded else value
     except ValueError:
         return value
+
+
+def _set_final_artifact_permissions(path: Path) -> None:
+    if grp is None:
+        return
+    try:
+        group_id = grp.getgrnam("fire_nginx").gr_gid
+    except KeyError as error:
+        raise ArtifactError("The fire_nginx group is unavailable.") from error
+    if not hasattr(os, "chown"):
+        return
+    os.chown(path, -1, group_id)
+    os.chmod(path, 0o640)
 
 
 def _signature_payload(
@@ -93,6 +114,7 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
             os.fsync(artifact_file.fileno())
         final_path.parent.mkdir(parents=True, exist_ok=True)
         os.replace(temp_path, final_path)
+        _set_final_artifact_permissions(final_path)
     except OSError as error:
         raise ArtifactError("Could not promote publication artifact.") from error
     finally:

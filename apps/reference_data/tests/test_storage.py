@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -24,10 +25,30 @@ def test_quarantine_enforces_size_limit_and_generated_accepted_keys(private_root
 
     source = private_roots / "source.pdf"
     source.write_bytes(b"safe")
-    accepted = promote_to_accepted(source, "123e4567-e89b-12d3-a456-426614174000.pdf")
+    with patch("apps.reference_data.storage.os.chmod") as chmod:
+        accepted = promote_to_accepted(source, "123e4567-e89b-12d3-a456-426614174000.pdf")
 
     assert accepted.parent == private_roots / "accepted"
     assert accepted.read_bytes() == b"safe"
+    chmod.assert_called_once_with(source, 0o640)
+
+
+def test_accepted_promotion_does_not_replace_after_mode_failure(
+    private_roots: Path, monkeypatch
+) -> None:
+    source = private_roots / "source.pdf"
+    source.write_bytes(b"safe")
+    destination = private_roots / "accepted" / "123e4567-e89b-12d3-a456-426614174000.pdf"
+
+    monkeypatch.setattr(
+        "apps.reference_data.storage.os.chmod", lambda *_: (_ for _ in ()).throw(OSError())
+    )
+
+    with pytest.raises(OSError):
+        promote_to_accepted(source, destination.name)
+
+    assert source.exists()
+    assert not destination.exists()
 
 
 def test_accepted_storage_rejects_traversal_keys(private_roots: Path) -> None:

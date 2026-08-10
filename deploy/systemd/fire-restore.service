@@ -11,7 +11,7 @@ EnvironmentFile=/etc/fire-backend/backup.env
 EnvironmentFile=/etc/fire-backend/restore.env
 Environment=RESTIC_PASSWORD_FILE=%d/restic-password
 LoadCredential=restic-password:/etc/fire-backend/credentials/restic-password
-ExecStart=/bin/sh /opt/fire-backend/deploy/scripts/fire-restore
+ExecStart=/bin/sh /srv/firedash/current/deploy/scripts/fire-restore
 TimeoutStartSec=30min
 UMask=0077
 NoNewPrivileges=true

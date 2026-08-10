@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.test import override_settings
 
+from apps.publications import artifacts
 from apps.publications.artifacts import (
     ArtifactError,
     _signature_payload,
@@ -65,6 +66,25 @@ def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded):
     assert metadata["artifact_signing_key_version"] == "43"
     cek = keywrap.aes_key_unwrap(kek, wrapped_cek)
     assert AESGCM(cek).decrypt(nonce, ciphertext, None) == b"safe data"
+
+
+def test_final_artifact_is_group_readable_by_nginx_reader(tmp_path, monkeypatch):
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"ciphertext")
+    chown_calls, chmod_calls = [], []
+
+    monkeypatch.setattr(
+        artifacts, "grp", SimpleNamespace(getgrnam=lambda _: SimpleNamespace(gr_gid=4321))
+    )
+    monkeypatch.setattr(
+        artifacts.os, "chown", lambda *args: chown_calls.append(args), raising=False
+    )
+    monkeypatch.setattr(artifacts.os, "chmod", lambda *args: chmod_calls.append(args))
+
+    artifacts._set_final_artifact_permissions(artifact)
+
+    assert chown_calls == [(artifact, -1, 4321)]
+    assert chmod_calls == [(artifact, 0o640)]
 
 
 def test_artifact_signature_contract_fixture_is_canonical_and_verifiable():

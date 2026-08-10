@@ -13,15 +13,20 @@ class StorageError(RuntimeError):
 
 def write_quarantine(upload: UploadedFile) -> Path:
     _ensure_private_roots()
-    path = settings.REFERENCE_DATA_QUARANTINE_ROOT / f"{uuid.uuid4()}.pdf"
+    job_directory = settings.REFERENCE_DATA_QUARANTINE_ROOT / str(uuid.uuid4())
+    job_directory.mkdir(mode=0o2710)
+    os.chmod(job_directory, 0o2710)
+    path = job_directory / "input.pdf"
     _write_limited(upload, path, settings.MAX_PDF_INPUT_BYTES)
+    os.chmod(path, 0o640)
     return path
 
 
 def output_path() -> Path:
     _ensure_private_roots()
     job_directory = settings.REFERENCE_DATA_SANITIZER_OUTPUT_ROOT / str(uuid.uuid4())
-    job_directory.mkdir(mode=0o700)
+    job_directory.mkdir(mode=0o2730)
+    os.chmod(job_directory, 0o2730)
     return job_directory / "sanitized.pdf"
 
 
@@ -32,6 +37,7 @@ def promote_to_accepted(source: Path, document_key: str) -> Path:
     destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / document_key
     if destination.exists():
         raise StorageError("Generated document key already exists.")
+    os.chmod(source, 0o640)
     os.replace(source, destination)
     return destination
 

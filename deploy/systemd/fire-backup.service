@@ -12,7 +12,7 @@ Environment=PGPASSFILE=%d/backup-pgpass
 Environment=RESTIC_PASSWORD_FILE=%d/restic-password
 LoadCredential=backup-pgpass:/etc/fire-backend/credentials/backup-pgpass
 LoadCredential=restic-password:/etc/fire-backend/credentials/restic-password
-ExecStart=/bin/sh /opt/fire-backend/deploy/scripts/fire-backup
+ExecStart=/bin/sh /srv/firedash/current/deploy/scripts/fire-backup
 TimeoutStartSec=30min
 UMask=0077
 NoNewPrivileges=true

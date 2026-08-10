@@ -1,0 +1,22 @@
+[Unit]
+Description=FireDash PDF sanitizer job %i
+
+[Service]
+Type=oneshot
+User=fire_pdf_sanitizer
+Group=fire_pdf_sanitizer
+UMask=0077
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX
+InaccessiblePaths=/var/lib/fire-backend/fire-plans /var/lib/fire-backend/publications /var/lib/fire-backend/publications-tmp /etc/fire-backend /srv/firedash
+BindReadOnlyPaths=/var/lib/fire-backend/quarantine/%i/input.pdf:/run/fire-pdf-sanitizer/input.pdf
+BindPaths=/var/lib/fire-backend/sanitizer-output/%i:/run/fire-pdf-sanitizer/output
+TasksMax=32
+MemoryMax=512M
+CPUQuota=100%
+TimeoutStartSec=60s
+ExecStart=/usr/bin/qpdf --deterministic-id --object-streams=disable /run/fire-pdf-sanitizer/input.pdf /run/fire-pdf-sanitizer/output/sanitized.pdf

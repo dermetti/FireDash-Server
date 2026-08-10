@@ -7,10 +7,10 @@ Wants=network-online.target
 Type=oneshot
 User=fire_backend
 Group=fire_backend
-WorkingDirectory=/opt/fire-backend
+WorkingDirectory=/srv/firedash/current
 Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env
-ExecStart=/opt/fire-backend/venv/bin/python manage.py mark_stale_installations
+ExecStart=/srv/firedash/current/venv/bin/python manage.py mark_stale_installations
 TimeoutStartSec=120s
 UMask=0077
 NoNewPrivileges=true

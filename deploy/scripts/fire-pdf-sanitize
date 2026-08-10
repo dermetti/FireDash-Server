@@ -1,35 +1,21 @@
 #!/bin/sh
-# This wrapper never falls back to an unrestricted qpdf invocation.
+# Root-owned UUID-only authorization wrapper. It never accepts caller paths or commands.
 set -eu
 
-input=${1:?input path required}
-output=${2:?output path required}
-timeout=${3:?timeout required}
-memory_max=${4:?memory limit required}
-case "$input:$output" in
-    /var/lib/fire-backend/quarantine/*.pdf:/var/lib/fire-backend/sanitizer-output/*/sanitized.pdf) ;;
+[ "$#" -eq 1 ] || exit 64
+job=$1
+case "$job" in
+    ????????-????-????-????-????????????) ;;
     *) exit 64 ;;
 esac
-case "$timeout:$memory_max" in
-    *[!0-9:]*|:*|0:*|*:0) exit 64 ;;
-esac
 
-job=$(basename "$(dirname "$output")")
-exec /usr/bin/systemd-run --quiet --wait --collect --service-type=exec \
-    --unit="fire-pdf-sanitize-${job}" \
-    --property=User=fire_pdf_sanitizer \
-    --property=Group=fire_pdf_sanitizer \
-    --property=NoNewPrivileges=yes \
-    --property=PrivateNetwork=yes \
-    --property=PrivateDevices=yes \
-    --property=ProtectSystem=strict \
-    --property=ProtectHome=yes \
-    --property=RestrictAddressFamilies=AF_UNIX \
-    --property=TasksMax=32 \
-    --property="MemoryMax=${memory_max}" \
-    --property=CPUQuota=100% \
-    --property="TimeoutStartSec=${timeout}s" \
-    --property="BindReadOnlyPaths=${input}:/run/fire-pdf-sanitizer/input.pdf" \
-    --property="BindPaths=$(dirname "$output"):/run/fire-pdf-sanitizer/output" \
-    /usr/bin/qpdf --deterministic-id --object-streams=disable \
-    /run/fire-pdf-sanitizer/input.pdf /run/fire-pdf-sanitizer/output/sanitized.pdf
+case "$job" in *[!0123456789abcdef-]*|*[A-F]*) exit 64 ;; esac
+
+unit="fire-pdf-sanitizer@${job}.service"
+output="/var/lib/fire-backend/sanitizer-output/${job}/sanitized.pdf"
+
+/bin/systemctl start --wait "$unit"
+[ -f "$output" ] && [ ! -L "$output" ] || exit 1
+[ "$(stat -c %s "$output")" -le 157286400 ] || exit 1
+chown fire_backend:fire_backend "$output"
+chmod 0600 "$output"

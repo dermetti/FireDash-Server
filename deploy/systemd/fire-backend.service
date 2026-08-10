@@ -8,10 +8,11 @@ Wants=network-online.target
 Type=exec
 User=fire_backend
 Group=fire_backend
-WorkingDirectory=/opt/fire-backend
+WorkingDirectory=/srv/firedash/current
 Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env
-ExecStart=/opt/fire-backend/venv/bin/gunicorn --config deploy/gunicorn/gunicorn.conf.py config.wsgi:application
+LoadCredential=publication-signing-public-key:/etc/fire-backend/credentials/publication-signing-public-key
+ExecStart=/srv/firedash/current/venv/bin/gunicorn --config deploy/gunicorn/gunicorn.conf.py config.wsgi:application
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

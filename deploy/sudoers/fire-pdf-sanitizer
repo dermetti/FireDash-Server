@@ -1,0 +1,2 @@
+Defaults! /usr/local/lib/fire-backend/fire-pdf-sanitize !setenv
+fire_backend ALL=(root) NOPASSWD: /usr/local/lib/fire-backend/fire-pdf-sanitize *
