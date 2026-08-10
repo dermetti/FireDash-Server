@@ -70,14 +70,14 @@ jobs:
       - name: Provision PostgreSQL production and test databases
         env:
           PGPASSWORD: postgres_ci
+          FIREDASH_DATABASE_OWNER_PASSWORD: database_owner_ci
+          FIREDASH_APPLICATION_RUNTIME_PASSWORD: application_runtime_ci
+          FIREDASH_BACKUP_ROLE_PASSWORD: backup_role_ci
         run: |
           psql -v ON_ERROR_STOP=1 \
             -h 127.0.0.1 \
             -U postgres \
             -d postgres \
-            -v database_owner_password=database_owner_ci \
-            -v application_runtime_password=application_runtime_ci \
-            -v backup_role_password=backup_role_ci \
             -f deploy/postgresql/bootstrap-production.sql
 
           psql -v ON_ERROR_STOP=1 \
@@ -104,10 +104,10 @@ jobs:
         env:
           PGPASSWORD: database_owner_ci
         run: |
-          role_flags=$(psql -v ON_ERROR_STOP=1 -At \
+          runtime_role_is_unprivileged=$(psql -v ON_ERROR_STOP=1 -At \
             -h 127.0.0.1 -U database_owner -d fire_backend \
-            -c "SELECT rolsuper || ':' || rolcreatedb || ':' || rolcreaterole || ':' || rolreplication || ':' || rolbypassrls FROM pg_roles WHERE rolname = 'application_runtime';")
-          test "$role_flags" = "f:f:f:f:f"
+            -c "SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname = 'application_runtime';")
+          test "$runtime_role_is_unprivileged" = "t"
 
           for statement in \
             "UPDATE audit_event SET id = id" \
@@ -132,6 +132,9 @@ jobs:
             echo "backup_role unexpectedly has write access" >&2
             exit 1
           fi
+
+      - name: Check bootstrap shell syntax
+        run: bash -n deploy/bootstrap-lxc.sh
 
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run
