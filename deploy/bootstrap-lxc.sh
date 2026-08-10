@@ -66,13 +66,16 @@ systemctl reload postgresql
 
 SECRETS=/etc/fire-backend/bootstrap-postgresql.env
 if [[ -f $SECRETS ]]; then
-    [[ $(stat -c %a "$SECRETS") == 600 ]] || die "$SECRETS must be mode 0600"
+    [[ $(stat -c %a "$SECRETS") == 600 ]] \
+        || die "$SECRETS must be mode 0600"
+    [[ $(stat -c '%U:%G' "$SECRETS") == root:root ]] \
+        || die "$SECRETS must be owned by root:root"
     set -a; . "$SECRETS"; set +a
-    sudo -u postgres env \
-        FIREDASH_DATABASE_OWNER_PASSWORD="$FIREDASH_DATABASE_OWNER_PASSWORD" \
-        FIREDASH_APPLICATION_RUNTIME_PASSWORD="$FIREDASH_APPLICATION_RUNTIME_PASSWORD" \
-        FIREDASH_BACKUP_ROLE_PASSWORD="$FIREDASH_BACKUP_ROLE_PASSWORD" \
-        psql -v ON_ERROR_STOP=1 -d postgres -f "$ROOT/deploy/postgresql/bootstrap-production.sql"
+    sudo \
+        --preserve-env=FIREDASH_DATABASE_OWNER_PASSWORD,FIREDASH_APPLICATION_RUNTIME_PASSWORD,FIREDASH_BACKUP_ROLE_PASSWORD \
+        -u postgres \
+        psql -v ON_ERROR_STOP=1 -d postgres \
+        < "$ROOT/deploy/postgresql/bootstrap-production.sql"
 else
     warn "PostgreSQL role bootstrap pending: install $SECRETS as root:root 0600"
 fi
@@ -81,9 +84,21 @@ KEY=/var/lib/fire-deploy/.ssh/id_ed25519
 if [[ ! -e $KEY ]]; then sudo -u fire_deploy ssh-keygen -q -t ed25519 -N '' -f "$KEY"; fi
 printf 'FireDash deploy-key public key:\n'; cat "$KEY.pub"
 if [[ -n $REPOSITORY_URL ]]; then
-    [[ $REPOSITORY_URL =~ ^git@github\.com:[^/]+/[^/]+\.git$ ]] || die "repository URL must be git@github.com:owner/repository.git"
-    sudo -u fire_deploy ssh-keyscan -H github.com >> /var/lib/fire-deploy/.ssh/known_hosts
-    sudo -u fire_deploy git ls-remote "$REPOSITORY_URL" HEAD >/dev/null
+    [[ $REPOSITORY_URL =~ ^git@github\.com:[^/]+/[^/]+\.git$ ]] \
+        || die "repository URL must be git@github.com:owner/repository.git"
+
+    sudo -u fire_deploy sh -c '
+        umask 077
+        ssh-keyscan -H github.com > /var/lib/fire-deploy/.ssh/known_hosts
+    '
+    chown fire_deploy:fire_deploy /var/lib/fire-deploy/.ssh/known_hosts
+    chmod 0644 /var/lib/fire-deploy/.ssh/known_hosts
+
+    (
+        cd /var/lib/fire-deploy
+        sudo -u fire_deploy git ls-remote "$REPOSITORY_URL" HEAD >/dev/null
+    )
+
     printf 'Read-only repository access verified.\n'
 else
     printf 'Add the public key as a read-only GitHub deploy key, then rerun with --repository-url.\n'
