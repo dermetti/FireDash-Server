@@ -136,6 +136,22 @@ log "=== application ==="
 [[ -x "$RELEASE/venv/bin/python" ]] && ok "release venv python" || fail "release venv python missing"
 [[ -e "$RELEASE/.firedash-release-complete" ]] && ok "release completion marker" || fail "release completion marker missing"
 
+# gunicorn console script: must be executable and its shebang interpreter must resolve.
+gunicorn_bin="$RELEASE/venv/bin/gunicorn"
+if [[ -x $gunicorn_bin ]]; then
+    ok "gunicorn executable"
+    gunicorn_shebang=$(head -n1 "$gunicorn_bin" 2>/dev/null)
+    gunicorn_interp="${gunicorn_shebang#\#!}"
+    gunicorn_interp="${gunicorn_interp%% *}"
+    if [[ -n $gunicorn_interp && -e $gunicorn_interp ]]; then
+        ok "gunicorn shebang interpreter resolves ($gunicorn_interp)"
+    else
+        fail "gunicorn shebang interpreter does not resolve ($gunicorn_interp)"
+    fi
+else
+    fail "gunicorn missing or not executable"
+fi
+
 # exact deployed SHA
 EXPECTED_SHA=${FIREDASH_RESOLVED_SHA:-}
 [[ -n $EXPECTED_SHA ]] || EXPECTED_SHA=$(env_value "$INSTALL_CONF" FIREDASH_LAST_SUCCESSFUL_SHA)

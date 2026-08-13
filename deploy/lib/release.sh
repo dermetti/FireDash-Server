@@ -7,7 +7,23 @@ source "$_LIB_DIR/common.sh"
 
 release_path() { printf '%s/%s' "$RELEASES_DIR" "$1"; }
 
+# Verify a release venv's console-script shebangs resolve at their final path.
+verify_release_venv() {
+    local release=${1:?} gunicorn="$1/venv/bin/gunicorn" shebang interp
+    [[ -x $gunicorn ]] || die "release venv is missing an executable gunicorn: $gunicorn"
+    shebang=$(head -n1 "$gunicorn" 2>/dev/null)
+    [[ $shebang == '#!'* ]] || die "gunicorn has no shebang: $gunicorn"
+    interp=${shebang#\#!}
+    interp=${interp%% *}
+    [[ -n $interp ]] || die "gunicorn shebang is empty: $gunicorn"
+    [[ $interp == "$release/venv/bin/"* ]] || die "gunicorn shebang interpreter is outside the release venv: $interp"
+    [[ -e $interp ]] || die "gunicorn shebang interpreter does not exist: $interp"
+    log "verified release venv: gunicorn -> $interp"
+}
+
 # Build an immutable, SHA-addressed release with a completion marker.
+# The virtualenv is created at its FINAL path (never relocated), so console-script
+# shebangs (which embed an absolute interpreter path) always resolve.
 build_release() {
     local sha=${FIREDASH_RESOLVED_SHA:?} root=${FIREDASH_REPO_ROOT:?} final staging actual
     final=$(release_path "$sha")
@@ -16,37 +32,61 @@ build_release() {
         log "release $sha already built; reusing"
         return 0
     fi
-    if [[ -e $final ]]; then
-        die "release directory $final exists without a completion marker; refusing to overwrite (operator inspection required)"
+
+    # Interrupted installer build: safely recoverable.
+    if [[ -e "$final/.firedash-release-building" ]]; then
+        log "removing interrupted installer build for release $sha"
+        rm -rf "$final"
     fi
 
+    # Unexpected final directory (not installer-owned, not complete): fail closed.
+    if [[ -e $final ]]; then
+        die "release directory $final exists without an installer completion marker; refusing to overwrite (operator inspection required)"
+    fi
+
+    # Remove stale installer-owned staging directories.
     rm -rf "$RELEASES_DIR/.$sha.staging."*
+
+    # 1-2. Stage and validate the source in an installer-owned temp directory.
     staging="$RELEASES_DIR/.$sha.staging.$$"
     install -d -m 0755 -o root -g root "$staging"
-
     log "extracting source for release $sha"
     git -C "$root" archive HEAD | tar -x -C "$staging"
     actual=$(git -C "$root" rev-parse HEAD)
     [[ $actual == "$sha" ]] || { rm -rf "$staging"; die "source SHA $actual does not match requested $sha"; }
 
-    log "creating virtualenv"
-    python3 -m venv "$staging/venv"
+    # 3-4. Create the final directory in an incomplete state, then move source in.
+    log "creating release directory $final"
+    install -d -m 0755 -o root -g root "$final"
+    : > "$final/.firedash-release-building"
+    find "$staging" -mindepth 1 -maxdepth 1 -exec mv -f -t "$final" -- {} +
+    rm -rf "$staging"
 
+    # 5. Create the virtualenv directly at its final path (never relocate it).
+    log "creating virtualenv at final path"
+    python3 -m venv "$final/venv"
+
+    # 6. Install requirements into the final-path venv.
     log "installing Python requirements"
-    "$staging/venv/bin/pip" install --no-cache-dir -r "$staging/requirements/base.txt"
+    "$final/venv/bin/pip" install --no-cache-dir -r "$final/requirements/base.txt"
 
+    # 7. Compile and import checks.
     log "compile and import checks"
-    "$staging/venv/bin/python" -m compileall -q "$staging/apps" "$staging/config" "$staging/manage.py"
-    "$staging/venv/bin/python" -c 'import django; print("django", django.get_version())' >/dev/null
+    "$final/venv/bin/python" -m compileall -q "$final/apps" "$final/config" "$final/manage.py"
+    "$final/venv/bin/python" -c 'import django; print("django", django.get_version())' >/dev/null
 
-    : > "$staging/.firedash-release-complete"
-
+    # 8. Harden ownership and write permissions.
     log "hardening release tree permissions (root-owned, group/world non-writable)"
-    chown -R root:root "$staging"
-    chmod -R go-w "$staging"
+    chown -R root:root "$final"
+    chmod -R go-w "$final"
 
-    log "promoting staging to $final"
-    mv "$staging" "$final"
+    # 9. Verify the venv console-script shebangs resolve at the final path.
+    verify_release_venv "$final"
+
+    # 10. Mark complete last; remove the building marker.
+    rm -f "$final/.firedash-release-building"
+    : > "$final/.firedash-release-complete"
+    log "release $sha built"
 }
 
 # Migrate, reapply grants, collectstatic, run checks, and atomically switch current.
