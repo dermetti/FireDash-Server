@@ -1,6 +1,6 @@
 # Runtime Configuration
 
-Use `/etc/fire-backend/fire-backend.env` in production. It must be owned by `root:fire_backend` with mode `0640`; it is not committed to the repository.
+Use `/etc/fire-backend/fire-backend.env` in production. It must be owned by `root:fire_backend` with mode `0640`; it is not committed to the repository. The installer generates this file and the credential files automatically on first install and never rotates them on rerun.
 
 Required production settings:
 

@@ -30,14 +30,14 @@ class ArtifactError(ValueError):
 
 def _credential(path: Path, label: str) -> bytes:
     try:
-        value = path.read_bytes().strip()
+        value = path.read_bytes()
     except OSError as error:
         raise ArtifactError(f"Publication {label} credential is unavailable.") from error
-    # Prefer a 32-byte file as raw key material; arbitrary raw bytes can also
-    # happen to be syntactically valid base64.
+    # A raw 32-byte file is unambiguous key material; read it exactly (no strip).
     if len(value) == 32:
         return value
-    # LoadCredential files may otherwise hold base64 text.
+    # LoadCredential files may otherwise hold base64 text (possibly with a newline).
+    value = value.strip()
     try:
         decoded = base64.b64decode(value, validate=True)
         return decoded if decoded else value

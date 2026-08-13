@@ -182,3 +182,17 @@ def test_remove_artifact_path_rejects_paths_outside_artifact_root(tmp_path):
             remove_artifact_path("../outside.bin")
 
     assert outside.exists()
+
+
+def test_credential_reads_raw_32_bytes_with_whitespace_boundaries(tmp_path):
+    key = bytes([0x20]) + b"x" * 30 + bytes([0x0A])
+    assert len(key) == 32
+    path = tmp_path / "key"
+    path.write_bytes(key)
+    assert artifacts._credential(path, "test") == key
+
+
+def test_credential_decodes_base64_text(tmp_path):
+    path = tmp_path / "key"
+    path.write_bytes(base64.b64encode(b"k" * 32) + b"\n")
+    assert artifacts._credential(path, "test") == b"k" * 32

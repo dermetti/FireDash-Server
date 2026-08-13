@@ -146,8 +146,22 @@ jobs:
             exit 1
           fi
 
-      - name: Check bootstrap shell syntax
-        run: bash -n deploy/bootstrap-lxc.sh
+      - name: Check deployment shell syntax
+        run: |
+          bash -n deploy/install.sh
+          bash -n deploy/install-local.sh
+          bash -n deploy/bootstrap-lxc.sh
+          bash -n deploy/deploy-release.sh
+          bash -n deploy/initialize-firedash.sh
+          bash -n deploy/verify-deployment.sh
+          for f in deploy/lib/*.sh; do bash -n "$f"; done
+          bash -n deploy/scripts/create-service-users.sh
+          bash -n deploy/scripts/fire-backup
+          bash -n deploy/scripts/fire-restore
+          bash -n deploy/scripts/fire-pdf-sanitize
+
+      - name: Run deployment helper tests
+        run: bash deploy/tests/test_state.sh
 
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run

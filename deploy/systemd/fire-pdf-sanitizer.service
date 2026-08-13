@@ -16,6 +16,6 @@ ProtectHome=yes
 RestrictAddressFamilies=AF_UNIX
 TasksMax=32
 MemoryMax=512M
-CPUQuota=100%%
+CPUQuota=100%
 TimeoutStartSec=60s
 ExecStart=/usr/bin/false

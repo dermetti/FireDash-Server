@@ -1,3 +1,4 @@
-# Pin the external PDF engine separately from Python requirements.
-# Update deliberately alongside the PDF-security regression suite.
-qpdf=11.3.0-1+deb12u1
+# External PDF sanitizer engine. On Debian 13 the installer uses the distro-packaged
+# qpdf; the exact version is validated at install time and recorded during acceptance
+# testing. Do not pin a Debian 12 version here.
+qpdf
