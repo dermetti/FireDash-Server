@@ -41,7 +41,7 @@ existing certificate/key paths.
 On first installation, the installer prompts (via the terminal, not the piped script) only for
 values it cannot generate:
 
-- FireDash HTTPS base URL (e.g. `https://firedash.mjblab.de`)
+- FireDash HTTPS base URL (e.g. `https://firedash.de`)
 - TLS full-chain certificate path
 - TLS private-key path
 - initial system administrator email and display name

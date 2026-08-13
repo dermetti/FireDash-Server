@@ -10,7 +10,7 @@ NGINX_ENABLED=/etc/nginx/sites-enabled/fire-backend
 
 # Validate a TLS certificate/private-key pair for a hostname (RSA and EC generic).
 validate_tls() {
-    local cert=${1:-} key=${2:-} host=${3:-} cert_pub key_pub
+    local cert=${1:-} key=${2:-} host=${3:-} cert_pub key_pub start start_ts now_ts
     [[ -f $cert ]] || die "TLS certificate not found: $cert"
     [[ -f $key ]] || die "TLS private key not found: $key"
     openssl x509 -in "$cert" -noout >/dev/null 2>&1 || die "TLS certificate does not parse: $cert"
@@ -19,7 +19,11 @@ validate_tls() {
     key_pub=$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
     [[ -n $cert_pub && $cert_pub == "$key_pub" ]] || die "TLS certificate and private key do not match"
     openssl x509 -in "$cert" -noout -checkhost "$host" >/dev/null 2>&1 || die "TLS certificate is not valid for hostname $host"
-    openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || die "TLS certificate is expired or not yet valid"
+    openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || die "TLS certificate is expired"
+    start=$(openssl x509 -in "$cert" -noout -startdate 2>/dev/null | cut -d= -f2-)
+    start_ts=$(date -d "$start" +%s 2>/dev/null || true)
+    now_ts=$(date +%s)
+    [[ -n $start_ts && $start_ts -le $now_ts ]] || die "TLS certificate is not yet valid (notBefore: ${start:-unknown})"
 }
 
 render_nginx_conf() {

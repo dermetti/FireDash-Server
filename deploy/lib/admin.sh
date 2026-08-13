@@ -10,15 +10,9 @@ admin_setup_url_file=/root/firedash-initial-admin-setup-url
 admin_state_snippet() {
     cat <<'PY'
 from apps.authorization.models import SystemRole
+from apps.authorization.services import classify_system_admin_state
 roles = list(SystemRole.objects.filter(active=True).select_related("user"))
-if any(r.user.is_active for r in roles):
-    print("active")
-elif len(roles) == 1:
-    print("inactive")
-elif len(roles) > 1:
-    print("multiple")
-else:
-    print("none")
+print(classify_system_admin_state(roles))
 PY
 }
 

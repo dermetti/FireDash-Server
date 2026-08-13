@@ -1,3 +1,5 @@
+from typing import Any
+
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils import timezone
@@ -12,6 +14,18 @@ from apps.organizations.models import Department, Station
 def require_system_admin(actor) -> None:
     if not is_system_admin(actor):
         raise PermissionDenied("System administrator role is required.")
+
+
+def classify_system_admin_state(roles: list[Any]) -> str:
+    """Classify bootstrap system-administrator state from active SystemRole rows.
+
+    Ambiguity (more than one active role) always wins over active/inactive.
+    """
+    if len(roles) == 0:
+        return "none"
+    if len(roles) > 1:
+        return "multiple"
+    return "active" if roles[0].user.is_active else "inactive"
 
 
 def require_department_admin(actor, department: Department) -> None:
