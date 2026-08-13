@@ -108,8 +108,11 @@ postgres_converge() {
 }
 
 # Run the production bootstrap SQL with secrets scoped to a subshell.
-# sudo --preserve-env is used (matching the original bootstrap) so the three
-# FIREDASH_* password variables reliably reach the \getenv calls in the SQL.
+# The SQL file is opened by the root installer shell and fed to psql on stdin,
+# because psql runs as the postgres OS user and cannot traverse the root-only
+# stage-0 checkout under /tmp. bootstrap-production.sql has no \i/\ir includes,
+# so stdin carries the complete script. runuser inherits the caller environment,
+# so the FIREDASH_* variables reach the SQL's \getenv calls.
 postgres_bootstrap() {
     local sql=${1:?}
     (
@@ -117,7 +120,6 @@ postgres_bootstrap() {
         FIREDASH_DATABASE_OWNER_PASSWORD=$(read_secret "$SECRET_DIR/database-owner-password")
         FIREDASH_APPLICATION_RUNTIME_PASSWORD=$(env_value "$ENV_FILE" POSTGRES_PASSWORD)
         FIREDASH_BACKUP_ROLE_PASSWORD=$(read_secret "$SECRET_DIR/backup-role-password")
-        sudo --preserve-env=FIREDASH_DATABASE_OWNER_PASSWORD,FIREDASH_APPLICATION_RUNTIME_PASSWORD,FIREDASH_BACKUP_ROLE_PASSWORD \
-            -u postgres psql -v ON_ERROR_STOP=1 -d postgres -f "$sql"
+        as_postgres psql -v ON_ERROR_STOP=1 -d postgres < "$sql"
     )
 }

@@ -24,6 +24,10 @@ FIREDASH_MAINTENANCE=0
 
 on_error() {
     local rc=$?
+    if (( BASH_SUBSHELL > 0 )); then
+        # In a subshell: propagate the failure silently; the top-level trap reports once.
+        exit "$rc"
+    fi
     log_err "installer failed during phase '$FIREDASH_PHASE' (exit $rc)"
     if [[ $FIREDASH_MAINTENANCE == 1 ]]; then
         log_err "maintenance/quiesce had begun: application services may be stopped."
