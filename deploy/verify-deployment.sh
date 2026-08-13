@@ -27,6 +27,12 @@ pg_as() { # role password statement...
     PGPASSWORD="$pw" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$role" -d fire_backend -tAc "$stmt"
 }
 
+# Privileged cluster-level introspection via the postgres OS identity. Used only
+# where non-superuser roles (e.g. database_owner) lack catalog visibility.
+pg_as_postgres() { # statement...
+    runuser -u postgres -- psql -v ON_ERROR_STOP=1 -d postgres -tAc "$1"
+}
+
 expect_sqlstate() { # role pw sqlstate stmt
     local role=$1 pw=$2 sqlstate=$3 stmt=$4 out rc
     out=$(PGPASSWORD="$pw" psql -v ON_ERROR_STOP=1 -v VERBOSITY=verbose -h 127.0.0.1 -U "$role" -d fire_backend -c "$stmt" 2>&1)
@@ -68,17 +74,33 @@ runtime_attrs=$(pg_as database_owner "$OWNER_PW" "SELECT NOT (rolsuper OR rolcre
 pg_as database_owner "$OWNER_PW" "SELECT 1 FROM pg_extension WHERE extname='postgis'" | grep -q 1 && ok "postgis installed" || fail "postgis missing"
 pg_as database_owner "$OWNER_PW" "SELECT 1 FROM pg_extension WHERE extname='btree_gist'" | grep -q 1 && ok "btree_gist installed" || fail "btree_gist missing"
 
-# HBA effective auth + ordering: FireDash rules must be scram and precede broad host rules.
-for r in database_owner application_runtime backup_role; do
-    method=$(pg_as database_owner "$OWNER_PW" "SELECT auth_method FROM pg_hba_file_rules WHERE user_name @> ARRAY['$r'] AND address IS NOT NULL ORDER BY line_number LIMIT 1")
-    [[ $method == scram-sha-256 ]] && ok "HBA $r scram-sha-256" || fail "HBA $r not scram-sha-256 (got: $method)"
-done
-fire_line=$(pg_as database_owner "$OWNER_PW" "SELECT min(line_number) FROM pg_hba_file_rules WHERE user_name @> ARRAY['database_owner']")
-broad_line=$(pg_as database_owner "$OWNER_PW" "SELECT min(line_number) FROM pg_hba_file_rules WHERE user_name @> ARRAY['all'] AND address IS NOT NULL")
-if [[ -n $fire_line && ( -z $broad_line || $fire_line -lt $broad_line ) ]]; then
-    ok "FireDash HBA rules precede broad host rules"
+# HBA verification needs cluster-level visibility (pg_hba_file_rules), which
+# database_owner lacks by design. Use the postgres OS identity, and report an
+# introspection failure distinctly from a bad-auth failure.
+if ! hba_rows=$(pg_as_postgres "SELECT user_name[1] || '|' || database[1] || '|' || coalesce(address,'') || '|' || coalesce(netmask,'') || '|' || coalesce(auth_method,'') || '|' || coalesce(error,'') || '|' || line_number FROM pg_hba_file_rules WHERE user_name && ARRAY['database_owner','application_runtime','backup_role'] ORDER BY line_number"); then
+    fail "unable to inspect pg_hba_file_rules"
 else
-    fail "FireDash HBA rules do not precede broad host rules"
+    for r in database_owner application_runtime backup_role; do
+        row=$(printf '%s\n' "$hba_rows" | grep "^$r|" || true)
+        if [[ -z $row ]]; then
+            fail "HBA $r: FireDash rule missing"
+            continue
+        fi
+        IFS='|' read -r _u db addr mask auth err ln <<<"$row"
+        if [[ $db == fire_backend && $addr == 127.0.0.1 && $mask == 255.255.255.255 && $auth == scram-sha-256 && -z $err ]]; then
+            ok "HBA $r: fire_backend 127.0.0.1/32 scram-sha-256"
+        else
+            fail "HBA $r: unexpected rule (db=$db addr=$addr mask=$mask auth=$auth err=$err)"
+        fi
+    done
+
+    fire_max=$(printf '%s\n' "$hba_rows" | awk -F'|' '{print $NF}' | sort -n | tail -n1)
+    broad_min=$(pg_as_postgres "SELECT min(line_number) FROM pg_hba_file_rules WHERE type='host' AND user_name @> ARRAY['all'] AND database @> ARRAY['all'] AND address='127.0.0.1'")
+    if [[ -n $fire_max && ( -z $broad_min || $fire_max -lt $broad_min ) ]]; then
+        ok "FireDash HBA rules precede broader host rules"
+    else
+        fail "FireDash HBA rules do not precede broader host rules"
+    fi
 fi
 
 # login checks

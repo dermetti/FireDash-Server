@@ -5,7 +5,8 @@ _LIB_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=common.sh
 source "$_LIB_DIR/common.sh"
 
-admin_setup_url_file=/root/firedash-initial-admin-setup-url
+admin_setup_url_file=${ADMIN_SETUP_URL_FILE:-/root/firedash-initial-admin-setup-url}
+admin_created_marker=${ADMIN_CREATED_MARKER:-/run/firedash-admin-created}
 
 admin_state_snippet() {
     cat <<'PY'
@@ -42,6 +43,7 @@ system_admin_state() {
 bootstrap_admin() {
     local release=${FIREDASH_RELEASE:?} base_url=${FIREDASH_BASE_URL:?} state url email name
 
+    rm -f "$admin_created_marker"
     state=$(system_admin_state)
     case "$state" in
         active)
@@ -72,6 +74,10 @@ bootstrap_admin() {
             printf '%s\n' "$url" > "$admin_setup_url_file"
             chmod 600 "$admin_setup_url_file"
             chown root:root "$admin_setup_url_file"
+            # Record that a NEW administrator was created THIS run (no raw token here).
+            printf 'created=1\n' > "$admin_created_marker"
+            chmod 600 "$admin_created_marker"
+            chown root:root "$admin_created_marker"
             log "Initial administrator created."
             log "Setup URL stored at $admin_setup_url_file (expires in 24 hours)."
             ;;
@@ -79,4 +85,26 @@ bootstrap_admin() {
             die "unexpected system administrator state: $state"
             ;;
     esac
+}
+
+# Display the initial admin setup URL at the end of a successful install, only if a
+# NEW administrator was created during this run. Prints to /dev/tty (never logs).
+display_admin_setup_url() {
+    [[ -f $admin_created_marker ]] || return 0
+    if [[ $(read_secret "$admin_created_marker") != created=1 ]]; then
+        rm -f "$admin_created_marker"
+        return 0
+    fi
+    local url
+    url=$(read_secret "$admin_setup_url_file" 2>/dev/null || true)
+    if [[ -n $url && -e /dev/tty && -w /dev/tty ]]; then
+        (
+            exec 2>/dev/null
+            printf '\nInitial System Administrator setup URL\nValid for 24 hours:\n\n%s\n\nA copy is stored at:\n%s\n' \
+                "$url" "$admin_setup_url_file" > /dev/tty
+        ) || true
+    else
+        log "Initial administrator setup URL stored at $admin_setup_url_file"
+    fi
+    rm -f "$admin_created_marker"
 }

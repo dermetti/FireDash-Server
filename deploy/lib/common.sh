@@ -15,6 +15,10 @@ SECRETS_MARKER=$FIREDASH_ETC/secrets-initialized
 RELEASES_DIR=${FIREDASH_RELEASES_DIR:-/srv/firedash/releases}
 CURRENT_LINK=${FIREDASH_CURRENT_LINK:-/srv/firedash/current}
 
+# Initial-admin setup-URL state (root-only, never logged; overridable for tests).
+ADMIN_SETUP_URL_FILE=${ADMIN_SETUP_URL_FILE:-/root/firedash-initial-admin-setup-url}
+ADMIN_CREATED_MARKER=${ADMIN_CREATED_MARKER:-/run/firedash-admin-created}
+
 log() { printf 'firedash: %s\n' "$*"; }
 log_warn() { printf 'firedash warning: %s\n' "$*" >&2; }
 log_err() { printf 'firedash error: %s\n' "$*" >&2; }

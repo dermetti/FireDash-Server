@@ -15,6 +15,8 @@ source "$SELF_DIR/lib/nginx.sh"
 source "$SELF_DIR/lib/postgresql.sh"
 # shellcheck source=lib/systemd.sh
 source "$SELF_DIR/lib/systemd.sh"
+# shellcheck source=lib/admin.sh
+source "$SELF_DIR/lib/admin.sh"
 
 FIREDASH_REPO_ROOT=${FIREDASH_REPO_ROOT:-$ROOT}
 export FIREDASH_REPO_ROOT
@@ -206,3 +208,5 @@ record_success() {
 record_success
 
 log "FireDash installation complete."
+
+display_admin_setup_url
