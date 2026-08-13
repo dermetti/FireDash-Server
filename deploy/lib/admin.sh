@@ -9,22 +9,30 @@ admin_setup_url_file=/root/firedash-initial-admin-setup-url
 
 admin_state_snippet() {
     cat <<'PY'
+import django
+
+django.setup()
+
 from apps.authorization.models import SystemRole
 from apps.authorization.services import classify_system_admin_state
+
 roles = list(SystemRole.objects.filter(active=True).select_related("user"))
 print(classify_system_admin_state(roles))
 PY
 }
 
 # Return active|inactive|multiple|none for the current system administrator state.
+# Runs a quiet python snippet (not `manage.py shell`, which emits an automatic-import
+# banner to stdout), so stdout contains exactly one token.
 system_admin_state() {
     local release=${FIREDASH_RELEASE:?} snippet
     snippet=$(mktemp)
     admin_state_snippet > "$snippet"
     (
         export DJANGO_SETTINGS_MODULE=config.settings.production
+        export PYTHONPATH="$release${PYTHONPATH:+:$PYTHONPATH}"
         load_env_file "$ENV_FILE"
-        "$release/venv/bin/python" "$release/manage.py" shell < "$snippet"
+        "$release/venv/bin/python" "$snippet"
     )
     local rc=$?
     rm -f "$snippet"

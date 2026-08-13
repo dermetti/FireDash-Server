@@ -165,6 +165,7 @@ jobs:
           bash deploy/tests/test_state.sh
           bash deploy/tests/test_postgres_bootstrap.sh
           bash deploy/tests/test_release_venv.sh
+          bash deploy/tests/test_admin_state.sh
 
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run
