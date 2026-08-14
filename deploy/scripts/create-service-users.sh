@@ -42,6 +42,6 @@ usermod -a -G fire_backend fire_publication
 usermod -a -G fire_nginx fire_publication
 usermod -a -G fire_nginx www-data
 install -d -o fire_publication -g fire_nginx -m 2750 /var/lib/fire-backend/publications
-install -d -o fire_publication -g fire_publication -m 0700 /var/lib/fire-backend/publications-tmp
+install -d -o fire_publication -g fire_publication -m 0700 /var/lib/fire-backend/publications/.tmp
 install -d -o root -g root -m 0700 /etc/fire-backend/credentials
 echo "Created service accounts and runtime directories."

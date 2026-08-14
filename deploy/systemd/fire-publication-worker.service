@@ -28,4 +28,4 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/var/lib/fire-backend/fire-plans
-ReadWritePaths=/var/lib/fire-backend/publications /var/lib/fire-backend/publications-tmp
+ReadWritePaths=/var/lib/fire-backend/publications

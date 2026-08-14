@@ -1,0 +1,18 @@
+<div class="modal fade" id="tabletActionModal" tabindex="-1" aria-labelledby="tabletActionModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" hx-post="{% url 'tablet-create' department.id %}" hx-target="#tablet-action-modal-container" hx-swap="innerHTML">
+        {% csrf_token %}
+        <div class="modal-header">
+          <h5 class="modal-title" id="tabletActionModalLabel">Register tablet</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">{% include "tablets/_tablet_fields.html" %}</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Register tablet</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

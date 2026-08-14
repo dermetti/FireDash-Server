@@ -239,6 +239,7 @@ for f in database-owner-password backup-role-password publication-kek publicatio
 done
 [[ $(stat -c '%U:%G:%a' "$ENV_FILE") == "root:fire_backend:640" ]] && ok "fire-backend.env root:fire_backend 0640" || fail "fire-backend.env ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/publications) == "fire_publication:fire_nginx:2750" ]] && ok "publications 2750" || fail "publications ownership/mode unexpected"
+[[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/publications/.tmp) == "fire_publication:fire_publication:700" ]] && ok "publications/.tmp 0700" || fail "publications/.tmp ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/fire-plans) == "fire_backend:fire_backend:750" ]] && ok "fire-plans 0750" || fail "fire-plans ownership/mode unexpected"
 
 neg_read() { # user path description
@@ -249,11 +250,31 @@ neg_read() { # user path description
         ok "$desc: $user cannot read $path"
     fi
 }
+
+# Publication artifacts are served by Nginx workers. This deployment intentionally
+# relies on the Debian default www-data worker user: the repo does not override the
+# `user` directive, and create-service-users.sh grants www-data the fire_nginx group
+# for final-artifact (0640/2750) access. Resolve the effective worker identity so the
+# negative-access checks below target the identity that actually serves files.
+nginx_user=www-data
+if [[ -f /etc/nginx/nginx.conf ]]; then
+    configured=$(awk '$1 == "user" {print $2; exit}' /etc/nginx/nginx.conf | tr -d ';')
+    if [[ -n $configured ]]; then
+        nginx_user=$configured
+    fi
+fi
+if [[ $nginx_user != www-data ]]; then
+    fail "Nginx worker user is '$nginx_user'; expected www-data"
+else
+    ok "Nginx worker user is www-data"
+fi
+
 neg_read fire_backend "$SECRET_DIR/publication-kek" "publication KEK"
 neg_read fire_backend "$SECRET_DIR/publication-signing-key" "private signing key"
 neg_read www-data "$SECRET_DIR/publication-kek" "credential file"
 neg_read www-data "$ENV_FILE" "runtime env"
 neg_read www-data /var/lib/fire-backend/fire-plans "fire-plan source"
+neg_read www-data /var/lib/fire-backend/publications/.tmp "publication temp (nginx worker)"
 neg_read fire_pdf_sanitizer "$ENV_FILE" "runtime env"
 
 # release tree must not be writable by service users

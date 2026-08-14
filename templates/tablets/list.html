@@ -1,22 +1,91 @@
 {% extends "base.html" %}
-{% block title %}{{ department.name }} Tablets{% endblock %}
+{% block title %}Devices / Tablets — {{ department.name }}{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h1 class="mb-0">{{ department.name }} Tablets</h1>
-</div>
-<form method="get" class="row g-2 mb-3">
-  <div class="col-sm-6 col-md-5"><label class="visually-hidden" for="tablet-query">Search tablets</label><input id="tablet-query" class="form-control" name="q" value="{{ query }}" placeholder="Search name or asset number"></div>
-  <div class="col-sm-4 col-md-3"><label class="visually-hidden" for="tablet-status">Status</label><select id="tablet-status" class="form-select" name="status"><option value="">All statuses</option>{% for value, label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
-  <div class="col-sm-2"><button class="btn btn-outline-primary w-100">Filter</button></div>
-</form>
-<div class="list-group">
-  {% for tablet in tablets %}
-  <a href="{% url 'tablet-detail' department.id tablet.id %}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
-    <span><strong>{{ tablet.display_name|default:"Unnamed tablet" }}</strong>{% if tablet.asset_number %}<span class="text-muted ms-2">{{ tablet.asset_number }}</span>{% endif %}</span>
-    <span><span class="badge bg-secondary">{{ tablet.status }}</span>{% for installation in tablet.current_installations %}<span class="badge bg-info text-dark ms-1">App {{ installation.status }}</span>{% endfor %}</span>
-  </a>
-  {% empty %}
-  <div class="list-group-item text-muted">No tablets match the selected filters.</div>
-  {% endfor %}
-</div>
+
+<h1 class="mb-1">Devices / Tablets</h1>
+<p class="text-body-secondary">Manage registered FireDash tablets, vehicle assignments, adoption state and server authorization.</p>
+
+{% include "tablets/_tablet_status_summary.html" %}
+
+<section class="mb-4">
+  <h2 class="h5 mb-3">Actions</h2>
+  <div class="card shadow-sm"><div class="card-body">
+    <a class="btn btn-primary" href="{% url 'tablet-create' department.id %}"
+       hx-get="{% url 'tablet-create' department.id %}" hx-target="#tablet-action-modal-container">
+      Register tablet
+    </a>
+    <p class="text-body-secondary small mt-2 mb-0">Create a FireDash tablet record before assigning it to a vehicle and starting adoption.</p>
+  </div></div>
+</section>
+
+<section>
+  <h2 class="h5 mb-3">Existing tablets</h2>
+
+  <form id="tablet-filter-form" method="get" class="row g-2 mb-3">
+    <div class="col-12 col-md-4">
+      <label class="form-label" for="tablet-search">Search</label>
+      <input id="tablet-search" class="form-control" type="search" name="search" value="{{ filters.search }}"
+             placeholder="Search by name or asset number"
+             hx-get="{% url 'tablet-list' department.id %}" hx-trigger="input changed delay:300ms"
+             hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label" for="tablet-status">Status</label>
+      <select id="tablet-status" class="form-select" name="status"
+              hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
+              hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+        <option value="">All statuses</option>
+        {% for value, label in statuses %}<option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label" for="tablet-station">Station</label>
+      <select id="tablet-station" class="form-select" name="station"
+              hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
+              hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+        <option value="">All stations</option>
+        {% for value, label in station_options %}<option value="{{ value }}" {% if filters.station == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label" for="tablet-vehicle">Vehicle</label>
+      <select id="tablet-vehicle" class="form-select" name="vehicle"
+              hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
+              hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+        <option value="">All vehicles</option>
+        {% for value, label in vehicle_options %}<option value="{{ value }}" {% if filters.vehicle == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label" for="tablet-sort">Sort</label>
+      <select id="tablet-sort" class="form-select" name="sort"
+              hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
+              hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+        <option value="name" {% if sort == "name" %}selected{% endif %}>Name</option>
+        <option value="status" {% if sort == "status" %}selected{% endif %}>Status</option>
+        <option value="asset" {% if sort == "asset" %}selected{% endif %}>Asset number</option>
+        <option value="created" {% if sort == "created" %}selected{% endif %}>Registered</option>
+        <option value="last_seen" {% if sort == "last_seen" %}selected{% endif %}>Last seen</option>
+      </select>
+    </div>
+    <div class="col-6 col-md-2 d-flex align-items-end gap-2">
+      <div class="flex-grow-1">
+        <label class="form-label" for="tablet-dir">Direction</label>
+        <select id="tablet-dir" class="form-select" name="dir"
+                hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
+                hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+          <option value="asc" {% if dir != "desc" %}selected{% endif %}>Ascending</option>
+          <option value="desc" {% if dir == "desc" %}selected{% endif %}>Descending</option>
+        </select>
+      </div>
+      <a href="{% url 'tablet-list' department.id %}" class="btn btn-outline-secondary">Reset</a>
+    </div>
+  </form>
+
+  <div id="tablet-results">
+    {% include "tablets/_tablet_results.html" %}
+  </div>
+</section>
+
+{% include "tablets/_action_modal.html" %}
 {% endblock %}

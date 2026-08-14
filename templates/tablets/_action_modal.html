@@ -1,0 +1,32 @@
+<div id="tablet-action-modal-container"></div>
+<script>
+  (function () {
+    var container = document.getElementById('tablet-action-modal-container');
+
+    function initPopovers() {
+      document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
+        if (!bootstrap.Popover.getInstance(el)) {
+          new bootstrap.Popover(el);
+        }
+      });
+    }
+
+    function showModal() {
+      var modalEl = container.querySelector('.modal');
+      if (!modalEl) return;
+      var instance = bootstrap.Modal.getInstance(modalEl);
+      if (instance) instance.dispose();
+      document.querySelectorAll('.modal-backdrop').forEach(function (backdrop) { backdrop.remove(); });
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
+
+    document.body.addEventListener('htmx:afterSwap', function (evt) {
+      initPopovers();
+      if (evt.target === container) showModal();
+    });
+    document.body.addEventListener('hidden.bs.modal', function (evt) {
+      if (container.contains(evt.target)) container.innerHTML = '';
+    });
+    initPopovers();
+  })();
+</script>

@@ -1,0 +1,13 @@
+{% for error in form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+<div class="mb-3">
+  <label class="form-label" for="{{ form.display_name.id_for_label }}">Display name</label>
+  {{ form.display_name }}
+  <div class="form-text">Name shown to FireDash administrators.</div>
+  {% for error in form.display_name.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+</div>
+<div class="mb-3">
+  <label class="form-label" for="{{ form.asset_number.id_for_label }}">Asset number</label>
+  {{ form.asset_number }}
+  <div class="form-text">Identifier used to match the physical tablet.</div>
+  {% for error in form.asset_number.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+</div>

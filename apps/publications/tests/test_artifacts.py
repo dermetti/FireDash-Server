@@ -1,6 +1,8 @@
 import base64
+import errno
 import hashlib
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -44,7 +46,7 @@ def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded, monkeypatch):
     )
     with override_settings(
         PUBLICATION_ARTIFACT_ROOT=tmp_path / "final",
-        PUBLICATION_ARTIFACT_TEMP_ROOT=tmp_path / "temp",
+        PUBLICATION_ARTIFACT_TEMP_ROOT=tmp_path / "final" / ".tmp",
         PUBLICATION_ARTIFACT_MAX_BYTES=1024,
         PUBLICATION_KEK_CREDENTIAL_PATH=kek_path,
         PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path,
@@ -135,7 +137,7 @@ def test_artifacts_use_distinct_cek_and_nonce(tmp_path, monkeypatch):
     )
     with override_settings(
         PUBLICATION_ARTIFACT_ROOT=tmp_path / "final",
-        PUBLICATION_ARTIFACT_TEMP_ROOT=tmp_path / "temp",
+        PUBLICATION_ARTIFACT_TEMP_ROOT=tmp_path / "final" / ".tmp",
         PUBLICATION_ARTIFACT_MAX_BYTES=1024,
         PUBLICATION_KEK_CREDENTIAL_PATH=tmp_path / "kek",
         PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=tmp_path / "signing",
@@ -149,17 +151,19 @@ def test_artifacts_use_distinct_cek_and_nonce(tmp_path, monkeypatch):
 
 
 def test_cleanup_removes_stale_temp_directories(tmp_path, monkeypatch):
-    stale = tmp_path / "temp" / "abandoned"
+    stale = tmp_path / "final" / ".tmp" / "abandoned"
     stale.mkdir(parents=True)
     os.utime(stale, (time.time() - 120, time.time() - 120))
     from apps.publications.models import DatasetPublication
 
     monkeypatch.setattr(DatasetPublication, "objects", SimpleNamespace(filter=lambda **_: []))
     with override_settings(
-        PUBLICATION_ARTIFACT_TEMP_ROOT=tmp_path / "temp", PUBLICATION_ARTIFACT_STALE_SECONDS=60
+        PUBLICATION_ARTIFACT_TEMP_ROOT=tmp_path / "final" / ".tmp",
+        PUBLICATION_ARTIFACT_STALE_SECONDS=60,
     ):
         assert cleanup_stale_artifacts() == 1
     assert not stale.exists()
+    assert (tmp_path / "final" / ".tmp").exists()
 
 
 def test_remove_artifact_path_removes_promoted_ciphertext(tmp_path):
@@ -196,3 +200,105 @@ def test_credential_decodes_base64_text(tmp_path):
     path = tmp_path / "key"
     path.write_bytes(base64.b64encode(b"k" * 32) + b"\n")
     assert artifacts._credential(path, "test") == b"k" * 32
+
+
+def _publication(**overrides) -> SimpleNamespace:
+    values = {
+        "id": "artifact-id",
+        "department_id": "department-id",
+        "station_id": None,
+        "dataset_type_code": "department_hydrants",
+        "schema_version": 1,
+        "version_number": 1,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _artifact_settings(root: Path, tmp_path: Path):
+    return override_settings(
+        PUBLICATION_ARTIFACT_ROOT=root,
+        PUBLICATION_ARTIFACT_TEMP_ROOT=root / ".tmp",
+        PUBLICATION_ARTIFACT_MAX_BYTES=1024,
+        PUBLICATION_KEK_CREDENTIAL_PATH=tmp_path / "kek",
+        PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=tmp_path / "signing",
+        PUBLICATION_KEK_VERSION="1",
+    )
+
+
+def test_promotion_uses_atomic_replace_on_the_common_tree(tmp_path, monkeypatch):
+    monkeypatch.setattr(artifacts, "_set_final_artifact_permissions", lambda path: None)
+    (tmp_path / "kek").write_bytes(b"k" * 32)
+    (tmp_path / "signing").write_bytes(b"s" * 32)
+    replaced = []
+    real_replace = os.replace
+
+    def spy_replace(src, dst):
+        replaced.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(artifacts.os, "replace", spy_replace)
+    root = tmp_path / "publications"
+    with _artifact_settings(root, tmp_path):
+        build_encrypted_artifact(publication=_publication(), plaintext=b"payload")
+
+    assert replaced == [(root / ".tmp" / "artifact-id" / "artifact.bin", root / "artifact-id.bin")]
+    assert (root / "artifact-id.bin").exists()
+
+
+def test_promotion_does_not_fall_back_to_copy_on_exdev(tmp_path, monkeypatch):
+    monkeypatch.setattr(artifacts, "_set_final_artifact_permissions", lambda path: None)
+    (tmp_path / "kek").write_bytes(b"k" * 32)
+    (tmp_path / "signing").write_bytes(b"s" * 32)
+
+    def failing_replace(src, dst):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(artifacts.os, "replace", failing_replace)
+    root = tmp_path / "publications"
+    with _artifact_settings(root, tmp_path):
+        with pytest.raises(ArtifactError, match="promote"):
+            build_encrypted_artifact(publication=_publication(), plaintext=b"payload")
+
+
+def test_promotion_failure_logs_oserror_context_without_secrets(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(artifacts, "_set_final_artifact_permissions", lambda path: None)
+    (tmp_path / "kek").write_bytes(b"k" * 32)
+    (tmp_path / "signing").write_bytes(b"s" * 32)
+
+    def failing_replace(src, dst):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(artifacts.os, "replace", failing_replace)
+    root = tmp_path / "publications"
+    with _artifact_settings(root, tmp_path):
+        with pytest.raises(ArtifactError):
+            with caplog.at_level(logging.ERROR, logger="apps.publications.artifacts"):
+                build_encrypted_artifact(
+                    publication=_publication(), plaintext=b"super-secret-plaintext"
+                )
+
+    assert "Invalid cross-device link" in caplog.text
+    assert "super-secret-plaintext" not in caplog.text
+
+
+def test_temp_directory_is_created_owner_private(tmp_path, monkeypatch):
+    monkeypatch.setattr(artifacts, "_set_final_artifact_permissions", lambda path: None)
+    (tmp_path / "kek").write_bytes(b"k" * 32)
+    (tmp_path / "signing").write_bytes(b"s" * 32)
+    requested = []
+    real_mkdir = os.mkdir
+
+    def spy_mkdir(path, mode=0o777, *args, **kwargs):
+        requested.append((Path(path), mode))
+        real_mkdir(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", spy_mkdir)
+    root = tmp_path / "publications"
+    with _artifact_settings(root, tmp_path):
+        build_encrypted_artifact(publication=_publication(), plaintext=b"payload")
+
+    temp_dir = root / ".tmp" / "artifact-id"
+    modes = [mode for path, mode in requested if path == temp_dir]
+    assert modes
+    assert all(mode == 0o700 for mode in modes)

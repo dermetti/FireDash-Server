@@ -1,0 +1,23 @@
+{% if state == "waiting" %}
+<div id="adoption-status" hx-get="{{ status_url }}" hx-trigger="every 4s" hx-swap="outerHTML">
+  <div class="alert alert-info mb-0">
+    Waiting for tablet&hellip; <span class="text-body-secondary">The invitation expires at {{ invitation.expires_at|date:"H:i" }}.</span>
+  </div>
+</div>
+{% elif state == "completed" %}
+<div id="adoption-status">
+  <div class="alert alert-success mb-3">
+    {% if mode == "adoption" %}Tablet adopted successfully.{% else %}Tablet reactivated successfully.{% endif %}
+  </div>
+  <a href="{% url 'tablet-detail' department.id tablet.id %}" class="btn btn-primary">View tablet</a>
+</div>
+{% elif state == "expired" %}
+<div id="adoption-status">
+  <div class="alert alert-warning mb-3">Invitation expired.</div>
+  <a href="{% if mode == 'adoption' %}{% url 'tablet-adopt' department.id tablet.id %}{% else %}{% url 'tablet-reactivate' department.id tablet.id %}{% endif %}" class="btn btn-outline-primary">Generate a new invitation</a>
+</div>
+{% else %}
+<div id="adoption-status">
+  <div class="alert alert-warning mb-0">Invitation is no longer available.</div>
+</div>
+{% endif %}

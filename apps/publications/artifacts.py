@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -22,6 +23,8 @@ except ImportError:  # pragma: no cover - unavailable on Windows development hos
     _grp = cast(Any, None)
 
 grp: Any = _grp
+
+logger = logging.getLogger(__name__)
 
 
 class ArtifactError(ValueError):
@@ -105,8 +108,8 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
     relative_path = Path(f"{publication.id}.bin")
     final_path = settings.PUBLICATION_ARTIFACT_ROOT / relative_path
     temp_dir = settings.PUBLICATION_ARTIFACT_TEMP_ROOT / str(publication.id)
-    temp_dir.mkdir(parents=True, exist_ok=True)
     try:
+        temp_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         temp_path = temp_dir / "artifact.bin"
         with temp_path.open("xb") as artifact_file:
             artifact_file.write(ciphertext)
@@ -116,6 +119,13 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
         os.replace(temp_path, final_path)
         _set_final_artifact_permissions(final_path)
     except OSError as error:
+        # Log the underlying filesystem error (errno/strerror + paths) without any
+        # secret key material or plaintext so it is diagnosable from the worker journal.
+        logger.error(
+            "Publication artifact promotion failed for %s: %s",
+            publication.id,
+            error,
+        )
         raise ArtifactError("Could not promote publication artifact.") from error
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

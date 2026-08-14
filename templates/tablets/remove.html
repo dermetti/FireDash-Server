@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Remove tablet — {{ tablet.display_name|default:"Tablet" }}{% endblock %}
+{% block content %}
+<div class="row justify-content-center"><div class="col-md-6">
+  <h1>Remove tablet</h1>
+  <p class="text-body-secondary">Tablet: <strong>{{ tablet.display_name|default:"Unnamed tablet" }}</strong>
+    {% if tablet.asset_number %}<span class="text-body-secondary">({{ tablet.asset_number }})</span>{% endif %}</p>
+  <div class="alert alert-warning">This will revoke the active installation and revoke its data access.</div>
+  <div class="card"><div class="card-body">
+    <form method="post" action="{% url 'tablet-remove' department.id tablet.id %}">
+      {% csrf_token %}
+      {% include "tablets/_remove_fields.html" %}
+      <a href="{% url 'tablet-detail' department.id tablet.id %}" class="btn btn-outline-secondary">Cancel</a>
+      <button type="submit" class="btn btn-danger">Remove tablet</button>
+    </form>
+  </div></div>
+</div></div>
+{% endblock %}

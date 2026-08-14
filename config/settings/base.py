@@ -1,6 +1,7 @@
+import os
 from pathlib import Path
 
-from config.settings.env import get_env, get_list, get_typed_env
+from config.settings.env import EnvironmentConfigurationError, get_env, get_list, get_typed_env
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -140,7 +141,30 @@ PUBLICATION_ARTIFACT_ROOT = Path(
     get_env("PUBLICATION_ARTIFACT_ROOT", default="/var/lib/fire-backend/publications")
 )
 PUBLICATION_ARTIFACT_TEMP_ROOT = Path(
-    get_env("PUBLICATION_ARTIFACT_TEMP_ROOT", default="/var/lib/fire-backend/publications-tmp")
+    get_env("PUBLICATION_ARTIFACT_TEMP_ROOT", default="/var/lib/fire-backend/publications/.tmp")
+)
+
+
+def validate_publication_artifact_layout(*, root: Path, temp_root: Path) -> None:
+    """Fail fast if temp artifacts would live outside the atomic-promotion root.
+
+    Atomic `os.replace` promotion requires temp and final artifacts to share one
+    writable filesystem tree, so the temp root must be a strict descendant of the
+    artifact root. Normalization is lexical (no filesystem resolution) to keep the
+    check side-effect free during settings load.
+    """
+    normalized_root = Path(os.path.normpath(str(root)))
+    normalized_temp = Path(os.path.normpath(str(temp_root)))
+    if normalized_temp == normalized_root or not normalized_temp.is_relative_to(normalized_root):
+        raise EnvironmentConfigurationError(
+            "PUBLICATION_ARTIFACT_TEMP_ROOT must be a strict descendant of "
+            "PUBLICATION_ARTIFACT_ROOT so artifact promotion remains an atomic "
+            "same-mount rename."
+        )
+
+
+validate_publication_artifact_layout(
+    root=PUBLICATION_ARTIFACT_ROOT, temp_root=PUBLICATION_ARTIFACT_TEMP_ROOT
 )
 PUBLICATION_ARTIFACT_MAX_BYTES = get_typed_env(
     "PUBLICATION_ARTIFACT_MAX_BYTES", int, default=100 * 1024 * 1024

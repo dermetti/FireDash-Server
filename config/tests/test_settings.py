@@ -43,3 +43,39 @@ def test_production_settings_require_secret_key(monkeypatch: pytest.MonkeyPatch)
     with _pristine_settings_import():
         with pytest.raises(RuntimeError, match="DJANGO_SECRET_KEY"):
             runpy.run_module("config.settings.production", run_name="production_settings_test")
+
+
+def test_publication_temp_root_must_descend_from_artifact_root() -> None:
+    from pathlib import Path
+
+    from config.settings.base import validate_publication_artifact_layout
+
+    validate_publication_artifact_layout(
+        root=Path("/var/lib/fire-backend/publications"),
+        temp_root=Path("/var/lib/fire-backend/publications/.tmp"),
+    )
+    with pytest.raises(EnvironmentConfigurationError, match="PUBLICATION_ARTIFACT_TEMP_ROOT"):
+        validate_publication_artifact_layout(
+            root=Path("/var/lib/fire-backend/publications"),
+            temp_root=Path("/var/lib/fire-backend/publications-tmp"),
+        )
+    with pytest.raises(EnvironmentConfigurationError, match="PUBLICATION_ARTIFACT_TEMP_ROOT"):
+        validate_publication_artifact_layout(
+            root=Path("/var/lib/fire-backend/publications"),
+            temp_root=Path("/var/lib/fire-backend/publications"),
+        )
+
+
+def test_production_settings_reject_temp_root_outside_artifact_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "test")
+    monkeypatch.setenv("DJANGO_ALLOWED_HOSTS", "example.invalid")
+    monkeypatch.setenv("PUBLICATION_ARTIFACT_ROOT", "/var/lib/fire-backend/publications")
+    monkeypatch.setenv("PUBLICATION_ARTIFACT_TEMP_ROOT", "/var/lib/fire-backend/publications-tmp")
+
+    import runpy
+
+    with _pristine_settings_import():
+        with pytest.raises(RuntimeError, match="PUBLICATION_ARTIFACT_TEMP_ROOT"):
+            runpy.run_module("config.settings.production", run_name="publication_layout_test")

@@ -203,6 +203,7 @@ def assign_tablet_vehicle(
     *, tablet: Tablet, vehicle: Vehicle, actor, effective_at: datetime | None = None
 ) -> TabletVehicleAssignment:
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
+    require_department_admin(actor, tablet.department)
     _validate_tablet_vehicle(tablet, vehicle)
     current = (
         TabletVehicleAssignment.objects.select_for_update()
@@ -214,12 +215,22 @@ def assign_tablet_vehicle(
         current.ended_at = timezone.now()
         current.ended_by = actor
         current.save(update_fields=("valid_until", "ended_at", "ended_by"))
-    return TabletVehicleAssignment.objects.create(
+    assignment = TabletVehicleAssignment.objects.create(
         tablet=tablet,
         vehicle=vehicle,
         valid_from=_now(effective_at),
         created_by=actor,
     )
+    record_event(
+        action="tablet.vehicle_assigned",
+        actor_user=actor,
+        department=tablet.department,
+        station=vehicle.station,
+        target_type="tablet_vehicle_assignment",
+        target_uuid=assignment.id,
+        metadata={"tablet_id": str(tablet.id), "vehicle_id": str(vehicle.id)},
+    )
+    return assignment
 
 
 def ensure_current_home(person: Person) -> None:

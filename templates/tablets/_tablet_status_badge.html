@@ -1,0 +1,7 @@
+{% if status == "ACTIVE" %}<span class="badge text-bg-success">Active</span>
+{% elif status == "PENDING" %}<span class="badge text-bg-warning">Pending</span>
+{% elif status == "STALE" %}<span class="badge text-bg-danger">Stale</span>
+{% elif status == "REMOVED" %}<span class="badge text-bg-secondary">Removed</span>
+{% elif status == "LOST" %}<span class="badge text-bg-danger">Lost</span>
+{% elif status == "RETIRED" %}<span class="badge text-bg-secondary">Retired</span>
+{% else %}<span class="badge text-bg-secondary">{{ status }}</span>{% endif %}

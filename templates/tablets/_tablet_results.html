@@ -1,0 +1,86 @@
+<p class="text-body-secondary small mb-2">Showing {{ tablets|length }} of {{ total_count }} tablet{{ total_count|pluralize }}.</p>
+{% if tablets %}
+  <table class="table table-hover align-middle mb-0">
+    <thead>
+      <tr>
+        <th scope="col">Tablet</th>
+        <th scope="col">Status</th>
+        <th scope="col" class="d-none d-md-table-cell">Vehicle</th>
+        <th scope="col" class="d-none d-lg-table-cell">Station</th>
+        <th scope="col" class="d-none d-md-table-cell">Last seen</th>
+        <th scope="col" class="text-end">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tablet in tablets %}
+      <tr>
+        <td>
+          <a href="{% url 'tablet-detail' department.id tablet.id %}" class="text-decoration-none">{{ tablet.display_name|default:"Unnamed tablet" }}</a>
+          {% if tablet.asset_number %}<div class="text-body-secondary small">{{ tablet.asset_number }}</div>{% endif %}
+        </td>
+        <td>{% include "tablets/_tablet_status_badge.html" with status=tablet.status %}</td>
+        <td class="d-none d-md-table-cell">
+          {% for assignment in tablet.current_assignment %}
+            {{ assignment.vehicle.display_name }}
+          {% empty %}—{% endfor %}
+        </td>
+        <td class="d-none d-lg-table-cell">
+          {% for assignment in tablet.current_assignment %}
+            {{ assignment.vehicle.station.name }}
+          {% empty %}—{% endfor %}
+        </td>
+        <td class="d-none d-md-table-cell">
+          {% if tablet.last_seen %}{{ tablet.last_seen|timesince }} ago{% else %}—{% endif %}
+        </td>
+        <td class="text-end">
+          <div class="dropdown">
+            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
+                    data-bs-toggle="dropdown" aria-expanded="false">Actions</button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><a class="dropdown-item" href="{% url 'tablet-detail' department.id tablet.id %}">View details</a></li>
+              {% if tablet.status == "PENDING" %}
+                <li><a class="dropdown-item" href="{% url 'tablet-assign' department.id tablet.id %}"
+                       hx-get="{% url 'tablet-assign' department.id tablet.id %}"
+                       hx-target="#tablet-action-modal-container">Assign vehicle</a></li>
+                {% if tablet.active and tablet.has_open_vehicle %}
+                <li><a class="dropdown-item" href="{% url 'tablet-adopt' department.id tablet.id %}"
+                       hx-get="{% url 'tablet-adopt' department.id tablet.id %}"
+                       hx-target="#tablet-action-modal-container">Start adoption</a></li>
+                {% endif %}
+              {% elif tablet.status == "STALE" %}
+                <li><a class="dropdown-item" href="{% url 'tablet-reactivate' department.id tablet.id %}"
+                       hx-get="{% url 'tablet-reactivate' department.id tablet.id %}"
+                       hx-target="#tablet-action-modal-container">Reactivate</a></li>
+                <li><a class="dropdown-item" href="{% url 'tablet-assign' department.id tablet.id %}"
+                       hx-get="{% url 'tablet-assign' department.id tablet.id %}"
+                       hx-target="#tablet-action-modal-container">Change assignment</a></li>
+              {% elif tablet.status == "ACTIVE" %}
+                <li><a class="dropdown-item" href="{% url 'tablet-assign' department.id tablet.id %}"
+                       hx-get="{% url 'tablet-assign' department.id tablet.id %}"
+                       hx-target="#tablet-action-modal-container">Change assignment</a></li>
+              {% endif %}
+              {% if tablet.status not in "REMOVED LOST RETIRED" %}
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item text-danger" href="{% url 'tablet-remove' department.id tablet.id %}"
+                       hx-get="{% url 'tablet-remove' department.id tablet.id %}"
+                       hx-target="#tablet-action-modal-container">Remove tablet</a></li>
+              {% endif %}
+            </ul>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="border rounded p-4 text-center text-body-secondary">
+    {% if total_count %}
+      <p class="mb-2">No tablets match these filters.</p>
+      <a href="{% url 'tablet-list' department.id %}" class="btn btn-outline-secondary btn-sm">Reset filters</a>
+    {% else %}
+      <p class="mb-2">No tablets registered.</p>
+      <a href="{% url 'tablet-create' department.id %}" class="btn btn-primary btn-sm"
+         hx-get="{% url 'tablet-create' department.id %}" hx-target="#tablet-action-modal-container">Register tablet</a>
+    {% endif %}
+  </div>
+{% endif %}
