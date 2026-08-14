@@ -25,7 +25,13 @@ from apps.publications.manifests import (
     request_manifest,
 )
 from apps.tablets.models import AdoptionRequest, AppInstallation
-from apps.tablets.services import TabletError, check_in, complete_adoption, create_adoption_request
+from apps.tablets.services import (
+    TabletError,
+    canonical_protocol_datetime,
+    check_in,
+    complete_adoption,
+    create_adoption_request,
+)
 
 
 @dataclass(frozen=True)
@@ -189,7 +195,7 @@ class AdoptionPreviewView(APIView):
                 "encrypted_challenge": base64.b64encode(challenge.encrypted_challenge).decode(
                     "ascii"
                 ),
-                "expires_at": challenge.request.expires_at,
+                "expires_at": canonical_protocol_datetime(challenge.request.expires_at),
                 "tablet_id": str(invitation.tablet_id),
                 "hpke_ciphersuite": challenge.request.hpke_ciphersuite,
                 "hpke_public_key_fingerprint": challenge.request.hpke_public_key_fingerprint,
@@ -220,7 +226,7 @@ class ReactivationPreviewView(AdoptionPreviewView):
                 "encrypted_challenge": base64.b64encode(challenge.encrypted_challenge).decode(
                     "ascii"
                 ),
-                "expires_at": challenge.request.expires_at,
+                "expires_at": canonical_protocol_datetime(challenge.request.expires_at),
                 "tablet_id": str(invitation.app_installation.tablet_id),
                 "hpke_ciphersuite": challenge.request.hpke_ciphersuite,
                 "hpke_public_key_fingerprint": challenge.request.hpke_public_key_fingerprint,
@@ -434,5 +440,5 @@ class DownloadView(InstallationAPIView):
         response = HttpResponse(content_type="application/octet-stream")
         response["ETag"] = etag
         response["Accept-Ranges"] = "bytes"
-        response["X-Accel-Redirect"] = f"/internal-protected-datasets/{publication.id}.bin"
+        response["X-Accel-Redirect"] = f"/internal-protected-datasets/{publication.artifact_path}"
         return response

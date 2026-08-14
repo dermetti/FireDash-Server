@@ -5,7 +5,7 @@ import hmac
 import json
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from django.conf import settings
@@ -41,6 +41,19 @@ class TabletError(ValueError):
     pass
 
 
+def canonical_protocol_datetime(value: datetime) -> str:
+    """Serialize an aware datetime in the canonical protocol UTC form.
+
+    Adoption/reactivation ``expires_at`` is bound into the HPKE ``info`` and
+    returned on the wire, so both must use the exact same string. DRF already
+    renders UTC datetimes with a ``Z`` suffix, so the canonical form is UTC with
+    ``Z`` (never ``+00:00``).
+    """
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("Protocol datetimes must be timezone-aware.")
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
 @dataclass(frozen=True)
 class AdoptionChallengeContext:
     adoption_request_id: UUID
@@ -64,7 +77,7 @@ def _canonical_context(context: AdoptionChallengeContext) -> str:
     return json.dumps(
         {
             "adoption_request_id": str(context.adoption_request_id),
-            "expires_at": context.expires_at.isoformat(),
+            "expires_at": canonical_protocol_datetime(context.expires_at),
             "hpke_ciphersuite": HPKE_CIPHERSUITE,
             "hpke_public_key_fingerprint": context.public_key_fingerprint,
             "installation_uuid": str(context.installation_uuid),

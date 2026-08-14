@@ -21,7 +21,7 @@ The server generates OpenAPI 3.1.0 (`FireDash Provisioning API`, version `1.0.0`
 | `GET` | `/api/v1/tablet/manifest` | Installation Bearer credential | `200`, `202`, or `304` |
 | `GET` | `/api/v1/tablet/datasets/{publication_id}/download` | Installation Bearer credential | `200` or `304` |
 
-Use HTTPS in deployed clients. JSON is the intended request format; the generated OpenAPI also advertises form and multipart request bodies for the two serializer-backed request types. Responses are JSON unless stated otherwise. Datetimes are server-generated ISO 8601 strings with an offset, for example `2026-08-09T12:34:56.789012+00:00`. UUID values are canonical UUID strings.
+Use HTTPS in deployed clients. JSON is the intended request format; the generated OpenAPI also advertises form and multipart request bodies for the two serializer-backed request types. Responses are JSON unless stated otherwise. Datetimes are server-generated ISO 8601 strings, for example `2026-08-09T12:34:56.789012Z`. UUID values are canonical UUID strings.
 
 ### Endpoint Contract Table
 
@@ -139,7 +139,7 @@ Successful response (`201`):
 {
   "adoption_request_id": "d052c99d-f30d-4cd7-9dc0-25bd0b7294b1",
   "encrypted_challenge": "BASE64_OF_65_BYTE_HPKE_ENC_CONCATENATED_WITH_CIPHERTEXT",
-  "expires_at": "2026-08-09T12:39:56.789012+00:00",
+  "expires_at": "2026-08-09T12:39:56.789012Z",
   "tablet_id": "10614df6-b7cd-4d9c-ae0b-980a096fad97",
   "hpke_ciphersuite": "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM",
   "hpke_public_key_fingerprint": "<lowercase-sha256-of-65-public-key-bytes>",
@@ -150,10 +150,12 @@ Successful response (`201`):
 
 `encrypted_challenge` is Base64 of `enc || ciphertext`, with no length prefix. For this P-256 KEM, `enc` is the first 65 bytes; `ciphertext` is the remaining bytes. Its plaintext is a random 32-byte nonce. The challenge expires five minutes after preview creation.
 
+`expires_at` uses the canonical UTC `Z` representation and is bound byte-for-byte into the HPKE `info`: the exact string returned in the preview response is the exact string used in the canonical context below. Do not re-serialize the timestamp before reconstructing the context.
+
 Decrypt it with RFC 9180 HPKE using the retained P-256 private key and the exact canonical `info` below. Do not use an empty `info` value.
 
 ```json
-{"adoption_request_id":"d052c99d-f30d-4cd7-9dc0-25bd0b7294b1","expires_at":"2026-08-09T12:39:56.789012+00:00","hpke_ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM","hpke_public_key_fingerprint":"<lowercase-sha256-of-65-public-key-bytes>","installation_uuid":"70d3e8aa-d9cc-44fd-9c20-85c0b7f57d87","mode":"adoption","protocol":"tablet-adoption-v1","tablet_id":"10614df6-b7cd-4d9c-ae0b-980a096fad97"}
+{"adoption_request_id":"d052c99d-f30d-4cd7-9dc0-25bd0b7294b1","expires_at":"2026-08-09T12:39:56.789012Z","hpke_ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM","hpke_public_key_fingerprint":"<lowercase-sha256-of-65-public-key-bytes>","installation_uuid":"70d3e8aa-d9cc-44fd-9c20-85c0b7f57d87","mode":"adoption","protocol":"tablet-adoption-v1","tablet_id":"10614df6-b7cd-4d9c-ae0b-980a096fad97"}
 ```
 
 Construct this ASCII JSON with lexicographically sorted keys and `,`/`:` separators using the preview response plus the submitted `installation_uuid`. `mode` is exactly `adoption` for this endpoint and `reactivation` for the reactivation preview endpoint; it is HPKE-bound, so a challenge cannot cross those flows. Compute `challenge_response = HMAC-SHA-256(key: nonce, message: contextInfoBytes)`. This is 32 raw bytes, then standard Base64 for JSON.

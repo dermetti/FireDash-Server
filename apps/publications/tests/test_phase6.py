@@ -174,6 +174,9 @@ def test_mark_dirty_advances_revision_preserves_first_dirty_time_and_coalesces_j
 def test_claim_finalize_stale_job_obsoletes_build_and_queues_current_revision(publication_context):
     admin, _, department, _, _ = publication_context
     scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
+    PublicationJob.objects.filter(department=department).update(
+        not_before=timezone.now() - timedelta(minutes=1)
+    )
     job = claim_next_job()
 
     assert job is not None
@@ -206,6 +209,9 @@ def test_claim_finalize_stale_job_obsoletes_build_and_queues_current_revision(pu
 def test_finalize_current_claim_marks_publication_ready_and_clears_dirty_scope(publication_context):
     admin, _, department, _, _ = publication_context
     scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
+    PublicationJob.objects.filter(department=department).update(
+        not_before=timezone.now() - timedelta(minutes=1)
+    )
     job = claim_next_job()
 
     assert job is not None
@@ -233,6 +239,9 @@ def test_finalize_current_claim_marks_publication_ready_and_clears_dirty_scope(p
 def test_recover_stale_job_requeues_then_exhausts_attempt_limit(publication_context):
     admin, _, department, _, _ = publication_context
     mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
+    PublicationJob.objects.filter(department=department).update(
+        not_before=timezone.now() - timedelta(minutes=1)
+    )
     job = claim_next_job()
     assert job is not None
     assert job.build_publication_id is not None
@@ -413,3 +422,31 @@ def test_department_feature_gate_is_audited(publication_context):
     ).exists()
     with pytest.raises(PublicationError, match="has not enabled"):
         mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_publication_clean_rejects_flat_artifact_path(publication_context):
+    admin, _, department, _, _ = publication_context
+    scope = DatasetScopeState.objects.create(
+        department=department, dataset_type_code="department_hydrants"
+    )
+    publication = DatasetPublication(
+        id=uuid.uuid4(),
+        department=department,
+        dataset_type_code="department_hydrants",
+        scope_state=scope,
+        version_number=1,
+        schema_version=1,
+        source_revision=1,
+        status=DatasetPublication.Status.READY_FOR_REVIEW,
+        artifact_ready=True,
+        artifact_status=DatasetPublication.ArtifactStatus.READY,
+        **artifact_metadata(department_id=department.id, publication_id=uuid.uuid4()),
+        created_by=admin,
+    )
+    publication.artifact_path = f"{uuid.uuid4()}.bin"
+
+    with pytest.raises(ValidationError) as error:
+        publication.full_clean()
+
+    assert "artifact_path" in error.value.message_dict

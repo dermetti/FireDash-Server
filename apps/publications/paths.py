@@ -1,0 +1,22 @@
+"""Canonical publication artifact path helpers.
+
+The final artifact layout is enforced by a PostgreSQL closeout trigger and must
+be the single source of truth here so build, model validation, serving, and
+tests never drift apart again.
+
+Layout (forward-slash, database/API form):
+
+    <department_id>/<publication_id>/artifact.bin
+
+The on-disk file lives under ``PUBLICATION_ARTIFACT_ROOT`` using this same
+relative path.
+"""
+
+from __future__ import annotations
+
+ARTIFACT_FILENAME = "artifact.bin"
+
+
+def publication_artifact_relative_path(*, department_id: object, publication_id: object) -> str:
+    """Return the canonical forward-slash relative artifact path for a publication."""
+    return f"{department_id}/{publication_id}/{ARTIFACT_FILENAME}"

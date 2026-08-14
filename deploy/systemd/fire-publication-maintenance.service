@@ -1,0 +1,29 @@
+[Unit]
+Description=FireDash publication maintenance (orphan artifact cleanup)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=fire_publication
+Group=fire_publication
+WorkingDirectory=/srv/firedash/current
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+EnvironmentFile=/etc/fire-backend/fire-backend.env
+ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_orphan_artifacts
+TimeoutStartSec=120s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/var/lib/fire-backend/fire-plans
+ReadWritePaths=/var/lib/fire-backend/publications

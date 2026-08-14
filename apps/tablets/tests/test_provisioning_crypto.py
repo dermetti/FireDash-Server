@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import uuid
 from datetime import UTC, datetime, timedelta
+from datetime import timezone as dt_timezone
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -12,6 +13,7 @@ from apps.tablets.models import AppInstallation
 from apps.tablets.services import (
     ADOPTION_PROTOCOL,
     AdoptionChallengeContext,
+    canonical_protocol_datetime,
     generate_credential,
     verify_credential,
 )
@@ -125,7 +127,7 @@ def test_adoption_context_reconstructed_from_preview_values_opens_challenge():
     )
     preview = {
         "adoption_request_id": str(context.adoption_request_id),
-        "expires_at": context.expires_at.isoformat(),
+        "expires_at": canonical_protocol_datetime(context.expires_at),
         "tablet_id": str(context.tablet_id),
         "hpke_ciphersuite": "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM",
         "hpke_public_key_fingerprint": context.public_key_fingerprint,
@@ -170,7 +172,7 @@ def test_adoption_context_has_a_frozen_mode_bound_canonical_encoding():
 
     assert context.info() == (
         b'{"adoption_request_id":"11111111-1111-1111-1111-111111111111",'
-        b'"expires_at":"2026-08-09T12:39:56.789012+00:00",'
+        b'"expires_at":"2026-08-09T12:39:56.789012Z",'
         b'"hpke_ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM",'
         b'"hpke_public_key_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         b'"installation_uuid":"22222222-2222-2222-2222-222222222222",'
@@ -189,3 +191,33 @@ def test_credential_verifier_is_constant_time_hash_comparison(settings):
 
     assert verify_credential(installation=installation, credential=credential)
     assert not verify_credential(installation=installation, credential=generate_credential())
+
+
+# --- canonical protocol datetime ---------------------------------------------
+
+
+def test_canonical_protocol_datetime_utc_input():
+    value = datetime(2026, 8, 14, 15, 0, 0, 123456, tzinfo=UTC)
+    assert canonical_protocol_datetime(value) == "2026-08-14T15:00:00.123456Z"
+
+
+def test_canonical_protocol_datetime_normalizes_non_utc_offset():
+    value = datetime(2026, 8, 14, 17, 0, 0, 123456, tzinfo=dt_timezone(timedelta(hours=2)))
+    assert canonical_protocol_datetime(value) == "2026-08-14T15:00:00.123456Z"
+
+
+def test_canonical_protocol_datetime_rejects_naive_datetime():
+    with pytest.raises(ValueError):
+        canonical_protocol_datetime(datetime(2026, 8, 14, 15, 0, 0, 123456))
+
+
+def test_canonical_protocol_datetime_is_deterministic_for_equivalent_instants():
+    utc_value = datetime(2026, 8, 14, 15, 0, 0, 123456, tzinfo=UTC)
+    offset_value = datetime(2026, 8, 14, 17, 0, 0, 123456, tzinfo=dt_timezone(timedelta(hours=2)))
+    assert canonical_protocol_datetime(utc_value) == canonical_protocol_datetime(offset_value)
+
+
+def test_canonical_protocol_datetime_never_uses_offset_suffix():
+    value = datetime(2026, 8, 14, 15, 0, 0, 123456, tzinfo=UTC)
+    assert canonical_protocol_datetime(value).endswith("Z")
+    assert "+00:00" not in canonical_protocol_datetime(value)

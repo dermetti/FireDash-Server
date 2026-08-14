@@ -1,0 +1,159 @@
+"""Deterministic publication operational state for the Publications UI.
+
+This is the query/view-model layer that derives one understandable state per
+dataset scope so templates never infer business state from several models.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from django.db.models import OuterRef, Subquery
+from django.utils import timezone
+
+from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
+from apps.publications.registry import get_dataset_definition
+
+# Operational state keys.
+CURRENT = "CURRENT"
+NOT_PUBLISHED = "NOT_PUBLISHED"
+UPDATE_QUEUED = "UPDATE_QUEUED"
+QUEUED = "QUEUED"
+BUILDING = "BUILDING"
+READY_TO_PUBLISH = "READY_TO_PUBLISH"
+NEEDS_REBUILD = "NEEDS_REBUILD"
+FAILED = "FAILED"
+
+STATE_LABELS = {
+    CURRENT: "Current",
+    NOT_PUBLISHED: "Not published",
+    UPDATE_QUEUED: "Update queued",
+    QUEUED: "Queued",
+    BUILDING: "Building",
+    READY_TO_PUBLISH: "Ready to publish",
+    NEEDS_REBUILD: "Update required",
+    FAILED: "Failed",
+}
+
+STATE_BADGE = {
+    CURRENT: "success",
+    NOT_PUBLISHED: "secondary",
+    UPDATE_QUEUED: "info",
+    QUEUED: "info",
+    BUILDING: "info",
+    READY_TO_PUBLISH: "warning",
+    NEEDS_REBUILD: "warning",
+    FAILED: "danger",
+}
+
+
+def compute_scope_state(
+    *,
+    dirty: bool,
+    latest_status: str | None,
+    latest_built_status: str | None,
+    current_published: bool,
+    active_job_status: str | None,
+    active_job_not_before,
+    now,
+) -> str:
+    """Derive the single operational state for one scope from its inputs."""
+    if active_job_status == PublicationJob.Status.RUNNING:
+        return BUILDING
+    if active_job_status == PublicationJob.Status.PENDING:
+        if active_job_not_before is not None and active_job_not_before > now:
+            return UPDATE_QUEUED
+        return QUEUED
+    if latest_status == DatasetPublication.Status.FAILED:
+        return FAILED
+    if latest_built_status == DatasetPublication.Status.READY_FOR_REVIEW:
+        return READY_TO_PUBLISH
+    if dirty:
+        return NEEDS_REBUILD
+    if current_published:
+        return CURRENT
+    return NOT_PUBLISHED
+
+
+def scope_operational_states(department, *, now=None) -> list[dict[str, Any]]:
+    """Return one operational-state view model per dataset scope (batched)."""
+    now = now or timezone.now()
+    latest = DatasetPublication.objects.filter(scope_state=OuterRef("pk")).order_by(
+        "-version_number"
+    )
+    scopes = (
+        DatasetScopeState.objects.filter(department=department)
+        .select_related("station", "latest_built_publication", "current_published_publication")
+        .annotate(
+            latest_status=Subquery(latest.values("status")[:1]),
+            latest_publication_id=Subquery(latest.values("id")[:1]),
+            latest_build_error=Subquery(latest.values("build_error")[:1]),
+            latest_built_at=Subquery(latest.values("created_at")[:1]),
+        )
+        .order_by("dataset_type_code", "station__name")
+    )
+
+    active_jobs = {
+        job.scope_state_id: job
+        for job in PublicationJob.objects.filter(
+            department=department,
+            status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+        ).select_related("build_publication")
+    }
+
+    rows: list[dict[str, Any]] = []
+    for scope in scopes:
+        definition = get_dataset_definition(scope.dataset_type_code)
+        job = active_jobs.get(scope.id)
+        latest_built = scope.latest_built_publication
+        current_published = scope.current_published_publication
+        state = compute_scope_state(
+            dirty=scope.dirty_since is not None,
+            latest_status=scope.latest_status,
+            latest_built_status=latest_built.status if latest_built else None,
+            current_published=current_published is not None,
+            active_job_status=job.status if job else None,
+            active_job_not_before=job.not_before if job else None,
+            now=now,
+        )
+        rows.append(
+            {
+                "scope_id": scope.id,
+                "dataset_type_code": scope.dataset_type_code,
+                "dataset_name": definition.display_name,
+                "scope_label": scope.station.name if scope.station else "Department",
+                "state": state,
+                "state_label": STATE_LABELS[state],
+                "state_badge": STATE_BADGE[state],
+                "source_revision": scope.source_revision,
+                "distributed_version": (
+                    current_published.version_number if current_published else None
+                ),
+                "latest_built_version": latest_built.version_number if latest_built else None,
+                "latest_built_status": latest_built.status if latest_built else None,
+                "latest_built_publication_id": latest_built.id if latest_built else None,
+                "latest_publication_id": scope.latest_publication_id,
+                "current_published_publication_id": (
+                    current_published.id if current_published else None
+                ),
+                "build_error": scope.latest_build_error if state == FAILED else None,
+                "last_activity": scope.latest_built_at or scope.updated_at,
+                "active_job_status": job.status if job else None,
+                "active_job_trigger_type": job.trigger_type if job else None,
+                "active_job_not_before": job.not_before if job else None,
+                "active_job_publication_id": job.build_publication_id if job else None,
+                "active_job_publication_version": (
+                    job.build_publication.version_number if job and job.build_publication else None
+                ),
+            }
+        )
+    return rows
+
+
+def operational_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Aggregate scope rows into the Status & Context card metrics."""
+    summary = {key: 0 for key in STATE_LABELS}
+    summary["total"] = len(rows)
+    for row in rows:
+        summary[row["state"]] += 1
+    return summary

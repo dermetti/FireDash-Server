@@ -204,7 +204,7 @@ fi
 
 # -------- systemd --------
 log "=== systemd ==="
-for unit in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-worker.timer fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-backup.service fire-backup.timer fire-restore.service; do
+for unit in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-worker.timer fire-publication-maintenance.service fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-backup.service fire-backup.timer fire-restore.service; do
     [[ -f /etc/systemd/system/$unit ]] && ok "unit $unit installed" || fail "unit $unit missing"
 done
 [[ $(systemctl is-enabled fire-backend.socket 2>/dev/null) == enabled ]] && ok "fire-backend.socket enabled" || fail "fire-backend.socket not enabled"
@@ -229,6 +229,11 @@ if systemctl cat fire-publication-worker.service 2>/dev/null | grep -q 'publicat
     ok "publication worker loads KEK + private signing key"
 else
     fail "publication worker missing KEK/private signing key credentials"
+fi
+if systemctl cat fire-publication-maintenance.service 2>/dev/null | grep -Eq 'publication-kek|publication-signing-key:'; then
+    fail "maintenance service must not load KEK/private signing key"
+else
+    ok "maintenance service does not load KEK/private signing key"
 fi
 
 # -------- filesystem / credentials --------

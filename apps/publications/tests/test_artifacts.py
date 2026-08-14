@@ -32,6 +32,11 @@ def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded, monkeypatch):
         "_set_final_artifact_permissions",
         lambda path: None,
     )
+    monkeypatch.setattr(
+        artifacts,
+        "_set_final_directory_permissions",
+        lambda path: None,
+    )
     kek, signing_seed = b"k" * 32, b"s" * 32
     kek_path, signing_path = tmp_path / "kek", tmp_path / "signing"
     kek_path.write_bytes(base64.b64encode(kek) if encoded else kek)
@@ -94,6 +99,33 @@ def test_final_artifact_is_group_readable_by_nginx_reader(tmp_path, monkeypatch)
     assert chmod_calls == [(artifact, 0o640)]
 
 
+def test_publication_artifact_relative_path_is_canonical_forward_slash():
+    from apps.publications.paths import publication_artifact_relative_path
+
+    path = publication_artifact_relative_path(department_id="dept-id", publication_id="pub-id")
+    assert path == "dept-id/pub-id/artifact.bin"
+    assert "\\" not in path
+
+
+def test_final_directory_permissions_apply_group_and_mode(tmp_path, monkeypatch):
+    directory = tmp_path / "dept" / "pub"
+    directory.mkdir(parents=True)
+    chown_calls, chmod_calls = [], []
+
+    monkeypatch.setattr(
+        artifacts, "grp", SimpleNamespace(getgrnam=lambda _: SimpleNamespace(gr_gid=4321))
+    )
+    monkeypatch.setattr(
+        artifacts.os, "chown", lambda *args: chown_calls.append(args), raising=False
+    )
+    monkeypatch.setattr(artifacts.os, "chmod", lambda *args: chmod_calls.append(args))
+
+    artifacts._set_final_directory_permissions(directory)
+
+    assert chown_calls == [(directory, -1, 4321)]
+    assert chmod_calls == [(directory, 0o750)]
+
+
 def test_artifact_signature_contract_fixture_is_canonical_and_verifiable():
     fixture_path = Path(__file__).parent / "fixtures" / "artifact_signature_contract.json"
     fixture = json.loads(fixture_path.read_text(encoding="ascii"))
@@ -123,6 +155,11 @@ def test_artifacts_use_distinct_cek_and_nonce(tmp_path, monkeypatch):
     monkeypatch.setattr(
         artifacts,
         "_set_final_artifact_permissions",
+        lambda path: None,
+    )
+    monkeypatch.setattr(
+        artifacts,
+        "_set_final_directory_permissions",
         lambda path: None,
     )
     (tmp_path / "kek").write_bytes(b"k" * 32)
@@ -242,8 +279,13 @@ def test_promotion_uses_atomic_replace_on_the_common_tree(tmp_path, monkeypatch)
     with _artifact_settings(root, tmp_path):
         build_encrypted_artifact(publication=_publication(), plaintext=b"payload")
 
-    assert replaced == [(root / ".tmp" / "artifact-id" / "artifact.bin", root / "artifact-id.bin")]
-    assert (root / "artifact-id.bin").exists()
+    assert replaced == [
+        (
+            root / ".tmp" / "artifact-id" / "artifact.bin",
+            root / "department-id" / "artifact-id" / "artifact.bin",
+        )
+    ]
+    assert (root / "department-id" / "artifact-id" / "artifact.bin").exists()
 
 
 def test_promotion_does_not_fall_back_to_copy_on_exdev(tmp_path, monkeypatch):

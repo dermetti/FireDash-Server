@@ -17,6 +17,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.conf import settings
 from django.utils import timezone
 
+from apps.publications.paths import publication_artifact_relative_path
+
 try:
     import grp as _grp
 except ImportError:  # pragma: no cover - unavailable on Windows development hosts.
@@ -48,17 +50,36 @@ def _credential(path: Path, label: str) -> bytes:
         return value
 
 
-def _set_final_artifact_permissions(path: Path) -> None:
+def _fire_nginx_gid() -> int | None:
     if grp is None:
-        return
+        return None
     try:
-        group_id = grp.getgrnam("fire_nginx").gr_gid
+        return cast(int, grp.getgrnam("fire_nginx").gr_gid)
     except KeyError as error:
         raise ArtifactError("The fire_nginx group is unavailable.") from error
-    if not hasattr(os, "chown"):
+
+
+def _set_final_artifact_permissions(path: Path) -> None:
+    group_id = _fire_nginx_gid()
+    if group_id is None or not hasattr(os, "chown"):
         return
     os.chown(path, -1, group_id)
     os.chmod(path, 0o640)
+
+
+def _set_final_directory_permissions(path: Path) -> None:
+    """Make a final nested directory traversable/readable by the serving group.
+
+    The worker runs with ``UMask=0077`` so ``mkdir(mode=0o750)`` still yields
+    ``0700``; the group must be re-applied and the mode set explicitly so Nginx
+    (group ``fire_nginx``) can traverse the directory to reach ``artifact.bin``.
+    """
+    group_id = _fire_nginx_gid()
+    if group_id is None or not hasattr(os, "chown"):
+        return
+    os.chown(path, -1, group_id)
+    # 0750 grants only group read/traverse for the serving group; no group write.
+    os.chmod(path, 0o750)  # nosec B103
 
 
 def _signature_payload(
@@ -104,8 +125,10 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
             publication=publication, wrapped_cek=wrapped_cek, nonce=nonce, ciphertext=ciphertext
         )
     )
-    # The public/internal URI exposes only this server-generated UUID filename.
-    relative_path = Path(f"{publication.id}.bin")
+    # The canonical final path is <department_id>/<publication_id>/artifact.bin.
+    relative_path = publication_artifact_relative_path(
+        department_id=publication.department_id, publication_id=publication.id
+    )
     final_path = settings.PUBLICATION_ARTIFACT_ROOT / relative_path
     temp_dir = settings.PUBLICATION_ARTIFACT_TEMP_ROOT / str(publication.id)
     try:
@@ -116,6 +139,8 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
             artifact_file.flush()
             os.fsync(artifact_file.fileno())
         final_path.parent.mkdir(parents=True, exist_ok=True)
+        _set_final_directory_permissions(final_path.parent)
+        _set_final_directory_permissions(final_path.parent.parent)
         os.replace(temp_path, final_path)
         _set_final_artifact_permissions(final_path)
     except OSError as error:
@@ -130,7 +155,7 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
     return {
-        "artifact_path": str(relative_path),
+        "artifact_path": relative_path,
         "artifact_size": len(ciphertext),
         "artifact_sha256": hashlib.sha256(ciphertext).hexdigest(),
         "artifact_nonce": nonce,
@@ -157,6 +182,12 @@ def remove_artifact_path(relative_path: object) -> None:
         except ValueError as error:
             raise ArtifactError("Artifact path must remain below the artifact root.") from error
         path.unlink(missing_ok=True)
+        # Best-effort housekeeping: remove the now-empty publication directory.
+        # rmdir only succeeds when empty, so this never deletes sibling artifacts.
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
 
 
 def cleanup_stale_artifacts() -> int:

@@ -6,6 +6,7 @@ from django.db import models
 from django.db.models import Q
 
 from apps.organizations.models import Department, Station
+from apps.publications.paths import publication_artifact_relative_path
 from apps.publications.registry import DatasetRegistryError, validate_dataset_scope
 
 MAX_CHANGE_SUMMARY_FIELDS = 20
@@ -191,6 +192,12 @@ class DatasetPublication(models.Model):
             or self.scope_state.dataset_type_code != self.dataset_type_code
         ):
             raise ValidationError({"scope_state": "Scope state must match the publication scope."})
+        if self.artifact_path and self.artifact_path != publication_artifact_relative_path(
+            department_id=self.department_id, publication_id=self.id
+        ):
+            raise ValidationError(
+                {"artifact_path": "Artifact path must be a generated publication path."}
+            )
         metadata_complete = all(
             (
                 self.artifact_path,
@@ -250,6 +257,8 @@ class PublicationJob(models.Model):
         related_name="requested_publication_jobs",
     )
     trigger_type = models.CharField(max_length=16, choices=TriggerType.choices)
+    not_before = models.DateTimeField(null=True, blank=True)
+    debounce_started_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)

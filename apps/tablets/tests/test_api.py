@@ -154,7 +154,7 @@ def test_manifest_pending_is_an_rfc9457_problem(api_context):
     assert response.json()["manifest_request_id"]
 
 
-def test_download_uses_only_server_generated_uuid_filename_and_etag(api_context, tmp_path):
+def test_download_uses_canonical_artifact_path_and_etag(api_context, tmp_path):
     client, installation, credential, publication = api_context
     signing_path = tmp_path / "signing"
     signing_path.write_bytes(b"s" * 32)
@@ -166,7 +166,9 @@ def test_download_uses_only_server_generated_uuid_filename_and_etag(api_context,
     )
 
     assert response.status_code == 200
-    assert response["X-Accel-Redirect"] == f"/internal-protected-datasets/{publication.id}.bin"
+    assert response["X-Accel-Redirect"] == (
+        f"/internal-protected-datasets/{publication.artifact_path}"
+    )
     assert response["Accept-Ranges"] == "bytes"
     assert response["ETag"] == '"' + publication.artifact_sha256 + '"'
 

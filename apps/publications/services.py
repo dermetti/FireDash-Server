@@ -1,7 +1,9 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Max
+from django.db.models import Max, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from apps.audit.services import record_event
@@ -138,18 +140,40 @@ def enqueue_publication_job(
     dataset_type_code: str,
     requested_by=None,
     trigger_type: str = PublicationJob.TriggerType.DATA_CHANGE,
+    debounce_started_at: datetime | None = None,
 ) -> PublicationJob | None:
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
     scope = _locked_scope(
         department=department, station=station, dataset_type_code=dataset_type_code
     )
-    if PublicationJob.objects.filter(
-        **_scope_filter(
-            department=department, station=station, dataset_type_code=dataset_type_code
-        ),
-        status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
-    ).exists():
-        return None
+    now = timezone.now()
+    active = (
+        PublicationJob.objects.select_for_update()
+        .filter(
+            **_scope_filter(
+                department=department, station=station, dataset_type_code=dataset_type_code
+            ),
+            status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+        )
+        .first()
+    )
+    if active is not None:
+        if active.status == PublicationJob.Status.RUNNING:
+            return None
+        # Coalesce an existing PENDING job to the latest source revision.
+        active.source_revision = scope.source_revision
+        if trigger_type == PublicationJob.TriggerType.USER_REQUEST:
+            # An explicit rebuild makes any pending work immediately eligible.
+            active.trigger_type = PublicationJob.TriggerType.USER_REQUEST
+            active.requested_by = requested_by
+            active.not_before = None
+        elif active.trigger_type == PublicationJob.TriggerType.DATA_CHANGE:
+            active.not_before = _data_change_not_before(
+                now=now, debounce_started_at=active.debounce_started_at
+            )
+        active.save(update_fields=("source_revision", "trigger_type", "requested_by", "not_before"))
+        return active
+
     job = PublicationJob(
         **_scope_filter(
             department=department, station=station, dataset_type_code=dataset_type_code
@@ -159,6 +183,14 @@ def enqueue_publication_job(
         requested_by=requested_by,
         trigger_type=trigger_type,
     )
+    if trigger_type == PublicationJob.TriggerType.DATA_CHANGE:
+        job.debounce_started_at = debounce_started_at or now
+        job.not_before = _data_change_not_before(
+            now=now, debounce_started_at=job.debounce_started_at
+        )
+    else:
+        job.debounce_started_at = None
+        job.not_before = None
     job.full_clean()
     try:
         job.save()
@@ -176,11 +208,21 @@ def enqueue_publication_job(
     return job
 
 
+def _data_change_not_before(*, now: datetime, debounce_started_at: datetime | None) -> datetime:
+    """Compute the trailing-debounce eligibility time for a DATA_CHANGE job."""
+    debounce = timedelta(seconds=settings.PUBLICATION_DATA_CHANGE_DEBOUNCE_SECONDS)
+    max_deferral = timedelta(seconds=settings.PUBLICATION_DATA_CHANGE_MAX_DEFERRAL_SECONDS)
+    window_start = debounce_started_at or now
+    return min(now + debounce, window_start + max_deferral)
+
+
 @transaction.atomic
 def claim_next_job() -> PublicationJob | None:
+    now = timezone.now()
     job = (
         PublicationJob.objects.select_for_update(skip_locked=True)
         .filter(status=PublicationJob.Status.PENDING)
+        .filter(Q(not_before__isnull=True) | Q(not_before__lte=now))
         .order_by("created_at")
         .first()
     )
@@ -265,6 +307,7 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             error_category="worker",
             error_message="Claim did not allocate a publication.",
         )
+    artifact: dict[str, object] | None = None
     try:
         definition = get_dataset_definition(job.dataset_type_code)
         _validate_scope(
@@ -286,9 +329,77 @@ def build_claimed_job(*, job_id) -> PublicationJob:
                 source_revision=job.source_revision,
             ),
         )
+        return finalize_publication_job(job_id=job.id, summary=summary, artifact=artifact)
     except (DatasetRegistryError, PublicationBuildError, PublicationError, ArtifactError) as error:
+        _compensate_artifact(artifact)
         return fail_publication_job(job_id=job.id, error_message=str(error))
-    return finalize_publication_job(job_id=job.id, summary=summary, artifact=artifact)
+    except ValidationError:
+        _compensate_artifact(artifact)
+        return fail_publication_job(
+            job_id=job.id,
+            error_message="Publication metadata is invalid.",
+            error_category="validation",
+        )
+    except IntegrityError as error:
+        # Only the publication closeout triggers (SQLSTATE P0001: the canonical
+        # artifact-path and artifact-metadata guards) are known, per-publication
+        # integrity failures. Those become FAILED with artifact compensation so
+        # later independent jobs still run. Any other IntegrityError (unique
+        # violation, check constraint, not-null, etc.) signals a broken
+        # application invariant or schema bug and must propagate to systemd.
+        if not _is_publication_guard_error(error):
+            raise
+        _compensate_artifact(artifact)
+        return fail_publication_job(
+            job_id=job.id,
+            error_message="Publication could not be finalized.",
+            error_category="finalization",
+        )
+
+
+def _is_publication_guard_error(error: IntegrityError) -> bool:
+    """Return True for the publication closeout trigger guards (SQLSTATE P0001)."""
+    cause = error.__cause__
+    return getattr(cause, "sqlstate", None) == "P0001"
+
+
+def _compensate_artifact(artifact: dict[str, object] | None) -> None:
+    """Remove a promoted artifact that could not be finalized (best effort)."""
+    if artifact is None:
+        return
+    try:
+        remove_artifact_path(artifact["artifact_path"])
+    except ArtifactError:
+        pass
+
+
+def _queue_follow_up_if_stale(*, job: PublicationJob) -> None:
+    """Queue a debounced DATA_CHANGE follow-up if the scope moved past this job.
+
+    When a RUNNING job leaves active state and the scope has since advanced to a
+    newer source revision, the newer revision must not be stranded without a
+    follow-up build. Reuse the scope's existing dirty-window start so the
+    follow-up honours the original trailing-debounce/maximum-deferral timing
+    rather than starting a fresh, independent window.
+    """
+    scope = _locked_scope(
+        department=job.department, station=job.station, dataset_type_code=job.dataset_type_code
+    )
+    if scope.source_revision <= job.source_revision:
+        return
+    department = job.department
+    station = job.station
+    dataset_type_code = job.dataset_type_code
+    debounce_started_at = scope.dirty_since
+    transaction.on_commit(
+        lambda: enqueue_publication_job(
+            department=department,
+            station=station,
+            dataset_type_code=dataset_type_code,
+            trigger_type=PublicationJob.TriggerType.DATA_CHANGE,
+            debounce_started_at=debounce_started_at,
+        )
+    )
 
 
 @transaction.atomic
@@ -416,6 +527,7 @@ def fail_publication_job(
         target_uuid=job.id,
         metadata={"dataset_type_code": job.dataset_type_code},
     )
+    _queue_follow_up_if_stale(job=job)
     return job
 
 
@@ -445,6 +557,7 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
             job.error_category = "retry_exhausted"
             job.error_message = "Publication build exceeded the maximum retry attempts."
             job.save(update_fields=("status", "completed_at", "error_category", "error_message"))
+            _queue_follow_up_if_stale(job=job)
         else:
             job.status = PublicationJob.Status.PENDING
             job.started_at = None
@@ -629,3 +742,78 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
         metadata={"dataset_type_code": publication.dataset_type_code},
     )
     return publication
+
+
+def _latest_publication_status_by_scope(department) -> dict[object, object]:
+    """Map each scope id to the status of its most recent publication attempt."""
+    latest = DatasetPublication.objects.filter(scope_state=OuterRef("pk")).order_by(
+        "-version_number"
+    )
+    rows = (
+        DatasetScopeState.objects.filter(department=department)
+        .annotate(latest_status=Subquery(latest.values("status")[:1]))
+        .values("id", "latest_status")
+    )
+    return {row["id"]: row["latest_status"] for row in rows}
+
+
+@transaction.atomic
+def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
+    """Enqueue USER_REQUEST rebuilds for every scope needing attention.
+
+    Qualifying scopes: dirty, never successfully built, or whose most recent
+    attempt failed without a later successful build. Scopes with an active
+    PENDING/RUNNING job are already queued and are left untouched.
+    """
+    require_department_admin(actor, department)
+    scopes = list(
+        DatasetScopeState.objects.filter(department=department).select_related(
+            "station", "latest_built_publication"
+        )
+    )
+    latest_status = _latest_publication_status_by_scope(department)
+    active_scope_ids = set(
+        PublicationJob.objects.filter(
+            department=department,
+            status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+        ).values_list("scope_state_id", flat=True)
+    )
+
+    requested = already_queued = already_current = 0
+    for scope in scopes:
+        if scope.id in active_scope_ids:
+            already_queued += 1
+            continue
+        needs_attention = (
+            scope.dirty_since is not None
+            or scope.latest_built_publication_id is None
+            or latest_status.get(scope.id) == DatasetPublication.Status.FAILED
+        )
+        if not needs_attention:
+            already_current += 1
+            continue
+        enqueue_publication_job(
+            department=department,
+            station=scope.station,
+            dataset_type_code=scope.dataset_type_code,
+            requested_by=actor,
+            trigger_type=PublicationJob.TriggerType.USER_REQUEST,
+        )
+        requested += 1
+
+    record_event(
+        action="publication.bulk_rebuild_requested",
+        actor_user=actor,
+        department=department,
+        target_type="dataset_scope_state",
+        metadata={
+            "requested": requested,
+            "already_queued": already_queued,
+            "already_current": already_current,
+        },
+    )
+    return {
+        "requested": requested,
+        "already_queued": already_queued,
+        "already_current": already_current,
+    }
