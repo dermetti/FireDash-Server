@@ -169,6 +169,7 @@ jobs:
           bash deploy/tests/test_admin_state.sh
           bash deploy/tests/test_admin_url.sh
           bash deploy/tests/test_hba_verify.sh
+          bash deploy/tests/test_nginx_etag.sh
 
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run

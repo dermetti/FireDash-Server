@@ -327,6 +327,40 @@ else
     ok "Nginx worker user is www-data"
 fi
 
+# The protected artifact location must remain an internal X-Accel target and retain
+# Django's cryptographic ETag instead of generating an mtime/size static-file ETag.
+nginx_site=/etc/nginx/sites-available/fire-backend
+if [[ ! -f $nginx_site ]]; then
+    fail "Nginx FireDash site missing"
+else
+    protected_dataset_location=$(awk '
+        $1 == "location" && $2 == "/internal-protected-datasets/" && $3 == "{" {
+            in_location = 1
+            next
+        }
+        in_location && $1 == "}" { exit }
+        in_location { print }
+    ' "$nginx_site")
+    if [[ -z $protected_dataset_location ]]; then
+        fail "Nginx protected dataset location missing"
+    else
+        grep -Eq '^[[:space:]]*internal;[[:space:]]*$' <<<"$protected_dataset_location" \
+            && ok "Nginx protected dataset location is internal" \
+            || fail "Nginx protected dataset location is not internal"
+        grep -Eq '^[[:space:]]*alias[[:space:]]+/var/lib/fire-backend/publications/;[[:space:]]*$' \
+            <<<"$protected_dataset_location" \
+            && ok "Nginx protected dataset alias is canonical" \
+            || fail "Nginx protected dataset alias is not canonical"
+        grep -Eq '^[[:space:]]*etag[[:space:]]+off;[[:space:]]*$' <<<"$protected_dataset_location" \
+            && ok "Nginx protected dataset static ETag disabled" \
+            || fail "Nginx protected dataset static ETag must be disabled"
+        grep -Eq '^[[:space:]]*add_header[[:space:]]+ETag[[:space:]]+\$upstream_http_etag[[:space:]]+always;[[:space:]]*$' \
+            <<<"$protected_dataset_location" \
+            && ok "Nginx protected dataset preserves upstream ETag" \
+            || fail "Nginx protected dataset does not preserve upstream ETag"
+    fi
+fi
+
 neg_read fire_backend "$SECRET_DIR/publication-kek" "publication KEK"
 neg_read fire_backend "$SECRET_DIR/publication-signing-key" "private signing key"
 neg_read www-data "$SECRET_DIR/publication-kek" "credential file"
