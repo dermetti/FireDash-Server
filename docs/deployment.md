@@ -1,122 +1,97 @@
-# Debian LXC Deployment
+# Deployment
 
-FireDash installs onto a clean Debian 13 (trixie) amd64 LXC with a single command:
+This is the installation authority for FireDash Server. Runtime procedures are
+in [operations.md](operations.md); setting names are in
+[configuration.md](configuration.md).
 
-```text
-curl -fsSL https://raw.githubusercontent.com/dermetti/FireDash-Server/main/deploy/install.sh | sudo bash
-```
+## Supported target
 
-Production documentation should pin an immutable release tag or commit SHA rather than the
-mutable `main` branch:
+Deploy supported releases to a Debian LXC host with PostgreSQL 17/PostGIS,
+Nginx, Gunicorn, and systemd. Releases are immutable under
+`/srv/firedash/releases/<sha>` and `/srv/firedash/current` points at the active
+release. Do not edit a deployed release in place.
 
-```text
-curl -fsSL https://raw.githubusercontent.com/dermetti/FireDash-Server/<tag>/deploy/install.sh | sudo bash
-```
+The convergent installer creates accounts, directories, PostgreSQL roles,
+environment files, credentials, Nginx configuration, systemd units, static
+assets, and migrations. Re-running it must repair the intended state without
+depending on a prior partial run. Run the deployment verifier after every
+installation or upgrade.
 
-## What the installer does
+## PostgreSQL and PostGIS
 
-The installer is a two-stage, idempotent process:
+Provision PostGIS before migrations. Use separate roles:
 
-1. **Stage 0 (`deploy/install.sh`)** — a self-contained bootstrapper that verifies Debian 13,
-   ensures `curl`/`git`/`ca-certificates` are present, fetches the public repository over HTTPS,
-   resolves and pins the exact Git SHA, and delegates to the repository-local installer.
-2. **Stage 1 (`deploy/install-local.sh`)** — the orchestrator that runs all host, release,
-   secret, PostgreSQL, Nginx, systemd, and application phases and finishes with full verification.
+- **database owner** applies migrations and owns schema changes;
+- **application runtime** has only the application data permissions it needs;
+- **backup role** can make verified backups but cannot modify audit records.
 
-The installer:
+Use local HBA rules and protected credential files appropriate to those roles.
+Do not give Gunicorn ownership credentials, disable triggers, or broaden HBA
+authentication to troubleshoot an application issue. Database constraints and
+audit immutability are deployment requirements, not optional application
+features.
 
-- installs OS dependencies, service identities, and systemd units
-- builds an immutable, root-owned release under `/srv/firedash/releases/<sha>`
-- generates the initial secret set on first install (never rotated on rerun)
-- bootstraps PostgreSQL roles, runs migrations as `database_owner`, and reapplies grants
-- configures Nginx to terminate TLS using externally managed certificates
-- activates Gunicorn via socket activation and enables background timers
-- creates the initial system administrator with a one-time setup URL
+## Web and filesystem layout
 
-It does **not** own or configure TLS/ACME or Tailscale/Headscale. It only accepts and validates
-existing certificate/key paths.
+Nginx terminates TLS and proxies Gunicorn over its local Unix socket. Install
+the intended certificate and validate Nginx before reloading it. Nginx serves
+protected publication artifacts through an internal alias rooted at
+`/var/lib/fire-backend/publications/`; Django authorises access and uses
+`X-Accel-Redirect`, rather than streaming artifact bytes.
 
-## Interactive prompts
+Keep ownership and writable paths narrow. Publication artifacts, accepted
+fire plans, quarantine, sanitizer output, static assets, and backups each
+have separate controlled locations. Do not make broad paths writable or use
+ad-hoc `chmod`/`chown` changes as a deployment shortcut.
 
-On first installation, the installer prompts (via the terminal, not the piped script) only for
-values it cannot generate:
+## Services and credentials
 
-- FireDash HTTPS base URL (e.g. `https://firedash.de`)
-- TLS full-chain certificate path
-- TLS private-key path
-- initial system administrator email and display name
+`fire_backend` runs Gunicorn. It has no publication KEK or Ed25519 private
+signing key. `fire_publication` owns the hardened publication workers:
 
-For automation, the same values can be supplied as environment variables:
+- `fire-publication-delivery.service` is persistent and runs
+  `process_publication_jobs --delivery --forever --poll-seconds 2` for grants
+  and signed manifests.
+- `fire-publication-build.service` runs build-only work. Its timer runs daily
+  at 00:05; `fire-publication-build.socket` accepts an advisory local wake
+  from the web process for eligible manual work.
+- `fire-publication-maintenance.service` and timer perform retention and
+  cleanup without the KEK or private signing key.
 
-```text
-FIREDASH_BASE_URL=https://firedash.mjblab.de
-FIREDASH_TLS_CERT_PATH=/etc/letsencrypt/live/firedash.mjblab.de/fullchain.pem
-FIREDASH_TLS_KEY_PATH=/etc/letsencrypt/live/firedash.mjblab.de/privkey.pem
-FIREDASH_INITIAL_ADMIN_EMAIL=admin@example.com
-FIREDASH_INITIAL_ADMIN_DISPLAY_NAME="System Administrator"
-```
+The build socket is `/run/fire-backend/publication-build.sock`, group-owned
+for the web service with mode `0660`. Connecting carries no job data and gives
+the web process no systemd, sudo, D-Bus, or arbitrary service-start privilege.
+The database remains the queue. Credential files for KEK/signing material are
+loaded only into the delivery/build services with `LoadCredential`.
 
-`FIREDASH_REF` (or `--ref`) selects the branch, tag, or exact 40-character SHA to install; it
-defaults to `main`.
+The installer retires the obsolete generic publication-worker timer, starts
+the persistent delivery service, and enables the build socket, nightly build
+timer, and maintenance timer. It also installs the PDF sanitizer broker and
+per-job sandbox units. Preserve the unit hardening directives rather than
+copying commands into a less restricted service.
 
-## Installation state
+## Reference-data sandbox
 
-`/etc/fire-backend/install.conf` holds non-secret configuration and the last successful SHA.
-`/etc/fire-backend/secrets-initialized` marks a committed secret set. The installer distinguishes
-a pristine host from a partially or fully installed one; on an established install, missing or
-corrupt secrets fail closed rather than being regenerated.
+The root-owned PDF sanitizer broker remains outside the web process. Its Unix
+socket is accessible to the web service only, accepts a canonical job UUID,
+and launches a per-job `fire_pdf_sanitizer` sandbox with private networking,
+a read-only quarantined input, and only the designated output path writable.
+If required sandbox properties are unavailable in the LXC, PDF uploads must
+fail rather than falling back to a direct converter invocation.
 
-## Credential isolation
+Install compatible GEOS/GDAL libraries for GeoDjango/PostGIS and configure
+`GDAL_LIBRARY_PATH` where normal discovery cannot find GDAL. Keep Nginx
+`client_max_body_size` aligned with `MAX_PDF_INPUT_BYTES`. Accepted fire plans
+remain private under `/var/lib/fire-backend/fire-plans`; they are neither a
+static directory nor an Nginx media alias.
 
-The privilege model is unchanged:
+## Installation and rollback
 
-- Gunicorn/web receives only the Ed25519 **public** verification key.
-- `fire_publication` worker receives the KEK and private signing key via systemd `LoadCredential`.
-- `database_owner` and `backup_role` passwords live only in root-owned `0600` credential files.
-- The runtime `fire-backend.env` (`root:fire_backend 0640`) holds only the `application_runtime`
-  database password, `DJANGO_SECRET_KEY`, and non-secret runtime settings.
+Use the repository deployment entrypoint and its documented required secrets;
+do not run migrations as the runtime application user. Before declaring an
+upgrade complete, run `nginx -t`, the deployment verifier, and the appropriate
+[acceptance checklist](acceptance.md).
 
-## Publication artifacts
-
-Publication artifacts are written under `/var/lib/fire-backend/publications`
-(`fire_publication:fire_nginx`, mode `2750`; files `0640`) and served only through the authorized
-X-Accel-style internal location. Static assets remain at `/var/lib/fire-backend/static` with
-non-hashed filenames; `collectstatic` runs during the maintenance window before the release switch.
-
-## PDF sanitizer
-
-The installer preserves the root-owned `fire-pdf-sanitizer-broker` executable, the
-`fire-pdf-sanitizer-broker.socket` activation unit (socket `root:fire_backend` mode `0660`,
-parent directory root-owned and not writable by `fire_backend`), and the hardened
-`fire-pdf-sanitizer-broker@.service` per-connection template (`Accept=yes`; systemd passes the
-accepted connection on stdin/stdout). The broker spawns the transient
-`fire-pdf-sanitizer@.service` sandbox (`PrivateNetwork=yes`, strict filesystem access, resource
-limits). Neither template is enabled directly; instances are transient. The broker socket is
-enabled via `activate_socket`. The application never elevates privileges (`fire-backend.service`
-keeps `NoNewPrivileges=true`) and talks to the broker over a Unix socket; there is no sudo path.
-
-## Backup
-
-`restic`, PostgreSQL client tools, and the backup units are installed. The backup timer is enabled
-only when the backup environment and credential files (`backup-pgpass`, `restic-password`) exist.
-`fire-restore.service` remains manual-only.
-
-## Verification
-
-`deploy/verify-deployment.sh` runs automatically at the end of installation and can be invoked
-manually. It checks host prerequisites, PostgreSQL roles and hardening, audit append-only and
-protected-registry enforcement, backup role behavior, application checks, systemd state, credential
-and filesystem isolation, and HTTPS health via a DNS-independent local `--resolve` request.
-
-## Rollback
-
-`/srv/firedash/current` is a symlink to the active release. Switching back is a code-only rollback:
-
-```text
-ln -sfn /srv/firedash/releases/<previous-sha> /srv/firedash/current
-systemctl restart fire-backend.service
-```
-
-Database migrations are not automatically rolled back. FireDash follows an expand/contract
-migration discipline so that a code rollback remains compatible with the current schema; a
-destructive migration requires a documented maintenance/recovery procedure.
+Switching `/srv/firedash/current` can roll back application code, but it does
+not reverse database migrations or publication data. Plan and test database
+rollback separately. Backups and restore drills are operational requirements.

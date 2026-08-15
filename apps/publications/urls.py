@@ -9,6 +9,11 @@ urlpatterns = [
         name="publications-list",
     ),
     path(
+        "departments/<uuid:department_id>/publications/status/",
+        views.publication_status,
+        name="publications-status",
+    ),
+    path(
         "departments/<uuid:department_id>/publications/rebuild-affected/",
         views.bulk_rebuild,
         name="publications-bulk-rebuild",

@@ -2,6 +2,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
+from django.db.models import OuterRef, Subquery
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -11,19 +12,20 @@ from apps.accounts.reauth import require_recent_reauthentication
 from apps.authorization.scopes import active_department_ids
 from apps.authorization.services import require_department_admin
 from apps.organizations.models import Department
-from apps.publications.models import DatasetPublication, DatasetScopeState
+from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.registry import get_dataset_definition
 from apps.publications.services import (
     PublicationError,
     bulk_request_rebuilds,
-    publish_publication,
-    reject_publication,
     request_rebuild,
     rollback_publication,
 )
 from apps.publications.state import (
     BUILDING,
+    CURRENT,
     FAILED,
+    NEEDS_REBUILD,
+    NOT_PUBLISHED,
     QUEUED,
     UPDATE_QUEUED,
     operational_summary,
@@ -47,46 +49,64 @@ def _scope_or_403(request: HttpRequest, scope_id) -> DatasetScopeState:
     return scope
 
 
-@login_required
-@require_http_methods(["GET"])
-def publications(request: HttpRequest, department_id) -> HttpResponse:
-    department = _department_or_403(request, department_id)
+def _publication_status_context(request: HttpRequest, department: Department) -> dict[str, object]:
+    """Build the bounded view model shared by the full page and HTMX partial."""
     rows = scope_operational_states(department)
     raw = operational_summary(rows)
     summary = {
         "total": raw["total"],
         "current": raw["CURRENT"],
-        "queued": raw["UPDATE_QUEUED"] + raw["QUEUED"],
+        "scheduled": raw["UPDATE_QUEUED"] + raw["QUEUED"],
         "building": raw["BUILDING"],
-        "needs_attention": raw["FAILED"] + raw["NEEDS_REBUILD"],
-        "ready_to_publish": raw["READY_TO_PUBLISH"],
+        "attention": raw["FAILED"] + raw["NEEDS_REBUILD"] + raw["NOT_PUBLISHED"],
     }
-
+    scheduled = [row for row in rows if row["state"] in (UPDATE_QUEUED, QUEUED)]
     building = [row for row in rows if row["state"] == BUILDING]
-    queued = [row for row in rows if row["state"] in (UPDATE_QUEUED, QUEUED)]
-    failed = [row for row in rows if row["state"] == FAILED]
-
+    attention = [row for row in rows if row["state"] in (FAILED, NEEDS_REBUILD, NOT_PUBLISHED)]
+    current = [row for row in rows if row["state"] == CURRENT]
+    job_origin = PublicationJob.objects.filter(build_publication_id=OuterRef("pk")).order_by(
+        "-created_at"
+    )
     history = (
         DatasetPublication.objects.filter(department=department)
+        .exclude(status=DatasetPublication.Status.PUBLISHED)
         .select_related("station", "created_by", "published_by")
+        .annotate(build_origin=Subquery(job_origin.values("trigger_type")[:1]))
         .order_by("-created_at")
     )
     paginator = Paginator(history, HISTORY_PAGE_SIZE)
-    page_number = request.GET.get("page")
-    history_page = paginator.get_page(page_number)
+    history_page = paginator.get_page(request.GET.get("page"))
+    return {
+        "department": department,
+        "summary": summary,
+        "scheduled": scheduled,
+        "building": building,
+        "attention": attention,
+        "current": current,
+        "history_page": history_page,
+        # Fast while work is moving; low-cost refreshes while idle catch nightly work.
+        "poll_seconds": 5 if scheduled or building else 30,
+    }
 
+
+@login_required
+@require_http_methods(["GET"])
+def publications(request: HttpRequest, department_id) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    return render(
+        request, "publications/list.html", _publication_status_context(request, department)
+    )
+
+
+@login_required
+@require_http_methods(["GET"])
+def publication_status(request: HttpRequest, department_id) -> HttpResponse:
+    """HTMX polling target for bounded publication operational status."""
+    department = _department_or_403(request, department_id)
     return render(
         request,
-        "publications/list.html",
-        {
-            "department": department,
-            "rows": rows,
-            "summary": summary,
-            "building": building,
-            "queued": queued,
-            "failed": failed,
-            "history_page": history_page,
-        },
+        "publications/_status.html",
+        _publication_status_context(request, department),
     )
 
 
@@ -154,13 +174,7 @@ def publication_review(request: HttpRequest, publication_id) -> HttpResponse:
         )
         action = request.POST.get("action")
         try:
-            if action == "publish":
-                publish_publication(actor=request.user, publication=publication)
-                message = "Publication published."
-            elif action == "reject":
-                reject_publication(actor=request.user, publication=publication)
-                message = "Publication rejected."
-            elif action == "rollback":
+            if action == "rollback":
                 rollback_publication(actor=request.user, publication=publication)
                 message = "Publication restored."
             else:

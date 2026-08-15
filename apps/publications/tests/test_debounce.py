@@ -9,7 +9,7 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
-from apps.publications.models import DatasetScopeState, PublicationJob
+from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.services import (
     claim_next_job,
     fail_publication_job,
@@ -83,7 +83,7 @@ def test_repeated_edits_coalesce_and_track_latest_revision(debounce_context):
     job = jobs.get()
     assert job.source_revision == 2
     assert job.not_before is not None and first_not_before is not None
-    assert job.not_before > first_not_before
+    assert job.not_before == first_not_before
 
 
 @pytest.mark.django_db(transaction=True)
@@ -103,7 +103,7 @@ def test_maximum_deferral_caps_the_debounce_window(debounce_context):
 
     job.refresh_from_db()
     assert job.not_before is not None and job.debounce_started_at is not None
-    assert job.not_before == job.debounce_started_at + timedelta(seconds=600)
+    assert job.not_before.time().isoformat() == "00:05:00"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -177,6 +177,35 @@ def test_user_request_without_pending_work_is_immediately_claimable(debounce_con
     job = claim_next_job()
     assert job is not None
     assert job.trigger_type == PublicationJob.TriggerType.USER_REQUEST
+
+
+@pytest.mark.django_db(transaction=True)
+def test_historical_terminal_candidate_consumes_its_immutable_attempt_version(debounce_context):
+    admin, department, station_a, _ = debounce_context
+    scope = DatasetScopeState.objects.create(
+        department=department, station=station_a, dataset_type_code="station_personnel"
+    )
+    # Historical terminal attempts retain their signed version and it remains
+    # part of the monotonically increasing attempt sequence.
+    DatasetPublication.objects.create(
+        department=department,
+        station=station_a,
+        dataset_type_code="station_personnel",
+        scope_state=scope,
+        version_number=99,
+        schema_version=1,
+        source_revision=1,
+        status=DatasetPublication.Status.REJECTED,
+    )
+    request_rebuild(
+        actor=admin, department=department, station=station_a, dataset_type_code="station_personnel"
+    )
+
+    job = claim_next_job()
+
+    assert job is not None
+    assert job.build_publication is not None
+    assert job.build_publication.version_number == 100
 
 
 @pytest.mark.django_db(transaction=True)

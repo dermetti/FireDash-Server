@@ -3,6 +3,7 @@ DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py", "*_tests.py"]
 testpaths = ["apps", "config"]
 addopts = "--strict-markers"
+tmp_path_retention_policy = "none"
 
 [tool.ruff]
 target-version = "py311"

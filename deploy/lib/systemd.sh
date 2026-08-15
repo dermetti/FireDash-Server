@@ -22,16 +22,16 @@ quiesce() {
         systemctl stop fire-backup.service 2>/dev/null || true
     fi
     local timer svc
-    for timer in fire-publication-worker.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+    for timer in fire-publication-worker.timer fire-publication-build.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
         systemctl stop "$timer" 2>/dev/null || true
     done
-    for svc in fire-publication-worker.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
+    for svc in fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
         systemctl stop "$svc" 2>/dev/null || true
     done
     systemctl stop fire-backend.socket 2>/dev/null || true
     systemctl stop fire-backend.service 2>/dev/null || true
 
-    for svc in fire-backend.socket fire-backend.service fire-publication-worker.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
+    for svc in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
         if systemctl is-active --quiet "$svc"; then
             die "unit $svc is still active; cannot proceed with migration"
         fi
@@ -43,13 +43,17 @@ activate_socket() {
     log "enabling socket activation"
     systemctl enable --now fire-backend.socket
     systemctl enable --now fire-pdf-sanitizer-broker.socket
+    systemctl enable --now fire-publication-build.socket
 }
 
 activate_timers() {
     local timer
-    for timer in fire-publication-worker.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+    systemctl disable --now fire-publication-worker.timer 2>/dev/null || true
+    systemctl stop fire-publication-worker.service 2>/dev/null || true
+    for timer in fire-publication-build.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
         systemctl enable --now "$timer"
     done
+    systemctl enable --now fire-publication-delivery.service
     if [[ -f /etc/fire-backend/backup.env ]] \
         && [[ -f $SECRET_DIR/backup-pgpass ]] \
         && [[ -f $SECRET_DIR/restic-password ]]; then

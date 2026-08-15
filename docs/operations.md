@@ -1,49 +1,56 @@
-# Operations
+# Operations runbook
 
-Check service state with `systemctl status fire-backend.service fire-backend.socket` and logs with `journalctl -u fire-backend.service`.
+Use this guide after deployment. Installation and account creation belong in
+[deployment.md](deployment.md); settings are in [configuration.md](configuration.md).
 
-The process must run as `fire_backend`, not root. Verify the socket is owned by `fire_backend:www-data` with mode `0660`. Verify health through Nginx over HTTPS.
+## Health and logs
 
-Phase 2 account setup URLs contain one-time secrets. Gunicorn access logging is disabled in favor of Nginx logging, and Nginx disables access logging for `/accounts/setup/` so those tokens never enter server logs.
+Check the health endpoint through the deployed proxy and inspect only the
+relevant service journal, for example:
 
-## Scheduled work
-
-Inspect all scheduled work with:
-
-```text
-systemctl list-timers 'fire-*'
-journalctl -u fire-publication-worker.service -u fire-temporary-assignment-expiry.service -u fire-stale-installation.service -u fire-backup.service
+```sh
+systemctl status fire-backend fire-publication-delivery
+journalctl -u fire-backend -u fire-publication-delivery --since '30 minutes ago'
+curl --fail https://<host>/health/
 ```
 
-The publication worker runs every minute, temporary-assignment expiry runs hourly, and stale
-installation processing runs every 15 minutes. A stale processor failure does not extend a lease:
-request authorization also rejects an expired active lease. Investigate and correct failed timers
-promptly because the processor creates the required stale audit event and updates tablet status.
+Do not paste credentials, bearer tokens, CEKs, KEKs, private keys, adoption
+tokens, or complete signed payloads into tickets or journals.
 
-Backups run nightly at 02:15 local system time. Confirm a recent successful snapshot with
-`systemctl status fire-backup.service` and `restic snapshots` as root with the backup environment
-loaded. A non-zero backup service result is the backup-failure record in the journal; alert on it
-and do not paste its environment or credential paths into tickets.
+## Schedulers and workers
 
-## Monthly restore drill
+Confirm these units have the intended state:
 
-1. Select a recent backup snapshot and record its identifier in the change ticket.
-2. Create an empty, restricted target below `/var/lib/fire-backend/restore-tests` and configure the root-only `restore.env` described in `configuration.md`.
-3. Run `systemctl start fire-restore.service`, then inspect the restored fire plans, artifacts, credentials, and PostgreSQL dump permissions without exposing their contents.
-4. Restore the dump into an isolated PostgreSQL database or disposable LXC. Run application migrations/checks against that isolated database and verify the expected data counts and a sample artifact hash.
-5. Record the snapshot, date, operator, validation result, and cleanup. Remove the restored data and `restore.env` after the drill.
+- `fire-publication-delivery.service` — persistent low-latency grants and manifests;
+- `fire-publication-build.socket` and `fire-publication-build.timer` — manual wake and nightly 00:05 builds;
+- `fire-publication-maintenance.timer` — artifact and manifest housekeeping;
+- `fire-stale-installation.timer` — expiration/stale processing;
+- `fire-temporary-assignment-expiry.timer` — assignment expiry;
+- `fire-backup.timer` — backup schedule.
 
-This repository provides the procedure and service definitions; restore/systemd execution has not
-been performed or claimed by this documentation.
+Use `systemctl list-timers` and targeted `journalctl` queries. A manifest
+pending response is normal while the delivery worker creates a signature; if
+latency is unexpected, inspect delivery work before touching publication
+records. Build failures leave the previous known-good publication current;
+inspect the safe recorded build error and use the normal admin workflow to
+expedite a corrected source state.
 
-## Security and logging
+The build socket is advisory. A failed wake does not invalidate committed
+database work; the nightly timer remains the fallback. Never use `sudo
+systemctl` from the web account or create a helper that grants that privilege.
 
-Use `journalctl` for Django, worker, timer, and backup output, and restrict journal access to
-operators who need it. Nginx is the HTTP access-log source; `/accounts/setup/` intentionally has
-access logging disabled because its URLs contain one-time secrets. Do not add query strings,
-authorization headers, adoption or reactivation credentials, HPKE material, database passwords,
-restic credentials, or decrypted dataset contents to logs.
+## Backup and restore
 
-Review Nginx error logs, service failures, authentication/audit events, publication failures, and
-backup failures during the operating review. Preserve audit-event retention according to policy;
-audit events are application records and do not replace protected system logs or backup monitoring.
+Monitor backups under the backup role, verify completion and retention, and
+periodically run a restore drill into an isolated environment. A successful
+backup command is not proof of recoverability. Never restore over production
+as part of an investigation.
+
+## Safe troubleshooting
+
+Run `nginx -t` before an Nginx reload and run the deployment verifier after
+deployment changes. Check filesystem ownership, systemd credential delivery,
+database role privileges, and unit hardening with read-only inspection first.
+Do not loosen PostgreSQL HBA, disable audit triggers, expose credential files,
+or recursively change ownership or modes to make a command work. Escalate a
+key compromise according to [security.md](security.md).

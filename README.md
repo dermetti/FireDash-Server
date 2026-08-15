@@ -1,7 +1,19 @@
-# FireDash-Server
+# FireDash Server
 
-Secure Django backend foundation for the FireDash tablet provisioning system.
+FireDash Server is the secure reference-data service for fire departments. It
+provisions departmental and station reference data to authorised tablets; it
+does **not** accept, store, or process incident or intervention data.
 
-Phase 1 establishes Django 5.2, PostgreSQL/PostGIS, a UUID/email custom user model, health endpoints, pytest, CI checks, and Debian LXC deployment configuration. Domain functionality is deliberately deferred to later PRD phases.
+The service is a Django 5.2 and Django REST Framework application backed by
+PostgreSQL/PostGIS. Gunicorn runs behind Nginx, and hardened systemd services
+run the publication and PDF-sanitisation boundaries on Debian LXC hosts.
 
-See `docs/development.md` for local setup and `docs/deployment.md` for Debian deployment.
+Start here:
+
+- [Documentation index](docs/README.md)
+- [Architecture](docs/architecture.md)
+- [Development](docs/development.md)
+- [Deployment](docs/deployment.md)
+
+The generated API schema is available from a running server at
+`/api/v1/schema/`, with interactive documentation at `/api/v1/docs/`.

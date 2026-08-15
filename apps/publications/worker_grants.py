@@ -83,6 +83,8 @@ def build_claimed_dataset_key_grant(*, grant_id) -> DatasetKeyGrant:
         wrapped_cek = publication.artifact_wrapped_cek
         if wrapped_cek is None:
             raise KeyGrantError("Ready publication has no wrapped content-encryption key.")
+        if publication.version_number is None:
+            raise KeyGrantError("Ready publication has no assigned version.")
         cek = keywrap.aes_key_unwrap(kek, wrapped_cek)
         context = HPKEContext(
             publication_id=publication.id,

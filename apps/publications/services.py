@@ -1,6 +1,5 @@
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Max, OuterRef, Q, Subquery
@@ -33,6 +32,7 @@ from apps.publications.registry import (
     get_dataset_definition,
     validate_dataset_scope,
 )
+from apps.publications.wake import wake_publication_build_worker
 
 
 class PublicationError(ValueError):
@@ -162,9 +162,12 @@ def enqueue_publication_job(
             return None
         # Coalesce an existing PENDING job to the latest source revision.
         active.source_revision = scope.source_revision
-        if trigger_type == PublicationJob.TriggerType.USER_REQUEST:
+        if trigger_type in (
+            PublicationJob.TriggerType.USER_REQUEST,
+            PublicationJob.TriggerType.BULK_REQUEST,
+        ):
             # An explicit rebuild makes any pending work immediately eligible.
-            active.trigger_type = PublicationJob.TriggerType.USER_REQUEST
+            active.trigger_type = trigger_type
             active.requested_by = requested_by
             active.not_before = None
         elif active.trigger_type == PublicationJob.TriggerType.DATA_CHANGE:
@@ -209,11 +212,11 @@ def enqueue_publication_job(
 
 
 def _data_change_not_before(*, now: datetime, debounce_started_at: datetime | None) -> datetime:
-    """Compute the trailing-debounce eligibility time for a DATA_CHANGE job."""
-    debounce = timedelta(seconds=settings.PUBLICATION_DATA_CHANGE_DEBOUNCE_SECONDS)
-    max_deferral = timedelta(seconds=settings.PUBLICATION_DATA_CHANGE_MAX_DEFERRAL_SECONDS)
-    window_start = debounce_started_at or now
-    return min(now + debounce, window_start + max_deferral)
+    """Schedule coalesced source changes for the next nightly build window."""
+    nightly = now.replace(hour=0, minute=5, second=0, microsecond=0)
+    if now.time() >= time(hour=0, minute=5):
+        nightly += timedelta(days=1)
+    return nightly
 
 
 @transaction.atomic
@@ -240,6 +243,8 @@ def claim_next_job() -> PublicationJob | None:
         return job
     now = timezone.now()
     job.source_revision = scope.source_revision
+    # The locked scope serializes allocation. Every build attempt consumes an
+    # immutable number, including attempts that later fail or become obsolete.
     version_number = (
         DatasetPublication.objects.filter(scope_state=scope).aggregate(
             maximum=Max("version_number")
@@ -427,6 +432,8 @@ def finalize_publication_job(
     if scope.source_revision != job.source_revision:
         remove_artifact_path(artifact["artifact_path"])
         publication.status = DatasetPublication.Status.OBSOLETE
+        # Keep the assigned value: it is included in the signed artifact
+        # canonical payload and terminal history must remain verifiable.
         publication.save(update_fields=("status",))
         job.status = PublicationJob.Status.OBSOLETE
         job.completed_at = now
@@ -463,7 +470,13 @@ def finalize_publication_job(
         setattr(publication, field, value)
     publication.artifact_status = DatasetPublication.ArtifactStatus.READY
     publication.artifact_ready = True
-    publication.status = DatasetPublication.Status.READY_FOR_REVIEW
+    previous_current = scope.current_published_publication
+    if previous_current is not None:
+        previous_current.status = DatasetPublication.Status.SUPERSEDED
+        previous_current.save(update_fields=("status",))
+    publication.status = DatasetPublication.Status.PUBLISHED
+    publication.published_at = now
+    publication.supersedes = previous_current
     publication.full_clean()
     publication.save(
         update_fields=(
@@ -473,17 +486,27 @@ def finalize_publication_job(
             "artifact_ready",
             *artifact.keys(),
             "status",
+            "published_at",
+            "supersedes",
         )
     )
     scope.latest_built_publication = publication
+    scope.current_published_publication = publication
     scope.dirty_since = None
-    scope.save(update_fields=("latest_built_publication", "dirty_since", "updated_at"))
+    scope.save(
+        update_fields=(
+            "latest_built_publication",
+            "current_published_publication",
+            "dirty_since",
+            "updated_at",
+        )
+    )
     job.status = PublicationJob.Status.SUCCEEDED
     job.completed_at = now
     job.heartbeat_at = now
     job.save(update_fields=("status", "completed_at", "heartbeat_at"))
     record_event(
-        action="publication.build_succeeded",
+        action="publication.published",
         department=job.department,
         station=job.station,
         target_type="dataset_publication",
@@ -491,6 +514,8 @@ def finalize_publication_job(
         metadata={
             "dataset_type_code": job.dataset_type_code,
             "version_number": publication.version_number,
+            "origin": job.trigger_type.lower(),
+            "source_revision": publication.source_revision,
         },
     )
     return job
@@ -549,7 +574,8 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
             DatasetPublication.objects.filter(
                 pk=job.build_publication_id, status=DatasetPublication.Status.BUILDING
             ).update(
-                status=DatasetPublication.Status.FAILED, build_error="Worker heartbeat timed out."
+                status=DatasetPublication.Status.FAILED,
+                build_error="Worker heartbeat timed out.",
             )
         if job.attempt_count >= max_attempts:
             job.status = PublicationJob.Status.FAILED
@@ -667,9 +693,23 @@ def request_rebuild(
     require_department_admin(actor, department)
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
     with transaction.atomic():
-        scope = _locked_scope(
-            department=department, station=station, dataset_type_code=dataset_type_code
+        scope = (
+            DatasetScopeState.objects.select_for_update()
+            .filter(
+                **_scope_filter(
+                    department=department, station=station, dataset_type_code=dataset_type_code
+                )
+            )
+            .first()
         )
+        if scope is None:
+            scope = DatasetScopeState(
+                **_scope_filter(
+                    department=department, station=station, dataset_type_code=dataset_type_code
+                )
+            )
+            scope.full_clean()
+            scope.save()
         transaction.on_commit(
             lambda: enqueue_publication_job(
                 department=department,
@@ -679,6 +719,7 @@ def request_rebuild(
                 trigger_type=PublicationJob.TriggerType.USER_REQUEST,
             )
         )
+        transaction.on_commit(wake_publication_build_worker)
         record_event(
             action="publication.rebuild_requested",
             actor_user=actor,
@@ -759,7 +800,7 @@ def _latest_publication_status_by_scope(department) -> dict[object, object]:
 
 @transaction.atomic
 def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
-    """Enqueue USER_REQUEST rebuilds for every scope needing attention.
+    """Promote or create one immediate BULK_REQUEST intent per affected scope.
 
     Qualifying scopes: dirty, never successfully built, or whose most recent
     attempt failed without a later successful build. Scopes with an active
@@ -772,17 +813,17 @@ def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
         )
     )
     latest_status = _latest_publication_status_by_scope(department)
-    active_scope_ids = set(
+    running_scope_ids = set(
         PublicationJob.objects.filter(
             department=department,
-            status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+            status=PublicationJob.Status.RUNNING,
         ).values_list("scope_state_id", flat=True)
     )
 
-    requested = already_queued = already_current = 0
+    created = promoted = already_running = skipped_current = 0
     for scope in scopes:
-        if scope.id in active_scope_ids:
-            already_queued += 1
+        if scope.id in running_scope_ids:
+            already_running += 1
             continue
         needs_attention = (
             scope.dirty_since is not None
@@ -790,16 +831,26 @@ def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
             or latest_status.get(scope.id) == DatasetPublication.Status.FAILED
         )
         if not needs_attention:
-            already_current += 1
+            skipped_current += 1
             continue
-        enqueue_publication_job(
+        before = PublicationJob.objects.filter(
+            scope_state=scope, status=PublicationJob.Status.PENDING
+        ).exists()
+        queued = enqueue_publication_job(
             department=department,
             station=scope.station,
             dataset_type_code=scope.dataset_type_code,
             requested_by=actor,
-            trigger_type=PublicationJob.TriggerType.USER_REQUEST,
+            trigger_type=PublicationJob.TriggerType.BULK_REQUEST,
         )
-        requested += 1
+        if queued is not None:
+            if before:
+                promoted += 1
+            else:
+                created += 1
+
+    if created or promoted:
+        transaction.on_commit(wake_publication_build_worker)
 
     record_event(
         action="publication.bulk_rebuild_requested",
@@ -807,13 +858,18 @@ def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
         department=department,
         target_type="dataset_scope_state",
         metadata={
-            "requested": requested,
-            "already_queued": already_queued,
-            "already_current": already_current,
+            "created": created,
+            "promoted": promoted,
+            "already_running": already_running,
+            "skipped_current": skipped_current,
         },
     )
     return {
-        "requested": requested,
-        "already_queued": already_queued,
-        "already_current": already_current,
+        "requested": created + promoted,
+        "already_queued": promoted,
+        "already_current": skipped_current,
+        "created": created,
+        "promoted": promoted,
+        "already_running": already_running,
+        "skipped_current": skipped_current,
     }

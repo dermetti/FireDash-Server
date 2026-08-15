@@ -1,0 +1,13 @@
+[Unit]
+Description=FireDash publication build wake socket
+
+[Socket]
+ListenStream=/run/fire-backend/publication-build.sock
+SocketGroup=fire_backend
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=true
+Service=fire-publication-build.service
+
+[Install]
+WantedBy=sockets.target

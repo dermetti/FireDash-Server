@@ -10,9 +10,11 @@ from django_otp.oath import TOTP
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from apps.accounts.models import User
+from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
+from apps.publications.paths import publication_artifact_relative_path
 from apps.publications.services import bulk_request_rebuilds, mark_dirty
 
 
@@ -27,8 +29,9 @@ def bulk_context(db):
 
 
 def _published(department, scope, station=None, version_number=1):
+    publication_id = uuid.uuid4()
     return DatasetPublication.objects.create(
-        id=uuid.uuid4(),
+        id=publication_id,
         department=department,
         station=station,
         dataset_type_code=scope.dataset_type_code,
@@ -39,7 +42,9 @@ def _published(department, scope, station=None, version_number=1):
         status=DatasetPublication.Status.PUBLISHED,
         artifact_ready=True,
         artifact_status=DatasetPublication.ArtifactStatus.READY,
-        artifact_path=f"{department.id}/{uuid.uuid4()}/artifact.bin",
+        artifact_path=publication_artifact_relative_path(
+            department_id=department.id, publication_id=publication_id
+        ),
         artifact_size=1,
         artifact_sha256="a" * 64,
         artifact_nonce=b"n" * 12,
@@ -103,7 +108,15 @@ def test_bulk_rebuild_requests_only_affected_scopes(bulk_context):
 
     result = bulk_request_rebuilds(actor=admin, department=department)
 
-    assert result == {"requested": 2, "already_queued": 1, "already_current": 1}
+    assert result == {
+        "requested": 3,
+        "already_queued": 1,
+        "already_current": 1,
+        "created": 2,
+        "promoted": 1,
+        "already_running": 0,
+        "skipped_current": 1,
+    }
 
 
 @pytest.mark.django_db(transaction=True)
@@ -119,7 +132,43 @@ def test_bulk_rebuild_does_not_request_current_scopes(bulk_context):
 
     result = bulk_request_rebuilds(actor=admin, department=department)
 
-    assert result == {"requested": 0, "already_queued": 0, "already_current": 1}
+    assert result == {
+        "requested": 0,
+        "already_queued": 0,
+        "already_current": 1,
+        "created": 0,
+        "promoted": 0,
+        "already_running": 0,
+        "skipped_current": 1,
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_bulk_promotes_scheduled_intent_and_records_one_summary_audit_event(bulk_context):
+    admin, department, station, _ = bulk_context
+    mark_dirty(
+        actor=admin,
+        department=department,
+        station=station,
+        dataset_type_code="station_personnel",
+    )
+
+    result = bulk_request_rebuilds(actor=admin, department=department)
+
+    job = PublicationJob.objects.get(department=department)
+    assert job.trigger_type == PublicationJob.TriggerType.BULK_REQUEST
+    assert job.not_before is None
+    assert result["promoted"] == 1
+    events = AuditEvent.objects.filter(
+        department=department, action="publication.bulk_rebuild_requested"
+    )
+    assert events.count() == 1
+    assert events.get().metadata == {
+        "created": 0,
+        "promoted": 1,
+        "already_running": 0,
+        "skipped_current": 0,
+    }
 
 
 @pytest.mark.django_db(transaction=True)

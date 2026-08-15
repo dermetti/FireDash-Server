@@ -1,207 +1,30 @@
 {% extends "base.html" %}
-{% load publications_extras %}
 {% block title %}Publications — {{ department.name }}{% endblock %}
 {% block content %}
-
 <p class="text-body-secondary small mb-0">Distributed Data / Publications</p>
 <h1 class="mb-1">Publications</h1>
-<p class="text-body-secondary">Build and monitor the encrypted datasets distributed to FireDash tablets.</p>
+<p class="text-body-secondary">Source changes are coalesced for the nightly build. Successful current builds publish automatically; a failed build leaves the last known-good dataset active.</p>
 
 <section class="mb-4">
-  <div class="card shadow-sm">
-    <div class="card-body">
-      <h2 class="h6 text-body-secondary mb-3">Publication status
-        <button type="button" class="btn btn-link btn-sm p-0 align-baseline text-decoration-none"
-                aria-label="About automatic publications"
-                data-bs-toggle="popover" data-bs-trigger="focus" title="Automatic publications"
-                data-bs-content="FireDash automatically queues affected datasets when authoritative data changes. Repeated changes to the same dataset are grouped before building.">?</button>
-      </h2>
-      <div class="row g-3 text-center">
-        <div class="col-6 col-sm-4 col-md-2">
-          <div class="fs-3 fw-semibold">{{ summary.total }}</div>
-          <div class="text-body-secondary small">Dataset scopes</div>
-        </div>
-        <div class="col-6 col-sm-4 col-md-2">
-          <div class="fs-3 fw-semibold text-success">{{ summary.current }}</div>
-          <div class="text-body-secondary small">Current</div>
-        </div>
-        <div class="col-6 col-sm-4 col-md-2">
-          <div class="fs-3 fw-semibold text-info">{{ summary.queued }}</div>
-          <div class="text-body-secondary small">Queued</div>
-        </div>
-        <div class="col-6 col-sm-4 col-md-2">
-          <div class="fs-3 fw-semibold text-info">{{ summary.building }}</div>
-          <div class="text-body-secondary small">Building</div>
-        </div>
-        <div class="col-6 col-sm-4 col-md-2">
-          <div class="fs-3 fw-semibold text-warning">{{ summary.ready_to_publish }}</div>
-          <div class="text-body-secondary small">Ready to publish</div>
-        </div>
-        <div class="col-6 col-sm-4 col-md-2">
-          <div class="fs-3 fw-semibold {% if summary.needs_attention %}text-danger{% else %}text-body-secondary{% endif %}">{{ summary.needs_attention }}</div>
-          <div class="text-body-secondary small">Needs attention</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="mb-4">
-  <h2 class="h5 mb-3">Actions</h2>
   <div class="card shadow-sm"><div class="card-body">
-    <form method="post" action="{% url 'publications-bulk-rebuild' department.id %}">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-primary">Rebuild affected datasets</button>
-    </form>
-    <p class="text-body-secondary small mt-2 mb-0">Enqueue rebuilds for datasets that are out of date, have never been built, or whose latest build failed. Request a rebuild when you need FireDash to rebuild the current data again or recover an affected dataset.</p>
+    <h2 class="h6 text-body-secondary mb-3">Publication status</h2>
+    <div class="row g-3 text-center">
+      <div class="col-6 col-sm"><div class="fs-3 fw-semibold">{{ summary.total }}</div><div class="text-body-secondary small">Scopes</div></div>
+      <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-success">{{ summary.current }}</div><div class="text-body-secondary small">Current</div></div>
+      <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-info">{{ summary.scheduled }}</div><div class="text-body-secondary small">Scheduled</div></div>
+      <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-info">{{ summary.building }}</div><div class="text-body-secondary small">Building</div></div>
+      <div class="col-6 col-sm"><div class="fs-3 fw-semibold {% if summary.attention %}text-danger{% endif %}">{{ summary.attention }}</div><div class="text-body-secondary small">Attention</div></div>
+    </div>
   </div></div>
 </section>
 
-<section>
-  <h2 class="h5 mb-3">Existing datasets</h2>
-
-  {% if failed %}
-  <div class="alert alert-danger" role="alert">
-    <h3 class="h6 mb-2">Failures requiring attention</h3>
-    <ul class="mb-0">
-      {% for row in failed %}
-      <li><strong>{{ row.dataset_name }} · {{ row.scope_label }}</strong> — latest build failed{% if row.build_error %}: {{ row.build_error }}{% endif %}{% if row.latest_publication_id %} · <a href="{% url 'publications-review' row.latest_publication_id %}" class="alert-link">View details</a>{% endif %}</li>
-      {% endfor %}
-    </ul>
-  </div>
-  {% endif %}
-
-  {% if building %}
-  <div class="mb-3">
-    <h3 class="h6 text-body-secondary mb-2">Currently building</h3>
-    <ul class="list-unstyled mb-0">
-      {% for row in building %}
-      <li><span class="spinner-border spinner-border-sm text-primary me-2" role="status" aria-hidden="true"></span>{{ row.dataset_name }} · {{ row.scope_label }}{% if row.active_job_publication_version %} — Building publication {{ row.active_job_publication_version }}…{% endif %}</li>
-      {% endfor %}
-    </ul>
-  </div>
-  {% endif %}
-
-  {% if queued %}
-  <div class="mb-3">
-    <h3 class="h6 text-body-secondary mb-2">Queued updates</h3>
-    <ul class="list-unstyled mb-0">
-      {% for row in queued %}
-      <li>{{ row.dataset_name }} · {{ row.scope_label }} — {% if row.state == "UPDATE_QUEUED" %}Waiting for recent changes to settle{% else %}Queued{% endif %}</li>
-      {% endfor %}
-    </ul>
-  </div>
-  {% endif %}
-
-  <div class="table-responsive-md">
-    <table class="table table-hover align-middle mb-0">
-      <thead>
-        <tr>
-          <th scope="col">Dataset</th>
-          <th scope="col">Distribution state</th>
-          <th scope="col">Published</th>
-          <th scope="col" class="d-none d-md-table-cell">Source revision</th>
-          <th scope="col" class="d-none d-lg-table-cell">Last activity</th>
-          <th scope="col" class="text-end">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td>
-            {{ row.dataset_name }}
-            <div class="text-body-secondary small">{{ row.scope_label }}</div>
-          </td>
-          <td>
-            <span class="badge text-bg-{{ row.state_badge }}">{{ row.state_label }}</span>
-            {% if row.state == "CURRENT" and row.distributed_version %}<div class="text-body-secondary small">Publication {{ row.distributed_version }} currently distributed</div>
-            {% elif row.state == "UPDATE_QUEUED" or row.state == "QUEUED" %}<div class="text-body-secondary small">{% if row.distributed_version %}Publication {{ row.distributed_version }} still distributed{% else %}Update pending{% endif %}</div>
-            {% elif row.state == "READY_TO_PUBLISH" %}<div class="text-body-secondary small">Publication {{ row.latest_built_version }} awaiting publish</div>
-            {% elif row.state == "NEEDS_REBUILD" %}<div class="text-body-secondary small">{% if row.distributed_version %}Publication {{ row.distributed_version }} still distributed{% else %}Source changed{% endif %}</div>
-            {% elif row.state == "NOT_PUBLISHED" %}<div class="text-body-secondary small">No successful publication yet</div>
-            {% endif %}
-          </td>
-          <td>{% if row.distributed_version %}Publication {{ row.distributed_version }}{% else %}—{% endif %}</td>
-          <td class="d-none d-md-table-cell">{{ row.source_revision }}</td>
-          <td class="d-none d-lg-table-cell">{{ row.last_activity|date:"j M Y H:i" }}</td>
-          <td class="text-end">
-            <div class="dropdown">
-              <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
-                      data-bs-toggle="dropdown" aria-expanded="false">Actions</button>
-              <ul class="dropdown-menu dropdown-menu-end">
-                {% if row.latest_built_publication_id or row.latest_publication_id %}
-                <li><a class="dropdown-item" href="{% url 'publications-review' row.latest_built_publication_id|default:row.latest_publication_id %}">View details</a></li>
-                {% endif %}
-                <li>
-                  <form method="post" action="{% url 'publications-scope-rebuild' row.scope_id %}">
-                    {% csrf_token %}
-                    <button type="submit" class="dropdown-item">Request rebuild</button>
-                  </form>
-                </li>
-              </ul>
-            </div>
-          </td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="6" class="text-center text-body-secondary py-4">No publication scopes initialized.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
-  <h3 class="h6 text-body-secondary mt-4 mb-2">Publication history</h3>
-  <div class="table-responsive-md">
-    <table class="table table-hover align-middle mb-0">
-      <thead>
-        <tr>
-          <th scope="col">Dataset</th>
-          <th scope="col">Publication</th>
-          <th scope="col" class="d-none d-md-table-cell">Source revision</th>
-          <th scope="col">Status</th>
-          <th scope="col" class="d-none d-md-table-cell">Built</th>
-          <th scope="col" class="text-end">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for publication in history_page %}
-        <tr>
-          <td>
-            {{ publication.dataset_type_code|dataset_display_name }}
-            {% if publication.station %}<div class="text-body-secondary small">{{ publication.station.name }}</div>{% endif %}
-          </td>
-          <td>Publication {{ publication.version_number }}</td>
-          <td class="d-none d-md-table-cell">{{ publication.source_revision }}</td>
-          <td><span class="badge text-bg-{{ publication.status|publication_status_badge }}">{{ publication.status|publication_status_label }}</span></td>
-          <td class="d-none d-md-table-cell">{{ publication.created_at|date:"j M Y H:i" }}</td>
-          <td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="{% url 'publications-review' publication.id %}">View details</a></td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="6" class="text-center text-body-secondary py-4">No publications yet.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% if history_page.paginator.num_pages > 1 %}
-  <nav class="mt-3" aria-label="Publication history pages">
-    <ul class="pagination pagination-sm">
-      {% if history_page.has_previous %}
-      <li class="page-item"><a class="page-link" href="?page={{ history_page.previous_page_number }}">Previous</a></li>
-      {% endif %}
-      <li class="page-item disabled"><span class="page-link">Page {{ history_page.number }} of {{ history_page.paginator.num_pages }}</span></li>
-      {% if history_page.has_next %}
-      <li class="page-item"><a class="page-link" href="?page={{ history_page.next_page_number }}">Next</a></li>
-      {% endif %}
-    </ul>
-  </nav>
-  {% endif %}
+<section class="mb-4">
+  <form method="post" action="{% url 'publications-bulk-rebuild' department.id %}">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-primary">Build &amp; publish affected datasets now</button>
+  </form>
+  <p class="text-body-secondary small mt-2 mb-0">This promotes existing affected work where possible and wakes the build runner after the request commits.</p>
 </section>
-{% endblock %}
-{% block scripts %}
-<script>
-  (function () {
-    document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
-      if (!bootstrap.Popover.getInstance(el)) { new bootstrap.Popover(el); }
-    });
-  })();
-</script>
+
+{% include "publications/_status.html" %}
 {% endblock %}

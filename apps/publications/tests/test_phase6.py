@@ -162,12 +162,11 @@ def test_mark_dirty_advances_revision_preserves_first_dirty_time_and_coalesces_j
     assert second.source_revision == 2
     assert second.dirty_since == first_dirty_since
     assert PublicationJob.objects.filter(status=PublicationJob.Status.PENDING).count() == 1
-    assert (
-        enqueue_publication_job(
-            department=department, dataset_type_code="department_hydrants", requested_by=admin
-        )
-        is None
+    coalesced = enqueue_publication_job(
+        department=department, dataset_type_code="department_hydrants", requested_by=admin
     )
+    assert coalesced is not None
+    assert coalesced.source_revision == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -229,7 +228,7 @@ def test_finalize_current_claim_marks_publication_ready_and_clears_dirty_scope(p
     scope.refresh_from_db()
 
     assert finalized.status == PublicationJob.Status.SUCCEEDED
-    assert finalized.build_publication.status == DatasetPublication.Status.READY_FOR_REVIEW
+    assert finalized.build_publication.status == DatasetPublication.Status.PUBLISHED
     assert finalized.build_publication.build_summary == hydrant_summary(scope.source_revision)
     assert scope.latest_built_publication == finalized.build_publication
     assert scope.dirty_since is None

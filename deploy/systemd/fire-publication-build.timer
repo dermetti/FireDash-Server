@@ -1,0 +1,10 @@
+[Unit]
+Description=Run FireDash publication builds nightly
+
+[Timer]
+OnCalendar=*-*-* 00:05:00
+Persistent=true
+Unit=fire-publication-build.service
+
+[Install]
+WantedBy=timers.target

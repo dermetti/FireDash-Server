@@ -29,17 +29,11 @@
   </div></div>
 </section>
 
-{% if publication.status == "READY_FOR_REVIEW" or publication.status == "SUPERSEDED" %}
+{% if publication.status == "SUPERSEDED" %}
 <section>
-  <h2 class="h5 mb-3">Review</h2>
+  <h2 class="h5 mb-3">Recovery</h2>
   <div class="d-flex gap-2">
-    {% if publication.status == "READY_FOR_REVIEW" %}
-    <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="publish"><button class="btn btn-success">Publish</button></form>
-    <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="reject"><button class="btn btn-outline-danger">Reject</button></form>
-    {% endif %}
-    {% if publication.status == "SUPERSEDED" %}
     <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="rollback"><button class="btn btn-outline-secondary">Restore this publication</button></form>
-    {% endif %}
   </div>
 </section>
 {% endif %}

@@ -204,16 +204,46 @@ fi
 
 # -------- systemd --------
 log "=== systemd ==="
-for unit in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-worker.timer fire-publication-maintenance.service fire-publication-maintenance.timer fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-pdf-sanitizer-broker.socket fire-pdf-sanitizer-broker@.service fire-backup.service fire-backup.timer fire-restore.service; do
+for unit in fire-backend.socket fire-backend.service fire-publication-delivery.service fire-publication-build.service fire-publication-build.socket fire-publication-build.timer fire-publication-maintenance.service fire-publication-maintenance.timer fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-pdf-sanitizer-broker.socket fire-pdf-sanitizer-broker@.service fire-backup.service fire-backup.timer fire-restore.service; do
     [[ -f /etc/systemd/system/$unit ]] && ok "unit $unit installed" || fail "unit $unit missing"
 done
 [[ $(systemctl is-enabled fire-backend.socket 2>/dev/null) == enabled ]] && ok "fire-backend.socket enabled" || fail "fire-backend.socket not enabled"
 [[ $(systemctl is-enabled fire-pdf-sanitizer-broker.socket 2>/dev/null) == enabled ]] && ok "fire-pdf-sanitizer-broker.socket enabled" || fail "fire-pdf-sanitizer-broker.socket not enabled"
 [[ $(systemctl is-active fire-pdf-sanitizer-broker.socket 2>/dev/null) == active ]] && ok "fire-pdf-sanitizer-broker.socket active" || fail "fire-pdf-sanitizer-broker.socket not active"
 [[ $(systemctl is-enabled fire-backend.service 2>/dev/null) != enabled ]] && ok "fire-backend.service not directly enabled" || fail "fire-backend.service should not be enabled"
-for t in fire-publication-worker.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+for t in fire-publication-build.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
     [[ $(systemctl is-enabled "$t" 2>/dev/null) == enabled ]] && ok "$t enabled" || fail "$t not enabled"
 done
+[[ $(systemctl is-enabled fire-publication-delivery.service 2>/dev/null) == enabled ]] && ok "fire-publication-delivery.service enabled" || fail "fire-publication-delivery.service not enabled"
+[[ $(systemctl is-active fire-publication-delivery.service 2>/dev/null) == active ]] && ok "fire-publication-delivery.service active" || fail "fire-publication-delivery.service not active"
+[[ $(systemctl is-enabled fire-publication-build.socket 2>/dev/null) == enabled ]] && ok "fire-publication-build.socket enabled" || fail "fire-publication-build.socket not enabled"
+[[ $(systemctl is-active fire-publication-build.socket 2>/dev/null) == active ]] && ok "fire-publication-build.socket active" || fail "fire-publication-build.socket not active"
+if systemctl cat fire-publication-build.socket 2>/dev/null | grep -q '^SocketGroup=fire_backend' \
+    && systemctl cat fire-publication-build.socket 2>/dev/null | grep -q '^SocketMode=0660'; then
+    ok "publication build wake socket is limited to fire_backend"
+else
+    fail "publication build wake socket permissions unexpected"
+fi
+if systemctl cat fire-publication-build.timer 2>/dev/null | grep -q '^OnCalendar=\*-\*-\* 00:05:00'; then
+    ok "publication build timer is scheduled nightly at 00:05"
+else
+    fail "publication build timer schedule unexpected"
+fi
+if [[ $(stat -c '%U:%G:%a' /run/fire-backend/publication-build.sock 2>/dev/null) == "root:fire_backend:660" ]]; then
+    ok "publication build wake socket owner/group/mode is constrained"
+else
+    fail "publication build wake socket owner/group/mode unexpected"
+fi
+if systemctl is-enabled fire-publication-worker.timer 2>/dev/null | grep -q enabled; then
+    fail "obsolete fire-publication-worker.timer is enabled"
+else
+    ok "obsolete fire-publication-worker.timer retired"
+fi
+if systemctl is-active --quiet fire-publication-worker.service; then
+    fail "obsolete fire-publication-worker.service is active"
+else
+    ok "obsolete fire-publication-worker.service is inactive"
+fi
 
 # credential separation
 if systemctl cat fire-backend.service 2>/dev/null | grep -q 'publication-signing-public-key'; then
@@ -226,16 +256,33 @@ if systemctl cat fire-backend.service 2>/dev/null | grep -Eq 'publication-kek|pu
 else
     ok "web service does not load KEK/private signing key"
 fi
-if systemctl cat fire-publication-worker.service 2>/dev/null | grep -q 'publication-kek' \
-    && systemctl cat fire-publication-worker.service 2>/dev/null | grep -q 'publication-signing-key'; then
-    ok "publication worker loads KEK + private signing key"
+if systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q 'publication-kek' \
+    && systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q 'publication-signing-key' \
+    && systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q -- '--delivery --forever --poll-seconds 2'; then
+    ok "publication delivery worker has private credentials and delivery-only command"
 else
-    fail "publication worker missing KEK/private signing key credentials"
+    fail "publication delivery worker credentials or command unexpected"
+fi
+if systemctl cat fire-publication-build.service 2>/dev/null | grep -q -- 'process_publication_jobs --build'; then
+    ok "publication build worker is build-only"
+else
+    fail "publication build worker command unexpected"
+fi
+if systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-kek' \
+    && systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-signing-key'; then
+    ok "publication build worker has required private credentials"
+else
+    fail "publication build worker private credentials unexpected"
 fi
 if systemctl cat fire-publication-maintenance.service 2>/dev/null | grep -Eq 'publication-kek|publication-signing-key:'; then
     fail "maintenance service must not load KEK/private signing key"
 else
     ok "maintenance service does not load KEK/private signing key"
+fi
+if runuser -u fire_backend -- sudo -n -l >/dev/null 2>&1; then
+    fail "fire_backend has passwordless sudo privileges"
+else
+    ok "fire_backend has no passwordless sudo privilege"
 fi
 
 # backend privilege boundary: NoNewPrivileges must remain enforced.

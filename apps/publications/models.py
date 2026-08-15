@@ -104,6 +104,8 @@ class DatasetPublication(models.Model):
     scope_state = models.ForeignKey(
         DatasetScopeState, on_delete=models.PROTECT, related_name="publications"
     )
+    # Every claimed build attempt receives one immutable scope-local version.
+    # It is part of the artifact signature payload and is never reused.
     version_number = models.PositiveBigIntegerField()
     schema_version = models.PositiveIntegerField()
     source_revision = models.PositiveBigIntegerField()
@@ -150,6 +152,8 @@ class DatasetPublication(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=("department", "station", "dataset_type_code", "version_number"),
+                # PostgreSQL treats department-scoped NULL station values as
+                # equal here, so every assigned version is unique per scope.
                 nulls_distinct=False,
                 name="unique_dataset_publication_version",
             ),
@@ -178,7 +182,7 @@ class DatasetPublication(models.Model):
             errors["station"] = "Station must belong to the publication department."
         if self.schema_version != definition.current_schema_version:
             errors["schema_version"] = "Schema version is not supported for this dataset."
-        elif self.schema_version not in definition.supported_schema_versions:
+        if self.schema_version not in definition.supported_schema_versions:
             errors["schema_version"] = "Schema version is not supported for this dataset."
         if errors:
             raise ValidationError(errors)
@@ -233,6 +237,7 @@ class PublicationJob(models.Model):
 
     class TriggerType(models.TextChoices):
         USER_REQUEST = "USER_REQUEST", "User request"
+        BULK_REQUEST = "BULK_REQUEST", "Bulk request"
         DATA_CHANGE = "DATA_CHANGE", "Data change"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

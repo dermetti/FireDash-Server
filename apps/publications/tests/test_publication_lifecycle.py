@@ -129,7 +129,9 @@ def test_fire_plan_deactivation_marks_dirty_and_queues(lifecycle_context):
 def test_inactive_hydrant_excluded_from_artifact(lifecycle_context):
     admin, department, _, _ = lifecycle_context
     active = create_hydrant(actor=admin, department=department, longitude=10.0, latitude=53.0)
-    inactive = Hydrant.objects.create(department=department, status=Hydrant.Status.INACTIVE)
+    inactive = create_hydrant(actor=admin, department=department, longitude=10.1, latitude=53.1)
+    inactive.status = Hydrant.Status.INACTIVE
+    inactive.save(update_fields=("status", "updated_at"))
 
     definition = get_dataset_definition("department_hydrants")
     artifact = build_artifact(

@@ -1,0 +1,31 @@
+[Unit]
+Description=FireDash publication build worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=fire_publication
+Group=fire_publication
+WorkingDirectory=/srv/firedash/current
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+EnvironmentFile=/etc/fire-backend/fire-backend.env
+LoadCredential=publication-kek:/etc/fire-backend/credentials/publication-kek
+LoadCredential=publication-signing-key:/etc/fire-backend/credentials/publication-signing-key
+ExecStart=/srv/firedash/current/venv/bin/python manage.py process_publication_jobs --build
+TimeoutStartSec=120s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/var/lib/fire-backend/fire-plans
+ReadWritePaths=/var/lib/fire-backend/publications
