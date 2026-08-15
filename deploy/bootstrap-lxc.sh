@@ -14,6 +14,8 @@ source "$SELF_DIR/lib/common.sh"
 source "$SELF_DIR/lib/postgresql.sh"
 # shellcheck source=lib/systemd.sh
 source "$SELF_DIR/lib/systemd.sh"
+# shellcheck source=lib/converge.sh
+source "$SELF_DIR/lib/converge.sh"
 
 FIREDASH_REPO_ROOT=${FIREDASH_REPO_ROOT:-$ROOT}
 export FIREDASH_REPO_ROOT
@@ -56,6 +58,9 @@ install_systemd_units
 install -d -o root -g root -m 0755 /usr/local/lib/fire-backend
 install -m 0755 -o root -g root "$ROOT/deploy/scripts/fire-pdf-sanitizer-broker" \
     /usr/local/lib/fire-backend/fire-pdf-sanitizer-broker
+
+log "converging obsolete deployment artifacts"
+remove_obsolete_deployment_artifacts
 
 systemd-tmpfiles --create
 
