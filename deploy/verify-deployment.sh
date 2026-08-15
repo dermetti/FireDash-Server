@@ -204,10 +204,12 @@ fi
 
 # -------- systemd --------
 log "=== systemd ==="
-for unit in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-worker.timer fire-publication-maintenance.service fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-backup.service fire-backup.timer fire-restore.service; do
+for unit in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-worker.timer fire-publication-maintenance.service fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-pdf-sanitizer-broker.socket fire-pdf-sanitizer-broker@.service fire-backup.service fire-backup.timer fire-restore.service; do
     [[ -f /etc/systemd/system/$unit ]] && ok "unit $unit installed" || fail "unit $unit missing"
 done
 [[ $(systemctl is-enabled fire-backend.socket 2>/dev/null) == enabled ]] && ok "fire-backend.socket enabled" || fail "fire-backend.socket not enabled"
+[[ $(systemctl is-enabled fire-pdf-sanitizer-broker.socket 2>/dev/null) == enabled ]] && ok "fire-pdf-sanitizer-broker.socket enabled" || fail "fire-pdf-sanitizer-broker.socket not enabled"
+[[ $(systemctl is-active fire-pdf-sanitizer-broker.socket 2>/dev/null) == active ]] && ok "fire-pdf-sanitizer-broker.socket active" || fail "fire-pdf-sanitizer-broker.socket not active"
 [[ $(systemctl is-enabled fire-backend.service 2>/dev/null) != enabled ]] && ok "fire-backend.service not directly enabled" || fail "fire-backend.service should not be enabled"
 for t in fire-publication-worker.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
     [[ $(systemctl is-enabled "$t" 2>/dev/null) == enabled ]] && ok "$t enabled" || fail "$t not enabled"
@@ -234,6 +236,57 @@ if systemctl cat fire-publication-maintenance.service 2>/dev/null | grep -Eq 'pu
     fail "maintenance service must not load KEK/private signing key"
 else
     ok "maintenance service does not load KEK/private signing key"
+fi
+
+# backend privilege boundary: NoNewPrivileges must remain enforced.
+if systemctl cat fire-backend.service 2>/dev/null | grep -Eq '^NoNewPrivileges=(true|yes)'; then
+    ok "fire-backend.service NoNewPrivileges enforced"
+else
+    fail "fire-backend.service missing NoNewPrivileges=true"
+fi
+
+# sanitizer broker must carry no application secrets and no credential material.
+if systemctl cat fire-pdf-sanitizer-broker@.service 2>/dev/null | grep -Eq 'publication-kek|publication-signing-key|LoadCredential|EnvironmentFile'; then
+    fail "sanitizer broker must not load credentials/environment"
+else
+    ok "sanitizer broker loads no credentials/environment"
+fi
+
+# inetd-style stdio: accepted connection on stdin, journal on stderr, stdout inherited.
+if systemctl cat fire-pdf-sanitizer-broker.socket 2>/dev/null | grep -q '^Accept=yes'; then
+    ok "sanitizer broker socket Accept=yes"
+else
+    fail "sanitizer broker socket missing Accept=yes"
+fi
+if systemctl cat fire-pdf-sanitizer-broker@.service 2>/dev/null | grep -q '^StandardInput=socket'; then
+    ok "sanitizer broker StandardInput=socket"
+else
+    fail "sanitizer broker missing StandardInput=socket"
+fi
+if systemctl cat fire-pdf-sanitizer-broker@.service 2>/dev/null | grep -q '^StandardOutput=inherit'; then
+    ok "sanitizer broker StandardOutput=inherit"
+else
+    fail "sanitizer broker missing StandardOutput=inherit"
+fi
+if systemctl cat fire-pdf-sanitizer-broker@.service 2>/dev/null | grep -q '^StandardError=journal'; then
+    ok "sanitizer broker StandardError=journal"
+else
+    fail "sanitizer broker missing StandardError=journal"
+fi
+
+# obsolete sudo handoff must be absent; the socket broker must be present.
+[[ ! -e /etc/sudoers.d/fire-pdf-sanitizer ]] && ok "obsolete sudoers rule removed" || fail "obsolete sudoers rule still installed"
+[[ ! -e /usr/local/lib/fire-backend/fire-pdf-sanitize ]] && ok "obsolete sudo wrapper removed" || fail "obsolete sudo wrapper still installed"
+if [[ -x /usr/local/lib/fire-backend/fire-pdf-sanitizer-broker ]]; then
+    ok "sanitizer broker executable present"
+else
+    fail "sanitizer broker executable missing"
+fi
+[[ $(stat -c '%U:%G:%a' /usr/local/lib/fire-backend/fire-pdf-sanitizer-broker) == "root:root:755" ]] && ok "sanitizer broker root:root 0755" || fail "sanitizer broker ownership/mode unexpected"
+if [[ -S /run/fire-pdf-sanitizer-broker/broker.sock ]]; then
+    [[ $(stat -c '%U:%G:%a' /run/fire-pdf-sanitizer-broker/broker.sock) == "root:fire_backend:660" ]] && ok "sanitizer broker socket root:fire_backend 0660" || fail "sanitizer broker socket ownership/mode unexpected"
+else
+    fail "sanitizer broker socket not present"
 fi
 
 # -------- filesystem / credentials --------

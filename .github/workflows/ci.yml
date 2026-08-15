@@ -158,7 +158,7 @@ jobs:
           bash -n deploy/scripts/create-service-users.sh
           bash -n deploy/scripts/fire-backup
           bash -n deploy/scripts/fire-restore
-          bash -n deploy/scripts/fire-pdf-sanitize
+          python -m py_compile deploy/scripts/fire-pdf-sanitizer-broker
 
       - name: Run deployment helper tests
         run: |

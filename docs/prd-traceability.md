@@ -38,7 +38,7 @@ restore drill, external service, or acceptance test has been performed.
 
 | PRD area | Requirement | Evidence | Status / gate |
 | --- | --- | --- | --- |
-| Phase 5 | Hydrant import, PDF quarantine, sandboxing, sanitization, validation, accepted storage | `apps/reference_data`, `deploy/scripts/fire-pdf-sanitize`, `deploy/systemd/fire-pdf-sanitizer.service` | Implemented; OS sandbox tools, paths, limits, and Nginx upload limit are environment gates. |
+| Phase 5 | Hydrant import, PDF quarantine, sandboxing, sanitization, validation, accepted storage | `apps/reference_data`, `deploy/scripts/fire-pdf-sanitizer-broker`, `deploy/systemd/fire-pdf-sanitizer@.service` | Implemented; OS sandbox tools, paths, limits, and Nginx upload limit are environment gates. |
 | Phase 6 | Scope state, revisions, dirty detection, locked job queue, drafts, approval, rollback | `apps/publications`, worker unit and timer | Implemented; timer execution and database locking behavior in production are verification gates. |
 | Phase 6 | Expire temporary personnel assignments | `expire_temporary_assignments` command and timer units | Implemented; timer enablement is an environment gate. |
 | Phase 6.1 | Immutable registry codes, scope/schema compatibility, features, generic builders | `apps/publications` registry/builders and tests | Implemented; fourth-type acceptance coverage remains a verification gate. |

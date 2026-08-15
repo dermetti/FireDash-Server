@@ -23,9 +23,9 @@ def write_quarantine(upload: UploadedFile) -> Path:
     return path
 
 
-def output_path() -> Path:
+def output_path(*, job_id: str | None = None) -> Path:
     _ensure_private_roots()
-    job_directory = settings.REFERENCE_DATA_SANITIZER_OUTPUT_ROOT / str(uuid.uuid4())
+    job_directory = settings.REFERENCE_DATA_SANITIZER_OUTPUT_ROOT / (job_id or str(uuid.uuid4()))
     # Owner-only creation: the unprivileged process must not request SUID/SGID bits.
     # The setgid parent propagates the fire_pdf_sanitizer group to this directory, so a
     # plain non-SGID chmod below grants the sanitizer narrow write/traverse (no read/list).

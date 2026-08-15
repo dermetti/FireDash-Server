@@ -1,7 +1,7 @@
 bind = "unix:/run/fire-backend/gunicorn.sock"
 workers = 2
 worker_class = "sync"
-timeout = 30
+timeout = 90
 graceful_timeout = 30
 keepalive = 5
 accesslog = None

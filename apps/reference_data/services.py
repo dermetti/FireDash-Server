@@ -166,7 +166,7 @@ def accept_fire_plan(
     try:
         quarantine = write_quarantine(uploaded_file)
         validate_pdf(quarantine, original_filename=uploaded_file.name)
-        sanitized = output_path()
+        sanitized = output_path(job_id=quarantine.parent.name)
         sanitize(quarantined_input=quarantine, sanitized_output=sanitized)
         file_size, page_count, digest = validate_pdf(sanitized)
         plan_id = uuid.uuid4()

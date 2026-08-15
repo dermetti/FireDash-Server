@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""FireDash PDF sanitizer broker (socket-activated, root-owned).
+
+Accepts exactly one lowercase canonical UUID + newline on stdin, starts the fixed
+``fire-pdf-sanitizer@<uuid>.service`` transient unit, waits for it to finish,
+verifies the sanitized output, and returns a single ``OK``/``ERR`` status line on
+the connection socket. It never accepts paths, commands, unit names, or shell
+syntax, and never uses a shell.
+"""
+
+import os
+import re
+import stat
+import subprocess
+import sys
+
+SYSTEMCTL = "/bin/systemctl"
+SANITIZER_OUTPUT_ROOT = "/var/lib/fire-backend/sanitizer-output"
+OUTPUT_NAME = "sanitized.pdf"
+OUTPUT_OWNER = "fire_backend"
+OUTPUT_GROUP = "fire_backend"
+OUTPUT_MODE = 0o600
+# Must stay in sync with MAX_PDF_OUTPUT_BYTES (default 150 MiB). The application
+# re-validates the size after the broker, so this is a defense-in-depth cap.
+MAX_OUTPUT_BYTES = 150 * 1024 * 1024
+# Backstop above the sanitizer unit's TimeoutStartSec (60s).
+SANITIZER_TIMEOUT_SECONDS = 75
+MAX_REQUEST_BYTES = 64
+
+# O_NOFOLLOW is not exposed on non-Linux hosts; it is only required in production.
+_O_NOFOLLOW: int = getattr(os, "O_NOFOLLOW", 0)
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def validate_job_id(job_id: str) -> str | None:
+    """Return *job_id* if it is exactly one lowercase canonical UUID, else None."""
+    if _UUID_RE.match(job_id) is None:
+        return None
+    return job_id
+
+
+def _owner_ids() -> tuple[int, int]:
+    """Resolve the fixed output owner/group to numeric ids (Linux-only)."""
+    import grp
+    import pwd
+
+    return pwd.getpwnam(OUTPUT_OWNER).pw_uid, grp.getgrnam(OUTPUT_GROUP).gr_gid
+
+
+def run_job(job_id: str) -> str:
+    """Run the sanitizer for *job_id*; return an ``OK``/``ERR`` status token."""
+    unit = f"fire-pdf-sanitizer@{job_id}.service"
+    output = os.path.join(SANITIZER_OUTPUT_ROOT, job_id, OUTPUT_NAME)
+    try:
+        # Fixed argv derived from a validated UUID; never a shell.
+        result = subprocess.run(  # nosec B603
+            [SYSTEMCTL, "start", "--wait", unit],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=SANITIZER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return "ERR timeout"
+    except OSError:
+        return "ERR failed"
+    if result.returncode != 0:
+        return "ERR failed"
+    try:
+        # Open with O_NOFOLLOW and finalize on the fd to avoid a path-based
+        # TOCTOU window between lstat and chown/chmod.
+        fd = os.open(output, os.O_RDONLY | _O_NOFOLLOW)
+    except OSError:
+        return "ERR failed"
+    try:
+        entry = os.fstat(fd)
+        if not stat.S_ISREG(entry.st_mode) or entry.st_size > MAX_OUTPUT_BYTES:
+            return "ERR failed"
+        uid, gid = _owner_ids()
+        os.fchown(fd, uid, gid)
+        os.fchmod(fd, OUTPUT_MODE)
+    except (OSError, KeyError):
+        return "ERR failed"
+    finally:
+        os.close(fd)
+    return "OK"
+
+
+def parse_request(raw: bytes) -> str:
+    """Validate one raw request; return a status token for the caller."""
+    if not raw:
+        return "ERR invalid"
+    if len(raw) > MAX_REQUEST_BYTES:
+        return "ERR invalid"
+    try:
+        text = raw.decode("ascii", "strict")
+    except UnicodeDecodeError:
+        return "ERR invalid"
+    if not text.endswith("\n"):
+        return "ERR invalid"
+    line = text[:-1]
+    if line.endswith("\r"):
+        line = line[:-1]
+    if "\n" in line or "\r" in line:
+        return "ERR invalid"
+    job_id = validate_job_id(line)
+    if job_id is None:
+        return "ERR invalid"
+    return run_job(job_id)
+
+
+def main() -> int:
+    # stdin is the accepted connection socket (StandardInput=socket); stdout is
+    # inherited by the journal, so the reply is written back on fd 0.
+    raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    reply = (parse_request(raw) + "\n").encode("ascii")
+    os.write(0, reply)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

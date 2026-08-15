@@ -120,6 +120,14 @@ def test_output_creation_requests_no_sgid(private_roots: Path, monkeypatch) -> N
     assert all(mode & 0o6000 == 0 for _, mode in chmod_calls)
 
 
+def test_output_path_shares_quarantine_job_id(private_roots: Path) -> None:
+    job_id = "123e4567-e89b-12d3-a456-426614174000"
+    sanitized = output_path(job_id=job_id)
+
+    assert sanitized.parent.name == job_id
+    assert sanitized.name == "sanitized.pdf"
+
+
 def test_runtime_directories_are_restrict_suidsgid_compatible(
     private_roots: Path, monkeypatch
 ) -> None:

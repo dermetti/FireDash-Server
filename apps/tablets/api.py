@@ -14,7 +14,7 @@ from django.utils import timezone
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
-from rest_framework import authentication, exceptions, permissions, serializers, status
+from rest_framework import authentication, exceptions, permissions, renderers, serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -405,8 +405,28 @@ class ManifestView(InstallationAPIView):
         return Response(payload, headers={"ETag": etag})
 
 
+class OctetStreamRenderer(renderers.BaseRenderer):
+    media_type = "application/octet-stream"
+    format = "binary"
+    charset = None
+    render_style = "binary"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if data is None:
+            return b""
+        if isinstance(data, bytes):
+            return data
+        return renderers.JSONRenderer().render(data, accepted_media_type, renderer_context)
+
+
 @extend_schema(responses={200: OpenApiTypes.BINARY, 304: None})
 class DownloadView(InstallationAPIView):
+    # The view returns a plain ``HttpResponse`` on success, so the renderer only
+    # participates in content negotiation. Accepting ``application/octet-stream``
+    # prevents DRF from raising 406 before ``get()``; structured error payloads are
+    # delegated to JSON so RFC 9457 problem responses remain intact.
+    renderer_classes = [renderers.JSONRenderer, OctetStreamRenderer]
+
     def get(self, request, publication_id: UUID):
         try:
             manifest = request_manifest(installation=self.installation)

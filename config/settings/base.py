@@ -123,8 +123,8 @@ PDF_SANITIZER_TIMEOUT_SECONDS = get_typed_env("PDF_SANITIZER_TIMEOUT_SECONDS", i
 PDF_SANITIZER_MEMORY_MAX_BYTES = get_typed_env(
     "PDF_SANITIZER_MEMORY_MAX_BYTES", int, default=512 * 1024 * 1024
 )
-PDF_SANITIZER_WRAPPER = get_env(
-    "PDF_SANITIZER_WRAPPER", default="/usr/local/lib/fire-backend/fire-pdf-sanitize"
+PDF_SANITIZER_BROKER_SOCKET = get_env(
+    "PDF_SANITIZER_BROKER_SOCKET", default="/run/fire-pdf-sanitizer-broker/broker.sock"
 )
 PUBLICATION_WORKER_BATCH_SIZE = get_typed_env("PUBLICATION_WORKER_BATCH_SIZE", int, default=10)
 PUBLICATION_JOB_HEARTBEAT_TIMEOUT_SECONDS = get_typed_env(

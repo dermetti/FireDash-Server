@@ -49,14 +49,13 @@ log "creating service identities and runtime directories"
 install -d -o root -g root -m 0755 /srv/firedash /srv/firedash/releases
 install -d -o root -g root -m 0700 /var/lib/fire-backend/backup-staging /var/lib/fire-backend/restore-tests
 
-log "installing tmpfiles, systemd units, PDF sanitizer boundary"
+log "installing tmpfiles, systemd units, PDF sanitizer broker"
 install -m 0644 "$ROOT/deploy/systemd/fire-backend.tmpfiles.conf" /etc/tmpfiles.d/fire-backend.conf
 install_systemd_units
 
 install -d -o root -g root -m 0755 /usr/local/lib/fire-backend
-install -m 0755 -o root -g root "$ROOT/deploy/scripts/fire-pdf-sanitize" /usr/local/lib/fire-backend/fire-pdf-sanitize
-install -m 0440 -o root -g root "$ROOT/deploy/sudoers/fire-pdf-sanitizer" /etc/sudoers.d/fire-pdf-sanitizer
-visudo -cf /etc/sudoers.d/fire-pdf-sanitizer
+install -m 0755 -o root -g root "$ROOT/deploy/scripts/fire-pdf-sanitizer-broker" \
+    /usr/local/lib/fire-backend/fire-pdf-sanitizer-broker
 
 systemd-tmpfiles --create
 

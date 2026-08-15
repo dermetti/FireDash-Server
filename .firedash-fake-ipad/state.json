@@ -1,0 +1,10 @@
+{
+  "app_version": "1.0.0",
+  "authorization_valid_until": "2026-08-21T16:43:03.296949Z",
+  "credential": "XV3tGwipWUUfyrBgi0uRm7s6DP9DfBuQ5Fond9OPYUQ",
+  "installation_id": "08dbb999-549c-4bfb-be92-174a57ea7eda",
+  "installation_uuid": "72c36a21-9a1f-482e-8747-8cfc193cc1cd",
+  "public_key_fingerprint": "27fe4f6662f04182c805f7b2a77ec5604a2289a4a603fc3ab241f1773875aa51",
+  "server_url": "https://firedash.mjblab.de",
+  "tablet_id": "406fb59a-4d59-4808-99cc-9e8045cf9360"
+}

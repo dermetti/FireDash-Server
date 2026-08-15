@@ -11,6 +11,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from django.conf import settings
 from django.test import Client, override_settings
 from django.utils import timezone
+from rest_framework.negotiation import DefaultContentNegotiation
+from rest_framework.request import Request
+from rest_framework.test import APIRequestFactory
 
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
@@ -19,6 +22,7 @@ from apps.publications.hpke import HPKE_CIPHERSUITE, serialize_p256_public_key
 from apps.publications.manifests import request_manifest
 from apps.publications.models import DatasetKeyGrant, DatasetPublication, DatasetScopeState
 from apps.publications.worker_grants import process_next_signed_manifest
+from apps.tablets.api import DownloadView
 from apps.tablets.models import AppInstallation, Tablet
 from apps.tablets.services import generate_credential, verify_credential
 
@@ -184,6 +188,62 @@ def test_download_uses_canonical_artifact_path_and_etag(api_context, tmp_path):
     assert invalid_uuid.status_code == 404
 
 
+def test_download_accepts_octet_stream_content_negotiation(api_context, tmp_path):
+    client, installation, credential, publication = api_context
+    signing_path = tmp_path / "signing"
+    signing_path.write_bytes(b"s" * 32)
+    request_manifest(installation=installation)
+    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+        process_next_signed_manifest()
+
+    response = client.get(
+        f"/api/v1/tablet/datasets/{publication.id}/download",
+        HTTP_ACCEPT="application/octet-stream",
+        **_authorization(credential),
+    )
+
+    assert response.status_code == 200
+    assert response["Content-Type"] == "application/octet-stream"
+    assert response["X-Accel-Redirect"] == (
+        f"/internal-protected-datasets/{publication.artifact_path}"
+    )
+    assert response["Accept-Ranges"] == "bytes"
+    assert response["ETag"] == '"' + publication.artifact_sha256 + '"'
+
+    not_modified = client.get(
+        f"/api/v1/tablet/datasets/{publication.id}/download",
+        HTTP_ACCEPT="application/octet-stream",
+        HTTP_IF_NONE_MATCH=response["ETag"],
+        **_authorization(credential),
+    )
+    assert not_modified.status_code == 304
+
+
+def test_download_errors_stay_problem_json_with_octet_stream_accept(api_context, tmp_path):
+    client, installation, credential, publication = api_context
+    signing_path = tmp_path / "signing"
+    signing_path.write_bytes(b"s" * 32)
+    request_manifest(installation=installation)
+    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+        process_next_signed_manifest()
+
+    unauthorized = client.get(
+        f"/api/v1/tablet/datasets/{publication.id}/download",
+        HTTP_ACCEPT="application/octet-stream",
+        **_authorization("not-a-credential"),
+    )
+    assert unauthorized.status_code == 403
+    assert unauthorized["Content-Type"].startswith("application/problem+json")
+
+    unknown = client.get(
+        f"/api/v1/tablet/datasets/{uuid.uuid4()}/download",
+        HTTP_ACCEPT="application/octet-stream",
+        **_authorization(credential),
+    )
+    assert unknown.status_code == 404
+    assert unknown["Content-Type"].startswith("application/problem+json")
+
+
 def test_invalid_bearer_uses_rfc9457_problem_detail(api_context):
     client, _, _, _ = api_context
     response = client.get("/api/v1/tablet/status", **_authorization("not-a-credential"))
@@ -249,3 +309,24 @@ def test_openapi_schema_is_available():
 
     assert response.status_code == 200
     assert "openapi: 3.1.0" in response.content.decode()
+
+
+def test_download_content_negotiation_accepts_octet_stream():
+    view = DownloadView()
+    renderers = view.get_renderers()
+    http_request = APIRequestFactory().get(
+        "/api/v1/tablet/datasets/x/download", HTTP_ACCEPT="application/octet-stream"
+    )
+    request = Request(
+        http_request,
+        parsers=[],
+        authenticators=[],
+        negotiator=DefaultContentNegotiation(),
+    )
+
+    accepted_renderer, media_type = DefaultContentNegotiation().select_renderer(
+        request, renderers, None
+    )
+
+    assert media_type == "application/octet-stream"
+    assert accepted_renderer.media_type == "application/octet-stream"

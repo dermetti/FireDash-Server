@@ -85,9 +85,15 @@ non-hashed filenames; `collectstatic` runs during the maintenance window before 
 
 ## PDF sanitizer
 
-The installer preserves the root-owned UUID wrapper, the narrow sudoers policy, and the hardened
-`fire-pdf-sanitizer@.service` template (`PrivateNetwork=yes`, strict filesystem access, resource
-limits). These are installed but never enabled directly; instances are transient.
+The installer preserves the root-owned `fire-pdf-sanitizer-broker` executable, the
+`fire-pdf-sanitizer-broker.socket` activation unit (socket `root:fire_backend` mode `0660`,
+parent directory root-owned and not writable by `fire_backend`), and the hardened
+`fire-pdf-sanitizer-broker@.service` per-connection template (`Accept=yes`; systemd passes the
+accepted connection on stdin/stdout). The broker spawns the transient
+`fire-pdf-sanitizer@.service` sandbox (`PrivateNetwork=yes`, strict filesystem access, resource
+limits). Neither template is enabled directly; instances are transient. The broker socket is
+enabled via `activate_socket`. The application never elevates privileges (`fire-backend.service`
+keeps `NoNewPrivileges=true`) and talks to the broker over a Unix socket; there is no sudo path.
 
 ## Backup
 

@@ -8,7 +8,6 @@ source "$_LIB_DIR/common.sh"
 install_systemd_units() {
     local src=${FIREDASH_REPO_ROOT:?}/deploy/systemd unit
     for unit in "$src"/*.service "$src"/*.socket "$src"/*.timer; do
-        [[ $(basename "$unit") == fire-pdf-sanitizer.service ]] && continue
         install -m 0644 -o root -g root "$unit" /etc/systemd/system/"$(basename "$unit")"
     done
     systemctl daemon-reload
@@ -43,6 +42,7 @@ quiesce() {
 activate_socket() {
     log "enabling socket activation"
     systemctl enable --now fire-backend.socket
+    systemctl enable --now fire-pdf-sanitizer-broker.socket
 }
 
 activate_timers() {
