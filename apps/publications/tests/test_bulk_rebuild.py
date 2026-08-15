@@ -1,13 +1,18 @@
 """Bulk "Rebuild affected datasets" eligibility and deduplication tests."""
 
 import uuid
+from time import time
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+from django.urls import reverse
+from django_otp.oath import TOTP
+from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
-from apps.publications.models import DatasetPublication, DatasetScopeState
+from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.services import bulk_request_rebuilds, mark_dirty
 
 
@@ -46,6 +51,17 @@ def _published(department, scope, station=None, version_number=1):
         artifact_signature_algorithm="Ed25519",
         artifact_signing_key_version="1",
     )
+
+
+def _current_token(device: TOTPDevice) -> str:
+    token = TOTP(
+        device.bin_key,
+        step=device.step,
+        t0=device.t0,
+        digits=device.digits,
+        drift=device.drift,
+    ).token()
+    return f"{token:0{device.digits}d}"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -104,3 +120,49 @@ def test_bulk_rebuild_does_not_request_current_scopes(bulk_context):
     result = bulk_request_rebuilds(actor=admin, department=department)
 
     assert result == {"requested": 0, "already_queued": 0, "already_current": 1}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_bulk_rebuild_reauthentication_returns_to_list_before_second_post(client, bulk_context):
+    admin, department, _, _ = bulk_context
+    admin.mfa_enabled = True
+    admin.save(update_fields=("mfa_enabled",))
+    device = TOTPDevice.objects.create(
+        user=admin,
+        name="default",
+        key="3132333435363738393031323334353637383930",
+        confirmed=True,
+    )
+    DatasetScopeState.objects.create(
+        department=department, dataset_type_code="department_fire_plans"
+    )
+    client.force_login(admin)
+    action_url = reverse("publications-bulk-rebuild", args=(department.id,))
+    return_url = reverse("publications-list", args=(department.id,))
+
+    pending_response = client.post(action_url)
+
+    assert pending_response.status_code == 302
+    token = parse_qs(urlparse(pending_response.url).query)["pending"][0]
+    assert client.session["pending_reauth"]["url"] == action_url
+    assert client.session["pending_reauth"]["method"] == "POST"
+    assert client.session["pending_reauth"]["return_url"] == return_url
+    assert not PublicationJob.objects.filter(scope_state__department=department).exists()
+
+    reauth_response = client.post(
+        reverse("accounts-reauthenticate"),
+        {"pending": token, "token": _current_token(device)},
+    )
+
+    assert reauth_response.status_code == 302
+    assert reauth_response.url == return_url
+    assert client.get(reauth_response.url).status_code == 200
+    assert not PublicationJob.objects.filter(scope_state__department=department).exists()
+    assert "pending_reauth" not in client.session
+    assert client.session["recent_reauthentication_at"] >= time() - 5
+
+    second_action_response = client.post(action_url)
+
+    assert second_action_response.status_code == 302
+    assert second_action_response.url == return_url
+    assert PublicationJob.objects.filter(scope_state__department=department).exists()

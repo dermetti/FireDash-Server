@@ -40,7 +40,7 @@ _DEFINITIONS = (
         validator_service="summary",
         summary_schema=MappingProxyType(
             {
-                "active_count": "non_negative_integer",
+                "active_count": "item_count",
                 "source_revision": "non_negative_integer",
                 "status_counts": "bounded_string_integer_map",
             }
@@ -64,7 +64,7 @@ _DEFINITIONS = (
         validator_service="summary",
         summary_schema=MappingProxyType(
             {
-                "active_document_count": "non_negative_integer",
+                "active_document_count": "item_count",
                 "total_accepted_bytes": "non_negative_integer",
                 "total_pages": "non_negative_integer",
                 "source_revision": "non_negative_integer",
@@ -89,10 +89,10 @@ _DEFINITIONS = (
         validator_service="summary",
         summary_schema=MappingProxyType(
             {
-                "person_count": "non_negative_integer",
+                "person_count": "item_count",
                 "station_id": "uuid",
-                "commander_eligible_count": "non_negative_integer",
-                "verified_commander_email_count": "non_negative_integer",
+                "commander_eligible_count": "item_count",
+                "verified_commander_email_count": "item_count",
                 "source_revision": "non_negative_integer",
             }
         ),
@@ -117,7 +117,7 @@ _DEFINITIONS = (
         validator_service="summary",
         summary_schema=MappingProxyType(
             {
-                "incident_count": "non_negative_integer",
+                "incident_count": "item_count",
                 "source_revision": "non_negative_integer",
             }
         ),

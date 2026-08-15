@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from django.conf import settings
@@ -234,3 +234,38 @@ def request_manifest(
             payload["signing_key_version"] = manifest.signing_key_version
             return ManifestRequest(payload=payload, unavailable=False, request_id=manifest.id)
         return ManifestRequest(payload=None, unavailable=True, request_id=manifest.id)
+
+
+def cleanup_signed_manifests(
+    *, retention_days: int, batch_size: int = 500, dry_run: bool = False
+) -> int:
+    """Remove old terminal manifests without touching current active authorization state."""
+    if retention_days < 1 or batch_size < 1:
+        raise ValueError("Manifest retention and batch size must be positive.")
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    latest_active_ready = (
+        SignedManifest.objects.filter(
+            status=SignedManifest.Status.READY,
+            app_installation__status=AppInstallation.Status.ACTIVE,
+        )
+        .order_by("app_installation_id", "-created_at")
+        .distinct("app_installation_id")
+        .values("id")
+    )
+    candidates = (
+        SignedManifest.objects.filter(
+            status__in=(
+                SignedManifest.Status.READY,
+                SignedManifest.Status.FAILED,
+                SignedManifest.Status.OBSOLETE,
+            ),
+            completed_at__lt=cutoff,
+        )
+        .exclude(id__in=latest_active_ready)
+        .order_by("completed_at")[:batch_size]
+    )
+    ids = list(candidates.values_list("id", flat=True))
+    if dry_run:
+        return len(ids)
+    with transaction.atomic():
+        return SignedManifest.objects.filter(id__in=ids).delete()[0]

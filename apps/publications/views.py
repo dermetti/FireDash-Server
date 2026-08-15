@@ -4,6 +4,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from apps.accounts.reauth import require_recent_reauthentication
@@ -93,7 +94,10 @@ def publications(request: HttpRequest, department_id) -> HttpResponse:
 @require_http_methods(["POST"])
 def scope_rebuild(request: HttpRequest, scope_id) -> HttpResponse:
     scope = _scope_or_403(request, scope_id)
-    require_recent_reauthentication(request)
+    require_recent_reauthentication(
+        request,
+        return_url=reverse("publications-list", args=(scope.department_id,)),
+    )
     try:
         request_rebuild(
             actor=request.user,
@@ -112,7 +116,10 @@ def scope_rebuild(request: HttpRequest, scope_id) -> HttpResponse:
 @require_http_methods(["POST"])
 def bulk_rebuild(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
-    require_recent_reauthentication(request)
+    require_recent_reauthentication(
+        request,
+        return_url=reverse("publications-list", args=(department.id,)),
+    )
     result = bulk_request_rebuilds(actor=request.user, department=department)
     requested = result["requested"]
     already_queued = result["already_queued"]
@@ -141,7 +148,10 @@ def publication_review(request: HttpRequest, publication_id) -> HttpResponse:
     )
     require_department_admin(request.user, publication.department)
     if request.method == "POST":
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("publications-review", args=(publication.id,)),
+        )
         action = request.POST.get("action")
         try:
             if action == "publish":

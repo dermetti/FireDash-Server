@@ -1,12 +1,17 @@
 from time import time
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from django.contrib.sessions.middleware import SessionMiddleware
+from django.http import HttpResponse
+from django.test import RequestFactory
 from django.urls import reverse
 from django_otp.oath import TOTP
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from apps.accounts.models import User
+from apps.accounts.reauth import ReauthRedirect, pending_action, require_recent_reauthentication
 from apps.authorization.models import SystemRole
 from apps.organizations.models import Department
 
@@ -116,6 +121,14 @@ def test_reauthentication_pending_action_expires_and_is_single_use(client) -> No
     pending_url = pending_response.url
     token = parse_qs(urlparse(pending_url).query)["pending"][0]
     assert not Department.objects.filter(short_code="NORTH").exists()
+    assert client.session["pending_reauth"] == {
+        "token": token,
+        "user_id": str(user.id),
+        "url": action_url,
+        "method": "POST",
+        "return_url": action_url,
+        "exp": client.session["pending_reauth"]["exp"],
+    }
 
     session = client.session
     session["pending_reauth"]["exp"] = int(time()) - 1
@@ -136,8 +149,40 @@ def test_reauthentication_pending_action_expires_and_is_single_use(client) -> No
     assert reauth_response.url == action_url
     assert client.session["recent_reauthentication_at"] >= time() - 5
     assert "pending_reauth" not in client.session
+    continuation_response = client.get(reauth_response.url)
+    assert continuation_response.status_code == 200
+    assert not Department.objects.filter(short_code="NORTH").exists()
+
+    second_action_response = client.post(action_url, {"name": "North", "short_code": "NORTH"})
+    assert second_action_response.status_code == 302
+    assert Department.objects.filter(short_code="NORTH").exists()
 
     replay_response = client.get(f"{reverse('accounts-reauthenticate')}?pending={token}")
 
     assert replay_response.status_code == 200
     assert b"North" not in replay_response.content
+
+
+@pytest.mark.parametrize("return_url", ("https://attacker.example/", "//attacker.example/"))
+def test_reauthentication_rejects_unsafe_or_missing_continuations(return_url) -> None:
+    request = RequestFactory().post("/sensitive-action/")
+    SessionMiddleware(lambda request: HttpResponse()).process_request(request)
+    request.user = User(id="user-id")
+
+    with pytest.raises(ValueError, match="safe local URL"):
+        require_recent_reauthentication(request, return_url=return_url)
+    with pytest.raises(TypeError):
+        cast(Any, require_recent_reauthentication)(request)
+
+
+def test_pending_reauthentication_rejects_tampered_return_url() -> None:
+    request = RequestFactory().post("/sensitive-action/")
+    SessionMiddleware(lambda request: HttpResponse()).process_request(request)
+    request.user = User(id="user-id")
+
+    with pytest.raises(ReauthRedirect):
+        require_recent_reauthentication(request, return_url="/safe-management-page/")
+    token = request.session["pending_reauth"]["token"]
+    request.session["pending_reauth"]["return_url"] = "//attacker.example/"
+
+    assert pending_action(request, token) is None

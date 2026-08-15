@@ -6,6 +6,7 @@ import json
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID
 
 from django.conf import settings
@@ -30,7 +31,7 @@ from apps.tablets.models import (
     Tablet,
 )
 
-LEASE_DURATION = timedelta(days=7)
+AUTO_RENEW_THRESHOLD = timedelta(hours=48)
 INVITATION_DURATION = timedelta(minutes=15)
 CHALLENGE_DURATION = timedelta(minutes=5)
 MAX_FAILED_ATTEMPTS = 5
@@ -115,6 +116,32 @@ def _require_operational_tablet(tablet: Tablet) -> None:
         vehicle__station__active=True,
     ).exists():
         raise TabletError("Tablet requires a current active vehicle assignment.")
+
+
+def lease_target(*, department, now: datetime) -> datetime:
+    """Return the department-owned maximum offline authorization lease target."""
+    return now + timedelta(days=cast(int, department.tablet_lease_days))
+
+
+def _eligible_for_lease_renewal(*, installation: AppInstallation, now) -> bool:
+    return (
+        installation.status == AppInstallation.Status.ACTIVE
+        and installation.authorization_valid_until > now
+        and installation.tablet.active
+        and installation.tablet.status == Tablet.Status.ACTIVE
+        and installation.tablet.department.status == installation.tablet.department.Status.ACTIVE
+    )
+
+
+def _renew_lease_if_due(*, installation: AppInstallation, now) -> bool:
+    if not _eligible_for_lease_renewal(installation=installation, now=now):
+        return False
+    if installation.authorization_valid_until - now > AUTO_RENEW_THRESHOLD:
+        return False
+    installation.authorization_valid_until = lease_target(
+        department=installation.tablet.department, now=now
+    )
+    return True
 
 
 @transaction.atomic
@@ -380,7 +407,7 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
             hpke_key_verified_at=now,
             adopted_at=now,
             adopted_by=invitation.created_by,
-            authorization_valid_until=now + LEASE_DURATION,
+            authorization_valid_until=lease_target(department=tablet.department, now=now),
         )
         from apps.publications.manifests import revoke_dataset_key_grants
 
@@ -394,7 +421,7 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
             raise TabletError("Only stale installations can be reactivated.")
         installation.credential_hash = _secret_digest(credential)
         installation.status = AppInstallation.Status.ACTIVE
-        installation.authorization_valid_until = now + LEASE_DURATION
+        installation.authorization_valid_until = lease_target(department=tablet.department, now=now)
         installation.reactivated_at = now
         installation.reactivated_by = invitation.created_by
         installation.save(
@@ -478,8 +505,51 @@ def check_in(*, installation: AppInstallation, credential: str) -> AppInstallati
         raise TabletError("Installation is not active.")
     _require_operational_tablet(installation.tablet)
     installation.last_successful_check_in_at = now
-    installation.authorization_valid_until = now + LEASE_DURATION
-    installation.save(update_fields=("last_successful_check_in_at", "authorization_valid_until"))
+    if _renew_lease_if_due(installation=installation, now=now):
+        installation.save(
+            update_fields=("last_successful_check_in_at", "authorization_valid_until")
+        )
+    else:
+        installation.save(update_fields=("last_successful_check_in_at",))
+    return installation
+
+
+@transaction.atomic
+def refresh_installation_lease(
+    *, installation: AppInstallation, credential: str
+) -> AppInstallation:
+    """Explicitly top up one eligible installation without creating delivery work."""
+    installation = (
+        AppInstallation.objects.select_for_update()
+        .select_related("tablet__department")
+        .get(pk=installation.pk)
+    )
+    now = timezone.now()
+    if not verify_credential(installation=installation, credential=credential):
+        raise PermissionDenied("Installation credential is invalid.")
+    if (
+        installation.status != AppInstallation.Status.ACTIVE
+        or installation.authorization_valid_until <= now
+    ):
+        raise TabletError("Installation is not active.")
+    _require_operational_tablet(installation.tablet)
+    if not _eligible_for_lease_renewal(installation=installation, now=now):
+        raise TabletError("Only an active, authorized installation can be renewed.")
+    old_expiry = installation.authorization_valid_until
+    target = lease_target(department=installation.tablet.department, now=now)
+    installation.authorization_valid_until = max(old_expiry, target)
+    installation.last_successful_check_in_at = now
+    installation.save(update_fields=("authorization_valid_until", "last_successful_check_in_at"))
+    record_event(
+        action="tablet.self_refreshed",
+        department=installation.tablet.department,
+        target_type="app_installation",
+        target_uuid=installation.id,
+        metadata={
+            "old_expiry": old_expiry.isoformat(),
+            "new_expiry": installation.authorization_valid_until.isoformat(),
+        },
+    )
     return installation
 
 

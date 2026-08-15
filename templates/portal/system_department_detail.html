@@ -19,5 +19,12 @@
     <form method="post">{% csrf_token %}<input type="hidden" name="action" value="provision">{{ admin_form.as_p }}<button class="btn btn-outline-primary">Create Admin</button></form>
     </div></div>
   </div>
+  <div class="col-md-6">
+    <div class="card mb-3"><div class="card-body">
+    <h5>Tablet authorization lease</h5>
+    <p class="text-body-secondary small">Maximum offline authorization lease duration. Existing longer leases are not shortened.</p>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="tablet-lease">{{ lease_form.as_p }}<button class="btn btn-outline-primary">Update lease policy</button></form>
+    </div></div>
+  </div>
 </div>
 {% endblock %}

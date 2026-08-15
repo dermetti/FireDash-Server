@@ -22,7 +22,7 @@ quiesce() {
         systemctl stop fire-backup.service 2>/dev/null || true
     fi
     local timer svc
-    for timer in fire-publication-worker.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+    for timer in fire-publication-worker.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
         systemctl stop "$timer" 2>/dev/null || true
     done
     for svc in fire-publication-worker.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
@@ -47,7 +47,7 @@ activate_socket() {
 
 activate_timers() {
     local timer
-    for timer in fire-publication-worker.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+    for timer in fire-publication-worker.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
         systemctl enable --now "$timer"
     done
     if [[ -f /etc/fire-backend/backup.env ]] \

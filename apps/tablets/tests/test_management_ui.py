@@ -368,6 +368,9 @@ def test_adoption_post_requires_reauth(client, tablet_ui_scope):
     response = client.post(reverse("tablet-adopt", args=(scope.department.id, tablet.id)))
     assert response.status_code == 302
     assert "reauthenticate" in response.url
+    assert client.session["pending_reauth"]["return_url"] == reverse(
+        "tablet-adopt", args=(scope.department.id, tablet.id)
+    )
     assert AdoptionInvitation.objects.count() == 0
 
 

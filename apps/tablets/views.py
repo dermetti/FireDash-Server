@@ -277,7 +277,10 @@ def tablet_adopt(request: HttpRequest, department_id, tablet_id) -> HttpResponse
     tablet = _tablet_or_404(request, department_id, tablet_id)
     vehicle = current_vehicle(tablet)
     if request.method == "POST":
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("tablet-adopt", args=(department_id, tablet.id)),
+        )
         try:
             invitation, token = create_adoption_invitation(actor=request.user, tablet=tablet)
         except TabletError as error:
@@ -320,7 +323,10 @@ def tablet_reactivate(request: HttpRequest, department_id, tablet_id) -> HttpRes
         .first()
     )
     if request.method == "POST":
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("tablet-reactivate", args=(department_id, tablet.id)),
+        )
         if installation is None:
             messages.error(request, "Only a stale tablet can be reactivated.")
             return redirect("tablet-detail", department_id=department_id, tablet_id=tablet.id)
@@ -449,7 +455,10 @@ def tablet_remove(request: HttpRequest, department_id, tablet_id) -> HttpRespons
     vehicle = current_vehicle(tablet)
     form = TabletRemovalForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("tablet-remove", args=(department_id, tablet.id)),
+        )
         try:
             remove_tablet(
                 actor=request.user,

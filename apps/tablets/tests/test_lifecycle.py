@@ -11,6 +11,8 @@ from apps.assignments.models import TabletVehicleAssignment
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE
+from apps.publications.manifests import request_manifest
+from apps.publications.models import SignedManifest
 from apps.tablets.models import AppInstallation, Tablet
 from apps.tablets.services import (
     TabletError,
@@ -121,12 +123,24 @@ def test_adoption_creates_installation_with_seven_day_lease(operational_tablet):
     assert verify_credential(installation=installation, credential=credential)
 
 
-def test_check_in_renews_lease_and_fails_when_stale(operational_tablet):
+def test_check_in_renews_only_near_expiry_and_fails_when_stale(operational_tablet):
     installation, credential = _adopt(*operational_tablet)
     original_expiry = installation.authorization_valid_until
+    first_manifest = request_manifest(installation=installation)
+    checked_in = check_in(installation=installation, credential=credential)
+    assert checked_in.authorization_valid_until == original_expiry
+    assert checked_in.last_successful_check_in_at is not None
+    second_manifest = request_manifest(installation=installation)
+    assert second_manifest.request_id == first_manifest.request_id
+    assert SignedManifest.objects.filter(app_installation=installation).count() == 1
+
+    installation.authorization_valid_until = timezone.now() + timedelta(hours=48)
+    installation.save(update_fields=("authorization_valid_until",))
     renewed = check_in(installation=installation, credential=credential)
     assert renewed.authorization_valid_until > original_expiry
-    assert renewed.last_successful_check_in_at is not None
+
+    immediately_checked_in = check_in(installation=installation, credential=credential)
+    assert immediately_checked_in.authorization_valid_until == renewed.authorization_valid_until
 
     installation.authorization_valid_until = timezone.now() - timedelta(seconds=1)
     installation.save(update_fields=("authorization_valid_until",))
@@ -213,7 +227,7 @@ def test_concurrent_check_in_is_serialized(operational_tablet):
     do_check_in()
     do_check_in()
     assert len(lease_tokens) == 2
-    assert lease_tokens[1] > lease_tokens[0]
+    assert lease_tokens[1] == lease_tokens[0]
 
 
 def test_adoption_request_ids_are_unique(db, operational_tablet):

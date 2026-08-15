@@ -164,7 +164,10 @@ def commander_email(request: HttpRequest, department_id, person_id) -> HttpRespo
 @require_http_methods(["POST"])
 @login_required
 def verify_email(request: HttpRequest, department_id, person_id) -> HttpResponse:
-    require_recent_reauthentication(request)
+    require_recent_reauthentication(
+        request,
+        return_url=reverse("personnel-detail", args=(department_id, person_id)),
+    )
     person = _person_or_404(request, department_id, person_id)
     verify_commander_email(actor=request.user, person=person)
     return redirect("personnel-detail", department_id=department_id, person_id=person.id)
@@ -173,7 +176,10 @@ def verify_email(request: HttpRequest, department_id, person_id) -> HttpResponse
 @require_http_methods(["POST"])
 @login_required
 def offboard(request: HttpRequest, department_id, person_id) -> HttpResponse:
-    require_recent_reauthentication(request)
+    require_recent_reauthentication(
+        request,
+        return_url=reverse("personnel-detail", args=(department_id, person_id)),
+    )
     person = _person_or_404(request, department_id, person_id)
     offboard_person(actor=request.user, person=person)
     messages.success(request, "Personnel record offboarded.")
@@ -183,7 +189,10 @@ def offboard(request: HttpRequest, department_id, person_id) -> HttpResponse:
 @require_http_methods(["POST"])
 @login_required
 def anonymize(request: HttpRequest, department_id, person_id) -> HttpResponse:
-    require_recent_reauthentication(request)
+    require_recent_reauthentication(
+        request,
+        return_url=reverse("personnel-detail", args=(department_id, person_id)),
+    )
     person = _person_or_404(request, department_id, person_id)
     anonymize_person(actor=request.user, person=person)
     return redirect("personnel-list", department_id=department_id)
@@ -194,7 +203,10 @@ def anonymize(request: HttpRequest, department_id, person_id) -> HttpResponse:
 def retention_policy(request: HttpRequest, department_id) -> HttpResponse:
     department = get_object_or_404(Department, pk=department_id)
     if request.method == "POST":
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("personnel-retention-policy", args=(department.id,)),
+        )
         form = RetentionPolicyForm(request.POST)
         if form.is_valid():
             set_retention_policy(

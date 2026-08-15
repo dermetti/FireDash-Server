@@ -15,6 +15,7 @@ The server generates OpenAPI 3.1.0 (`FireDash Provisioning API`, version `1.0.0`
 | `POST` | `/api/v1/tablet/reactivation/preview` | None; reactivation token is in the body | `201` |
 | `POST` | `/api/v1/tablet/reactivation/complete` | Installation Bearer credential | `201` |
 | `POST` | `/api/v1/tablet/check-in` | Installation Bearer credential | `200` |
+| `POST` | `/api/v1/tablet/refresh` | Installation Bearer credential | `200` |
 | `GET` | `/api/v1/tablet/status` | Installation Bearer credential | `200` |
 | `GET` | `/api/v1/tablet/configuration` | Installation Bearer credential | `200` |
 | `GET` | `/api/v1/tablet/signing-keys/{version}` | Installation Bearer credential | `200` |
@@ -31,7 +32,8 @@ Use HTTPS in deployed clients. JSON is the intended request format; the generate
 | Adoption complete | JSON request UUID, Base64 HMAC proof, `confirmed: true` | `201` installation UUID, one-time credential, lease deadline | None |
 | Reactivation preview | Same as adoption preview, but reactivation token | `201` challenge object | Preview itself is unauthenticated |
 | Reactivation complete | Same as adoption complete | `201` replacement credential and lease deadline | Requires the current installation credential |
-| Check-in | No body | `200` active status, server time, renewed lease deadline | Only this endpoint renews a lease |
+| Check-in | No body | `200` active status, server time, lease deadline | Updates last check-in; automatically renews only with 48 hours or less remaining |
+| Refresh tablet | No body | `200` active status, server time, lease deadline | Explicit active-tablet top-up; follow with configuration, manifest, and conditional downloads |
 | Status | No body | `200` stored status, lease deadline, purge directive | Stale and revoked credentials can read this surface; replaced credentials cannot authenticate |
 | Configuration | No body | `200` installation/tablet/department/station/vehicle UUIDs | Requires an active authorized assignment |
 | Signing key | Path `version` | `200` algorithm, version, Base64 raw public key | The requested version must be the configured current version |
@@ -182,7 +184,7 @@ Successful response (`201`):
 }
 ```
 
-Persist the credential before making authenticated calls. A successful adoption sets the installation active and grants a seven-day authorization lease. An existing active/stale installation for the tablet is replaced atomically.
+Persist the credential before making authenticated calls. A successful adoption sets the installation active and grants the department-configured maximum authorization lease (seven days by default; minimum policy value is three days). An existing active/stale installation for the tablet is replaced atomically.
 
 `confirmed: false` is rejected and does not increment the failed-attempt count. An invalid proof increments both the request and invitation counters. At five failed proofs, the invitation is revoked and the request cannot be completed. A completed request, expired request, used/revoked invitation, unsupported suite, or invalid invitation cannot be retried; begin a new preview with a valid invitation.
 
@@ -194,7 +196,7 @@ Only a stale installation can be reactivated, with an administrator-generated re
 2. Call `POST /api/v1/tablet/reactivation/complete` with the same body as adoption completion and the *current* installation credential in `Authorization: Bearer ...`.
 3. Confirm the `201` response, replace the Keychain credential with the new one, and resume check-ins/manifests.
 
-The completion endpoint verifies that the request belongs to the authenticated installation. It rotates the credential and restores a seven-day active lease. The former credential no longer verifies.
+The completion endpoint verifies that the request belongs to the authenticated installation. It rotates the credential and restores the department-configured maximum active lease. The former credential no longer verifies.
 
 ## Lease And Status Flow
 
@@ -210,7 +212,23 @@ The completion endpoint verifies that the request belongs to the authenticated i
 }
 ```
 
-On success, it renews the lease to seven days from server time. Schedule periodic check-ins conservatively before `authorization_valid_until`; an offline client should retain the last server-provided deadline and not assume local clock authority. An active but expired installation is transitioned to stale on check-in and receives an authorization error. A stale installation needs the reactivation flow, not a retry loop.
+Every successful check-in records a new server-side check-in time. It renews only when 48 hours or less remain, setting the deadline to the department-configured maximum lease from server time (seven days by default; policy minimum three days). With more than 48 hours remaining it deliberately leaves `authorization_valid_until` unchanged, allowing the same signed manifest and ETag to be reused. Schedule periodic check-ins conservatively before `authorization_valid_until`; an offline client should retain the last server-provided deadline and not assume local clock authority. An active but expired installation is transitioned to stale on check-in and receives an authorization error. A stale installation needs the reactivation flow, not a retry loop.
+
+### Refresh tablet
+
+`POST /api/v1/tablet/refresh` has no request body and requires the same installation Bearer credential.
+
+```json
+{
+  "status": "active",
+  "server_time": "2026-08-09T12:34:56.789012+00:00",
+  "authorization_valid_until": "2026-08-16T12:34:56.789012+00:00"
+}
+```
+
+This is the explicit user-facing **Refresh tablet** action. For an active, non-expired, operational installation, the server updates the check-in time and sets the authorization deadline to `max(current_deadline, server_time + department_maximum_lease)`. Repeated presses therefore top up to approximately one policy period from server time; they do not stack additional lease periods or shorten an already longer deadline. Stale, expired, revoked, replaced, removed, inactive, and otherwise unauthorized tablets cannot use it to recover; use the existing reactivation/recovery flow instead.
+
+`/refresh` does not return publications, issue HPKE grants, create a signed manifest, sign data, or download bytes. One iPad **Refresh tablet** action should orchestrate this sequence: `POST /tablet/refresh`, `GET /tablet/configuration`, then `GET /tablet/manifest` with the cached `If-None-Match`. Honor manifest `202 Retry-After`; on `304`, retain already verified publications; on `200`, verify the Ed25519 manifest and use the existing conditional dataset-download, signature/hash/size, HPKE, AES-GCM, and atomic-cache workflow for changed or missing datasets.
 
 ### Status
 
@@ -226,13 +244,13 @@ On success, it renews the lease to seven days from server time. Schedule periodi
 
 `status` is lowercased from the stored values: `active`, `stale`, `revoked`, or `replaced`. If `purge_provisioned_data` is `true`, erase locally provisioned API data and cryptographic credentials. This currently occurs only for `revoked`, not `replaced`.
 
-Use status as a recovery/status surface, not as a lease renewal; only check-in renews the lease.
+Use status as a recovery/status surface, not as a lease renewal. Automatic renewal belongs to check-in near expiry; deliberate top-up belongs to the authenticated Refresh tablet action.
 
 ### Installation State Access Matrix
 
 This matrix records runtime authorization, not an instruction to retain a credential after revocation. `403` means the endpoint rejects the request through authentication or business authorization; normal active-manifest processing can still return `202` while worker work is pending.
 
-| Installation state | Credential authenticates | Status | Check-in | Configuration / manifest / download | Reactivation complete |
+| Installation state | Credential authenticates | Status | Check-in / refresh | Configuration / manifest / download | Reactivation complete |
 | --- | --- | --- | --- | --- | --- |
 | `active` | Yes | `200` | `200` when the lease and tablet are operational | Authorized; manifest can be `200`, `202`, or `304` | Rejected: only stale installations may reactivate |
 | `stale` | Yes | `200` | `403` | `403` | Allowed only with a matching valid reactivation request and proof |
@@ -389,7 +407,7 @@ The registry also contains `test_department_incidents`, but it is explicitly int
 1. **Unprovisioned**: create/persist a P-256 key pair and installation UUID; receive an out-of-band adoption token.
 2. **Preview pending**: send adoption preview. If the server returns an error, do not repeatedly submit a bad proof; correct token/key/suite inputs or obtain a new invitation.
 3. **Challenge received**: reconstruct the canonical context from preview values and the retained installation UUID, then decrypt and prove the challenge.
-4. **Active**: store the credential, call check-in before the lease deadline, then retrieve configuration and manifest.
+4. **Active**: store the credential and call check-in before the lease deadline. When the firefighter chooses **Refresh tablet**, call refresh once, then retrieve configuration and manifest as the same user action.
 5. **Manifest pending**: retain verified cache, wait at least five seconds, then request manifest with ETag.
 6. **Manifest ready**: verify Ed25519 signature, then for each dataset validate metadata, unwrap CEK with HPKE, download/cache with ETag, validate ciphertext hash/size, and decrypt only when all artifact metadata is available.
 7. **Stale**: stop retrying check-in as a recovery mechanism; obtain a reactivation invitation and run reactivation with the old credential.
@@ -402,7 +420,7 @@ Use network retries only for transport failures and `5xx` results with bounded e
 The following are implementation facts, not client-side workarounds:
 
 * Signing-key distribution currently serves only the configured active `PUBLICATION_SIGNING_KEY_VERSION`. The server has no historical key ring, so deployments must retain prior public keys in clients or add a key-ring configuration before rotating a key whose old artifacts remain in use.
-* OpenAPI now has typed scalar response schemas for completion, check-in, status, configuration, signing-key, and manifest-pending responses. It remains intentionally incomplete for nested manifest/dataset objects, generic RFC 9457 errors, response headers, and exact binary download media behavior; runtime documentation above is authoritative for those details. Reactivation preview is shown unauthenticated, which matches runtime but may surprise integrators.
+* OpenAPI has typed scalar response schemas for completion, check-in/refresh, status, configuration, signing-key, and manifest-pending responses. It remains intentionally incomplete for nested manifest/dataset objects, generic RFC 9457 errors, response headers, and exact binary download media behavior; runtime documentation above is authoritative for those details. Reactivation preview is shown unauthenticated, which matches runtime but may surprise integrators.
 * No `/api/v1/` endpoint documents paging, server base URL, protocol negotiation, rate limits, CORS, clock-skew policy, or supported minimum client versions. Do not invent any of these behaviors in the client contract.
 
 ## Source References
@@ -421,6 +439,6 @@ The following are implementation facts, not client-side workarounds:
 
 ## Validation Status
 
-`python manage.py spectacular --validate` completed successfully against the generated OpenAPI 3.1 document. The generated schema now includes typed response objects for adoption/reactivation completion, check-in, status, configuration, signing keys, and the manifest-pending problem.
+Run `python manage.py spectacular --validate` against the generated OpenAPI 3.1 document. The schema includes typed response objects for adoption/reactivation completion, check-in/refresh, status, configuration, signing keys, and the manifest-pending problem.
 
 The configured PostgreSQL/PostGIS suite completed successfully: `pytest --ds=config.settings.test` → **151 passed in 28.12s**. Adoption/reactivation contract tests, tablet lifecycle/API/state-matrix tests, artifact fixture/signature tests, and manifest signature/key-grant tests passed. Ruff, `mypy .`, Django system checks, migration consistency, and OpenAPI validation also passed.

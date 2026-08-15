@@ -19,10 +19,14 @@ departments or stations.
 3. Allow the tablet to check in and retrieve its manifest over the private HTTPS network.
 4. Verify that it receives department-wide packages and only its station-specific personnel package.
 
-An authorization lease lasts seven days after a successful check-in. A tablet with an expired
-lease cannot receive manifests, grants, or downloads. It cannot reactivate itself. A department
-administrator must generate a reactivation invitation, complete the reactivation process with the
-tablet, and confirm that its credential was rotated before access resumes.
+Each department's maximum tablet authorization lease defaults to seven days (with a three-day
+minimum policy). Normal check-ins renew only when 48 hours or less remain. A firefighter who needs
+to prepare for an extended incident can choose **Refresh tablet** on the iPad: it tops up that
+active tablet and then synchronizes configuration, manifests, and changed publications. A tablet
+with an expired lease cannot receive manifests, grants, or downloads and cannot use Refresh tablet
+to reactivate itself. A department administrator must generate a reactivation invitation, complete
+the reactivation process with the tablet, and confirm that its credential was rotated before access
+resumes.
 
 ## Lost, replaced, or suspicious tablets
 

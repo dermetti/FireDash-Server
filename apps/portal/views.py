@@ -31,6 +31,7 @@ from apps.portal.forms import (
     AdministratorForm,
     DepartmentForm,
     DepartmentStatusForm,
+    DepartmentTabletLeaseForm,
     RevokeStationScopeForm,
     StationForm,
     StationScopeForm,
@@ -161,7 +162,7 @@ def system_departments(request: HttpRequest) -> HttpResponse:
         raise PermissionDenied("System administrator role is required.")
     form = DepartmentForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(request, return_url=reverse("portal-system-departments"))
         create_department(actor=request.user, **form.cleaned_data)
         return redirect("portal-system-departments")
     return render(
@@ -178,24 +179,43 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
         raise PermissionDenied("System administrator role is required.")
     department = get_object_or_404(Department, pk=department_id)
     status_form = DepartmentStatusForm(request.POST or None, initial={"status": department.status})
+    lease_form = DepartmentTabletLeaseForm(
+        initial={"tablet_lease_days": department.tablet_lease_days}
+    )
     admin_form = AdministratorForm()
     if (
         request.method == "POST"
         and request.POST.get("action") == "status"
         and status_form.is_valid()
     ):
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-system-department", args=(department.id,)),
+        )
         change_department_status(
             actor=request.user, department=department, status=status_form.cleaned_data["status"]
         )
         return redirect("portal-system-department", department_id=department.id)
     if request.method == "POST" and request.POST.get("action") == "provision":
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-system-department", args=(department.id,)),
+        )
         admin_form = AdministratorForm(request.POST)
         if admin_form.is_valid():
             token = provision_department_admin(
                 actor=request.user, department=department, **admin_form.cleaned_data
             )
+    if request.method == "POST" and request.POST.get("action") == "tablet-lease":
+        lease_form = DepartmentTabletLeaseForm(request.POST)
+        if lease_form.is_valid():
+            require_recent_reauthentication(
+                request,
+                return_url=reverse("portal-system-department", args=(department.id,)),
+            )
+            department.tablet_lease_days = lease_form.cleaned_data["tablet_lease_days"]
+            department.save(update_fields=("tablet_lease_days",))
+            return redirect("portal-system-department", department_id=department.id)
             return render(
                 request,
                 "portal/setup_link.html",
@@ -204,7 +224,12 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
     return render(
         request,
         "portal/system_department_detail.html",
-        {"department": department, "status_form": status_form, "admin_form": admin_form},
+        {
+            "department": department,
+            "status_form": status_form,
+            "admin_form": admin_form,
+            "lease_form": lease_form,
+        },
     )
 
 
@@ -217,7 +242,10 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
     revoke_scope_form = RevokeStationScopeForm(request.POST or None)
     action = request.POST.get("action")
     if request.method == "POST" and action == "provision" and form.is_valid():
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-manage", args=(department.id,)),
+        )
         token = provision_department_admin(
             actor=request.user, department=department, **form.cleaned_data
         )
@@ -242,7 +270,10 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
             station_admin_assignments__active=True,
         )
     if request.method == "POST" and action == "grant-station" and scope_form.is_valid():
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-manage", args=(department.id,)),
+        )
         user = get_object_or_404(administrators, pk=scope_form.cleaned_data["user_id"])
         station = get_object_or_404(
             Station, pk=scope_form.cleaned_data["station_id"], department=department, active=True
@@ -250,7 +281,10 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
         grant_station_admin(actor=request.user, user=user, station=station)
         return redirect("portal-department-manage", department_id=department.id)
     if request.method == "POST" and action == "revoke-station" and revoke_scope_form.is_valid():
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-manage", args=(department.id,)),
+        )
         assignment = get_object_or_404(
             StationAdminAssignment,
             pk=revoke_scope_form.cleaned_data["assignment_id"],
@@ -317,7 +351,10 @@ def station_manage(request: HttpRequest, station_id) -> HttpResponse:
         update_station(actor=request.user, station=station, **form.cleaned_data)
         return redirect("portal-station-manage", station_id=station.id)
     if request.method == "POST" and request.POST.get("action") == "provision":
-        require_recent_reauthentication(request)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-station-manage", args=(station.id,)),
+        )
         admin_form = AdministratorForm(request.POST)
         if admin_form.is_valid():
             token = provision_station_admin(

@@ -6,6 +6,7 @@ urlpatterns = [
     path("adoption/preview", api.AdoptionPreviewView.as_view(), name="api-adoption-preview"),
     path("adoption/complete", api.AdoptionCompleteView.as_view(), name="api-adoption-complete"),
     path("tablet/check-in", api.CheckInView.as_view(), name="api-tablet-check-in"),
+    path("tablet/refresh", api.RefreshView.as_view(), name="api-tablet-refresh"),
     path("tablet/status", api.StatusView.as_view(), name="api-tablet-status"),
     path("tablet/configuration", api.ConfigurationView.as_view(), name="api-tablet-configuration"),
     path("tablet/manifest", api.ManifestView.as_view(), name="api-tablet-manifest"),

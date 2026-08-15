@@ -50,7 +50,7 @@ restore drill, external service, or acceptance test has been performed.
 | PRD area | Requirement | Evidence | Status / gate |
 | --- | --- | --- | --- |
 | Phase 8 | Tablets, installations, invitations, adoption API and HPKE proof | `apps/tablets/models.py`, `services.py`, `api.py`, tests | Implemented; tablet-client interoperability is a verification gate. |
-| Phase 8 | Active check-in extends a seven-day authorization lease | `apps/tablets/services.py` (`LEASE_DURATION`, `check_in`) | Implemented; live API operation is an environment/verification gate. |
+| Phase 8 | Department-owned tablet lease policy; check-in renews only within 48 hours and authenticated Refresh tablet explicitly tops up an active lease | `apps/organizations/models.py`, `apps/tablets/services.py`, `apps/tablets/api.py` | Implemented; live API operation is an environment/verification gate. |
 | Phase 8 | Expired active installations become stale with an audit event | `mark_stale_installations`, new management command and `fire-stale-installation.*` units | Implemented; `daemon-reload`, timer enablement, and successful execution are environment/verification gates. |
 | Phase 8 | Stale tablets cannot self-reactivate; department admin reactivation rotates credentials | tablet services, views, API and tests | Implemented; administrator beta workflow confirmation is a verification gate. |
 | Phase 8 | Removal/revocation denies future access and revokes grants | `remove_tablet` and manifest/key-grant services | Implemented; operational lost-device procedure is documented in `administrator-beta-guide.md`. |

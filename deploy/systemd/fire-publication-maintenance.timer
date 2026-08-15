@@ -1,0 +1,11 @@
+[Unit]
+Description=Run FireDash publication maintenance daily
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1d
+Persistent=true
+Unit=fire-publication-maintenance.service
+
+[Install]
+WantedBy=timers.target

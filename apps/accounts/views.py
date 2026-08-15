@@ -250,12 +250,14 @@ def reauthenticate(request: HttpRequest) -> HttpResponse:
     current_user = User.objects.get(pk=user_id)
     pending_token = request.GET.get("pending") or request.POST.get("pending")
     operation = ""
+    return_url = ""
     if pending_token:
         from apps.accounts.reauth import pending_action
 
         pending = pending_action(request, pending_token)
         if pending is not None:
-            operation = pending.url
+            operation = pending.action_url
+            return_url = pending.return_url
     form = ReauthenticationForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         device = TOTPDevice.objects.filter(user=current_user, confirmed=True).first()
@@ -275,10 +277,10 @@ def reauthenticate(request: HttpRequest) -> HttpResponse:
                 target_type="user",
                 target_uuid=current_user.id,
             )
-            if pending_token and operation:
+            if pending_token and return_url:
                 pending_action(request, pending_token, consume=True)
                 # The operator must submit the sensitive action again; no POST body is replayed.
-                return redirect(operation)
+                return redirect(return_url)
             return redirect("dashboard")
         else:
             record_auth_failure(

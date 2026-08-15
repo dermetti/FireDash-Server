@@ -204,14 +204,14 @@ fi
 
 # -------- systemd --------
 log "=== systemd ==="
-for unit in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-worker.timer fire-publication-maintenance.service fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-pdf-sanitizer-broker.socket fire-pdf-sanitizer-broker@.service fire-backup.service fire-backup.timer fire-restore.service; do
+for unit in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-worker.timer fire-publication-maintenance.service fire-publication-maintenance.timer fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-pdf-sanitizer-broker.socket fire-pdf-sanitizer-broker@.service fire-backup.service fire-backup.timer fire-restore.service; do
     [[ -f /etc/systemd/system/$unit ]] && ok "unit $unit installed" || fail "unit $unit missing"
 done
 [[ $(systemctl is-enabled fire-backend.socket 2>/dev/null) == enabled ]] && ok "fire-backend.socket enabled" || fail "fire-backend.socket not enabled"
 [[ $(systemctl is-enabled fire-pdf-sanitizer-broker.socket 2>/dev/null) == enabled ]] && ok "fire-pdf-sanitizer-broker.socket enabled" || fail "fire-pdf-sanitizer-broker.socket not enabled"
 [[ $(systemctl is-active fire-pdf-sanitizer-broker.socket 2>/dev/null) == active ]] && ok "fire-pdf-sanitizer-broker.socket active" || fail "fire-pdf-sanitizer-broker.socket not active"
 [[ $(systemctl is-enabled fire-backend.service 2>/dev/null) != enabled ]] && ok "fire-backend.service not directly enabled" || fail "fire-backend.service should not be enabled"
-for t in fire-publication-worker.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+for t in fire-publication-worker.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
     [[ $(systemctl is-enabled "$t" 2>/dev/null) == enabled ]] && ok "$t enabled" || fail "$t not enabled"
 done
 

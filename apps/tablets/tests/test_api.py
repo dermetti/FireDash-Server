@@ -20,7 +20,12 @@ from apps.assignments.models import TabletVehicleAssignment
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE, serialize_p256_public_key
 from apps.publications.manifests import request_manifest
-from apps.publications.models import DatasetKeyGrant, DatasetPublication, DatasetScopeState
+from apps.publications.models import (
+    DatasetKeyGrant,
+    DatasetPublication,
+    DatasetScopeState,
+    SignedManifest,
+)
 from apps.publications.worker_grants import process_next_signed_manifest
 from apps.tablets.api import DownloadView
 from apps.tablets.models import AppInstallation, Tablet
@@ -36,7 +41,9 @@ def api_context(db):
     vehicle = Vehicle.objects.create(
         department=department, station=station, display_name="Engine 1"
     )
-    tablet = Tablet.objects.create(department=department, display_name="Tablet")
+    tablet = Tablet.objects.create(
+        department=department, display_name="Tablet", status=Tablet.Status.ACTIVE
+    )
     credential = generate_credential()
     key = ec.generate_private_key(ec.SECP256R1())
     installation = AppInstallation.objects.create(
@@ -52,7 +59,7 @@ def api_context(db):
         hpke_key_fingerprint="a" * 64,
         hpke_key_verified_at=now,
         adopted_at=now,
-        authorization_valid_until=now + timedelta(days=1),
+        authorization_valid_until=now + timedelta(days=3),
     )
     TabletVehicleAssignment.objects.create(
         tablet=tablet, vehicle=vehicle, valid_from=now, created_by=user
@@ -254,15 +261,116 @@ def test_invalid_bearer_uses_rfc9457_problem_detail(api_context):
     assert response.json()["request_id"]
 
 
-def test_check_in_renews_an_active_installation(api_context):
+def test_check_in_does_not_renew_an_active_installation_with_more_than_48_hours_remaining(
+    api_context,
+):
     client, installation, credential, _ = api_context
     previous_expiry = installation.authorization_valid_until
     response = client.post("/api/v1/tablet/check-in", **_authorization(credential))
 
     installation.refresh_from_db()
     assert response.status_code == 200
-    assert installation.authorization_valid_until > previous_expiry
+    assert installation.authorization_valid_until == previous_expiry
+    assert installation.last_successful_check_in_at is not None
     assert verify_credential(installation=installation, credential=credential)
+
+
+def test_refresh_tops_up_an_active_installation_without_delivery_work(api_context):
+    client, installation, credential, _ = api_context
+    old_expiry = installation.authorization_valid_until
+    request_manifest(installation=installation)
+    manifest_count = SignedManifest.objects.filter(app_installation=installation).count()
+    grant_count = DatasetKeyGrant.objects.filter(app_installation=installation).count()
+
+    unauthenticated = client.post("/api/v1/tablet/refresh")
+    assert unauthenticated.status_code == 403
+
+    response = client.post("/api/v1/tablet/refresh", **_authorization(credential))
+    installation.refresh_from_db()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    assert response.json()["server_time"]
+    assert response.json()["authorization_valid_until"]
+    assert installation.last_successful_check_in_at is not None
+    assert (
+        timedelta(days=6)
+        < installation.authorization_valid_until - timezone.now()
+        <= timedelta(days=7)
+    )
+    assert installation.authorization_valid_until > old_expiry
+    assert SignedManifest.objects.filter(app_installation=installation).count() == manifest_count
+    assert DatasetKeyGrant.objects.filter(app_installation=installation).count() == grant_count
+    from apps.audit.models import AuditEvent
+
+    event = AuditEvent.objects.get(action="tablet.self_refreshed", target_uuid=installation.id)
+    assert event.metadata["old_expiry"]
+    assert event.metadata["new_expiry"]
+
+    refreshed_expiry = installation.authorization_valid_until
+    second_response = client.post("/api/v1/tablet/refresh", **_authorization(credential))
+    installation.refresh_from_db()
+    assert second_response.status_code == 200
+    assert (
+        refreshed_expiry
+        <= installation.authorization_valid_until
+        < refreshed_expiry + timedelta(minutes=1)
+    )
+
+    # The changed expiry is observed only by the existing manifest request path.
+    request_manifest(installation=installation)
+    assert (
+        SignedManifest.objects.filter(app_installation=installation).count() == manifest_count + 1
+    )
+
+
+def test_refresh_honors_policy_without_shortening_a_longer_lease(api_context):
+    client, installation, credential, _ = api_context
+    department = installation.tablet.department
+    department.tablet_lease_days = 3
+    department.save(update_fields=("tablet_lease_days",))
+
+    response = client.post("/api/v1/tablet/refresh", **_authorization(credential))
+    installation.refresh_from_db()
+    assert response.status_code == 200
+    assert (
+        timedelta(days=2)
+        < installation.authorization_valid_until - timezone.now()
+        <= timedelta(days=3)
+    )
+
+    longer_expiry = timezone.now() + timedelta(days=10)
+    installation.authorization_valid_until = longer_expiry
+    installation.save(update_fields=("authorization_valid_until",))
+    response = client.post("/api/v1/tablet/refresh", **_authorization(credential))
+    installation.refresh_from_db()
+    assert response.status_code == 200
+    assert installation.authorization_valid_until == longer_expiry
+
+
+def test_refresh_rejects_expired_or_non_operational_installations(api_context):
+    client, installation, credential, _ = api_context
+    installation.authorization_valid_until = timezone.now() - timedelta(seconds=1)
+    installation.save(update_fields=("authorization_valid_until",))
+
+    expired = client.post("/api/v1/tablet/refresh", **_authorization(credential))
+    installation.refresh_from_db()
+    assert expired.status_code == 403
+    assert installation.status == AppInstallation.Status.ACTIVE
+
+    installation.authorization_valid_until = timezone.now() + timedelta(days=1)
+    installation.status = AppInstallation.Status.ACTIVE
+    installation.tablet.active = False
+    installation.tablet.save(update_fields=("active",))
+    installation.save(update_fields=("authorization_valid_until", "status"))
+    inactive = client.post("/api/v1/tablet/refresh", **_authorization(credential))
+    assert inactive.status_code == 403
+
+    installation.tablet.active = True
+    installation.tablet.status = Tablet.Status.REMOVED
+    installation.tablet.save(update_fields=("active", "status"))
+    removed = client.post("/api/v1/tablet/refresh", **_authorization(credential))
+    assert removed.status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -276,6 +384,10 @@ def test_check_in_renews_an_active_installation(api_context):
         (AppInstallation.Status.STALE, "/api/v1/tablet/check-in", 403),
         (AppInstallation.Status.REVOKED, "/api/v1/tablet/check-in", 403),
         (AppInstallation.Status.REPLACED, "/api/v1/tablet/check-in", 403),
+        (AppInstallation.Status.ACTIVE, "/api/v1/tablet/refresh", 200),
+        (AppInstallation.Status.STALE, "/api/v1/tablet/refresh", 403),
+        (AppInstallation.Status.REVOKED, "/api/v1/tablet/refresh", 403),
+        (AppInstallation.Status.REPLACED, "/api/v1/tablet/refresh", 403),
         (AppInstallation.Status.ACTIVE, "/api/v1/tablet/configuration", 200),
         (AppInstallation.Status.STALE, "/api/v1/tablet/configuration", 403),
         (AppInstallation.Status.REVOKED, "/api/v1/tablet/configuration", 403),
@@ -291,7 +403,7 @@ def test_installation_state_access_matrix(api_context, installation_status, path
     installation.status = installation_status
     installation.save(update_fields=("status",))
 
-    if path.endswith("check-in"):
+    if path.endswith(("check-in", "refresh")):
         response = client.post(path, **_authorization(credential))
     else:
         response = client.get(path, **_authorization(credential))

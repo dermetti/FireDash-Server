@@ -1,5 +1,5 @@
 [Unit]
-Description=FireDash publication maintenance (orphan artifact cleanup)
+Description=FireDash publication maintenance
 After=network-online.target
 Wants=network-online.target
 
@@ -11,6 +11,7 @@ WorkingDirectory=/srv/firedash/current
 Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env
 ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_orphan_artifacts
+ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_signed_manifests
 TimeoutStartSec=120s
 UMask=0077
 NoNewPrivileges=true

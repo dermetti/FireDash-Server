@@ -46,9 +46,9 @@ def validate_summary(*, definition: DatasetTypeDefinition, summary: Any) -> None
         raise PublicationBuildError("Builder returned an invalid summary schema.")
     for field, kind in definition.summary_schema.items():
         value = summary[field]
-        if kind == "non_negative_integer" and (not isinstance(value, int) or value < 0):
+        if kind in {"item_count", "non_negative_integer"} and (type(value) is not int or value < 0):
             raise PublicationBuildError("Builder returned an invalid summary value.")
-        if kind == "non_negative_integer" and value > settings.PUBLICATION_BUILD_SUMMARY_MAX_ITEMS:
+        if kind == "item_count" and value > settings.PUBLICATION_BUILD_SUMMARY_MAX_ITEMS:
             raise PublicationBuildError("Builder summary exceeds the configured item limit.")
         if kind == "uuid" and (not isinstance(value, str) or len(value) != 36):
             raise PublicationBuildError("Builder returned an invalid summary value.")
@@ -58,13 +58,14 @@ def validate_summary(*, definition: DatasetTypeDefinition, summary: Any) -> None
                     "Builder summary exceeds the configured category limit."
                 )
             if any(
-                not isinstance(key, str)
-                or len(key) > 128
-                or not isinstance(count, int)
-                or count < 0
+                not isinstance(key, str) or len(key) > 128 or type(count) is not int or count < 0
                 for key, count in value.items()
             ):
                 raise PublicationBuildError("Builder returned an invalid summary value.")
+            if any(
+                count > settings.PUBLICATION_BUILD_SUMMARY_MAX_ITEMS for count in value.values()
+            ):
+                raise PublicationBuildError("Builder summary exceeds the configured item limit.")
 
 
 def _build_hydrants(*, department, station, source_revision: int) -> dict[str, object]:

@@ -31,6 +31,7 @@ from apps.tablets.services import (
     check_in,
     complete_adoption,
     create_adoption_request,
+    refresh_installation_lease,
 )
 
 
@@ -303,6 +304,26 @@ class CheckInView(InstallationAPIView):
     def post(self, request):
         try:
             installation = check_in(installation=self.installation, credential=request.auth)
+        except (TabletError, PermissionDenied) as error:
+            raise _problem_from_service(error) from error
+        return Response(
+            {
+                "status": "active",
+                "server_time": timezone.now(),
+                "authorization_valid_until": installation.authorization_valid_until,
+            }
+        )
+
+
+@extend_schema(request=None, responses={200: CheckInResponseSerializer})
+class RefreshView(InstallationAPIView):
+    """Top up an active tablet lease before the normal synchronization sequence."""
+
+    def post(self, request):
+        try:
+            installation = refresh_installation_lease(
+                installation=self.installation, credential=request.auth
+            )
         except (TabletError, PermissionDenied) as error:
             raise _problem_from_service(error) from error
         return Response(

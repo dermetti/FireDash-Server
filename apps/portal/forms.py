@@ -42,3 +42,9 @@ class DepartmentStatusForm(forms.Form):
         choices=(("ACTIVE", "Active"), ("SUSPENDED", "Suspended"), ("DEACTIVATED", "Deactivated")),
         required=True,
     )
+
+
+class DepartmentTabletLeaseForm(forms.Form):
+    tablet_lease_days = forms.IntegerField(
+        min_value=3, label="Maximum offline authorization lease (days)"
+    )

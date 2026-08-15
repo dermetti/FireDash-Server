@@ -1,6 +1,7 @@
 import uuid
 
 from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models
 
 
@@ -14,12 +15,23 @@ class Department(models.Model):
     name = models.CharField(max_length=255)
     short_code = models.CharField(max_length=64)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    tablet_lease_days = models.PositiveSmallIntegerField(
+        default=7, validators=[MinValueValidator(3)]
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="created_departments",
     )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(tablet_lease_days__gte=3),
+                name="department_tablet_lease_days_min",
+            )
+        ]
 
     def __str__(self) -> str:
         return self.name

@@ -73,8 +73,10 @@ Only the local Nginx proxy may appear in `TRUSTED_PROXY_IPS`. Nginx overwrites i
 ## Phase 8/9 operational configuration
 
 The stale-installation processor uses the production application environment and runs every 15
-minutes. Lease duration is fixed at seven days in the application; do not treat the timer interval
-as the authorization period.
+minutes. Each department configures its maximum tablet authorization lease (seven days by default,
+minimum three). Ordinary check-ins renew only when 48 hours or less remain; an authenticated tablet
+may explicitly top up through the Refresh tablet action. Do not treat the timer interval as the
+authorization period.
 
 `/etc/fire-backend/backup.env` is separate from `fire-backend.env`, owned by `root:root`, and mode
 `0600`. Required names are `BACKUP_PG_DATABASE`, `BACKUP_PG_USER`, `BACKUP_PG_HOST`, and
