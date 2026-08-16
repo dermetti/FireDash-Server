@@ -36,6 +36,7 @@ from tools.fake_ipad.crypto import (  # noqa: E402
     CryptoState,
     canonical_json_bytes,
     challenge_proof,
+    ed25519_from_bytes,
 )
 from tools.fake_ipad.errors import ClientError  # noqa: E402
 from tools.fake_ipad.output import Output  # noqa: E402
@@ -742,6 +743,37 @@ def test_signing_key_rejects_wrong_algorithm_version_or_encoding(
     api.handlers["/api/v1/tablet/signing-keys/2"] = lambda b, r: (200, payload, {})
     with pytest.raises(ClientError, match=message):
         _client(state, api).get_signing_key("2", {})
+
+
+def test_complete_manifest_contract_fixture_uses_the_live_client_verifier(tmp_path: Path):
+    fixture_path = (
+        Path(__file__).resolve().parent.parent
+        / "apps"
+        / "publications"
+        / "tests"
+        / "fixtures"
+        / "complete_manifest_contract.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    manifest = fixture["wire_manifest"]
+    assert isinstance(manifest, dict)
+    state = DeviceState(tmp_path / "state")
+    state.ensure_identity(server_url="https://test.example", app_version="1.0.0")
+    client = _client(state, StubApi())
+
+    canonical = client.canonical_manifest_payload(manifest)
+    assert canonical == fixture["unsigned_canonical_manifest_ascii"].encode("ascii")
+    assert hashlib.sha256(canonical).hexdigest() == fixture["unsigned_canonical_manifest_sha256"]
+    client._verify_manifest_signature_with_key(
+        manifest, ed25519_from_bytes(base64.b64decode(fixture["public_key"], validate=True))
+    )
+    response = HttpResponse(
+        status=200,
+        headers={"etag": fixture["expected_manifest_etag"]},
+        body=json.dumps(manifest).encode("utf-8"),
+        url="https://test.example/api/v1/tablet/manifest",
+    )
+    assert client.verify_manifest_etag(response, manifest) == fixture["expected_manifest_etag"]
 
 
 def test_terminal_matrix_allows_status_only_and_denies_operational_endpoints(tmp_path: Path):

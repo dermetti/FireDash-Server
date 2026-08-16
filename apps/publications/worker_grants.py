@@ -20,6 +20,10 @@ from apps.publications.manifests import (
 )
 from apps.publications.models import DatasetKeyGrant, SignedManifest
 from apps.publications.registry import get_dataset_definition
+from apps.publications.signing_keys import (
+    SigningKeyConfigurationError,
+    active_publication_signing_key,
+)
 
 
 class KeyGrantError(ValueError):
@@ -31,9 +35,14 @@ def sign_manifest_payload(*, payload: dict[str, object]) -> bytes:
     signing_key = _credential(settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH, "signing")
     if len(signing_key) != 32:
         raise KeyGrantError("Publication Ed25519 private key must be exactly 32 bytes.")
-    return Ed25519PrivateKey.from_private_bytes(signing_key).sign(
-        canonical_manifest_payload(payload)
-    )
+    private_key = Ed25519PrivateKey.from_private_bytes(signing_key)
+    try:
+        expected_public_key = active_publication_signing_key()
+    except SigningKeyConfigurationError as error:
+        raise KeyGrantError(str(error)) from error
+    if private_key.public_key().public_bytes_raw() != expected_public_key:
+        raise KeyGrantError("Publication Ed25519 private key does not match the active public key.")
+    return private_key.sign(canonical_manifest_payload(payload))
 
 
 @transaction.atomic

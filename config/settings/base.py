@@ -230,9 +230,9 @@ PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = publication_credential_path(
     override_name="PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH",
     credential_name="publication-signing-key",
 )
-PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH = publication_credential_path(
-    override_name="PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH",
-    credential_name="publication-signing-public-key",
+PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH = publication_credential_path(
+    override_name="PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH",
+    credential_name="publication-signing-public-key-ring",
 )
 PUBLICATION_KEK_VERSION = get_env("PUBLICATION_KEK_VERSION", default="1")
 PUBLICATION_SIGNING_KEY_VERSION = get_env("PUBLICATION_SIGNING_KEY_VERSION", default="1")

@@ -1,6 +1,7 @@
 from django.db import connections
 from django.db.models.signals import post_migrate
 
+from config.settings.base import BASE_DIR
 from config.settings.development import *  # noqa: F403
 from config.settings.env import get_env, get_typed_env
 
@@ -8,6 +9,9 @@ DEBUG = False
 SECRET_KEY = "test-secret-key-not-for-production"  # nosec B105
 FIREDASH_PUBLIC_ORIGIN = "https://firedash.test"
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH = (
+    BASE_DIR / "apps" / "publications" / "tests" / "fixtures" / "test_signing_public_key_ring.json"
+)
 
 # pytest-django must never inherit the development/runtime database role.
 DATABASES = {

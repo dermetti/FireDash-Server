@@ -62,7 +62,14 @@ The build socket is `/run/fire-backend/publication-build.sock`, group-owned
 for the web service with mode `0660`. Connecting carries no job data and gives
 the web process no systemd, sudo, D-Bus, or arbitrary service-start privilege.
 The database remains the queue. Credential files for KEK/signing material are
-loaded only into the delivery/build services with `LoadCredential`.
+loaded only into the delivery/build services with `LoadCredential`. The
+root-owned `publication-signing-public-key-ring.json` is separately delivered
+read-only to web and publication services; it retains historical public
+Ed25519 keys by version. To rotate v1 to v2, first add v2's public key to that
+ring without removing v1, verify both entries, then install v2's private key
+only for the publication workers and set `PUBLICATION_SIGNING_KEY_VERSION=2`.
+Rerun the installer so it validates the active private/public pair and reloads
+units. Never remove v1 while retained manifests or artifacts may refer to it.
 
 The installer retires the obsolete generic publication-worker timer, starts
 the persistent delivery service, and enables the build socket, nightly build

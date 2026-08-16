@@ -1,4 +1,5 @@
 import base64
+import json
 import uuid
 from datetime import timedelta
 
@@ -103,9 +104,25 @@ def test_web_manifest_queues_grant_without_reading_kek_and_worker_fulfills_it(
     kek_path.write_bytes(base64.b64encode(kek))
     signing_path = tmp_path / "signing"
     signing_path.write_bytes(b"s" * 32)
+    signing_ring_path = tmp_path / "signing-ring.json"
+    signing_ring_path.write_text(
+        json.dumps(
+            {
+                "keys": {
+                    "1": base64.b64encode(
+                        Ed25519PrivateKey.from_private_bytes(b"s" * 32)
+                        .public_key()
+                        .public_bytes_raw()
+                    ).decode("ascii")
+                }
+            }
+        ),
+        encoding="ascii",
+    )
     with override_settings(
         PUBLICATION_KEK_CREDENTIAL_PATH=kek_path,
         PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path,
+        PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH=signing_ring_path,
     ):
         processed_grant = process_next_dataset_key_grant()
         signed_manifest = process_next_signed_manifest()
@@ -199,9 +216,27 @@ def test_worker_manifest_signature_covers_canonical_payload(tmp_path):
     signing_seed = b"s" * 32
     signing_path = tmp_path / "signing"
     signing_path.write_bytes(signing_seed)
+    signing_ring_path = tmp_path / "signing-ring.json"
+    signing_ring_path.write_text(
+        json.dumps(
+            {
+                "keys": {
+                    "1": base64.b64encode(
+                        Ed25519PrivateKey.from_private_bytes(signing_seed)
+                        .public_key()
+                        .public_bytes_raw()
+                    ).decode("ascii")
+                }
+            }
+        ),
+        encoding="ascii",
+    )
     payload = {"datasets": [], "manifest_generation": 1}
 
-    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+    with override_settings(
+        PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path,
+        PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH=signing_ring_path,
+    ):
         signature = sign_manifest_payload(payload=payload)
 
     Ed25519PrivateKey.from_private_bytes(signing_seed).public_key().verify(

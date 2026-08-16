@@ -3,7 +3,6 @@
 import base64
 import hashlib
 import hmac
-import json
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -30,7 +29,8 @@ from apps.authorization.services import minimum_supported_app_version
 from apps.publications.manifests import (
     ManifestError,
     authorized_publications,
-    publication_signing_public_key,
+    manifest_response_etag,
+    publication_signing_public_key_for_requested_version,
     request_manifest,
 )
 from apps.tablets.models import AdoptionRequest, AppInstallation
@@ -564,10 +564,10 @@ class ConfigurationView(InstallationAPIView):
 )
 class SigningKeyView(InstallationAPIView):
     def get(self, request, version: str):
-        if version != settings.PUBLICATION_SIGNING_KEY_VERSION:
-            raise exceptions.NotFound("Signing key version is not available.")
         try:
-            public_key = publication_signing_public_key()
+            public_key = publication_signing_public_key_for_requested_version(version)
+        except KeyError as error:
+            raise exceptions.NotFound("Signing key version is not available.") from error
         except ManifestError as error:
             raise _problem_from_service(error) from error
         return Response(
@@ -611,14 +611,7 @@ class ManifestView(InstallationAPIView):
         if result.payload is None:
             raise exceptions.PermissionDenied("Manifest is not available for this installation.")
         payload = result.payload
-        etag_payload = {key: value for key, value in payload.items() if key != "generated_at"}
-        etag = (
-            '"'
-            + hashlib.sha256(
-                json.dumps(etag_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
-            + '"'
-        )
+        etag = manifest_response_etag(payload)
         if request.headers.get("If-None-Match") == etag:
             return Response(status=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
         return Response(payload, headers={"ETag": etag})

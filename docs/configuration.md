@@ -73,9 +73,23 @@ Publication credentials are normally resolved from systemd's per-service
 `CREDENTIALS_DIRECTORY`; do not configure a unit-name-specific credential path.
 The explicit `PUBLICATION_KEK_CREDENTIAL_PATH`,
 `PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH`, and
-`PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH` overrides exist only for
-development and focused tests. The web service receives only the public signing
-key credential.
+`PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH` overrides exist only for
+development and focused tests. Production loads a root-managed JSON public-key
+ring credential with exact version-to-standard-Base64 raw-Ed25519-key entries.
+The web service receives only this public ring; it never receives a private
+signing key or the KEK.
+
+The installer maintains `/etc/fire-backend/credentials/publication-signing-public-key-ring.json`
+as root:root mode `0600`. Its deliberately small format is:
+
+```json
+{"keys":{"1":"<standard-Base64 raw 32-byte Ed25519 public key>","2":"<...>"}}
+```
+
+Every key version matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. The active
+`PUBLICATION_SIGNING_KEY_VERSION` must exist in the ring and match the public
+key derived from the worker-only active private seed. Installer reruns retain
+unrelated historical entries; they never prune the ring.
 
 ## Tablets, backups, and restore
 

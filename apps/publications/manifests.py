@@ -13,10 +13,14 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.assignments.models import TabletVehicleAssignment
-from apps.publications.artifacts import ArtifactError, _credential
 from apps.publications.feature_services import is_feature_enabled
 from apps.publications.models import DatasetKeyGrant, DatasetPublication, SignedManifest
 from apps.publications.registry import get_dataset_definition
+from apps.publications.signing_keys import (
+    SigningKeyConfigurationError,
+    active_publication_signing_key,
+    publication_signing_public_key_for_version,
+)
 from apps.tablets.models import AppInstallation
 
 
@@ -45,16 +49,32 @@ def attach_manifest_signature(*, payload: dict[str, object], signature: bytes) -
 
 
 def publication_signing_public_key() -> bytes:
-    """Load the separately provisioned public half without accessing worker credentials."""
+    """Load the active public half without accessing worker credentials."""
     try:
-        public_key = _credential(
-            settings.PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH, "signing public key"
-        )
-    except ArtifactError as error:
+        public_key = active_publication_signing_key()
+    except SigningKeyConfigurationError as error:
         raise ManifestError(str(error)) from error
-    if len(public_key) != 32:
-        raise ManifestError("Publication Ed25519 public key must be exactly 32 bytes.")
     return public_key
+
+
+def publication_signing_public_key_for_requested_version(version: str) -> bytes:
+    """Load one exact public ring entry for the authenticated tablet API."""
+    try:
+        return publication_signing_public_key_for_version(version)
+    except SigningKeyConfigurationError as error:
+        raise ManifestError(str(error)) from error
+
+
+def manifest_response_etag(payload: dict[str, object]) -> str:
+    """Return the response ETag, which intentionally excludes only generated_at."""
+    etag_payload = {key: value for key, value in payload.items() if key != "generated_at"}
+    return (
+        '"'
+        + hashlib.sha256(
+            json.dumps(etag_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        + '"'
+    )
 
 
 def manifest_state_hash(

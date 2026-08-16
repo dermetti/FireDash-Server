@@ -12,6 +12,7 @@ Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env
 LoadCredential=publication-kek:/etc/fire-backend/credentials/publication-kek
 LoadCredential=publication-signing-key:/etc/fire-backend/credentials/publication-signing-key
+LoadCredential=publication-signing-public-key-ring:/etc/fire-backend/credentials/publication-signing-public-key-ring.json
 ExecStart=/srv/firedash/current/venv/bin/python manage.py process_publication_jobs --delivery --forever --poll-seconds 2
 TimeoutStopSec=30s
 Restart=on-failure

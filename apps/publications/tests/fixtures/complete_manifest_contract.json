@@ -1,0 +1,29 @@
+{
+  "description": "Deterministic test-only complete SignedManifest interoperability vector.",
+  "expected_manifest_etag": "\"b5dd3883e57797257aebebdf96e68366cef782abe8c47a497ae2a3593f9d4e6c\"",
+  "public_key": "/sFChnP2r+iSZLOAc0SuiyadElpQOFUgJofbWnEoV58=",
+  "signature": "RoGtwOOPBdUYGQ6PVxRlLrVUdiv4PuiCx/jazVA7IdJ9I35oz4h3IKQ55K5PsRApYIwuPAcwtvlM3NJziHE3Cg==",
+  "signing_key_version": "fixture-1",
+  "unsigned_canonical_manifest_ascii": "{\"authorization_valid_until\":\"2030-01-09T03:04:05+00:00\",\"configuration\":{\"department_id\":\"33333333-3333-3333-3333-333333333333\",\"installation_id\":\"11111111-1111-1111-1111-111111111111\",\"station_id\":\"44444444-4444-4444-4444-444444444444\",\"tablet_id\":\"22222222-2222-2222-2222-222222222222\",\"vehicle_id\":\"55555555-5555-5555-5555-555555555555\"},\"datasets\":[{\"artifact_format\":\"json\",\"artifact_signature\":\"U1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTUw==\",\"artifact_signature_algorithm\":\"Ed25519\",\"artifact_signing_key_version\":\"fixture-1\",\"ciphertext_sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"content_encryption_algorithm\":\"AES-256-GCM\",\"content_encryption_nonce\":\"Tk5OTk5OTk5OTk5O\",\"content_key_kek_version\":\"1\",\"content_key_wrapped_for_kek\":\"S0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSw==\",\"content_key_wrapping_algorithm\":\"AES-KW-RFC3394\",\"download_url\":\"/api/v1/tablet/datasets/66666666-6666-6666-6666-666666666666/download\",\"encrypted_size\":1234,\"key_grant\":{\"ciphersuite\":\"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM\",\"encapsulated_key\":\"BEVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUU=\",\"scheme\":\"HPKE\",\"wrapped_content_key\":\"V1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dX\"},\"minimum_app_version\":null,\"publication_id\":\"66666666-6666-6666-6666-666666666666\",\"required\":true,\"schema_version\":1,\"scope\":\"station\",\"type\":\"station_personnel\",\"version\":7}],\"generated_at\":\"2030-01-02T03:04:05+00:00\",\"manifest_generation\":1,\"signature_algorithm\":\"Ed25519\",\"signing_key_version\":\"fixture-1\"}",
+  "unsigned_canonical_manifest_sha256": "53cbe7da362ce6e871fe476ff821cd16bf094ac08e57e391243214521da5a9f6",
+  "wire_manifest": {
+    "authorization_valid_until": "2030-01-09T03:04:05+00:00",
+    "configuration": {
+      "department_id": "33333333-3333-3333-3333-333333333333",
+      "installation_id": "11111111-1111-1111-1111-111111111111",
+      "station_id": "44444444-4444-4444-4444-444444444444",
+      "tablet_id": "22222222-2222-2222-2222-222222222222",
+      "vehicle_id": "55555555-5555-5555-5555-555555555555"
+    },
+    "datasets": [{
+      "artifact_format": "json", "artifact_signature": "U1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTUw==", "artifact_signature_algorithm": "Ed25519", "artifact_signing_key_version": "fixture-1", "ciphertext_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "content_encryption_algorithm": "AES-256-GCM", "content_encryption_nonce": "Tk5OTk5OTk5OTk5O", "content_key_kek_version": "1", "content_key_wrapped_for_kek": "S0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSw==", "content_key_wrapping_algorithm": "AES-KW-RFC3394", "download_url": "/api/v1/tablet/datasets/66666666-6666-6666-6666-666666666666/download", "encrypted_size": 1234,
+      "key_grant": {"ciphersuite": "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM", "encapsulated_key": "BEVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUU=", "scheme": "HPKE", "wrapped_content_key": "V1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dX"},
+      "minimum_app_version": null, "publication_id": "66666666-6666-6666-6666-666666666666", "required": true, "schema_version": 1, "scope": "station", "type": "station_personnel", "version": 7
+    }],
+    "generated_at": "2030-01-02T03:04:05+00:00",
+    "manifest_generation": 1,
+    "signature": "RoGtwOOPBdUYGQ6PVxRlLrVUdiv4PuiCx/jazVA7IdJ9I35oz4h3IKQ55K5PsRApYIwuPAcwtvlM3NJziHE3Cg==",
+    "signature_algorithm": "Ed25519",
+    "signing_key_version": "fixture-1"
+  }
+}

@@ -77,20 +77,21 @@ python .\tools\fake_ipad.py update-check --state-dir $State --expect-unchanged s
 python .\tools\fake_ipad.py download --state-dir $State
 ```
 
-Workstream 2 will make historical signing-key retrieval and its deterministic
-complete-manifest fixture available. Once deployed, the human rotates keys and
-the fake client verifies both exact versions without substituting the active
-key:
+The deployed public-key ring retains historical keys. During a human key
+rotation, the fake client verifies both exact versions without substituting the
+active key:
 
 ```powershell
 python .\tools\fake_ipad.py signing-key 1 --state-dir $State
 python .\tools\fake_ipad.py verify --state-dir $State
-# Human rotates the server signing key to v2 and triggers changed signed state.
+# Human adds public v2 to the ring, installs private v2 only for publication
+# workers, switches the active signing version, and triggers changed signed state.
 python .\tools\fake_ipad.py signing-key 1 --state-dir $State
 python .\tools\fake_ipad.py signing-key 2 --state-dir $State
 python .\tools\fake_ipad.py verify --state-dir $State
 ```
 
-The deterministic complete-manifest fixture command is intentionally pending
-the Workstream 2 fixture; its consumer will use the same canonicalisation and
-Ed25519 verifier as live manifest processing.
+The deterministic complete-manifest fixture is checked in at
+`apps/publications/tests/fixtures/complete_manifest_contract.json` and is
+verified by both the server fixture test and the fake-iPad client test using
+the live canonicalisation and Ed25519 verification paths.

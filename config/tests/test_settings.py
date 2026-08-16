@@ -83,7 +83,7 @@ def test_publication_credentials_use_the_current_systemd_credential_directory(
 
     monkeypatch.delenv("PUBLICATION_KEK_CREDENTIAL_PATH", raising=False)
     monkeypatch.delenv("PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH", raising=False)
-    monkeypatch.delenv("PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH", raising=False)
+    monkeypatch.delenv("PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH", raising=False)
 
     delivery_directory = tmp_path / "delivery-invocation"
     build_directory = tmp_path / "build-invocation"
@@ -111,10 +111,10 @@ def test_publication_credentials_use_the_current_systemd_credential_directory(
     )
     assert (
         publication_credential_path(
-            override_name="PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH",
-            credential_name="publication-signing-public-key",
+            override_name="PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH",
+            credential_name="publication-signing-public-key-ring",
         )
-        == build_directory / "publication-signing-public-key"
+        == build_directory / "publication-signing-public-key-ring"
     )
 
 

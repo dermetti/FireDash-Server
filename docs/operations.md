@@ -39,6 +39,13 @@ The build socket is advisory. A failed wake does not invalidate committed
 database work; the nightly timer remains the fallback. Never use `sudo
 systemctl` from the web account or create a helper that grants that privilege.
 
+For an Ed25519 signing-key rotation, keep every historical public key in the
+root-managed public-key ring. Add and verify the next public version before
+switching the worker-only private key and `PUBLICATION_SIGNING_KEY_VERSION`.
+Use `GET /api/v1/tablet/signing-keys/<version>` with an authorised test tablet
+to verify both old and new entries; do not remove an old public key while any
+retained manifest or artifact can reference it.
+
 ## Backup and restore
 
 Monitor backups under the backup role, verify completion and retention, and

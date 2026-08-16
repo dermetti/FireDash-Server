@@ -19,14 +19,18 @@ PY
 
 # Render /etc/fire-backend/fire-backend.env. Empty runtime_password/secret_key reuse existing values.
 render_env() {
-    local runtime_password=${1:-} secret_key=${2:-} host=${3:-}
+    local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1
     if [[ -f $ENV_FILE ]]; then
         [[ -z $runtime_password ]] && runtime_password=$(env_value "$ENV_FILE" POSTGRES_PASSWORD)
         [[ -z $secret_key ]] && secret_key=$(env_value "$ENV_FILE" DJANGO_SECRET_KEY)
+        signing_key_version=$(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION)
     fi
     [[ -n $runtime_password ]] || die "runtime database password is unavailable"
     [[ -n $secret_key ]] || die "Django SECRET_KEY is unavailable"
     [[ -n $host ]] || die "hostname is unavailable"
+    [[ -n $signing_key_version ]] || signing_key_version=1
+    [[ $signing_key_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
+        || die "PUBLICATION_SIGNING_KEY_VERSION is invalid"
     local tmp
     tmp=$(mktemp)
     cat > "$tmp" <<EOF
@@ -68,9 +72,71 @@ PUBLICATION_ARTIFACT_TEMP_ROOT=/var/lib/fire-backend/publications/.tmp
 PUBLICATION_ARTIFACT_MAX_BYTES=104857600
 PUBLICATION_ARTIFACT_STALE_SECONDS=3600
 PUBLICATION_KEK_VERSION=1
-PUBLICATION_SIGNING_KEY_VERSION=1
+PUBLICATION_SIGNING_KEY_VERSION=$signing_key_version
 EOF
     install_file_atomic "$tmp" "$ENV_FILE" 0640 root:fire_backend
+    rm -f "$tmp"
+}
+
+# Preserve every historical public key while ensuring the active private/public
+# pair is represented by its configured immutable version.  The ring is loaded
+# as a public-only systemd credential by web and publication services.
+ensure_public_signing_key_ring() {
+    local release=$1 active_version tmp
+    active_version=$(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION)
+    [[ -n $active_version ]] || active_version=1
+    tmp=$(mktemp)
+    "$release/venv/bin/python" - "$SECRET_DIR/publication-signing-public-key" \
+        "$SECRET_DIR/publication-signing-public-key-ring.json" "$active_version" > "$tmp" <<'PY'
+import base64
+import json
+import re
+import sys
+from pathlib import Path
+
+public_path = Path(sys.argv[1])
+ring_path = Path(sys.argv[2])
+active_version = sys.argv[3]
+version_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+if not version_re.fullmatch(active_version):
+    raise SystemExit("PUBLICATION_SIGNING_KEY_VERSION is invalid")
+
+def no_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("public signing-key ring has duplicate keys")
+        result[key] = value
+    return result
+
+public_key = public_path.read_bytes()
+if len(public_key) != 32:
+    raise SystemExit("active publication signing public key must be exactly 32 bytes")
+if ring_path.exists():
+    document = json.loads(ring_path.read_text(encoding="ascii"), object_pairs_hook=no_duplicate_keys)
+    if not isinstance(document, dict) or set(document) != {"keys"} or not isinstance(document["keys"], dict):
+        raise SystemExit("public signing-key ring is invalid")
+    keys = document["keys"]
+else:
+    keys = {}
+for version, encoded_key in keys.items():
+    if not isinstance(version, str) or not version_re.fullmatch(version):
+        raise SystemExit("public signing-key ring has an invalid version")
+    if not isinstance(encoded_key, str):
+        raise SystemExit("public signing-key ring has an invalid key")
+    try:
+        decoded = base64.b64decode(encoded_key.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError) as error:
+        raise SystemExit("public signing-key ring has an invalid key") from error
+    if len(decoded) != 32:
+        raise SystemExit("public signing-key ring key must be exactly 32 bytes")
+active_encoded = base64.b64encode(public_key).decode("ascii")
+if active_version in keys and keys[active_version] != active_encoded:
+    raise SystemExit("active public key does not match its existing ring version")
+keys[active_version] = active_encoded
+sys.stdout.write(json.dumps({"keys": keys}, sort_keys=True, separators=(",", ":")) + "\n")
+PY
+    install_file_atomic "$tmp" "$SECRET_DIR/publication-signing-public-key-ring.json" 0600 root:root
     rm -f "$tmp"
 }
 
@@ -109,6 +175,7 @@ generate_and_commit_secrets() {
         install -m 0600 -o root -g root "$staging/$f" "$SECRET_DIR/$f"
     done
     render_env "$runtime_password" "$secret_key" "$host"
+    ensure_public_signing_key_ring "$release"
 
     : > "$SECRETS_MARKER"
     chmod 600 "$SECRETS_MARKER"
@@ -139,6 +206,7 @@ validate_established_secrets() {
     [[ $v =~ ^[0-9a-f]{64}$ ]] || die "established install: POSTGRES_PASSWORD is invalid"
     v=$(env_value "$ENV_FILE" DJANGO_SECRET_KEY)
     [[ -n $v ]] || die "established install: DJANGO_SECRET_KEY is missing"
+    ensure_public_signing_key_ring "$release"
 }
 
 # Main entry. Requires FIREDASH_STATE, FIREDASH_RELEASE, FIREDASH_HOST from the caller.

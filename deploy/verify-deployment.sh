@@ -247,10 +247,10 @@ else
 fi
 
 # credential separation
-if systemctl cat fire-backend.service 2>/dev/null | grep -q 'publication-signing-public-key'; then
-    ok "web service loads public signing key"
+if systemctl cat fire-backend.service 2>/dev/null | grep -q 'publication-signing-public-key-ring'; then
+    ok "web service loads public signing-key ring"
 else
-    fail "web service missing public signing key credential"
+    fail "web service missing public signing-key ring credential"
 fi
 if systemctl cat fire-backend.service 2>/dev/null | grep -Eq 'publication-kek|publication-signing-key:'; then
     fail "web service loads private KEK/signing key"
@@ -259,6 +259,7 @@ else
 fi
 if systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q 'publication-kek' \
     && systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q 'publication-signing-key' \
+    && systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q 'publication-signing-public-key-ring' \
     && systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q -- '--delivery --forever --poll-seconds 2'; then
     ok "publication delivery worker has private credentials and delivery-only command"
 else
@@ -270,7 +271,8 @@ else
     fail "publication build worker command unexpected"
 fi
 if systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-kek' \
-    && systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-signing-key'; then
+    && systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-signing-key' \
+    && systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-signing-public-key-ring'; then
     ok "publication build worker has required private credentials"
 else
     fail "publication build worker private credentials unexpected"
@@ -340,9 +342,36 @@ fi
 # -------- filesystem / credentials --------
 log "=== filesystem / credentials ==="
 [[ $(stat -c '%a' "$SECRET_DIR") == 700 ]] && ok "credentials dir 0700" || fail "credentials dir mode $(stat -c '%a' "$SECRET_DIR")"
-for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key; do
+for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key publication-signing-public-key-ring.json; do
     [[ $(stat -c '%U:%G:%a' "$SECRET_DIR/$f") == "root:root:600" ]] && ok "$f root:root 0600" || fail "$f has unexpected ownership/mode"
 done
+if "$RELEASE/venv/bin/python" - "$SECRET_DIR/publication-signing-public-key" \
+    "$SECRET_DIR/publication-signing-public-key-ring.json" \
+    "$(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION)" <<'PY'
+import base64
+import json
+import re
+import sys
+from pathlib import Path
+
+public_path, ring_path, active_version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] or "1"
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", active_version):
+    raise SystemExit(1)
+document = json.loads(ring_path.read_text(encoding="ascii"))
+keys = document.get("keys") if isinstance(document, dict) and set(document) == {"keys"} else None
+if not isinstance(keys, dict):
+    raise SystemExit(1)
+key = keys.get(active_version)
+if not isinstance(key, str):
+    raise SystemExit(1)
+if base64.b64decode(key.encode("ascii"), validate=True) != public_path.read_bytes():
+    raise SystemExit(1)
+PY
+then
+    ok "active publication public key is present in the retained public-key ring"
+else
+    fail "publication public-key ring is invalid or omits the active key"
+fi
 [[ $(stat -c '%U:%G:%a' "$ENV_FILE") == "root:fire_backend:640" ]] && ok "fire-backend.env root:fire_backend 0640" || fail "fire-backend.env ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/publications) == "fire_publication:fire_nginx:2750" ]] && ok "publications 2750" || fail "publications ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/publications/.tmp) == "fire_publication:fire_publication:700" ]] && ok "publications/.tmp 0700" || fail "publications/.tmp ownership/mode unexpected"

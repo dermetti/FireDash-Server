@@ -18,6 +18,7 @@ def test_delivery_unit_is_persistent_delivery_only_and_hardened():
     assert "--build" not in unit
     assert "LoadCredential=publication-kek:" in unit
     assert "LoadCredential=publication-signing-key:" in unit
+    assert "LoadCredential=publication-signing-public-key-ring:" in unit
     for setting in ("NoNewPrivileges=true", "PrivateTmp=true", "ProtectSystem=full"):
         assert setting in unit
 
@@ -29,9 +30,10 @@ def test_worker_credentials_are_separate_from_the_web_public_key_credential():
     for unit in (delivery, build):
         assert "LoadCredential=publication-kek:" in unit
         assert "LoadCredential=publication-signing-key:" in unit
+        assert "LoadCredential=publication-signing-public-key-ring:" in unit
     assert "publication-kek" not in web
     assert "publication-signing-key:" not in web
-    assert "LoadCredential=publication-signing-public-key:" in web
+    assert "LoadCredential=publication-signing-public-key-ring:" in web
 
 
 def test_build_service_socket_and_timer_have_narrow_nightly_contract():
@@ -44,6 +46,7 @@ def test_build_service_socket_and_timer_have_narrow_nightly_contract():
     assert "--delivery" not in build
     assert "LoadCredential=publication-kek:" in build
     assert "LoadCredential=publication-signing-key:" in build
+    assert "LoadCredential=publication-signing-public-key-ring:" in build
     assert "ListenStream=/run/fire-backend/publication-build.sock" in socket
     assert "FileDescriptorName=publication-build-wake" in socket
     assert "SocketGroup=fire_backend" in socket
@@ -76,5 +79,7 @@ def test_verifier_checks_lane_commands_socket_security_and_credential_separation
     assert "publication build timer is scheduled nightly at 00:05" in verifier
     assert "root:fire_backend:660" in verifier
     assert "FileDescriptorName=publication-build-wake" in verifier
+    assert "publication-signing-public-key-ring.json" in verifier
+    assert "retained public-key ring" in verifier
     assert "maintenance service does not load KEK/private signing key" in verifier
     assert "fire_backend has no passwordless sudo privilege" in verifier

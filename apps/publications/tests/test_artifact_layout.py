@@ -32,7 +32,7 @@ def test_web_service_does_not_receive_private_publication_credentials():
     load_lines = [line for line in unit.splitlines() if line.startswith("LoadCredential=")]
     assert not any("publication-kek" in line for line in load_lines)
     assert not any("publication-signing-key" in line for line in load_lines)
-    assert any("publication-signing-public-key" in line for line in load_lines)
+    assert any("publication-signing-public-key-ring" in line for line in load_lines)
 
 
 def test_worker_preserves_sandbox_hardening():

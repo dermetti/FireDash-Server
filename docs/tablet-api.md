@@ -57,7 +57,7 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 | `POST /api/v1/tablet/refresh` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
 | `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
 | `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403 | ACTIVE, unexpired, authorised |
-| `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | Current authorised installation; active key only |
+| `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | Current authorised installation; exact configured public key version |
 | `GET /api/v1/tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403 | ACTIVE, unexpired, authorised |
 | `GET /api/v1/tablet/datasets/{publication_id}/download` | Bearer | No body; `If-None-Match` optional | 200 encrypted bytes | 304, 403, 404 | ACTIVE, unexpired, authorised and manifest-listed |
 
@@ -309,11 +309,11 @@ There is currently no independent signing root and no public-key pinning
 mechanism. HTTPS transport and installation authentication are therefore part
 of the initial signing-key trust decision.
 
-**Current server limitation — signing-key rotation:** the endpoint exposes only
-the configured active key version and returns 404 for old/unknown versions.
-Retain trusted keys by version with verified cache while artifacts/manifests
-signed by them may remain usable; an old key not retained locally cannot
-currently be fetched again.
+**Historical signing-key retrieval:** the endpoint returns the exact configured
+public key for every retained version; unknown versions
+return 404. Cache each strictly validated key by version and never substitute
+the active key for a different requested version. The server retains historical
+public keys while signed material referring to them remains available.
 
 ## Manifest retrieval and complete wire format
 
@@ -357,7 +357,11 @@ consume numbers, so clients must not assume `vN+1` exists.
 
 ### Manifest Ed25519 verification
 
-Fetch the raw 32-byte public key named by `signing_key_version`. Remove only
+Fetch the raw 32-byte public key named by `signing_key_version`. The endpoint
+returns that exact configured public-ring entry whether or not it is the active
+signing version; an unknown version is 404. Cache keys by exact version and
+never substitute the active/current key for a requested historical version.
+Remove only
 the top-level `signature`. Serialize all remaining members, including
 `signature_algorithm`, `signing_key_version`, configuration, datasets, and key
 grants using sorted keys, compact separators, and ASCII encoding:
@@ -369,9 +373,11 @@ json.dumps(unsigned_manifest, sort_keys=True, separators=(',', ':')).encode('asc
 Strictly Base64-decode the signature and verify Ed25519. Failure makes every
 manifest-derived field and new download untrusted: discard the candidate,
 retain prior verified state, and report recovery required. The exact helper is
-`canonical_manifest_payload` in `apps/publications/manifests.py`, covered by
-`apps/publications/tests/test_manifests.py`; no frozen complete-manifest fixture
-currently exists.
+`canonical_manifest_payload` in `apps/publications/manifests.py`. The complete
+test-only frozen vector is
+`apps/publications/tests/fixtures/complete_manifest_contract.json`; its test
+also freezes the distinct quoted response ETag rule (response payload excluding
+only `generated_at`). Do not treat the ETag hash as the signed-payload hash.
 
 The verified manifest supplies the publication identity/binding: its signed
 dataset entry binds the publication ID, scope, version, artifact metadata,
@@ -605,17 +611,9 @@ the plaintext `station_id` to equal the manifest/configuration station scope.
 
 ## Current known limitations / interoperability gaps
 
-- **Runtime/server limitation - signing-key rotation:**
-  `/api/v1/tablet/signing-keys/{version}` serves only the active configured
-  key. The client must retain old already-trusted public keys while signed
-  manifests/artifacts using them remain in its cache. There is no historical
-  server key ring, independent signing root, or public-key pinning mechanism
-  in the current beta.
-- **Missing interoperability fixture:** there is no deterministic complete
-  signed-manifest fixture. A future fixture should contain the complete
-  manifest object, exact unsigned canonical bytes, SHA-256 of those bytes,
-  Ed25519 public key, signature, expected quoted ETag, and signing-key version.
-  Do not invent those values in a client implementation.
+- **Trust-bootstrap limitation:** authenticated HTTPS to FireDash supplies the
+  initial public-key trust. There is no independent signing root or public-key
+  pinning mechanism.
 - **Validation gap in this environment:** database-backed tablet/manifest API
   tests may be unavailable when the development PostgreSQL server rejects the
   host in `pg_hba.conf` or the configured role cannot create `test_firedash`.
@@ -630,7 +628,7 @@ Use these deterministic materials when building Swift interoperability tests:
 | --- | --- | --- |
 | Adoption/reactivation canonical info and proof | `apps/tablets/services.py`, `apps/publications/hpke.py` | `apps/tablets/tests/test_provisioning_crypto.py`, especially `test_adoption_context_has_a_frozen_mode_bound_canonical_encoding` |
 | HPKE grant info and RFC 9180 vector | `apps/publications/hpke.py` | `apps/publications/tests/fixtures/hpke_contract.json`, `apps/publications/tests/test_hpke.py` |
-| Manifest signed bytes and ETag | `apps/publications/manifests.py`, `apps/publications/worker_grants.py` | `apps/publications/tests/test_manifests.py` |
+| Complete manifest signed bytes, signature, and ETag | `apps/publications/manifests.py`, `apps/publications/worker_grants.py` | `apps/publications/tests/fixtures/complete_manifest_contract.json`, `apps/publications/tests/test_manifest_contract.py` |
 | Artifact signature and AES-GCM metadata | `apps/publications/artifacts.py` | `apps/publications/tests/fixtures/artifact_signature_contract.json`, `apps/publications/tests/test_artifacts.py` |
 | Tablet routes, request validation, headers and states | `apps/tablets/api_urls.py`, `apps/tablets/api.py`, `apps/tablets/services.py`, `apps/tablets/models.py` | `apps/tablets/tests/test_api.py`, `apps/tablets/tests/test_adoption_api_crypto.py` |
 | Dataset schemas | `apps/publications/registry.py`, `apps/publications/builders.py` | publication builder tests |
