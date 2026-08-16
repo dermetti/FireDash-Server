@@ -3,9 +3,11 @@
 from dataclasses import dataclass
 from datetime import timedelta
 from time import monotonic
+from uuid import UUID
 
 from django.conf import settings
 
+from apps.publications.models import SignedManifest
 from apps.publications.services import process_next_job, recover_stale_jobs
 from apps.publications.worker_grants import (
     process_next_dataset_key_grant,
@@ -28,10 +30,16 @@ class DeliveryCycleResult:
     key_grants: int
     manifests: int
     elapsed_seconds: float
+    deferred_manifests: int = 0
 
     @property
     def processed(self) -> int:
         return self.key_grants + self.manifests
+
+    @property
+    def forward_progress(self) -> int:
+        """Items that reached a durable non-deferred outcome this cycle."""
+        return self.key_grants + self.manifests - self.deferred_manifests
 
 
 @dataclass(frozen=True)
@@ -49,18 +57,26 @@ def process_delivery_cycle(*, batch_size: int | None = None) -> DeliveryCycleRes
     """Process only latency-sensitive grant and manifest work."""
     started = monotonic()
     limit = batch_size or settings.PUBLICATION_WORKER_BATCH_SIZE
-    grants = manifests = 0
+    grants = manifests = deferred_manifests = 0
+    deferred_manifest_ids: set[UUID] = set()
     for _ in range(limit):
         grant = process_next_dataset_key_grant()
-        manifest = process_next_signed_manifest()
+        manifest = process_next_signed_manifest(exclude_ids=deferred_manifest_ids)
         grants += int(grant is not None)
         manifests += int(manifest is not None)
+        if (
+            manifest is not None
+            and getattr(manifest, "status", None) == SignedManifest.Status.PENDING
+        ):
+            deferred_manifests += 1
+            deferred_manifest_ids.add(manifest.id)
         if grant is None and manifest is None:
             break
     return DeliveryCycleResult(
         key_grants=grants,
         manifests=manifests,
         elapsed_seconds=monotonic() - started,
+        deferred_manifests=deferred_manifests,
     )
 
 

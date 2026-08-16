@@ -29,8 +29,8 @@ class Command(BaseCommand):
             processed = 0
             if options["delivery"]:
                 delivery = process_delivery_cycle()
-                processed = delivery.processed
-                if processed:
+                processed = delivery.forward_progress
+                if delivery.forward_progress:
                     self.stdout.write(
                         "Publication delivery cycle: "
                         f"grants={delivery.key_grants} manifests={delivery.manifests} "

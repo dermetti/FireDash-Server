@@ -202,23 +202,37 @@ PUBLICATION_ARTIFACT_MAX_BYTES = get_typed_env(
 PUBLICATION_ARTIFACT_STALE_SECONDS = get_typed_env(
     "PUBLICATION_ARTIFACT_STALE_SECONDS", int, default=3600
 )
-PUBLICATION_KEK_CREDENTIAL_PATH = Path(
-    get_env(
-        "PUBLICATION_KEK_CREDENTIAL_PATH",
-        default="/run/credentials/fire-publication-worker.service/publication-kek",
-    )
+
+
+def publication_credential_path(*, override_name: str, credential_name: str) -> Path:
+    """Return an explicit override or this unit's systemd credential path.
+
+    ``LoadCredential=`` gives each service invocation its own directory.  The
+    directory name is intentionally not stable, so workers must use systemd's
+    ``CREDENTIALS_DIRECTORY`` rather than a particular unit name.  Explicit
+    paths remain available for development and focused tests.
+    """
+    override = os.environ.get(override_name)
+    if override:
+        return Path(override)
+    credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    if credentials_directory:
+        return Path(credentials_directory) / credential_name
+    # Outside a systemd credential context the credential is deliberately
+    # unavailable unless the caller supplies an explicit override.
+    return Path("/run/credentials") / credential_name
+
+
+PUBLICATION_KEK_CREDENTIAL_PATH = publication_credential_path(
+    override_name="PUBLICATION_KEK_CREDENTIAL_PATH", credential_name="publication-kek"
 )
-PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = Path(
-    get_env(
-        "PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH",
-        default="/run/credentials/fire-publication-worker.service/publication-signing-key",
-    )
+PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = publication_credential_path(
+    override_name="PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH",
+    credential_name="publication-signing-key",
 )
-PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH = Path(
-    get_env(
-        "PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH",
-        default="/run/credentials/fire-backend.service/publication-signing-public-key",
-    )
+PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH = publication_credential_path(
+    override_name="PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH",
+    credential_name="publication-signing-public-key",
 )
 PUBLICATION_KEK_VERSION = get_env("PUBLICATION_KEK_VERSION", default="1")
 PUBLICATION_SIGNING_KEY_VERSION = get_env("PUBLICATION_SIGNING_KEY_VERSION", default="1")

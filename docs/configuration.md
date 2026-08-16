@@ -69,11 +69,13 @@ The artifact temporary root must be a strict descendant of the artifact root
 so final promotion is an atomic same-filesystem rename. Normal source edits
 coalesce for the nightly build rather than a sliding debounce.
 
-The following are **credential paths**, normally supplied by systemd rather
-than values to place in the environment: `PUBLICATION_KEK_CREDENTIAL_PATH`,
+Publication credentials are normally resolved from systemd's per-service
+`CREDENTIALS_DIRECTORY`; do not configure a unit-name-specific credential path.
+The explicit `PUBLICATION_KEK_CREDENTIAL_PATH`,
 `PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH`, and
-`PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH`. The web service receives
-only the public signing key path.
+`PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH` overrides exist only for
+development and focused tests. The web service receives only the public signing
+key credential.
 
 ## Tablets, backups, and restore
 

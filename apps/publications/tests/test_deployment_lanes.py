@@ -22,6 +22,18 @@ def test_delivery_unit_is_persistent_delivery_only_and_hardened():
         assert setting in unit
 
 
+def test_worker_credentials_are_separate_from_the_web_public_key_credential():
+    delivery = _unit("fire-publication-delivery.service")
+    build = _unit("fire-publication-build.service")
+    web = _unit("fire-backend.service")
+    for unit in (delivery, build):
+        assert "LoadCredential=publication-kek:" in unit
+        assert "LoadCredential=publication-signing-key:" in unit
+    assert "publication-kek" not in web
+    assert "publication-signing-key:" not in web
+    assert "LoadCredential=publication-signing-public-key:" in web
+
+
 def test_build_service_socket_and_timer_have_narrow_nightly_contract():
     build = _unit("fire-publication-build.service")
     socket = _unit("fire-publication-build.socket")

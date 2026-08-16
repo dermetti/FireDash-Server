@@ -25,6 +25,7 @@ from apps.publications.models import (
     DatasetScopeState,
     SignedManifest,
 )
+from apps.publications.work_cycle import process_delivery_cycle
 from apps.publications.worker_grants import (
     claim_next_dataset_key_grant,
     claim_next_signed_manifest,
@@ -157,6 +158,93 @@ def test_manifest_becomes_ready_after_worker_processing(pub_fixture, tmp_path):
     assert signed is not None
     assert signed.status == SignedManifest.Status.READY
     assert signed.payload is not None
+
+
+def test_failed_required_grant_fails_manifest_without_reclaiming_it(pub_fixture):
+    _, _, installation, publication, _, _, _ = pub_fixture
+    request_manifest(installation=installation)
+    grant = DatasetKeyGrant.objects.get(publication=publication, app_installation=installation)
+    grant.status = DatasetKeyGrant.Status.FAILED
+    grant.completed_at = timezone.now()
+    grant.error_message = "Publication KEK credential is unavailable."
+    grant.save(update_fields=("status", "completed_at", "error_message"))
+
+    manifest = process_next_signed_manifest()
+
+    assert manifest is not None
+    assert manifest.status == SignedManifest.Status.FAILED
+    assert manifest.completed_at is not None
+    assert manifest.error_message == "A required dataset key grant failed."
+    assert process_next_signed_manifest() is None
+
+
+def test_new_manifest_request_safely_retries_terminal_grant_and_manifest(pub_fixture):
+    _, _, installation, publication, _, _, _ = pub_fixture
+    first = request_manifest(installation=installation)
+    assert first.request_id is not None
+    DatasetKeyGrant.objects.filter(publication=publication, app_installation=installation).update(
+        status=DatasetKeyGrant.Status.FAILED,
+        completed_at=timezone.now(),
+        error_message="Publication KEK credential is unavailable.",
+    )
+    SignedManifest.objects.filter(pk=first.request_id).update(
+        status=SignedManifest.Status.FAILED,
+        completed_at=timezone.now(),
+        error_message="A required dataset key grant failed.",
+    )
+
+    retry = request_manifest(installation=installation)
+    grant = DatasetKeyGrant.objects.get(publication=publication, app_installation=installation)
+    manifest = SignedManifest.objects.get(pk=first.request_id)
+
+    assert retry.request_id == first.request_id
+    assert grant.status == DatasetKeyGrant.Status.PENDING
+    assert grant.completed_at is None
+    assert manifest.status == SignedManifest.Status.PENDING
+    assert manifest.completed_at is None
+
+
+def test_deferred_manifest_is_attempted_once_per_delivery_cycle_and_later_completes(
+    pub_fixture, tmp_path
+):
+    _, _, installation, publication, _, _, _ = pub_fixture
+    request_manifest(installation=installation)
+    grant = DatasetKeyGrant.objects.get(publication=publication, app_installation=installation)
+    grant.status = DatasetKeyGrant.Status.RUNNING
+    grant.save(update_fields=("status",))
+
+    deferred = process_delivery_cycle(batch_size=10)
+    manifest = SignedManifest.objects.get(app_installation=installation)
+
+    assert deferred.key_grants == 0
+    assert deferred.manifests == 1
+    assert deferred.deferred_manifests == 1
+    assert deferred.forward_progress == 0
+    assert manifest.status == SignedManifest.Status.PENDING
+
+    signing_path = tmp_path / "signing"
+    signing_path.write_bytes(b"s" * 32)
+    grant.status = DatasetKeyGrant.Status.READY
+    grant.hpke_ciphersuite = HPKE_CIPHERSUITE
+    grant.hpke_encapsulated_key = b"e" * 65
+    grant.hpke_wrapped_content_key = b"w" * 48
+    grant.completed_at = timezone.now()
+    grant.save(
+        update_fields=(
+            "status",
+            "hpke_ciphersuite",
+            "hpke_encapsulated_key",
+            "hpke_wrapped_content_key",
+            "completed_at",
+        )
+    )
+
+    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+        completed = process_delivery_cycle(batch_size=10)
+
+    manifest.refresh_from_db()
+    assert completed.forward_progress == 1
+    assert manifest.status == SignedManifest.Status.READY
 
 
 def test_revoked_installation_grants_are_revoked(pub_fixture):

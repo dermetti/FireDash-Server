@@ -76,6 +76,64 @@ def test_public_origin_must_be_an_https_origin() -> None:
         validate_public_origin("https://firedash.example.org/api/v1")
 
 
+def test_publication_credentials_use_the_current_systemd_credential_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from config.settings.base import publication_credential_path
+
+    monkeypatch.delenv("PUBLICATION_KEK_CREDENTIAL_PATH", raising=False)
+    monkeypatch.delenv("PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH", raising=False)
+    monkeypatch.delenv("PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH", raising=False)
+
+    delivery_directory = tmp_path / "delivery-invocation"
+    build_directory = tmp_path / "build-invocation"
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(delivery_directory))
+    assert (
+        publication_credential_path(
+            override_name="PUBLICATION_KEK_CREDENTIAL_PATH", credential_name="publication-kek"
+        )
+        == delivery_directory / "publication-kek"
+    )
+    assert (
+        publication_credential_path(
+            override_name="PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH",
+            credential_name="publication-signing-key",
+        )
+        == delivery_directory / "publication-signing-key"
+    )
+
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(build_directory))
+    assert (
+        publication_credential_path(
+            override_name="PUBLICATION_KEK_CREDENTIAL_PATH", credential_name="publication-kek"
+        )
+        == build_directory / "publication-kek"
+    )
+    assert (
+        publication_credential_path(
+            override_name="PUBLICATION_SIGNING_PUBLIC_KEY_CREDENTIAL_PATH",
+            credential_name="publication-signing-public-key",
+        )
+        == build_directory / "publication-signing-public-key"
+    )
+
+
+def test_explicit_publication_credential_path_override_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from config.settings.base import publication_credential_path
+
+    override = tmp_path / "test-kek"
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path / "systemd"))
+    monkeypatch.setenv("PUBLICATION_KEK_CREDENTIAL_PATH", str(override))
+    assert (
+        publication_credential_path(
+            override_name="PUBLICATION_KEK_CREDENTIAL_PATH", credential_name="publication-kek"
+        )
+        == override
+    )
+
+
 def test_production_settings_reject_temp_root_outside_artifact_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

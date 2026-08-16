@@ -162,7 +162,10 @@ def authorized_publications(*, installation: AppInstallation, now=None):
 
 @transaction.atomic
 def request_dataset_key_grant(
-    *, publication: DatasetPublication, installation: AppInstallation
+    *,
+    publication: DatasetPublication,
+    installation: AppInstallation,
+    retry_failed: bool = False,
 ) -> DatasetKeyGrant:
     """Persist an idempotent worker request without handling KEK or CEK material."""
     _, _, publications = authorized_publications(installation=installation)
@@ -172,6 +175,11 @@ def request_dataset_key_grant(
         publication=publication, app_installation=installation
     ).first()
     if grant is not None:
+        if retry_failed and grant.status == DatasetKeyGrant.Status.FAILED:
+            grant.status = DatasetKeyGrant.Status.PENDING
+            grant.completed_at = None
+            grant.error_message = ""
+            grant.save(update_fields=("status", "completed_at", "error_message"))
         return grant
     try:
         return DatasetKeyGrant.objects.create(
@@ -208,7 +216,9 @@ def request_manifest(
             installation=installation, now=now
         )
         for publication in publications:
-            request_dataset_key_grant(publication=publication, installation=installation)
+            request_dataset_key_grant(
+                publication=publication, installation=installation, retry_failed=True
+            )
         state_hash = manifest_state_hash(
             installation=installation,
             vehicle=vehicle,
@@ -225,6 +235,14 @@ def request_manifest(
             manifest = SignedManifest.objects.get(
                 app_installation=installation, state_hash=state_hash
             )
+        if manifest.status == SignedManifest.Status.FAILED:
+            # A new tablet manifest request is an explicit, safe retry signal.
+            # It can recover a credential outage without a database repair, but
+            # the delivery worker never reclaims terminal failures by itself.
+            manifest.status = SignedManifest.Status.PENDING
+            manifest.completed_at = None
+            manifest.error_message = ""
+            manifest.save(update_fields=("status", "completed_at", "error_message"))
         if manifest.status == SignedManifest.Status.READY:
             if manifest.signature is None:
                 raise ManifestError("Ready manifest has no signature.")

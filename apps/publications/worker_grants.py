@@ -1,6 +1,7 @@
 """Publication-worker-only CEK grant and manifest signing operations."""
 
 import base64
+from uuid import UUID
 
 from cryptography.hazmat.primitives import keywrap
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -133,13 +134,15 @@ def build_claimed_dataset_key_grant(*, grant_id) -> DatasetKeyGrant:
 
 
 @transaction.atomic
-def claim_next_signed_manifest() -> SignedManifest | None:
-    manifest = (
+def claim_next_signed_manifest(*, exclude_ids: set[UUID] | None = None) -> SignedManifest | None:
+    manifests = (
         SignedManifest.objects.select_for_update(skip_locked=True)
         .filter(status=SignedManifest.Status.PENDING)
         .order_by("created_at")
-        .first()
     )
+    if exclude_ids:
+        manifests = manifests.exclude(id__in=exclude_ids)
+    manifest = manifests.first()
     if manifest is None:
         return None
     manifest.status = SignedManifest.Status.RUNNING
@@ -208,8 +211,8 @@ def _manifest_payload(*, installation, vehicle, publications, grants, generation
     }
 
 
-def process_next_signed_manifest() -> SignedManifest | None:
-    manifest = claim_next_signed_manifest()
+def process_next_signed_manifest(*, exclude_ids: set[UUID] | None = None) -> SignedManifest | None:
+    manifest = claim_next_signed_manifest(exclude_ids=exclude_ids)
     if manifest is None:
         return None
     return build_claimed_signed_manifest(manifest_id=manifest.id)
@@ -245,9 +248,27 @@ def build_claimed_signed_manifest(*, manifest_id) -> SignedManifest:
             manifest.error_message = "Manifest authorization or publication state changed."
             manifest.save(update_fields=("status", "completed_at", "error_message"))
             return manifest
-        if any(grant.status != DatasetKeyGrant.Status.READY for grant in grants):
+        failed_grant = next(
+            (grant for grant in grants if grant.status == DatasetKeyGrant.Status.FAILED), None
+        )
+        if failed_grant is not None:
+            manifest.status = SignedManifest.Status.FAILED
+            manifest.completed_at = now
+            manifest.error_message = "A required dataset key grant failed."
+            manifest.save(update_fields=("status", "completed_at", "error_message"))
+            return manifest
+        if any(
+            grant.status in (DatasetKeyGrant.Status.PENDING, DatasetKeyGrant.Status.RUNNING)
+            for grant in grants
+        ):
             manifest.status = SignedManifest.Status.PENDING
             manifest.save(update_fields=("status",))
+            return manifest
+        if any(grant.status != DatasetKeyGrant.Status.READY for grant in grants):
+            manifest.status = SignedManifest.Status.OBSOLETE
+            manifest.completed_at = now
+            manifest.error_message = "A required dataset key grant is no longer usable."
+            manifest.save(update_fields=("status", "completed_at", "error_message"))
             return manifest
         payload = _manifest_payload(
             installation=installation,
