@@ -39,12 +39,52 @@ The build socket is advisory. A failed wake does not invalidate committed
 database work; the nightly timer remains the fallback. Never use `sudo
 systemctl` from the web account or create a helper that grants that privilege.
 
-For an Ed25519 signing-key rotation, keep every historical public key in the
-root-managed public-key ring. Add and verify the next public version before
-switching the worker-only private key and `PUBLICATION_SIGNING_KEY_VERSION`.
-Use `GET /api/v1/tablet/signing-keys/<version>` with an authorised test tablet
-to verify both old and new entries; do not remove an old public key while any
-retained manifest or artifact can reference it.
+## Publication signing-key rotation
+
+The publication KEK is unrelated to signing-key rotation: **do not rotate the
+KEK in this procedure**. Historical Ed25519 public keys must remain in the
+root-managed ring while any retained manifest or artifact may reference them.
+`GET /api/v1/tablet/signing-keys/<version>` returns only that exact retained
+version; an unknown version is 404 and clients must never substitute the
+active key.
+
+Use the root-only two-phase helper from the deployed exact-SHA release. It
+does not send private material through Django, Gunicorn, HTTP, audit events, or
+logs. It stages root-only private material, atomically adds the public key to
+the ring, and then atomically swaps the active worker credentials only after
+the staged pair and ring entry match.
+
+```sh
+sudo bash deploy/rotate-publication-signing-key status
+sudo bash deploy/rotate-publication-signing-key prepare --version 2
+sudo bash deploy/rotate-publication-signing-key status
+```
+
+Before activation, with the old signer still active, ensure `fire-backend` has
+restarted after prepare (the helper attempts this) and use an authorised test
+tablet/fake iPad to fetch and validate both the old and prepared public key.
+Run the normal exact-SHA installer convergence procedure before and after the
+transition as required by the release process; installer reruns preserve every
+historical ring entry and never regenerate signing keys. When those checks are
+clean, activate:
+
+```sh
+sudo bash deploy/rotate-publication-signing-key activate --version 2
+sudo bash deploy/rotate-publication-signing-key status
+# Run the approved exact-SHA installer convergence rerun for this release.
+sudo /srv/firedash/current/deploy/verify-deployment.sh
+journalctl -u fire-publication-delivery -u fire-publication-build --since '15 minutes ago'
+```
+
+The helper pauses only build/delivery during the active credential transition,
+then re-enables their expected socket/service state. It does not run a build.
+Use the normal administrator publication workflow to produce one legitimate
+new signed manifest/artifact, then verify both that new v2 material and old v1
+material with the exact corresponding public keys. Do not “roll back” by
+rewriting prior signatures or publication metadata. Staging remains under
+`/etc/fire-backend/credentials/publication-signing-key-staging/`; remove a
+root-only staged private key only after the retention/recovery review, never
+the retained public-ring entry merely because it is no longer active.
 
 ## Backup and restore
 

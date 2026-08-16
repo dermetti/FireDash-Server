@@ -121,7 +121,7 @@ Reactivation retains the installation but rotates its credential; atomically
 replace the old Keychain value. A REPLACED credential is accepted only by the
 terminal status probe and no operational endpoint.
 
-| State | Bearer authenticates | Status | Check-in / Refresh | Config / manifest / download | Reactivation | Purge |
+| State | Bearer authenticates | Status | Check-in / Refresh | Config / signing keys / manifest / download | Reactivation | Purge |
 | --- | --- | --- | --- | --- | --- | --- |
 | ACTIVE and unexpired | Yes | 200 | 200 | Allowed when tablet, vehicle, department, features are authorised | No | No |
 | ACTIVE but expired | Yes until stale transition | 200 with deadline | 403; check-in marks stale | 403 | Requires stale invitation | Offline lease expired |
@@ -136,7 +136,7 @@ adopt, reactivate, check in, refresh, configure, obtain a manifest, or download.
 credential, including a terminal REPLACED credential:
 
 ```json
-{"status":"active","authorization_valid_until":"2026-08-22T00:00:00Z","purge_provisioned_data":false}
+{"status":"active","authorization_valid_until":"2026-08-22T00:00:00Z","purge_provisioned_data":false,"server_time":"2026-08-15T00:00:00Z"}
 ```
 
 REVOKED and REPLACED return `purge_provisioned_data: true`. A required purge removes
@@ -632,3 +632,12 @@ Use these deterministic materials when building Swift interoperability tests:
 | Artifact signature and AES-GCM metadata | `apps/publications/artifacts.py` | `apps/publications/tests/fixtures/artifact_signature_contract.json`, `apps/publications/tests/test_artifacts.py` |
 | Tablet routes, request validation, headers and states | `apps/tablets/api_urls.py`, `apps/tablets/api.py`, `apps/tablets/services.py`, `apps/tablets/models.py` | `apps/tablets/tests/test_api.py`, `apps/tablets/tests/test_adoption_api_crypto.py` |
 | Dataset schemas | `apps/publications/registry.py`, `apps/publications/builders.py` | publication builder tests |
+
+## /api/v1 beta freeze
+
+`/api/v1` is **BETA FROZEN**. Existing v1 routes, fields, field types, and
+meanings will not be removed, renamed, or changed. Later v1 evolution is
+additive and optional; a breaking wire or lifecycle change requires a future
+`/api/v2`. Exact-version historical signing-key retrieval is part of this v1
+compatibility contract: clients may cache a retained key by version, but must
+never substitute another active or historical key.

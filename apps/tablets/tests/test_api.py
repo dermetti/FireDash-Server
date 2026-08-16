@@ -469,6 +469,38 @@ def test_refresh_rejects_expired_or_non_operational_installations(api_context):
 
 
 @pytest.mark.parametrize(
+    ("installation_status", "expected_status"),
+    [
+        (AppInstallation.Status.ACTIVE, 200),
+        (AppInstallation.Status.STALE, 403),
+        (AppInstallation.Status.REVOKED, 403),
+        (AppInstallation.Status.REPLACED, 403),
+    ],
+)
+def test_signing_key_requires_current_authorized_installation(
+    api_context, tmp_path, installation_status, expected_status
+):
+    client, installation, credential, _ = api_context
+    signing_public = (
+        Ed25519PrivateKey.from_private_bytes(b"s" * 32)
+        .public_key()
+        .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    )
+    ring_path = tmp_path / "signing-public-ring.json"
+    ring_path.write_text(
+        json.dumps({"keys": {"1": base64.b64encode(signing_public).decode("ascii")}}),
+        encoding="ascii",
+    )
+    installation.status = installation_status
+    installation.save(update_fields=("status",))
+
+    with override_settings(PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH=ring_path):
+        response = client.get("/api/v1/tablet/signing-keys/1", **_authorization(credential))
+
+    assert response.status_code == expected_status
+
+
+@pytest.mark.parametrize(
     ("installation_status", "path", "expected_status"),
     [
         (AppInstallation.Status.ACTIVE, "/api/v1/tablet/status", 200),
@@ -534,6 +566,37 @@ def test_download_openapi_contract_has_no_drf_format_query_parameter():
     assert response_content == {
         "application/octet-stream": {"schema": {"format": "binary", "type": "string"}}
     }
+
+
+def test_openapi_tablet_error_and_conditional_response_contracts():
+    response = Client().get("/api/v1/schema/")
+
+    schema = yaml.safe_load(response.content)
+    manifest = schema["paths"]["/api/v1/tablet/manifest"]["get"]
+    download = schema["paths"]["/api/v1/tablet/datasets/{publication_id}/download"]["get"]
+    signing_key = schema["paths"]["/api/v1/tablet/signing-keys/{version}"]["get"]
+
+    assert manifest["responses"]["202"]["content"] == {
+        "application/problem+json": {
+            "schema": {"$ref": "#/components/schemas/ManifestPendingResponse"}
+        }
+    }
+    assert manifest["responses"]["403"]["content"] == {
+        "application/problem+json": {"schema": {"$ref": "#/components/schemas/ProblemResponse"}}
+    }
+    assert signing_key["responses"]["404"]["content"] == {
+        "application/problem+json": {"schema": {"$ref": "#/components/schemas/ProblemResponse"}}
+    }
+    assert {parameter["name"] for parameter in manifest["parameters"]} == {"If-None-Match"}
+    assert set(manifest["responses"]["200"]["headers"]) == {"ETag"}
+    assert set(manifest["responses"]["202"]["headers"]) == {"Retry-After"}
+    assert set(manifest["responses"]["304"]["headers"]) == {"ETag"}
+    assert {parameter["name"] for parameter in download["parameters"]} == {
+        "publication_id",
+        "If-None-Match",
+    }
+    assert set(download["responses"]["200"]["headers"]) == {"ETag"}
+    assert set(download["responses"]["304"]["headers"]) == {"ETag"}
 
 
 def test_download_content_negotiation_accepts_octet_stream():

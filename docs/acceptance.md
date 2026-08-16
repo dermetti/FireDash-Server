@@ -78,14 +78,16 @@ python .\tools\fake_ipad.py download --state-dir $State
 ```
 
 The deployed public-key ring retains historical keys. During a human key
-rotation, the fake client verifies both exact versions without substituting the
-active key:
+rotation, use the root-only two-phase helper and the fake client verifies both
+exact versions without substituting the active key:
 
 ```powershell
 python .\tools\fake_ipad.py signing-key 1 --state-dir $State
 python .\tools\fake_ipad.py verify --state-dir $State
-# Human adds public v2 to the ring, installs private v2 only for publication
-# workers, switches the active signing version, and triggers changed signed state.
+# On the LXC as root: prepare v2, verify both keys while v1 stays active,
+# then activate v2. Do not rotate the publication KEK.
+# sudo bash deploy/rotate-publication-signing-key prepare --version 2
+# sudo bash deploy/rotate-publication-signing-key activate --version 2
 python .\tools\fake_ipad.py signing-key 1 --state-dir $State
 python .\tools\fake_ipad.py signing-key 2 --state-dir $State
 python .\tools\fake_ipad.py verify --state-dir $State

@@ -56,10 +56,13 @@ counts, timestamps, and error summaries, never the secret/payload material.
 2. Preserve evidence: record a restricted incident entry with affected scope,
    time, and containment action; do not paste the secret itself into it.
 3. Rotate the appropriate credential and update systemd credential delivery.
-   For publication signing keys, retain historical public entries in the
-   root-managed public-key ring, add the replacement public key first, and
-   deliver the replacement private key only to publication workers. Validate
-   old and new artifacts/manifests before normal operation resumes.
+   For publication signing keys, use the root-only two-phase
+   `rotate-publication-signing-key` runbook: retain historical public entries,
+   prepare and verify the replacement public key first, then deliver the
+   replacement private key only to publication workers. The web service
+   receives the public ring only. Do not rotate the unrelated publication KEK
+   as part of this procedure. Validate old and new artifacts/manifests before
+   normal operation resumes.
 4. Review audit and service logs for affected installations, administrative
    actions, and publication work. Revoke/re-adopt installations where the
    installation credential or HPKE key may be compromised.

@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# Root-only, two-phase Ed25519 publication signing-key rotation.
+set -Eeuo pipefail
+
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/common.sh
+source "$SELF_DIR/lib/common.sh"
+
+RING_FILE="$SECRET_DIR/publication-signing-public-key-ring.json"
+ACTIVE_PRIVATE="$SECRET_DIR/publication-signing-key"
+ACTIVE_PUBLIC="$SECRET_DIR/publication-signing-public-key"
+STAGING_ROOT="$SECRET_DIR/publication-signing-key-staging"
+RELEASE=${FIREDASH_RELEASE:-$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)}
+
+usage() {
+    cat >&2 <<'EOF'
+Usage: rotate-publication-signing-key {prepare|activate} --version N
+       rotate-publication-signing-key status
+EOF
+    exit 2
+}
+
+require_release() {
+    [[ -n $RELEASE && -x $RELEASE/venv/bin/python ]] || die "current release Python is unavailable"
+}
+
+valid_version() { [[ ${1:-} =~ ^[1-9][0-9]*$ ]]; }
+stage_dir() { printf '%s/%s' "$STAGING_ROOT" "$1"; }
+
+# Validate configuration without emitting any key material. The same strict JSON
+# contract is used by Django's public-ring reader.
+validate_current() {
+    "$RELEASE/venv/bin/python" - "$ACTIVE_PRIVATE" "$ACTIVE_PUBLIC" "$RING_FILE" "$ENV_FILE" <<'PY'
+import base64, json, re, sys
+from pathlib import Path
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+private, public, ring, env = map(Path, sys.argv[1:5])
+def duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result: raise ValueError("duplicate key")
+        result[key] = value
+    return result
+values = [line.split("=", 1)[1] for line in env.read_text("utf-8").splitlines() if line.startswith("PUBLICATION_SIGNING_KEY_VERSION=")]
+if len(values) != 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", values[0]): raise ValueError("invalid active version")
+private_value, public_value = private.read_bytes(), public.read_bytes()
+if len(private_value) != 32 or len(public_value) != 32: raise ValueError("invalid credential length")
+if Ed25519PrivateKey.from_private_bytes(private_value).public_key().public_bytes_raw() != public_value: raise ValueError("active pair mismatch")
+document = json.loads(ring.read_text("ascii"), object_pairs_hook=duplicates)
+if not isinstance(document, dict) or set(document) != {"keys"} or not isinstance(document["keys"], dict): raise ValueError("invalid ring")
+for version, encoded in document["keys"].items():
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", version) or not isinstance(encoded, str) or len(base64.b64decode(encoded.encode("ascii"), validate=True)) != 32: raise ValueError("invalid ring entry")
+if document["keys"].get(values[0]) != base64.b64encode(public_value).decode("ascii"): raise ValueError("active key absent from ring")
+PY
+}
+
+ring_add_prepared_key() {
+    local version=$1 stage=$2 output
+    output=$(mktemp "$RING_FILE.tmp.XXXXXX")
+    "$RELEASE/venv/bin/python" - "$RING_FILE" "$stage" "$version" > "$output" <<'PY'
+import base64, json, os, re, sys
+from pathlib import Path
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+ring, stage, version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+def duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result: raise ValueError("duplicate key")
+        result[key] = value
+    return result
+document = json.loads(ring.read_text("ascii"), object_pairs_hook=duplicates)
+if not isinstance(document, dict) or set(document) != {"keys"} or not isinstance(document["keys"], dict): raise ValueError("invalid ring")
+keys = document["keys"]
+if version in keys: raise ValueError("version already retained")
+stage.mkdir(mode=0o700)
+private = Ed25519PrivateKey.generate()
+(stage / "private").write_bytes(private.private_bytes_raw())
+(stage / "public").write_bytes(private.public_key().public_bytes_raw())
+os.chmod(stage / "private", 0o600)
+os.chmod(stage / "public", 0o600)
+keys[version] = base64.b64encode((stage / "public").read_bytes()).decode("ascii")
+for candidate, encoded in keys.items():
+    if not isinstance(candidate, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", candidate) or not isinstance(encoded, str) or len(base64.b64decode(encoded.encode("ascii"), validate=True)) != 32: raise ValueError("invalid ring entry")
+print(json.dumps({"keys": keys}, sort_keys=True, separators=(",", ":")))
+PY
+    install_file_atomic "$output" "$RING_FILE" 0600 root:root
+    rm -f "$output"
+}
+
+safe_ring_metadata() {
+    "$RELEASE/venv/bin/python" - "$RING_FILE" "$1" <<'PY'
+import base64, hashlib, json, sys
+from pathlib import Path
+ring, version = Path(sys.argv[1]), sys.argv[2]
+keys = json.load(ring.open(encoding="ascii"))["keys"]
+print("public-key SHA-256: " + hashlib.sha256(base64.b64decode(keys[version], validate=True)).hexdigest())
+print("retained public versions: " + ", ".join(sorted(keys, key=lambda value: int(value) if value.isdigit() else value)))
+PY
+}
+
+prepare() {
+    local version=$1 stage
+    valid_version "$version" || die "rotation version must be a positive integer"
+    require_release
+    validate_current || die "current signing credentials or public ring are invalid"
+    stage=$(stage_dir "$version")
+    [[ ! -e $stage ]] || die "version $version already has staged material; refusing overwrite"
+    install -d -m 0700 -o root -g root "$STAGING_ROOT"
+    ring_add_prepared_key "$version" "$stage" || { rmdir "$stage" 2>/dev/null || true; die "could not prepare version $version"; }
+    # LoadCredential copies its source at service start. Restarting only the
+    # web service makes the new *public* ring entry observable before activation.
+    systemctl try-restart fire-backend.service || log_warn "public ring prepared; restart fire-backend before endpoint verification"
+    log "prepared publication signing-key version $version"
+    safe_ring_metadata "$version"
+    log "active signing credentials remain unchanged; verify the public ring before activation"
+}
+
+write_active_version() {
+    local version=$1 output
+    output=$(mktemp "$ENV_FILE.tmp.XXXXXX")
+    "$RELEASE/venv/bin/python" - "$ENV_FILE" "$version" > "$output" <<'PY'
+import sys
+from pathlib import Path
+env, version = Path(sys.argv[1]), sys.argv[2]
+lines = env.read_text("utf-8").splitlines()
+matches = [index for index, line in enumerate(lines) if line.startswith("PUBLICATION_SIGNING_KEY_VERSION=")]
+if len(matches) != 1: raise SystemExit("active signing version is missing or duplicated")
+lines[matches[0]] = "PUBLICATION_SIGNING_KEY_VERSION=" + version
+print("\n".join(lines))
+PY
+    install_file_atomic "$output" "$ENV_FILE" 0640 root:fire_backend
+    rm -f "$output"
+}
+
+restart_publication_services() {
+    systemctl enable --now fire-publication-build.socket
+    systemctl enable --now fire-publication-delivery.service
+}
+
+restore_active() {
+    local backup=$1
+    install_file_atomic "$backup/private" "$ACTIVE_PRIVATE" 0600 root:root || true
+    install_file_atomic "$backup/public" "$ACTIVE_PUBLIC" 0600 root:root || true
+    install_file_atomic "$backup/fire-backend.env" "$ENV_FILE" 0640 root:fire_backend || true
+    restart_publication_services || true
+}
+
+activate() {
+    local version=$1 stage backup
+    valid_version "$version" || die "rotation version must be a positive integer"
+    require_release
+    validate_current || die "current signing credentials or public ring are invalid"
+    stage=$(stage_dir "$version")
+    [[ -f $stage/private && -f $stage/public ]] || die "version $version is not prepared"
+    "$RELEASE/venv/bin/python" - "$stage/private" "$stage/public" "$RING_FILE" "$version" <<'PY'
+import base64, json, sys
+from pathlib import Path
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+private, public, ring, version = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
+private_value, public_value = private.read_bytes(), public.read_bytes()
+if len(private_value) != 32 or len(public_value) != 32 or Ed25519PrivateKey.from_private_bytes(private_value).public_key().public_bytes_raw() != public_value: raise SystemExit(1)
+if json.load(ring.open(encoding="ascii"))["keys"].get(version) != base64.b64encode(public_value).decode("ascii"): raise SystemExit(1)
+PY
+    [[ $(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION) != "$version" ]] || {
+        cmp -s "$ACTIVE_PRIVATE" "$stage/private" && cmp -s "$ACTIVE_PUBLIC" "$stage/public" && { log "version $version is already active; no change"; return; }
+        die "version $version is active but differs from staged material"
+    }
+    backup="$stage/active-backup"
+    [[ ! -e $backup ]] || die "activation backup exists; inspect before retrying"
+    install -d -m 0700 -o root -g root "$backup"
+    install -m 0600 -o root -g root "$ACTIVE_PRIVATE" "$backup/private"
+    install -m 0600 -o root -g root "$ACTIVE_PUBLIC" "$backup/public"
+    install -m 0640 -o root -g fire_backend "$ENV_FILE" "$backup/fire-backend.env"
+    systemctl stop fire-publication-build.service 2>/dev/null || true
+    systemctl stop fire-publication-delivery.service || die "could not quiesce publication delivery"
+    if ! install_file_atomic "$stage/private" "$ACTIVE_PRIVATE" 0600 root:root || ! install_file_atomic "$stage/public" "$ACTIVE_PUBLIC" 0600 root:root || ! write_active_version "$version" || ! validate_current; then
+        log_err "activation failed; restoring previously active signing credentials"
+        restore_active "$backup"
+        die "activation failed safely; prior active credentials restored"
+    fi
+    if ! restart_publication_services; then
+        # A valid credential change is not useful if the workers remain
+        # quiesced. Restore the complete prior active set and make one best
+        # effort to return the pre-rotation service state before reporting the
+        # failure. Historical public-ring entries are deliberately untouched.
+        log_err "publication services did not restart; restoring prior active signing credentials"
+        restore_active "$backup"
+        die "activation could not restart publication services; prior active credentials restored"
+    fi
+    log "activated publication signing-key version $version"
+    safe_ring_metadata "$version"
+    log "staged material retained at $stage; remove it only after the documented retention review"
+}
+
+status() {
+    require_release
+    validate_current || die "current signing credentials or public ring are invalid"
+    "$RELEASE/venv/bin/python" - "$ACTIVE_PUBLIC" "$RING_FILE" "$ENV_FILE" "$STAGING_ROOT" <<'PY'
+import base64, hashlib, json, sys
+from pathlib import Path
+public, ring, env, staging = map(Path, sys.argv[1:5])
+active = next((line.split("=", 1)[1] for line in env.read_text("utf-8").splitlines() if line.startswith("PUBLICATION_SIGNING_KEY_VERSION=")), "")
+keys = json.load(ring.open(encoding="ascii"))["keys"]
+active_key = public.read_bytes()
+print("active version: " + active)
+print("active public matches ring: " + ("yes" if keys.get(active) == base64.b64encode(active_key).decode("ascii") else "no"))
+for version in sorted(keys, key=lambda value: int(value) if value.isdigit() else value):
+    print(f"public version {version}: sha256={hashlib.sha256(base64.b64decode(keys[version], validate=True)).hexdigest()}")
+staged = sorted(path.name for path in staging.iterdir() if path.is_dir()) if staging.is_dir() else []
+print("staged versions: " + (", ".join(staged) if staged else "none"))
+PY
+}
+
+require_root
+[[ $# -ge 1 ]] || usage
+case "$1" in
+    prepare|activate) [[ $# -eq 3 && $2 == --version ]] || usage; "$1" "$3" ;;
+    status) [[ $# -eq 1 ]] || usage; status ;;
+    *) usage ;;
+esac

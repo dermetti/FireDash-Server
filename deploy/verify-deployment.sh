@@ -345,7 +345,8 @@ log "=== filesystem / credentials ==="
 for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key publication-signing-public-key-ring.json; do
     [[ $(stat -c '%U:%G:%a' "$SECRET_DIR/$f") == "root:root:600" ]] && ok "$f root:root 0600" || fail "$f has unexpected ownership/mode"
 done
-if "$RELEASE/venv/bin/python" - "$SECRET_DIR/publication-signing-public-key" \
+if "$RELEASE/venv/bin/python" - "$SECRET_DIR/publication-signing-key" \
+    "$SECRET_DIR/publication-signing-public-key" \
     "$SECRET_DIR/publication-signing-public-key-ring.json" \
     "$(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION)" <<'PY'
 import base64
@@ -353,8 +354,11 @@ import json
 import re
 import sys
 from pathlib import Path
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-public_path, ring_path, active_version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] or "1"
+private_path, public_path, ring_path, active_version = (
+    Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4] or "1"
+)
 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", active_version):
     raise SystemExit(1)
 document = json.loads(ring_path.read_text(encoding="ascii"))
@@ -364,11 +368,15 @@ if not isinstance(keys, dict):
 key = keys.get(active_version)
 if not isinstance(key, str):
     raise SystemExit(1)
-if base64.b64decode(key.encode("ascii"), validate=True) != public_path.read_bytes():
+public_key = public_path.read_bytes()
+private_key = private_path.read_bytes()
+if len(private_key) != 32 or Ed25519PrivateKey.from_private_bytes(private_key).public_key().public_bytes_raw() != public_key:
+    raise SystemExit(1)
+if base64.b64decode(key.encode("ascii"), validate=True) != public_key:
     raise SystemExit(1)
 PY
 then
-    ok "active publication public key is present in the retained public-key ring"
+    ok "active publication private/public pair matches the retained public-key ring"
 else
     fail "publication public-key ring is invalid or omits the active key"
 fi

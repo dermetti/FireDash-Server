@@ -196,6 +196,17 @@ class ManifestPendingResponseSerializer(serializers.Serializer[dict[str, object]
     manifest_request_id = serializers.UUIDField()
 
 
+class ProblemResponseSerializer(serializers.Serializer[dict[str, object]]):
+    """Stable RFC 9457 members shared by ordinary tablet problem responses."""
+
+    type = serializers.URLField()
+    title = serializers.CharField()
+    status = serializers.IntegerField()
+    code = serializers.CharField()
+    detail = serializers.CharField()
+    request_id = serializers.CharField()
+
+
 class ClientUpdateRequiredResponseSerializer(serializers.Serializer[dict[str, object]]):
     type = serializers.URLField()
     title = serializers.CharField()
@@ -251,6 +262,8 @@ class TabletProtocolAPIView(APIView):
     request=AdoptionPreviewSerializer,
     responses={
         201: AdoptionPreviewResponseSerializer,
+        (400, "application/problem+json"): ProblemResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     },
 )
@@ -291,6 +304,8 @@ class AdoptionPreviewView(TabletProtocolAPIView):
     request=AdoptionPreviewSerializer,
     responses={
         201: AdoptionPreviewResponseSerializer,
+        (400, "application/problem+json"): ProblemResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     },
 )
@@ -324,7 +339,12 @@ class ReactivationPreviewView(AdoptionPreviewView):
 
 
 @extend_schema(
-    request=AdoptionCompleteSerializer, responses={201: AdoptionCompleteResponseSerializer}
+    request=AdoptionCompleteSerializer,
+    responses={
+        201: AdoptionCompleteResponseSerializer,
+        (400, "application/problem+json"): ProblemResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+    },
 )
 class AdoptionCompleteView(TabletProtocolAPIView):
     authentication_classes = []
@@ -356,7 +376,12 @@ class AdoptionCompleteView(TabletProtocolAPIView):
 
 
 @extend_schema(
-    request=AdoptionCompleteSerializer, responses={201: AdoptionCompleteResponseSerializer}
+    request=AdoptionCompleteSerializer,
+    responses={
+        201: AdoptionCompleteResponseSerializer,
+        (400, "application/problem+json"): ProblemResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+    },
 )
 class ReactivationCompleteView(AdoptionCompleteView):
     authentication_classes = []
@@ -434,11 +459,21 @@ _APP_TELEMETRY_HEADERS = [
     OpenApiParameter("X-FireDash-App-Build", int, OpenApiParameter.HEADER, required=False),
 ]
 
+_CONDITIONAL_GET_PARAMETERS = [
+    OpenApiParameter("If-None-Match", str, OpenApiParameter.HEADER, required=False),
+    OpenApiParameter("ETag", str, OpenApiParameter.HEADER, response=[200, 304]),
+]
+_MANIFEST_CONDITIONAL_GET_PARAMETERS = [
+    *_CONDITIONAL_GET_PARAMETERS,
+    OpenApiParameter("Retry-After", int, OpenApiParameter.HEADER, response=[202]),
+]
+
 
 @extend_schema(
     request=None,
     responses={
         200: CheckInResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     },
     parameters=_APP_TELEMETRY_HEADERS,
@@ -477,6 +512,7 @@ class CheckInView(InstallationAPIView):
     request=None,
     responses={
         200: CheckInResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     },
     parameters=_APP_TELEMETRY_HEADERS,
@@ -513,7 +549,12 @@ class RefreshView(InstallationAPIView):
         )
 
 
-@extend_schema(responses={200: StatusResponseSerializer})
+@extend_schema(
+    responses={
+        200: StatusResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+    }
+)
 class StatusView(InstallationAPIView):
     compatibility_exempt = True
 
@@ -545,6 +586,7 @@ def _configuration(installation: AppInstallation) -> dict[str, str]:
 @extend_schema(
     responses={
         200: ConfigurationResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     }
 )
@@ -559,12 +601,20 @@ class ConfigurationView(InstallationAPIView):
 @extend_schema(
     responses={
         200: SigningKeyResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+        (404, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     }
 )
 class SigningKeyView(InstallationAPIView):
     def get(self, request, version: str):
         try:
+            # Signing keys are public material, but this tablet endpoint is
+            # deliberately not a terminal-state escape hatch. Keep its
+            # lifecycle/assignment authorization identical to configuration,
+            # manifest, and download; status is the sole REPLACED/REVOKED
+            # recovery probe.
+            authorized_publications(installation=self.installation)
             public_key = publication_signing_public_key_for_requested_version(version)
         except KeyError as error:
             raise exceptions.NotFound("Signing key version is not available.") from error
@@ -584,8 +634,10 @@ class SigningKeyView(InstallationAPIView):
         200: OpenApiTypes.OBJECT,
         (202, "application/problem+json"): ManifestPendingResponseSerializer,
         304: None,
+        (403, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
-    }
+    },
+    parameters=_MANIFEST_CONDITIONAL_GET_PARAMETERS,
 )
 class ManifestView(InstallationAPIView):
     def get(self, request):
@@ -635,10 +687,12 @@ class OctetStreamRenderer(renderers.BaseRenderer):
     # DRF Spectacular otherwise derives its global ``?format=`` parameter from
     # the JSON/octet-stream renderers. Dataset downloads deliberately use
     # Accept plus whole-object ETag semantics, not URL format negotiation.
-    parameters=[OpenApiParameter("format", exclude=True)],
+    parameters=[OpenApiParameter("format", exclude=True), *_CONDITIONAL_GET_PARAMETERS],
     responses={
         (200, "application/octet-stream"): OpenApiTypes.BINARY,
         304: None,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+        (404, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     },
 )

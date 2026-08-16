@@ -65,11 +65,15 @@ The database remains the queue. Credential files for KEK/signing material are
 loaded only into the delivery/build services with `LoadCredential`. The
 root-owned `publication-signing-public-key-ring.json` is separately delivered
 read-only to web and publication services; it retains historical public
-Ed25519 keys by version. To rotate v1 to v2, first add v2's public key to that
-ring without removing v1, verify both entries, then install v2's private key
-only for the publication workers and set `PUBLICATION_SIGNING_KEY_VERSION=2`.
-Rerun the installer so it validates the active private/public pair and reloads
-units. Never remove v1 while retained manifests or artifacts may refer to it.
+Ed25519 keys by version. Use the root-only
+`deploy/rotate-publication-signing-key prepare --version N` followed by its
+verification and `activate --version N` workflow rather than editing active
+credentials by hand. The helper preserves the old public entry, validates the
+staged private/public pair against the ring, and updates only the active worker
+credentials and `PUBLICATION_SIGNING_KEY_VERSION`. A normal exact-SHA installer
+rerun validates and preserves the resulting ring. See the full runbook in
+[operations.md](operations.md#publication-signing-key-rotation). Never remove
+an old public version while retained manifests or artifacts may refer to it.
 
 The installer retires the obsolete generic publication-worker timer, starts
 the persistent delivery service, and enables the build socket, nightly build

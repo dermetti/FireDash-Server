@@ -80,6 +80,27 @@ def test_verifier_checks_lane_commands_socket_security_and_credential_separation
     assert "root:fire_backend:660" in verifier
     assert "FileDescriptorName=publication-build-wake" in verifier
     assert "publication-signing-public-key-ring.json" in verifier
-    assert "retained public-key ring" in verifier
+    assert "private/public pair matches the retained public-key ring" in verifier
     assert "maintenance service does not load KEK/private signing key" in verifier
     assert "fire_backend has no passwordless sudo privilege" in verifier
+
+
+def test_root_rotation_helper_uses_two_phase_atomic_public_ring_workflow():
+    helper = (ROOT / "deploy" / "rotate-publication-signing-key").read_text(encoding="utf-8")
+    secrets = (ROOT / "deploy" / "lib" / "secrets.sh").read_text(encoding="utf-8")
+    assert "require_root" in helper
+    assert "prepare|activate" in helper
+    assert "publication-signing-key-staging" in helper
+    assert 'install_file_atomic "$output" "$RING_FILE" 0600 root:root' in helper
+    assert "PUBLICATION_SIGNING_KEY_VERSION" in helper
+    assert "systemctl stop fire-publication-delivery.service" in helper
+    assert "systemctl enable --now fire-publication-build.socket" in helper
+    assert "systemctl enable --now fire-publication-delivery.service" in helper
+    assert "private_bytes_raw" in helper
+    assert "public_key().public_bytes_raw" in helper
+    # The operator-facing output is fingerprints/version metadata only.
+    assert "private signing material" not in helper
+    # Exact-SHA installer convergence preserves, rather than recreates, a
+    # rotated ring and merely reconciles the active version entry.
+    assert "if ring_path.exists()" in secrets
+    assert "keys[active_version] = active_encoded" in secrets
