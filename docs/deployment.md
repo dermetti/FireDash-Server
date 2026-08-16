@@ -66,7 +66,7 @@ loaded only into the delivery/build services with `LoadCredential`. The
 root-owned `publication-signing-public-key-ring.json` is separately delivered
 read-only to web and publication services; it retains historical public
 Ed25519 keys by version. Use the root-only
-`deploy/rotate-publication-signing-key prepare --version N` followed by its
+`/srv/firedash/current/deploy/rotate-publication-signing-key prepare --version N` followed by its
 verification and `activate --version N` workflow rather than editing active
 credentials by hand. The helper preserves the old public entry, validates the
 staged private/public pair against the ring, and updates only the active worker

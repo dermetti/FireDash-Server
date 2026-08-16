@@ -91,7 +91,11 @@ def test_root_rotation_helper_uses_two_phase_atomic_public_ring_workflow():
     assert "require_root" in helper
     assert "prepare|activate" in helper
     assert "publication-signing-key-staging" in helper
-    assert 'install_file_atomic "$output" "$RING_FILE" 0600 root:root' in helper
+    assert "replace_file_atomically" in helper
+    assert 'replace_file_atomically "$PREPARE_CANDIDATE" "$RING_FILE" 0600 root:root' in helper
+    assert 'if ! mv -f -- "$temporary" "$destination"; then' in helper
+    assert 'rm -f -- "$temporary"' in helper
+    assert "prepare validation failed" in helper
     assert "PUBLICATION_SIGNING_KEY_VERSION" in helper
     assert "systemctl stop fire-publication-delivery.service" in helper
     assert "systemctl enable --now fire-publication-build.socket" in helper

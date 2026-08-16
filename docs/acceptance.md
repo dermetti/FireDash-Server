@@ -86,8 +86,8 @@ python .\tools\fake_ipad.py signing-key 1 --state-dir $State
 python .\tools\fake_ipad.py verify --state-dir $State
 # On the LXC as root: prepare v2, verify both keys while v1 stays active,
 # then activate v2. Do not rotate the publication KEK.
-# sudo bash deploy/rotate-publication-signing-key prepare --version 2
-# sudo bash deploy/rotate-publication-signing-key activate --version 2
+# sudo bash /srv/firedash/current/deploy/rotate-publication-signing-key prepare --version 2
+# sudo bash /srv/firedash/current/deploy/rotate-publication-signing-key activate --version 2
 python .\tools\fake_ipad.py signing-key 1 --state-dir $State
 python .\tools\fake_ipad.py signing-key 2 --state-dir $State
 python .\tools\fake_ipad.py verify --state-dir $State

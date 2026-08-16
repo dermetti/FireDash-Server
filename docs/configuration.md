@@ -92,7 +92,7 @@ key derived from the worker-only active private seed. Installer reruns retain
 unrelated historical entries; they never prune the ring.
 
 Rotate the active signing pair only with the root-only two-phase
-`deploy/rotate-publication-signing-key` helper. It preserves this public ring,
+`/srv/firedash/current/deploy/rotate-publication-signing-key` helper. It preserves this public ring,
 keeps active private credentials root-only, and changes only
 `PUBLICATION_SIGNING_KEY_VERSION` in `fire-backend.env`; see the operational
 [rotation runbook](operations.md#publication-signing-key-rotation). The KEK is

@@ -54,10 +54,24 @@ logs. It stages root-only private material, atomically adds the public key to
 the ring, and then atomically swaps the active worker credentials only after
 the staged pair and ring entry match.
 
+`prepare` is fail-closed: duplicate versions, malformed/empty rings, invalid
+keys, and staged-version conflicts fail before it creates staging material,
+replaces the ring, or invokes systemd. A duplicate version is never a reason
+to regenerate or overwrite anything. If prepare or activate fails, do not try
+to repair it by rewriting historical signatures or publication metadata; use
+`status`, the deployment verifier, and the retained root-only backup/staging
+material to investigate.
+
+After the ring has been atomically prepared, the helper refreshes the web
+service's public `LoadCredential` snapshot. If that refresh fails, it returns
+non-zero and does not claim preparation succeeded; the old active signer still
+remains active and the operator must restore web-service health and verify the
+retained ring before any activation.
+
 ```sh
-sudo bash deploy/rotate-publication-signing-key status
-sudo bash deploy/rotate-publication-signing-key prepare --version 2
-sudo bash deploy/rotate-publication-signing-key status
+sudo bash /srv/firedash/current/deploy/rotate-publication-signing-key status
+sudo bash /srv/firedash/current/deploy/rotate-publication-signing-key prepare --version 2
+sudo bash /srv/firedash/current/deploy/rotate-publication-signing-key status
 ```
 
 Before activation, with the old signer still active, ensure `fire-backend` has
@@ -69,15 +83,17 @@ historical ring entry and never regenerate signing keys. When those checks are
 clean, activate:
 
 ```sh
-sudo bash deploy/rotate-publication-signing-key activate --version 2
-sudo bash deploy/rotate-publication-signing-key status
+sudo bash /srv/firedash/current/deploy/rotate-publication-signing-key activate --version 2
+sudo bash /srv/firedash/current/deploy/rotate-publication-signing-key status
 # Run the approved exact-SHA installer convergence rerun for this release.
 sudo /srv/firedash/current/deploy/verify-deployment.sh
 journalctl -u fire-publication-delivery -u fire-publication-build --since '15 minutes ago'
 ```
 
-The helper pauses only build/delivery during the active credential transition,
-then re-enables their expected socket/service state. It does not run a build.
+The helper pauses only publication build activation (service, socket, and
+timer) plus delivery during the active credential transition, then re-enables
+their expected state. Maintenance is untouched, and the helper does not run a
+build.
 Use the normal administrator publication workflow to produce one legitimate
 new signed manifest/artifact, then verify both that new v2 material and old v1
 material with the exact corresponding public keys. Do not “roll back” by
