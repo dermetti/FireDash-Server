@@ -181,9 +181,7 @@ def _hydrant_baseline(*, department) -> dict[str, str]:
         identifier: _fingerprint(
             {
                 "updated_at": hydrant.updated_at.isoformat(),
-                "status": hydrant.status,
-                "longitude": hydrant.location.x,
-                "latitude": hydrant.location.y,
+                "business_values": _hydrant_business_values(hydrant),
             }
         )
         for hydrant in Hydrant.objects.filter(
@@ -191,6 +189,28 @@ def _hydrant_baseline(*, department) -> dict[str, str]:
         ).only("external_identifier", "updated_at", "status", "location")
         for identifier in [hydrant.external_identifier]
     }
+
+
+def _hydrant_business_values(hydrant_or_row) -> dict[str, object]:
+    """The import's canonical business representation, never persistence metadata."""
+    if isinstance(hydrant_or_row, Hydrant):
+        return {
+            "longitude": hydrant_or_row.location.x,
+            "latitude": hydrant_or_row.location.y,
+            "hydrant_type": hydrant_or_row.hydrant_type,
+            "diameter_mm": hydrant_or_row.diameter_mm,
+            "status": hydrant_or_row.status,
+        }
+    return {
+        field: hydrant_or_row[field]
+        for field in ("longitude", "latitude", "hydrant_type", "diameter_mm", "status")
+    }
+
+
+def _hydrant_changed_fields(*, current: Hydrant, proposed: dict[str, object]) -> list[str]:
+    current_values = _hydrant_business_values(current)
+    proposed_values = _hydrant_business_values(proposed)
+    return [field for field in proposed_values if current_values[field] != proposed_values[field]]
 
 
 def _personnel_baseline(*, department) -> dict[str, str]:
@@ -243,7 +263,9 @@ def create_preview(
                 raise ImportError("Hydrant imports require merge or authoritative snapshot mode.")
             intent = parse_hydrants(payload=payload, import_format=import_format)
             baseline = _hydrant_baseline(department=department)
-            counts = _preview_hydrants(intent=intent, baseline=baseline, mode=import_mode)
+            counts, hydrant_updates = _preview_hydrants(
+                intent=intent, department=department, mode=import_mode
+            )
         elif domain == ImportBatch.Domain.PERSONNEL:
             if import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("Personnel imports support upsert mode only.")
@@ -292,6 +314,8 @@ def create_preview(
     batch.previewed_at = timezone.now()
     batch.add_count, batch.update_count, batch.deactivate_count, batch.unchanged_count = counts
     batch.validation_summary = {"error_count": 0, "row_count": len(intent)}
+    if domain == ImportBatch.Domain.HYDRANTS:
+        batch.validation_summary["updates"] = hydrant_updates
     if domain == ImportBatch.Domain.FIRE_PLANS:
         batch.validation_summary["coordinate_conflicts"] = _coordinate_conflicts(
             department=department, intent=intent
@@ -317,14 +341,44 @@ def create_preview(
     return batch
 
 
-def _preview_hydrants(*, intent, baseline, mode):
+def _preview_hydrants(*, intent, department, mode):
+    existing = {
+        hydrant.external_identifier: hydrant
+        for hydrant in Hydrant.objects.filter(department=department, external_identifier__gt="")
+    }
     incoming = {row["external_identifier"] for row in intent}
-    add = sum(row["external_identifier"] not in baseline for row in intent)
-    update = sum(row["external_identifier"] in baseline for row in intent)
+    add = update = unchanged = 0
+    details: list[dict[str, object]] = []
+    for row in intent:
+        current = existing.get(row["external_identifier"])
+        if current is None:
+            add += 1
+        else:
+            changed_fields = _hydrant_changed_fields(current=current, proposed=row)
+            if changed_fields:
+                update += 1
+                if len(details) < settings.MAX_IMPORT_VALIDATION_ERRORS:
+                    current_values = _hydrant_business_values(current)
+                    proposed_values = _hydrant_business_values(row)
+                    details.append(
+                        {
+                            "external_identifier": row["external_identifier"],
+                            "fields": [
+                                {
+                                    "name": field,
+                                    "current": current_values[field],
+                                    "proposed": proposed_values[field],
+                                }
+                                for field in changed_fields
+                            ],
+                        }
+                    )
+            else:
+                unchanged += 1
     deactivate = (
-        len(set(baseline) - incoming) if mode == ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT else 0
+        len(set(existing) - incoming) if mode == ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT else 0
     )
-    return add, update, deactivate, 0
+    return (add, update, deactivate, unchanged), details
 
 
 def _preview_personnel(*, intent, baseline):
@@ -491,15 +545,7 @@ def _apply_hydrants(*, batch, rows):
                 **values,
             )
             add += 1
-        elif (
-            any(
-                getattr(hydrant, field) != value
-                for field, value in values.items()
-                if field != "location"
-            )
-            or hydrant.location.x != row["longitude"]
-            or hydrant.location.y != row["latitude"]
-        ):
+        elif _hydrant_changed_fields(current=hydrant, proposed=row):
             for field, value in values.items():
                 setattr(hydrant, field, value)
             hydrant.save()
