@@ -6,6 +6,11 @@ urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("system/departments/", views.system_departments, name="portal-system-departments"),
     path(
+        "system/api-compatibility/",
+        views.system_api_compatibility,
+        name="portal-system-api-compatibility",
+    ),
+    path(
         "system/departments/<uuid:department_id>/",
         views.system_department_detail,
         name="portal-system-department",

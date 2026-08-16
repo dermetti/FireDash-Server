@@ -1,7 +1,10 @@
 import base64
+import json
 from io import BytesIO
+from urllib.parse import urlsplit
 
 import qrcode
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
@@ -369,7 +372,24 @@ def tablet_reactivate(request: HttpRequest, department_id, tablet_id) -> HttpRes
 
 
 def _qr_data_uri(token: str) -> str:
-    image = qrcode.make(token).get_image()
+    origin = settings.FIREDASH_PUBLIC_ORIGIN
+    parsed = urlsplit(origin)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        raise TabletError("FireDash public origin must be an HTTPS origin.")
+    payload = json.dumps(
+        {"origin": origin.rstrip("/"), "protocol": "firedash-provisioning-v1", "token": token},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    image = qrcode.make(payload).get_image()
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode()
@@ -379,6 +399,7 @@ def _render_invitation(request, *, mode, token, invitation, tablet, vehicle) -> 
     context = {
         "mode": mode,
         "token": token,
+        "origin": settings.FIREDASH_PUBLIC_ORIGIN.rstrip("/"),
         "invitation": invitation,
         "tablet": tablet,
         "vehicle": vehicle,

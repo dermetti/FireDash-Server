@@ -30,16 +30,20 @@ from apps.tablets.models import (
     ReactivationInvitation,
     Tablet,
 )
+from apps.tablets.versions import AppVersionError, parse_app_build, parse_app_version
 
 AUTO_RENEW_THRESHOLD = timedelta(hours=48)
 INVITATION_DURATION = timedelta(minutes=15)
 CHALLENGE_DURATION = timedelta(minutes=5)
 MAX_FAILED_ATTEMPTS = 5
 ADOPTION_PROTOCOL = "tablet-adoption-v1"
+COMPLETION_REPLAY_DURATION = timedelta(minutes=10)
 
 
 class TabletError(ValueError):
-    pass
+    def __init__(self, message: str, *, code: str = "invalid_request") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def canonical_protocol_datetime(value: datetime) -> str:
@@ -106,16 +110,40 @@ def verify_credential(*, installation: AppInstallation, credential: str) -> bool
 
 def _require_operational_tablet(tablet: Tablet) -> None:
     if tablet.department.status != tablet.department.Status.ACTIVE or not tablet.active:
-        raise TabletError("Tablet department must be active.")
+        raise TabletError("Tablet department must be active.", code="installation_inactive")
     if tablet.status in (Tablet.Status.REMOVED, Tablet.Status.LOST, Tablet.Status.RETIRED):
-        raise TabletError("Tablet cannot be adopted or reactivated.")
+        raise TabletError("Tablet cannot be adopted or reactivated.", code="installation_inactive")
     if not tablet.vehicle_assignments.filter(
         ended_at__isnull=True,
         valid_until__isnull=True,
         vehicle__active=True,
         vehicle__station__active=True,
     ).exists():
-        raise TabletError("Tablet requires a current active vehicle assignment.")
+        raise TabletError(
+            "Tablet requires a current active vehicle assignment.", code="installation_inactive"
+        )
+
+
+def update_app_telemetry(
+    *,
+    installation: AppInstallation,
+    app_version: str | None,
+    app_build: int | None,
+    build_supplied: bool,
+    now: datetime,
+) -> bool:
+    """Update telemetry only when a complete, valid version was supplied."""
+    if app_version is None:
+        return False
+    if app_version == installation.app_version:
+        installation.app_version_seen_at = now
+        if build_supplied:
+            installation.app_build = app_build
+    else:
+        installation.app_version = app_version
+        installation.app_build = app_build if build_supplied else None
+        installation.app_version_seen_at = now
+    return True
 
 
 def lease_target(*, department, now: datetime) -> datetime:
@@ -249,10 +277,17 @@ def create_adoption_request(
     token: str,
     installation_uuid: UUID,
     app_version: str,
+    app_build: int | None = None,
     hpke_public_key: bytes,
     hpke_ciphersuite: str,
     reactivation: bool = False,
 ) -> ProvisioningChallenge:
+    try:
+        app_version = str(parse_app_version(app_version))
+        if app_build is not None:
+            app_build = parse_app_build(app_build)
+    except AppVersionError as error:
+        raise TabletError(str(error), code="invalid_request") from error
     if hpke_ciphersuite != HPKE_CIPHERSUITE:
         raise TabletError("Unsupported HPKE cipher suite.")
     invitation = _invitation_for_token(token=token, reactivation=reactivation)
@@ -279,6 +314,7 @@ def create_adoption_request(
         reactivation_invitation=invitation if reactivation else None,
         installation_uuid=installation_uuid,
         app_version=app_version[:64],
+        app_build=app_build,
         hpke_public_key=hpke_public_key,
         hpke_public_key_fingerprint=fingerprint,
         hpke_ciphersuite=hpke_ciphersuite,
@@ -366,17 +402,22 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
         invitation = lock_model.objects.select_for_update(of=("self",)).get(pk=invitation.pk)
     now = timezone.now()
     if request.completed_at:
-        raise TabletError("Adoption request has already been completed.")
+        raise TabletError(
+            "Adoption request has already been completed.", code="adoption_request_completed"
+        )
     if request.expires_at <= now:
-        raise TabletError("Adoption request is expired.")
+        raise TabletError("Adoption request is expired.", code="adoption_request_expired")
     if request.failed_attempt_count >= MAX_FAILED_ATTEMPTS:
-        raise TabletError("Adoption request has reached the maximum failed attempts.")
+        raise TabletError(
+            "Adoption request has reached the maximum failed attempts.",
+            code="adoption_attempt_limit_reached",
+        )
     if invitation is None:
-        raise TabletError("Adoption request has no invitation.")
+        raise TabletError("Adoption request has no invitation.", code="invalid_request")
     if invitation.used_at:
-        raise TabletError("Invitation has already been used.")
+        raise TabletError("Invitation has already been used.", code="invitation_invalid")
     if invitation.revoked_at:
-        raise TabletError("Invitation has been revoked.")
+        raise TabletError("Invitation has been revoked.", code="invitation_invalid")
     installation = (
         request.reactivation_invitation.app_installation
         if request.reactivation_invitation
@@ -401,6 +442,9 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
             credential_hash=_secret_digest(credential),
             status=AppInstallation.Status.ACTIVE,
             app_version=request.app_version,
+            adopted_app_version=request.app_version,
+            app_build=request.app_build,
+            app_version_seen_at=now,
             hpke_public_key=request.hpke_public_key,
             hpke_ciphersuite=request.hpke_ciphersuite,
             hpke_key_fingerprint=request.hpke_public_key_fingerprint,
@@ -421,6 +465,9 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
             raise TabletError("Only stale installations can be reactivated.")
         installation.credential_hash = _secret_digest(credential)
         installation.status = AppInstallation.Status.ACTIVE
+        installation.app_version = request.app_version
+        installation.app_build = request.app_build
+        installation.app_version_seen_at = now
         installation.authorization_valid_until = lease_target(department=tablet.department, now=now)
         installation.reactivated_at = now
         installation.reactivated_by = invitation.created_by
@@ -428,6 +475,9 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
             update_fields=(
                 "credential_hash",
                 "status",
+                "app_version",
+                "app_build",
+                "app_version_seen_at",
                 "authorization_valid_until",
                 "reactivated_at",
                 "reactivated_by",
@@ -435,7 +485,8 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
         )
         action = "tablet.reactivated"
     request.completed_at = now
-    request.save(update_fields=("completed_at",))
+    request.completion_replay_valid_until = now + COMPLETION_REPLAY_DURATION
+    request.save(update_fields=("completed_at", "completion_replay_valid_until"))
     invitation.used_at = now
     invitation.save(update_fields=("used_at",))
     tablet.status = Tablet.Status.ACTIVE
@@ -452,42 +503,110 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
     return installation, credential
 
 
+@transaction.atomic
+def _replay_successful_completion(
+    *, request_id: UUID, challenge_response: bytes, reactivation: bool
+) -> tuple[AppInstallation, str]:
+    request = (
+        AdoptionRequest.objects.select_for_update()
+        .select_related(
+            "invitation__tablet__department",
+            "reactivation_invitation__app_installation__tablet__department",
+        )
+        .get(pk=request_id)
+    )
+    now = timezone.now()
+    invitation = request.reactivation_invitation or request.invitation
+    if (request.reactivation_invitation is not None) != reactivation:
+        raise TabletError(
+            "Adoption request mode does not match the completion endpoint.", code="invalid_request"
+        )
+    if (
+        request.completed_at is None
+        or request.completion_replay_valid_until is None
+        or request.completion_replay_valid_until <= now
+        or request.completion_replay_invalidated_at is not None
+        or invitation is None
+        or invitation.revoked_at is not None
+        or not hmac.compare_digest(bytes(request.expected_hmac_digest), challenge_response)
+    ):
+        raise TabletError(
+            "Completion recovery is not available.", code="adoption_request_completed"
+        )
+    installation = (
+        request.reactivation_invitation.app_installation
+        if request.reactivation_invitation is not None
+        else AppInstallation.objects.select_for_update().get(
+            installation_uuid=request.installation_uuid
+        )
+    )
+    if installation.status in (AppInstallation.Status.REVOKED, AppInstallation.Status.REPLACED):
+        raise TabletError("Completion recovery is not available.", code="installation_inactive")
+    credential = generate_credential()
+    installation.credential_hash = _secret_digest(credential)
+    installation.save(update_fields=("credential_hash",))
+    record_event(
+        action="tablet.completion_recovered",
+        actor_user=invitation.created_by,
+        department=installation.tablet.department,
+        target_type="app_installation",
+        target_uuid=installation.id,
+        metadata={"mode": "reactivation" if reactivation else "adoption"},
+    )
+    return installation, credential
+
+
 def complete_adoption(
     *, request_id: UUID, challenge_response: bytes, confirmed: bool, reactivation: bool = False
 ) -> tuple[AppInstallation, str]:
     if not confirmed:
-        raise TabletError("Adoption was not confirmed.")
+        raise TabletError("Adoption was not confirmed.", code="invalid_request")
     request = AdoptionRequest.objects.select_related(
         "invitation__tablet__department",
         "reactivation_invitation__app_installation__tablet__department",
     ).get(pk=request_id)
     invitation = request.reactivation_invitation or request.invitation
     if (request.reactivation_invitation is not None) != reactivation:
-        raise TabletError("Adoption request mode does not match the completion endpoint.")
+        raise TabletError(
+            "Adoption request mode does not match the completion endpoint.", code="invalid_request"
+        )
     if invitation is None:
-        raise TabletError("Adoption request has no invitation.")
+        raise TabletError("Adoption request has no invitation.", code="invalid_request")
     now = timezone.now()
     if request.completed_at:
-        raise TabletError("Adoption request has already been completed.")
+        return _replay_successful_completion(
+            request_id=request_id, challenge_response=challenge_response, reactivation=reactivation
+        )
     if request.expires_at <= now:
-        raise TabletError("Adoption request is expired.")
+        raise TabletError("Adoption request is expired.", code="adoption_request_expired")
     if request.failed_attempt_count >= MAX_FAILED_ATTEMPTS:
-        raise TabletError("Adoption request has reached the maximum failed attempts.")
+        raise TabletError(
+            "Adoption request has reached the maximum failed attempts.",
+            code="adoption_attempt_limit_reached",
+        )
     if invitation is None:
         raise TabletError("Adoption request has no invitation.")
     if invitation.used_at:
-        raise TabletError("Invitation has already been used.")
+        raise TabletError("Invitation has already been used.", code="invitation_invalid")
     if invitation.revoked_at:
-        raise TabletError("Invitation has been revoked.")
+        raise TabletError("Invitation has been revoked.", code="invitation_invalid")
     proof_valid = hmac.compare_digest(bytes(request.expected_hmac_digest), challenge_response)
     if not proof_valid:
         _record_failed_attempt(request_id=request_id)
-        raise TabletError("Adoption proof is invalid.")
+        raise TabletError("Adoption proof is invalid.", code="adoption_proof_invalid")
     return _complete_successful_adoption(request_id=request_id)
 
 
 @transaction.atomic
-def check_in(*, installation: AppInstallation, credential: str) -> AppInstallation:
+def check_in(
+    *,
+    installation: AppInstallation,
+    credential: str,
+    app_version: str | None = None,
+    app_build: int | None = None,
+    build_supplied: bool = False,
+    minimum_app_version=None,
+) -> AppInstallation:
     installation = (
         AppInstallation.objects.select_for_update()
         .select_related("tablet__department")
@@ -502,21 +621,46 @@ def check_in(*, installation: AppInstallation, credential: str) -> AppInstallati
     ):
         if installation.status == AppInstallation.Status.ACTIVE:
             _mark_stale(installation, now)
-        raise TabletError("Installation is not active.")
+        raise TabletError("Installation is not active.", code="installation_inactive")
     _require_operational_tablet(installation.tablet)
     installation.last_successful_check_in_at = now
+    telemetry_updated = update_app_telemetry(
+        installation=installation,
+        app_version=app_version,
+        app_build=app_build,
+        build_supplied=build_supplied,
+        now=now,
+    )
+    if (
+        minimum_app_version is not None
+        and parse_app_version(installation.app_version) < minimum_app_version
+    ):
+        fields: list[str] = []
+        if telemetry_updated:
+            fields.extend(("app_version", "app_build", "app_version_seen_at"))
+        if fields:
+            installation.save(update_fields=fields)
+        installation.compatibility_blocked = True
+        return installation
     if _renew_lease_if_due(installation=installation, now=now):
-        installation.save(
-            update_fields=("last_successful_check_in_at", "authorization_valid_until")
-        )
+        fields = ["last_successful_check_in_at", "authorization_valid_until"]
     else:
-        installation.save(update_fields=("last_successful_check_in_at",))
+        fields = ["last_successful_check_in_at"]
+    if telemetry_updated:
+        fields.extend(("app_version", "app_build", "app_version_seen_at"))
+    installation.save(update_fields=fields)
     return installation
 
 
 @transaction.atomic
 def refresh_installation_lease(
-    *, installation: AppInstallation, credential: str
+    *,
+    installation: AppInstallation,
+    credential: str,
+    app_version: str | None = None,
+    app_build: int | None = None,
+    build_supplied: bool = False,
+    minimum_app_version=None,
 ) -> AppInstallation:
     """Explicitly top up one eligible installation without creating delivery work."""
     installation = (
@@ -531,15 +675,38 @@ def refresh_installation_lease(
         installation.status != AppInstallation.Status.ACTIVE
         or installation.authorization_valid_until <= now
     ):
-        raise TabletError("Installation is not active.")
+        raise TabletError("Installation is not active.", code="installation_inactive")
     _require_operational_tablet(installation.tablet)
     if not _eligible_for_lease_renewal(installation=installation, now=now):
-        raise TabletError("Only an active, authorized installation can be renewed.")
+        raise TabletError(
+            "Only an active, authorized installation can be renewed.", code="installation_inactive"
+        )
     old_expiry = installation.authorization_valid_until
     target = lease_target(department=installation.tablet.department, now=now)
     installation.authorization_valid_until = max(old_expiry, target)
     installation.last_successful_check_in_at = now
-    installation.save(update_fields=("authorization_valid_until", "last_successful_check_in_at"))
+    telemetry_updated = update_app_telemetry(
+        installation=installation,
+        app_version=app_version,
+        app_build=app_build,
+        build_supplied=build_supplied,
+        now=now,
+    )
+    if (
+        minimum_app_version is not None
+        and parse_app_version(installation.app_version) < minimum_app_version
+    ):
+        fields: list[str] = []
+        if telemetry_updated:
+            fields.extend(("app_version", "app_build", "app_version_seen_at"))
+        if fields:
+            installation.save(update_fields=fields)
+        installation.compatibility_blocked = True
+        return installation
+    fields = ["authorization_valid_until", "last_successful_check_in_at"]
+    if telemetry_updated:
+        fields.extend(("app_version", "app_build", "app_version_seen_at"))
+    installation.save(update_fields=fields)
     record_event(
         action="tablet.self_refreshed",
         department=installation.tablet.department,
@@ -593,6 +760,13 @@ def remove_tablet(*, actor, tablet: Tablet, status: str, reason: str) -> Tablet:
     AppInstallation.objects.filter(
         tablet=tablet, status__in=(AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE)
     ).update(status=AppInstallation.Status.REVOKED, revoked_at=now, revocation_reason=reason[:512])
+    AdoptionRequest.objects.filter(
+        models.Q(invitation__tablet=tablet)
+        | models.Q(reactivation_invitation__app_installation__tablet=tablet),
+        completed_at__isnull=False,
+        completion_replay_valid_until__gt=now,
+        completion_replay_invalidated_at__isnull=True,
+    ).update(completion_replay_invalidated_at=now)
     from apps.publications.manifests import revoke_dataset_key_grants
 
     revoked_installations = AppInstallation.objects.filter(

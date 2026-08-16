@@ -6,14 +6,65 @@ from django.utils import timezone
 
 from apps.accounts.services import create_setup_token
 from apps.audit.services import record_event
-from apps.authorization.models import DepartmentMembership, StationAdminAssignment
+from apps.authorization.models import (
+    ApiVersionCompatibilityPolicy,
+    DepartmentMembership,
+    StationAdminAssignment,
+)
 from apps.authorization.scopes import active_department_ids, is_system_admin
 from apps.organizations.models import Department, Station
+from apps.tablets.versions import AppVersionError, parse_app_version
 
 
 def require_system_admin(actor) -> None:
     if not is_system_admin(actor):
         raise PermissionDenied("System administrator role is required.")
+
+
+def minimum_supported_app_version(*, api_major: int):
+    """Return the configured minimum for a server-selected API generation."""
+    policy = (
+        ApiVersionCompatibilityPolicy.objects.filter(api_major=api_major)
+        .only("minimum_app_version")
+        .first()
+    )
+    return (
+        None
+        if policy is None or policy.minimum_app_version is None
+        else parse_app_version(policy.minimum_app_version)
+    )
+
+
+@transaction.atomic
+def set_api_version_compatibility_policy(
+    *, actor, api_major: int, minimum_app_version: str | None
+) -> ApiVersionCompatibilityPolicy:
+    require_system_admin(actor)
+    if api_major < 1:
+        raise ValueError("API major must be positive.")
+    normalized = None
+    if minimum_app_version:
+        try:
+            normalized = str(parse_app_version(minimum_app_version))
+        except AppVersionError as error:
+            raise ValueError(str(error)) from error
+    policy, created = ApiVersionCompatibilityPolicy.objects.select_for_update().get_or_create(
+        api_major=api_major,
+        defaults={"minimum_app_version": normalized, "updated_by": actor},
+    )
+    old_value = policy.minimum_app_version
+    policy.minimum_app_version = normalized
+    policy.updated_by = actor
+    policy.save(update_fields=("minimum_app_version", "updated_by", "updated_at"))
+    if created or old_value != normalized:
+        record_event(
+            action="api_compatibility_policy.updated",
+            actor_user=actor,
+            target_type="api_version_compatibility_policy",
+            target_uuid=None,
+            metadata={"api_major": api_major, "old_minimum": old_value, "new_minimum": normalized},
+        )
+    return policy
 
 
 def classify_system_admin_state(roles: list[Any]) -> str:

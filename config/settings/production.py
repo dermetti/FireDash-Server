@@ -9,6 +9,10 @@ if not SECRET_KEY:  # noqa: F405
 if not ALLOWED_HOSTS:  # noqa: F405
     raise RuntimeError("DJANGO_ALLOWED_HOSTS must be set in production.")
 
+if not FIREDASH_PUBLIC_ORIGIN:  # noqa: F405
+    raise RuntimeError("FIREDASH_PUBLIC_ORIGIN must be set in production.")
+validate_public_origin(FIREDASH_PUBLIC_ORIGIN)  # noqa: F405
+
 DATABASES = {
     "default": {
         "ENGINE": "django.contrib.gis.db.backends.postgis",

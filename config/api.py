@@ -14,13 +14,18 @@ def problem_exception_handler(exc, context):
     elif isinstance(detail, dict):
         detail = "Request validation failed."
     code = getattr(exc, "default_code", "request-error")
-    response.data = {
+    payload = {
         "type": f"https://fire-backend.internal/problems/{code}",
         "title": response.status_text,
         "status": response.status_code,
+        "code": code,
         "detail": str(detail),
         "request_id": str(getattr(request, "request_id", "")),
     }
+    if hasattr(exc, "minimum_app_version"):
+        payload["minimum_app_version"] = exc.minimum_app_version
+    response.data = payload
     response["Content-Type"] = "application/problem+json"
+    response.setdefault("Cache-Control", "no-store, private")
     response.content_type = "application/problem+json"
     return response

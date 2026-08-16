@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}API Compatibility{% endblock %}
+{% block nav_links %}<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>{% endblock %}
+{% block content %}
+<h1>API compatibility</h1>
+<div class="card"><div class="card-body">
+  <p>FireDash API v1. A minimum version causes older installed apps to receive Upgrade Required. Leave the value blank to allow all app versions.</p>
+  <form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-danger">Save compatibility policy</button></form>
+</div></div>
+{% endblock %}

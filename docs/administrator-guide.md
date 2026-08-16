@@ -73,3 +73,9 @@ Use the existing reactivation workflow for stale tablets. Revoke or remove a
 lost tablet promptly; this prevents future use of its credential and data
 delivery. Review the audit trail for these actions. For protocol details, see
 [tablet-api.md](tablet-api.md).
+
+System administrators can set the minimum supported FireDash application
+version for API v1 from **API Compatibility** on the system dashboard. Leave
+the value blank to permit all v1 applications. Setting a value makes older
+installed apps receive **Upgrade Required** and should be used only after the
+required release is available to affected tablets.

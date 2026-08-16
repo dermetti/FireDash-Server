@@ -7,8 +7,10 @@ headers, canonical bytes, and cryptographic verification.
 
 ## API conventions
 
-All paths are relative to the HTTPS base URL and begin with `/api/v1/`.
-Production uses HTTPS. Send JSON as `Content-Type: application/json`. JSON
+All application API paths begin with `/api/v1/` and have **no trailing slash**.
+The exceptions are the generated `/api/v1/schema/` and `/api/v1/docs/` paths,
+which do have trailing slashes. Production uses HTTPS. Send JSON as
+`Content-Type: application/json`. JSON
 success uses `application/json`; errors use `application/problem+json`; a
 successful artifact transfer uses `application/octet-stream`.
 
@@ -17,10 +19,11 @@ Use lower-case, hyphenated UUID strings. Binary fields use strict standard RFC
 whitespace, malformed padding, PEM, DER, and JWK wrappers. The opaque
 installation credential is URL-safe and must be used verbatim.
 
-Timestamps are ISO 8601/RFC 3339 strings. Adoption/reactivation `expires_at`
-is canonical UTC with `Z` and is byte-bound into HPKE `info`; preserve it
-exactly. Manifest timestamp strings are signed and must be preserved as
-received for canonicalization.
+Timestamps are ISO 8601/RFC 3339 strings. In normal API data, both `Z` and
+`+00:00` represent UTC. Adoption/reactivation `expires_at` is specifically
+canonical UTC with `Z`, is byte-bound into HPKE `info`, and must be preserved
+as the exact returned string. Manifest timestamp strings are signed and must
+not be normalized before verification.
 
 Authenticated calls use exactly:
 
@@ -34,10 +37,10 @@ the credential itself and compares its protected digest.
 Errors have this RFC 9457 shape:
 
 ```json
-{"type":"https://fire-backend.internal/problems/<code>","title":"Forbidden","status":403,"detail":"Safe reason.","request_id":"correlation id"}
+{"type":"https://fire-backend.internal/problems/<code>","title":"Forbidden","status":403,"code":"stable_machine_code","detail":"Safe reason.","request_id":"correlation id"}
 ```
 
-Keep `request_id` only for support diagnostics. Current authentication and
+Switch on HTTP status plus `code`, never title or detail. Keep `request_id` only for support diagnostics. Current authentication and
 authorisation failures are rendered as 403; malformed input is 400; unknown
 routes/resources are 404; a queued manifest is 202; conditional matches are
 304. No tablet 409 or rate-limit/429 contract currently exists.
@@ -46,21 +49,65 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 
 | Method and path | Authentication | Request body / headers | Success | Other results | Eligible state |
 | --- | --- | --- | --- | --- | --- |
-| `POST /adoption/preview` | None | preview JSON | 201 challenge | 400, 403 | Valid unused adoption invitation; operational tablet |
-| `POST /adoption/complete` | None | completion JSON | 201 credential | 400, 403 | Matching unexpired challenge/invitation |
-| `POST /tablet/reactivation/preview` | None | preview JSON | 201 challenge | 400, 403 | Valid invitation for STALE installation |
-| `POST /tablet/reactivation/complete` | Existing Bearer | completion JSON | 201 rotated credential | 400, 403 | Same STALE installation/request |
-| `POST /tablet/check-in` | Bearer | None | 200 lease JSON | 403 | ACTIVE, unexpired, operational |
-| `POST /tablet/refresh` | Bearer | None | 200 lease JSON | 403 | ACTIVE, unexpired, operational |
-| `GET /tablet/status` | Bearer | None | 200 status JSON | 403 | Any non-REPLACED credential |
-| `GET /tablet/configuration` | Bearer | None | 200 configuration JSON | 403 | ACTIVE, unexpired, authorised |
-| `GET /tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404 | Any non-REPLACED credential; active key only |
-| `GET /tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403 | ACTIVE, unexpired, authorised |
-| `GET /tablet/datasets/{publication_id}/download` | Bearer | No body; `If-None-Match` optional | 200 encrypted bytes | 304, 403, 404 | ACTIVE, unexpired, authorised and manifest-listed |
+| `POST /api/v1/adoption/preview` | None | preview JSON | 201 challenge | 400, 403 | Valid unused adoption invitation; operational tablet |
+| `POST /api/v1/adoption/complete` | None | completion JSON | 201 credential | 400, 403 | Matching unexpired challenge/invitation |
+| `POST /api/v1/tablet/reactivation/preview` | None | preview JSON | 201 challenge | 400, 403 | Valid invitation for STALE installation |
+| `POST /api/v1/tablet/reactivation/complete` | Existing Bearer on first completion; exact proof-only recovery replay for 10 minutes | completion JSON | 201 rotated credential | 400, 403 | Same STALE installation/request |
+| `POST /api/v1/tablet/check-in` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
+| `POST /api/v1/tablet/refresh` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
+| `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
+| `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403 | ACTIVE, unexpired, authorised |
+| `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | Current authorised installation; active key only |
+| `GET /api/v1/tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403 | ACTIVE, unexpired, authorised |
+| `GET /api/v1/tablet/datasets/{publication_id}/download` | Bearer | No body; `If-None-Match` optional | 200 encrypted bytes | 304, 403, 404 | ACTIVE, unexpired, authorised and manifest-listed |
 
 304 has no body. A 202 manifest is a problem object with `Retry-After: 5`.
-Do not rely on Range/206 behavior as an application contract: protected Nginx
-delivery can serve ranges, but FireDash verification requires the complete body.
+Request the complete encrypted artifact: do not send `Range` as part of the
+FireDash application protocol, and never accept a partial/206 response as a
+fully verified artifact. Protected Nginx may serve ranges, but FireDash
+verification requires the complete body.
+
+## App version, build, and compatibility
+
+FireDash app versions are exactly numeric `MAJOR.MINOR.PATCH`; compare the
+three components numerically. `app_build` is a positive binary diagnostic
+number and is never a compatibility axis. Adoption and reactivation preview
+require `app_version` and accept optional `app_build`. Check-in and Refresh
+may send:
+
+```http
+X-FireDash-App-Version: 1.2.0
+X-FireDash-App-Build: 57
+```
+
+With neither header, stored telemetry is unchanged. A valid version/build pair
+replaces both. Version without build preserves the existing build only if the
+version is unchanged; otherwise it clears the unknown build. Build without a
+version, or malformed telemetry, is ignored without changing authorization.
+
+Every `/api/v1/...` handler selects API major 1 from its server route. System
+administrators may configure a database-backed minimum app version for that
+major; no policy row or blank value is unrestricted. If configured and the
+effective current version is lower, non-status calls return 426 with
+`code: "client_update_required"` and `minimum_app_version`. Check-in and
+Refresh process valid telemetry before this decision, then do not renew or top
+up an unsupported client. Dataset schema/minimum version and immutable
+publication version remain independent compatibility concepts.
+
+## Provisioning origin and completion recovery
+
+The administrator QR code contains compact JSON with exactly
+`"protocol":"firedash-provisioning-v1"`, HTTPS `origin`, and `token`.
+Persist the origin and resolve API paths below `<origin>/api/v1/`; manual entry
+uses the same origin/token pair. Resolve relative downloads only against that
+same origin and never forward bearer credentials cross-origin.
+
+For a lost successful completion response, the exact completed request and
+cryptographic proof can be retried for a fixed 10-minute window. Each valid
+retry rotates a fresh credential for the same installation, never creates a
+second installation, and never extends the window. This recovery remains valid
+despite the invitation being consumed by the original successful request, but
+fails for wrong proof, mode, binding, expiry, or administrative invalidation.
 
 ## Credential lifecycle and installation states
 
@@ -71,29 +118,32 @@ back up, or place it in a URL.
 
 New adoption replaces prior ACTIVE/STALE installations for the tablet.
 Reactivation retains the installation but rotates its credential; atomically
-replace the old Keychain value. A REPLACED credential does not authenticate.
+replace the old Keychain value. A REPLACED credential is accepted only by the
+terminal status probe and no operational endpoint.
 
 | State | Bearer authenticates | Status | Check-in / Refresh | Config / manifest / download | Reactivation | Purge |
 | --- | --- | --- | --- | --- | --- | --- |
 | ACTIVE and unexpired | Yes | 200 | 200 | Allowed when tablet, vehicle, department, features are authorised | No | No |
 | ACTIVE but expired | Yes until stale transition | 200 with deadline | 403; check-in marks stale | 403 | Requires stale invitation | Offline lease expired |
 | STALE | Yes | 200 | 403 | 403 | Preview with invitation; completion with same Bearer | No new data |
-| REVOKED | Yes | 200, `purge_provisioned_data: true` | 403 | 403 | No | Purge credential, CEKs, plaintext/cache |
-| REPLACED | No | 403 | 403 | 403 | No | Purge all provisioned material |
+| REVOKED | Yes | 200, `purge_provisioned_data: true` | 403 | 403 | No | Purge all provisioned material |
+| REPLACED | Status only | 200, `purge_provisioned_data: true` | 403 | 403 | No | Purge all provisioned material |
 
 Removed, lost, retired, inactive, or otherwise unauthorised tablets cannot
 adopt, reactivate, check in, refresh, configure, obtain a manifest, or download.
 
-`GET /tablet/status` is the safe state probe for an authenticating non-replaced
-credential:
+`GET /api/v1/tablet/status` is the safe state probe for any recognized
+credential, including a terminal REPLACED credential:
 
 ```json
 {"status":"active","authorization_valid_until":"2026-08-22T00:00:00Z","purge_provisioned_data":false}
 ```
 
-Only REVOKED returns `purge_provisioned_data: true`. Treat a denied status
-request as replacement/invalid-credential recovery rather than a reason to
-reuse cached authority indefinitely.
+REVOKED and REPLACED return `purge_provisioned_data: true`. A required purge removes
+the credential, private key, CEKs, verified encrypted artifacts, decrypted or
+plaintext cache, and manifest/configuration/cache metadata. Treat a denied
+status request as replacement/invalid-credential recovery rather than a reason
+to reuse cached authority indefinitely.
 
 ## P-256 HPKE requirements
 
@@ -118,11 +168,10 @@ mechanism only if it can provide this exact P-256/HPKE representation.
 ## Adoption: byte-exact flow
 
 An administrator supplies an out-of-band adoption token. Invitations normally
-last 15 minutes; a preview challenge lasts 5 minutes. Incorrect proofs are
-counted and the invitation is revoked after five failed attempts. Successful
-completion consumes the challenge and invitation.
+last 15 minutes; a preview challenge lasts 5 minutes. The fixed suite is
+mandatory: an unsupported `hpke_ciphersuite` is rejected at preview.
 
-`POST /adoption/preview` is unauthenticated:
+`POST /api/v1/adoption/preview` is unauthenticated:
 
 ```json
 {"token":"invitation token","installation_uuid":"11111111-1111-1111-1111-111111111111","app_version":"1.2.3","hpke_public_key":"Base64(65-byte X9.62 point)","hpke_ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM"}
@@ -146,7 +195,7 @@ ASCII, sorted-key, compact JSON; do not normalize or reformat `expires_at`:
 ```
 
 Compute `HMAC-SHA256(key=decrypted_nonce, message=exact_info_ascii_bytes)`.
-Then call `POST /adoption/complete`:
+Then call `POST /api/v1/adoption/complete`:
 
 ```json
 {"adoption_request_id":"22222222-2222-2222-2222-222222222222","challenge_response":"Base64(32-byte HMAC)","confirmed":true}
@@ -162,33 +211,41 @@ Persist UUID, private-key reference, credential, and deadline atomically. If
 the completion response is lost, do not assume the credential is recoverable;
 use the administrative recovery flow instead of blindly replaying completion.
 
+`confirmed:false` fails completion without incrementing proof counters. An
+invalid HMAC increments both the request and invitation counters; on the fifth
+invalid proof the invitation is revoked. Expired or already-completed requests,
+used or revoked invitations, and replayed completion attempts fail. Successful
+completion consumes both the request and invitation, so it cannot be replayed.
+
 ## Reactivation: byte-exact flow
 
 An administrator creates an invitation only for a STALE installation.
-`POST /tablet/reactivation/preview` is unauthenticated but requires that token.
+`POST /api/v1/tablet/reactivation/preview` is unauthenticated but requires that token.
 Its request is the adoption preview request with the existing installation UUID,
 exact stored public key, and same suite. Its response has
 `"mode":"reactivation"` and `"protocol":"tablet-adoption-v1"`.
 
 Construct/decrypt the challenge exactly as above, changing only `mode` in
 canonical HPKE info to `reactivation`. Complete with the same completion JSON
-at `POST /tablet/reactivation/complete` and the existing STALE installation
+at `POST /api/v1/tablet/reactivation/complete` and the existing STALE installation
 Bearer credential. The server binds the request to that credential's
 installation. Success is the same 201 object as adoption completion, with a
 rotated one-time credential and a fresh department lease. ACTIVE, REVOKED,
 REPLACED, removed, lost, retired, and inactive tablets cannot use reactivation
-as a shortcut.
+as a shortcut. The confirmation, expiry, invalid-proof counter, five-failure
+revocation, used/revoked invitation, and replay rules above apply equally to
+reactivation requests.
 
 ## Lease, check-in, Refresh tablet
 
 Department lease policy is server-owned: default seven days, minimum three.
 
-`POST /tablet/check-in` has no body. It always records activity. With more
+`POST /api/v1/tablet/check-in` has no body. It always records activity. With more
 than 48 hours remaining it leaves `authorization_valid_until` unchanged. With
 48 hours or less it sets the deadline to `server_time + department lease`.
 It cannot revive an expired/stale installation.
 
-`POST /tablet/refresh` is the firefighter's explicit user action and has no
+`POST /api/v1/tablet/refresh` is the firefighter's explicit user action and has no
 body. For an ACTIVE, unexpired, operational installation it records activity
 and sets:
 
@@ -206,10 +263,11 @@ Refresh audits the action but does not create a `SignedManifest`,
 
 One iOS **Refresh tablet** action is this orchestration, not a combined API:
 
-1. `POST /tablet/refresh`.
-2. `GET /tablet/configuration`.
-3. Conditional `GET /tablet/manifest` using a trusted cached ETag.
-4. On 202, retain verified cache, wait exactly `Retry-After`, retry manifest.
+1. `POST /api/v1/tablet/refresh`.
+2. `GET /api/v1/tablet/configuration`.
+3. Conditional `GET /api/v1/tablet/manifest` using a trusted cached ETag.
+4. On 202, retain verified cache; wait **at least** the supplied `Retry-After`
+   duration and never retry earlier, then retry manifest.
 5. On 304, retain verified manifest/datasets.
 6. On 200, verify manifest, reconcile changed/missing artifacts, then commit
    the complete verified candidate atomically.
@@ -219,7 +277,7 @@ manifest retrieval. Do not make automatic check-in an explicit lease top-up.
 
 ## Configuration and signing keys
 
-`GET /tablet/configuration` returns:
+`GET /api/v1/tablet/configuration` returns:
 
 ```json
 {"installation_id":"...","tablet_id":"...","department_id":"...","station_id":"...","vehicle_id":"..."}
@@ -230,21 +288,28 @@ department datasets; `station_id` scopes station datasets; `vehicle_id` is the
 assignment identity. Refresh configuration before processing changed
 authorisation state or applying a newly retrieved manifest.
 
-`GET /tablet/signing-keys/{version}` returns:
+`GET /api/v1/tablet/signing-keys/{version}` returns:
 
 ```json
 {"algorithm":"Ed25519","version":"1","public_key":"Base64(raw-32-byte-Ed25519-key)"}
 ```
 
 Require `algorithm == "Ed25519"`, the requested matching version, strict
-Base64, and exactly 32 decoded bytes. The server exposes only the configured
-active key version and returns 404 for old/unknown versions. Retain trusted
-keys by version with verified cache: after rotation, an old key not retained
-locally cannot currently be fetched again.
+Base64, and exactly 32 decoded bytes. In the current beta, the initial trust
+bootstrap is the key obtained from this authenticated HTTPS FireDash backend.
+There is currently no independent signing root and no public-key pinning
+mechanism. HTTPS transport and installation authentication are therefore part
+of the initial signing-key trust decision.
+
+**Current server limitation — signing-key rotation:** the endpoint exposes only
+the configured active key version and returns 404 for old/unknown versions.
+Retain trusted keys by version with verified cache while artifacts/manifests
+signed by them may remain usable; an old key not retained locally cannot
+currently be fetched again.
 
 ## Manifest retrieval and complete wire format
 
-`GET /tablet/manifest` only reads/coalesces database work in the web process;
+`GET /api/v1/tablet/manifest` only reads/coalesces database work in the web process;
 it never loads the KEK or signing private key. A ready manifest returns 200 and
 a quoted ETag. The ETag is SHA-256 of sorted compact JSON of the response payload
 excluding `generated_at`; send it unchanged in `If-None-Match`. A match returns
@@ -300,6 +365,12 @@ retain prior verified state, and report recovery required. The exact helper is
 `apps/publications/tests/test_manifests.py`; no frozen complete-manifest fixture
 currently exists.
 
+The verified manifest supplies the publication identity/binding: its signed
+dataset entry binds the publication ID, scope, version, artifact metadata,
+download URL, and HPKE grant. The artifact signature is a second integrity
+binding for the encrypted artifact metadata, but is not by itself a standalone
+assertion of a publication identity.
+
 ## Client persistence and cache transaction
 
 Persist installation state atomically enough that a crash cannot leave a
@@ -323,8 +394,9 @@ known-good verified ciphertext or plaintext.
 When a configuration/manifest no longer authorises a dataset, remove its CEK
 and decrypted representation. On a server `purge_provisioned_data: true`, a
 REPLACED credential, or explicit local deprovisioning, remove the credential,
-private key, CEKs, verified artifacts, and plaintext cache. Encrypted residue
-without a CEK is not usable, but prompt purge is the required client behavior.
+private key, CEKs, verified artifacts, plaintext/decrypted cache, and
+manifest/configuration/cache metadata. Encrypted residue without a CEK is not
+usable, but prompt complete purge is the required client behavior.
 
 ## Client state machine
 
@@ -334,7 +406,7 @@ without a CEK is not usable, but prompt purge is the required client behavior.
 | Adoption preview/challenge | Challenge held only until expiry | Open 32-byte nonce, HMAC exact info, complete once. |
 | Active | Credential and lease valid | Foreground: check-in, configuration, conditional manifest. |
 | Refreshing | User selected **Refresh tablet** | Refresh, configuration, conditional manifest, reconcile datasets. |
-| Manifest pending | Server returned 202 | Retain cache; wait `Retry-After`, then retry only manifest. |
+| Manifest pending | Server returned 202 | Retain cache; wait at least `Retry-After` and never retry earlier, then retry only manifest. |
 | Manifest ready | Verified 200 or trusted 304 | Use only fully verified data until deadline. |
 | Offline-valid | Network unavailable before deadline | Use prior verified data and elapsed server-time anchor. |
 | Stale / reactivation required | Deadline expired or server says STALE | Do not attempt check-in/refresh recovery; use stale invitation flow. |
@@ -355,11 +427,10 @@ infer a lease renewal.
 | Result or failure | Client action |
 | --- | --- |
 | Transport failure / 5xx | Retain verified state; use bounded exponential backoff with jitter. |
-| 202 manifest | Retain cache and wait exactly the supplied `Retry-After` before manifest retry. |
+| 202 manifest | Retain cache; wait at least the supplied `Retry-After` duration and never retry earlier before manifest retry. This remains correct when iOS resumes later from suspension/backgrounding. |
 | 304 | No body: retain the corresponding verified cache and ETag. |
 | 400 | Treat as client/protocol error; do not blind-retry malformed canonical crypto input. |
-| 401 | Not a currently documented tablet authentication response; treat as authentication recovery rather than assuming success. |
-| 403 | Inspect state through `GET /tablet/status` if possible; stale requires invitation reactivation, revoked/replaced requires purge. |
+| 401 or 403 | The API does not promise a stable authentication/authorisation distinction. If status can be fetched, use it to choose stale reactivation versus revoked/replaced purge; otherwise enter credential recovery and do not assume cached authority remains valid. |
 | 404 | Treat unknown signing key/resource/publication as a safe protocol/state error; do not substitute another key or dataset. |
 | 409 / 429 | Not currently a tablet API contract; if received, do not infer special semantics unless a future server contract defines them. |
 | Invalid Base64, point, JSON canonicalization, or UUID/scope | Reject the candidate without cache replacement. |
@@ -367,9 +438,9 @@ infer a lease renewal.
 | HPKE or AES-GCM failure | Reject candidate and its CEK; do not attempt plaintext parsing. |
 | Size/hash/ZIP/schema/app-version failure | Reject candidate; do not activate partial data. |
 
-Honor a server `Retry-After` exactly where supplied. Other retries must be
-bounded; do not spin on a permanently invalid credential, a malformed payload,
-or a cryptographic verification failure.
+Honor a server `Retry-After` as a minimum delay: never retry earlier. Other
+retries must be bounded; do not spin on a permanently invalid credential, a
+malformed payload, or a cryptographic verification failure.
 
 ## iOS implementation notes
 
@@ -388,24 +459,6 @@ or a cryptographic verification failure.
 - This contract does not endorse a particular Swift HPKE implementation. Prove
   the selected implementation against the frozen vectors before deployment.
 
-## Frozen vectors and contract sources
-
-Use these deterministic materials when building Swift interoperability tests:
-
-| Protocol area | Implementation source | Tests / fixture |
-| --- | --- | --- |
-| Adoption/reactivation canonical info and proof | `apps/tablets/services.py`, `apps/publications/hpke.py` | `apps/tablets/tests/test_provisioning_crypto.py`, especially `test_adoption_context_has_a_frozen_mode_bound_canonical_encoding` |
-| HPKE grant info and RFC 9180 vector | `apps/publications/hpke.py` | `apps/publications/tests/fixtures/hpke_contract.json`, `apps/publications/tests/test_hpke.py` |
-| Manifest signed bytes and ETag | `apps/publications/manifests.py`, `apps/publications/worker_grants.py` | `apps/publications/tests/test_manifests.py` |
-| Artifact signature and AES-GCM metadata | `apps/publications/artifacts.py` | `apps/publications/tests/fixtures/artifact_signature_contract.json`, `apps/publications/tests/test_artifacts.py` |
-| Tablet routes, request validation, headers and states | `apps/tablets/api_urls.py`, `apps/tablets/api.py`, `apps/tablets/services.py`, `apps/tablets/models.py` | `apps/tablets/tests/test_api.py`, `apps/tablets/tests/test_adoption_api_crypto.py` |
-| Dataset schemas | `apps/publications/registry.py`, `apps/publications/builders.py` | publication builder tests |
-
-There is currently no frozen full-manifest signing fixture. Use the canonical
-manifest tests and create an app-side test vector from a captured verified test
-manifest before claiming Swift/Python manifest interoperability. The signing-key
-endpoint also exposes only the active key, so retaining previously verified
-keys is required for offline verification across rotation.
 ## DatasetKeyGrant: HPKE unwrap
 
 For each dataset, decode `key_grant.encapsulated_key` as exactly 65 bytes and
@@ -425,6 +478,12 @@ The field set is exact: `ciphertext_sha256`, `installation_id`, `protocol`,
 equivalent Swift canonicalization. The resulting CEK is exactly 32 bytes; any
 wrong point, Base64, suite, `info`, or authentication failure is fatal for that
 candidate dataset. Do not try another publication or retain unverified output.
+
+`content_key_wrapped_for_kek` is opaque, server-side KEK-wrapped, signed
+metadata. The iPad has no server KEK and **never** AES-KW unwraps it. Its usable
+32-byte CEK comes exclusively from HPKE-opening
+`key_grant.wrapped_content_key`. The AES-KW value is still required verbatim
+when reconstructing the artifact-signature payload.
 
 `apps/publications/tests/fixtures/hpke_contract.json` is the deterministic
 HPKE info and RFC 9180 interoperability vector. Its expected canonical
@@ -490,8 +549,14 @@ by `test_artifact_signature_contract_fixture_is_canonical_and_verifiable`.
 
 ## Dataset plaintext formats
 
-Every entry has a registered `schema_version`; reject unsupported versions and
-do not activate a dataset requiring an unsupported `minimum_app_version`.
+Every entry has a registered `schema_version`. An unsupported **required**
+dataset, schema, or `minimum_app_version` blocks activation of the candidate
+manifest. An unsupported optional dataset may be ignored only when the server
+marks that entry `required:false`; retain existing verified data rather than
+activating an unverified replacement. The current production datasets
+`department_hydrants`, `department_fire_plans`, and `station_personnel` are all
+`required:true`, schema version 1, with no minimum app version. The internal
+test-only dataset is not a production client contract.
 
 ### `department_hydrants` (`artifact_format: geojson`)
 
@@ -529,3 +594,35 @@ The plaintext is:
 
 `commander_email` may be `null`; it is populated only when verified. Require
 the plaintext `station_id` to equal the manifest/configuration station scope.
+
+## Current known limitations / interoperability gaps
+
+- **Runtime/server limitation - signing-key rotation:**
+  `/api/v1/tablet/signing-keys/{version}` serves only the active configured
+  key. The client must retain old already-trusted public keys while signed
+  manifests/artifacts using them remain in its cache. There is no historical
+  server key ring, independent signing root, or public-key pinning mechanism
+  in the current beta.
+- **Missing interoperability fixture:** there is no deterministic complete
+  signed-manifest fixture. A future fixture should contain the complete
+  manifest object, exact unsigned canonical bytes, SHA-256 of those bytes,
+  Ed25519 public key, signature, expected quoted ETag, and signing-key version.
+  Do not invent those values in a client implementation.
+- **Validation gap in this environment:** database-backed tablet/manifest API
+  tests may be unavailable when the development PostgreSQL server rejects the
+  host in `pg_hba.conf` or the configured role cannot create `test_firedash`.
+  That is an environment/test-permission gap, not by itself evidence of a
+  protocol defect. Do not weaken database roles or HBA policy to run them.
+
+## Frozen vectors and contract sources
+
+Use these deterministic materials when building Swift interoperability tests:
+
+| Protocol area | Implementation source | Tests / fixture |
+| --- | --- | --- |
+| Adoption/reactivation canonical info and proof | `apps/tablets/services.py`, `apps/publications/hpke.py` | `apps/tablets/tests/test_provisioning_crypto.py`, especially `test_adoption_context_has_a_frozen_mode_bound_canonical_encoding` |
+| HPKE grant info and RFC 9180 vector | `apps/publications/hpke.py` | `apps/publications/tests/fixtures/hpke_contract.json`, `apps/publications/tests/test_hpke.py` |
+| Manifest signed bytes and ETag | `apps/publications/manifests.py`, `apps/publications/worker_grants.py` | `apps/publications/tests/test_manifests.py` |
+| Artifact signature and AES-GCM metadata | `apps/publications/artifacts.py` | `apps/publications/tests/fixtures/artifact_signature_contract.json`, `apps/publications/tests/test_artifacts.py` |
+| Tablet routes, request validation, headers and states | `apps/tablets/api_urls.py`, `apps/tablets/api.py`, `apps/tablets/services.py`, `apps/tablets/models.py` | `apps/tablets/tests/test_api.py`, `apps/tablets/tests/test_adoption_api_crypto.py` |
+| Dataset schemas | `apps/publications/registry.py`, `apps/publications/builders.py` | publication builder tests |

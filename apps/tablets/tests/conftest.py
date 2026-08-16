@@ -48,7 +48,7 @@ def _adopt(user, tablet, installation_uuid=None):
     challenge = create_adoption_request(
         token=token,
         installation_uuid=installation_uuid or uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )

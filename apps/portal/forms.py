@@ -1,5 +1,7 @@
 from django import forms
 
+from apps.tablets.versions import AppVersionError, parse_app_version
+
 
 class DepartmentForm(forms.Form):
     name = forms.CharField(max_length=255)
@@ -48,3 +50,21 @@ class DepartmentTabletLeaseForm(forms.Form):
     tablet_lease_days = forms.IntegerField(
         min_value=3, label="Maximum offline authorization lease (days)"
     )
+
+
+class ApiVersionCompatibilityPolicyForm(forms.Form):
+    minimum_app_version = forms.CharField(
+        max_length=64,
+        required=False,
+        label="Minimum supported FireDash app version",
+        help_text="Leave blank to allow all app versions using this API generation.",
+    )
+
+    def clean_minimum_app_version(self):
+        value = self.cleaned_data["minimum_app_version"].strip()
+        if not value:
+            return None
+        try:
+            return str(parse_app_version(value))
+        except AppVersionError as error:
+            raise forms.ValidationError(str(error)) from error

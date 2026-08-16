@@ -5,6 +5,7 @@ from django.db import models
 from django.db.models import Q
 
 from apps.organizations.models import Department
+from apps.tablets.versions import validate_app_version
 
 
 class Tablet(models.Model):
@@ -49,12 +50,18 @@ class AppInstallation(models.Model):
         REVOKED = "REVOKED", "Revoked"
         REPLACED = "REPLACED", "Replaced"
 
+    # Service-only result marker; it is deliberately not persisted.
+    compatibility_blocked: bool = False
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tablet = models.ForeignKey(Tablet, on_delete=models.PROTECT, related_name="installations")
     installation_uuid = models.UUIDField(unique=True)
     credential_hash = models.CharField(max_length=64)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
-    app_version = models.CharField(max_length=64)
+    app_version = models.CharField(max_length=64, validators=[validate_app_version])
+    adopted_app_version = models.CharField(max_length=64, validators=[validate_app_version])
+    app_build = models.PositiveBigIntegerField(null=True, blank=True)
+    app_version_seen_at = models.DateTimeField()
     hpke_public_key = models.BinaryField()
     hpke_ciphersuite = models.CharField(max_length=128)
     hpke_key_fingerprint = models.CharField(max_length=64)
@@ -140,7 +147,8 @@ class AdoptionRequest(models.Model):
         related_name="requests",
     )
     installation_uuid = models.UUIDField()
-    app_version = models.CharField(max_length=64)
+    app_version = models.CharField(max_length=64, validators=[validate_app_version])
+    app_build = models.PositiveBigIntegerField(null=True, blank=True)
     hpke_public_key = models.BinaryField()
     hpke_public_key_fingerprint = models.CharField(max_length=64)
     hpke_ciphersuite = models.CharField(max_length=128)
@@ -150,6 +158,8 @@ class AdoptionRequest(models.Model):
     encrypted_challenge = models.BinaryField()
     expires_at = models.DateTimeField()
     completed_at = models.DateTimeField(null=True, blank=True)
+    completion_replay_valid_until = models.DateTimeField(null=True, blank=True)
+    completion_replay_invalidated_at = models.DateTimeField(null=True, blank=True)
     failed_attempt_count = models.PositiveSmallIntegerField(default=0)
 
     class Meta:

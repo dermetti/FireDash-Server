@@ -62,7 +62,7 @@ def test_adoption_invitation_expires_and_cannot_be_used(operational_tablet):
         create_adoption_request(
             token=token,
             installation_uuid=uuid.uuid4(),
-            app_version="1.0",
+            app_version="1.0.0",
             hpke_public_key=_p256_public_key(),
             hpke_ciphersuite=HPKE_CIPHERSUITE,
         )
@@ -75,7 +75,7 @@ def test_adoption_request_replay_is_rejected(operational_tablet):
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -88,7 +88,7 @@ def test_adoption_request_replay_is_rejected(operational_tablet):
         create_adoption_request(
             token=token,
             installation_uuid=uuid.uuid4(),
-            app_version="1.0",
+            app_version="1.0.0",
             hpke_public_key=key,
             hpke_ciphersuite=HPKE_CIPHERSUITE,
         )
@@ -101,7 +101,7 @@ def test_adoption_proof_is_verified_before_creation(operational_tablet):
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -121,6 +121,46 @@ def test_adoption_creates_installation_with_seven_day_lease(operational_tablet):
     assert timedelta(days=6) < lease_remaining <= timedelta(days=7)
     assert len(credential) == 43
     assert verify_credential(installation=installation, credential=credential)
+
+
+def test_successful_adoption_completion_can_recover_once_response_is_lost(operational_tablet):
+    user, tablet = operational_tablet
+    _, token = create_adoption_invitation(actor=user, tablet=tablet)
+    challenge = create_adoption_request(
+        token=token,
+        installation_uuid=uuid.uuid4(),
+        app_version="1.0.0",
+        hpke_public_key=_p256_public_key(),
+        hpke_ciphersuite=HPKE_CIPHERSUITE,
+    )
+    installation, first_credential = complete_adoption(
+        request_id=challenge.request.id,
+        challenge_response=challenge.request.expected_hmac_digest,
+        confirmed=True,
+    )
+    replay_installation, recovery_credential = complete_adoption(
+        request_id=challenge.request.id,
+        challenge_response=challenge.request.expected_hmac_digest,
+        confirmed=True,
+    )
+    assert replay_installation.id == installation.id
+    assert recovery_credential != first_credential
+    installation.refresh_from_db()
+    assert not verify_credential(installation=installation, credential=first_credential)
+    assert verify_credential(installation=installation, credential=recovery_credential)
+
+
+def test_version_only_telemetry_preserves_build_when_version_is_unchanged(operational_tablet):
+    installation, credential = _adopt(*operational_tablet)
+    installation.app_build = 7
+    installation.save(update_fields=("app_build",))
+    check_in(installation=installation, credential=credential, app_version="1.0.0")
+    installation.refresh_from_db()
+    assert installation.app_build == 7
+    check_in(installation=installation, credential=credential, app_version="1.0.1")
+    installation.refresh_from_db()
+    assert installation.app_version == "1.0.1"
+    assert installation.app_build is None
 
 
 def test_check_in_renews_only_near_expiry_and_fails_when_stale(operational_tablet):
@@ -238,14 +278,14 @@ def test_adoption_request_ids_are_unique(db, operational_tablet):
     c1 = create_adoption_request(
         token=token1,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
     c2 = create_adoption_request(
         token=token2,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )

@@ -66,6 +66,16 @@ def test_publication_temp_root_must_descend_from_artifact_root() -> None:
         )
 
 
+def test_public_origin_must_be_an_https_origin() -> None:
+    from config.settings.base import validate_public_origin
+
+    validate_public_origin("https://firedash.example.org")
+    with pytest.raises(RuntimeError, match="FIREDASH_PUBLIC_ORIGIN"):
+        validate_public_origin("http://firedash.example.org")
+    with pytest.raises(RuntimeError, match="FIREDASH_PUBLIC_ORIGIN"):
+        validate_public_origin("https://firedash.example.org/api/v1")
+
+
 def test_production_settings_reject_temp_root_outside_artifact_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

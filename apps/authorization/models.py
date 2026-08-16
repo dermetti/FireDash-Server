@@ -5,6 +5,27 @@ from django.db import models
 from django.db.models import Q
 
 from apps.organizations.models import Department, Station
+from apps.tablets.versions import validate_app_version
+
+
+class ApiVersionCompatibilityPolicy(models.Model):
+    """Global minimum FireDash app version for one server API generation."""
+
+    api_major = models.PositiveSmallIntegerField(unique=True)
+    minimum_app_version = models.CharField(
+        max_length=64, null=True, blank=True, validators=[validate_app_version]
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="updated_api_version_compatibility_policies",
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(api_major__gt=0), name="api_policy_positive_major")
+        ]
 
 
 class SystemRole(models.Model):

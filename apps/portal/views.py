@@ -10,7 +10,7 @@ from django.views.decorators.http import require_http_methods
 from apps.accounts.models import User
 from apps.accounts.reauth import require_recent_reauthentication
 from apps.audit.models import AuditEvent
-from apps.authorization.models import StationAdminAssignment
+from apps.authorization.models import ApiVersionCompatibilityPolicy, StationAdminAssignment
 from apps.authorization.scopes import active_department_ids, active_station_ids, is_system_admin
 from apps.authorization.services import (
     change_department_status,
@@ -19,6 +19,7 @@ from apps.authorization.services import (
     provision_department_admin,
     provision_station_admin,
     revoke_station_admin,
+    set_api_version_compatibility_policy,
 )
 from apps.organizations.models import Department, Station, Vehicle
 from apps.organizations.services import (
@@ -29,6 +30,7 @@ from apps.organizations.services import (
 )
 from apps.portal.forms import (
     AdministratorForm,
+    ApiVersionCompatibilityPolicyForm,
     DepartmentForm,
     DepartmentStatusForm,
     DepartmentTabletLeaseForm,
@@ -170,6 +172,29 @@ def system_departments(request: HttpRequest) -> HttpResponse:
         "portal/system_departments.html",
         {"departments": Department.objects.all(), "form": form},
     )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def system_api_compatibility(request: HttpRequest) -> HttpResponse:
+    if not is_system_admin(request.user):
+        raise PermissionDenied("System administrator role is required.")
+    policy = ApiVersionCompatibilityPolicy.objects.filter(api_major=1).first()
+    form = ApiVersionCompatibilityPolicyForm(
+        request.POST or None,
+        initial={"minimum_app_version": policy.minimum_app_version if policy else None},
+    )
+    if request.method == "POST" and form.is_valid():
+        require_recent_reauthentication(
+            request, return_url=reverse("portal-system-api-compatibility")
+        )
+        set_api_version_compatibility_policy(
+            actor=request.user,
+            api_major=1,
+            minimum_app_version=form.cleaned_data["minimum_app_version"],
+        )
+        return redirect("portal-system-api-compatibility")
+    return render(request, "portal/system_api_compatibility.html", {"form": form, "policy": policy})
 
 
 @login_required

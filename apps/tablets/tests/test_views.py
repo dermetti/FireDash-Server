@@ -40,6 +40,8 @@ def test_department_admin_can_view_tablet_list_and_detail(client, tablet_admin_d
         installation_uuid=uuid.uuid4(),
         credential_hash="a" * 64,
         app_version="1.2.3",
+        adopted_app_version="1.2.3",
+        app_version_seen_at=now,
         hpke_public_key=b"public-key",
         hpke_ciphersuite="DHKEM(P-256, HKDF-SHA256)",
         hpke_key_fingerprint="b" * 64,

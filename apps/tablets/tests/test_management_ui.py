@@ -310,6 +310,8 @@ def _adopted_installation(tablet, credential_hash="f" * 64, fingerprint="b" * 64
         installation_uuid=uuid.uuid4(),
         credential_hash=credential_hash,
         app_version="9.9.9",
+        adopted_app_version="9.9.9",
+        app_version_seen_at=now,
         hpke_public_key=b"public",
         hpke_ciphersuite="DHKEM(P-256, HKDF-SHA256)",
         hpke_key_fingerprint=fingerprint,

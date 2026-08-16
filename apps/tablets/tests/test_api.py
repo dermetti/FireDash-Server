@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from django.conf import settings
+from django.core.exceptions import PermissionDenied
 from django.test import Client, override_settings
 from django.utils import timezone
 from rest_framework.negotiation import DefaultContentNegotiation
@@ -17,6 +18,7 @@ from rest_framework.test import APIRequestFactory
 
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
+from apps.authorization.models import ApiVersionCompatibilityPolicy, SystemRole
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE, serialize_p256_public_key
 from apps.publications.manifests import request_manifest
@@ -54,6 +56,8 @@ def api_context(db):
         ).hexdigest(),
         status=AppInstallation.Status.ACTIVE,
         app_version="1.0.0",
+        adopted_app_version="1.0.0",
+        app_version_seen_at=now,
         hpke_public_key=serialize_p256_public_key(key.public_key()),
         hpke_ciphersuite=HPKE_CIPHERSUITE,
         hpke_key_fingerprint="a" * 64,
@@ -275,6 +279,71 @@ def test_check_in_does_not_renew_an_active_installation_with_more_than_48_hours_
     assert verify_credential(installation=installation, credential=credential)
 
 
+def test_check_in_reports_upgrade_before_lease_renewal_but_accepts_new_version_telemetry(
+    api_context,
+):
+    client, installation, credential, _ = api_context
+    actor = installation.tablet.department.created_by
+    assert actor is not None
+    ApiVersionCompatibilityPolicy.objects.create(
+        api_major=1, minimum_app_version="1.0.1", updated_by=actor
+    )
+    previous_expiry = installation.authorization_valid_until
+
+    blocked = client.post("/api/v1/tablet/check-in", **_authorization(credential))
+    installation.refresh_from_db()
+    assert blocked.status_code == 426
+    assert blocked.json()["code"] == "client_update_required"
+    assert blocked.json()["minimum_app_version"] == "1.0.1"
+    assert installation.authorization_valid_until == previous_expiry
+
+    upgraded = client.post(
+        "/api/v1/tablet/check-in",
+        HTTP_X_FIREDASH_APP_VERSION="1.0.1",
+        HTTP_X_FIREDASH_APP_BUILD="57",
+        **_authorization(credential),
+    )
+    installation.refresh_from_db()
+    assert upgraded.status_code == 200
+    assert installation.app_version == "1.0.1"
+    assert installation.app_build == 57
+
+
+def test_version_only_header_preserves_matching_build_and_clears_changed_build(api_context):
+    client, installation, credential, _ = api_context
+    installation.app_build = 7
+    installation.save(update_fields=("app_build",))
+    same = client.post(
+        "/api/v1/tablet/check-in",
+        HTTP_X_FIREDASH_APP_VERSION="1.0.0",
+        **_authorization(credential),
+    )
+    installation.refresh_from_db()
+    assert same.status_code == 200
+    assert installation.app_build == 7
+    changed = client.post(
+        "/api/v1/tablet/check-in",
+        HTTP_X_FIREDASH_APP_VERSION="1.0.1",
+        **_authorization(credential),
+    )
+    installation.refresh_from_db()
+    assert changed.status_code == 200
+    assert installation.app_build is None
+
+
+def test_api_compatibility_policy_requires_system_administrator(db):
+    actor = User.objects.create_user("system-policy@example.test", "System", "safe-password")
+    from apps.authorization.services import set_api_version_compatibility_policy
+
+    with pytest.raises(PermissionDenied):
+        set_api_version_compatibility_policy(actor=actor, api_major=1, minimum_app_version="1.0.0")
+    SystemRole.objects.create(user=actor)
+    policy = set_api_version_compatibility_policy(
+        actor=actor, api_major=1, minimum_app_version="1.0.0"
+    )
+    assert policy.minimum_app_version == "1.0.0"
+
+
 def test_refresh_tops_up_an_active_installation_without_delivery_work(api_context):
     client, installation, credential, _ = api_context
     old_expiry = installation.authorization_valid_until
@@ -379,7 +448,7 @@ def test_refresh_rejects_expired_or_non_operational_installations(api_context):
         (AppInstallation.Status.ACTIVE, "/api/v1/tablet/status", 200),
         (AppInstallation.Status.STALE, "/api/v1/tablet/status", 200),
         (AppInstallation.Status.REVOKED, "/api/v1/tablet/status", 200),
-        (AppInstallation.Status.REPLACED, "/api/v1/tablet/status", 403),
+        (AppInstallation.Status.REPLACED, "/api/v1/tablet/status", 200),
         (AppInstallation.Status.ACTIVE, "/api/v1/tablet/check-in", 200),
         (AppInstallation.Status.STALE, "/api/v1/tablet/check-in", 403),
         (AppInstallation.Status.REVOKED, "/api/v1/tablet/check-in", 403),
@@ -412,7 +481,7 @@ def test_installation_state_access_matrix(api_context, installation_status, path
     if path.endswith("status") and expected_status == 200:
         assert response.json()["status"] == installation_status.lower()
         assert response.json()["purge_provisioned_data"] == (
-            installation_status == AppInstallation.Status.REVOKED
+            installation_status in (AppInstallation.Status.REVOKED, AppInstallation.Status.REPLACED)
         )
 
 

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from config.settings.env import EnvironmentConfigurationError, get_env, get_list, get_typed_env
 
@@ -8,6 +9,22 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 SECRET_KEY = get_env("DJANGO_SECRET_KEY", default="")
 DEBUG = False
 ALLOWED_HOSTS = get_list("DJANGO_ALLOWED_HOSTS")
+FIREDASH_PUBLIC_ORIGIN = get_env("FIREDASH_PUBLIC_ORIGIN", default="")
+
+
+def validate_public_origin(origin: str) -> None:
+    parsed = urlsplit(origin)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        raise RuntimeError("FIREDASH_PUBLIC_ORIGIN must be an HTTPS origin without a path.")
+
 
 INSTALLED_APPS = [
     "django.contrib.admin",

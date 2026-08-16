@@ -11,6 +11,7 @@ credentials, not added to that file.
 | --- | --- | --- |
 | `DJANGO_SECRET_KEY` | required in production | Secret. |
 | `DJANGO_ALLOWED_HOSTS` | required in production | Comma-separated hosts. |
+| `FIREDASH_PUBLIC_ORIGIN` | required in production | Non-secret HTTPS origin encoded in tablet provisioning QR payloads; no path or query. |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | empty | Comma-separated origins. |
 | `DJANGO_STATIC_ROOT` | `/var/lib/fire-backend/static` | Static collection destination. |
 | `ADMIN_SESSION_MAX_AGE_SECONDS` | `28800` | Browser-session lifetime. |
