@@ -5,6 +5,7 @@ import uuid
 from datetime import timedelta
 
 import pytest
+import yaml
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -490,6 +491,24 @@ def test_openapi_schema_is_available():
 
     assert response.status_code == 200
     assert "openapi: 3.1.0" in response.content.decode()
+
+
+def test_download_openapi_contract_has_no_drf_format_query_parameter():
+    response = Client().get("/api/v1/schema/")
+
+    schema = yaml.safe_load(response.content)
+    parameters = schema["paths"]["/api/v1/tablet/datasets/{publication_id}/download"]["get"].get(
+        "parameters", []
+    )
+    assert not any(
+        parameter["name"] == "format" and parameter["in"] == "query" for parameter in parameters
+    )
+    response_content = schema["paths"]["/api/v1/tablet/datasets/{publication_id}/download"]["get"][
+        "responses"
+    ]["200"]["content"]
+    assert response_content == {
+        "application/octet-stream": {"schema": {"format": "binary", "type": "string"}}
+    }
 
 
 def test_download_content_negotiation_accepts_octet_stream():

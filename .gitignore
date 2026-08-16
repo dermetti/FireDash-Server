@@ -235,11 +235,10 @@ __marimo__/
 # Misc
 Product Requirements Document.md
 PRD.md
-fake_ipad.py
 firedash-ipad-tailnet-onboarding.md
-tools/
 AGENTS.md
 .codex/
 .opencode/
 .firedash-fake-ipad/
 .private/
+misc_md_files/

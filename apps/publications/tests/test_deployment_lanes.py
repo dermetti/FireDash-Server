@@ -12,6 +12,8 @@ def _unit(name: str) -> str:
 def test_delivery_unit_is_persistent_delivery_only_and_hardened():
     unit = _unit("fire-publication-delivery.service")
     assert "Type=simple" in unit
+    assert "[Install]" in unit
+    assert "WantedBy=multi-user.target" in unit
     assert "--delivery --forever --poll-seconds 2" in unit
     assert "--build" not in unit
     assert "LoadCredential=publication-kek:" in unit
@@ -25,6 +27,7 @@ def test_build_service_socket_and_timer_have_narrow_nightly_contract():
     socket = _unit("fire-publication-build.socket")
     timer = _unit("fire-publication-build.timer")
     assert "Type=oneshot" in build
+    assert "[Install]" not in build
     assert "process_publication_jobs --build" in build
     assert "--delivery" not in build
     assert "LoadCredential=publication-kek:" in build
@@ -42,6 +45,7 @@ def test_maintenance_is_credential_free_and_legacy_worker_is_retired_by_installe
     installer = (ROOT / "deploy" / "lib" / "systemd.sh").read_text(encoding="utf-8")
     assert "publication-kek" not in maintenance
     assert "publication-signing-key" not in maintenance
+    assert "[Install]" not in maintenance
     assert "cleanup_signed_manifests" in maintenance
     assert "cleanup_orphan_artifacts" in maintenance
     assert "disable --now fire-publication-worker.timer" in installer

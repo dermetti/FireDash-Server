@@ -639,11 +639,15 @@ class OctetStreamRenderer(renderers.BaseRenderer):
 
 
 @extend_schema(
+    # DRF Spectacular otherwise derives its global ``?format=`` parameter from
+    # the JSON/octet-stream renderers. Dataset downloads deliberately use
+    # Accept plus whole-object ETag semantics, not URL format negotiation.
+    parameters=[OpenApiParameter("format", exclude=True)],
     responses={
         (200, "application/octet-stream"): OpenApiTypes.BINARY,
         304: None,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
-    }
+    },
 )
 class DownloadView(InstallationAPIView):
     # The view returns a plain ``HttpResponse`` on success, so the renderer only
