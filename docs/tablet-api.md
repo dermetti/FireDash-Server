@@ -201,21 +201,29 @@ Then call `POST /api/v1/adoption/complete`:
 {"adoption_request_id":"22222222-2222-2222-2222-222222222222","challenge_response":"Base64(32-byte HMAC)","confirmed":true}
 ```
 
-201 returns the installation ID, one-time credential, and initial deadline:
+201 returns the installation ID, one-time credential, initial deadline, and
+server-time anchor:
 
 ```json
-{"installation_id":"44444444-4444-4444-4444-444444444444","credential":"opaque URL-safe credential","authorization_valid_until":"2026-08-16T12:39:56.789012Z"}
+{"installation_id":"44444444-4444-4444-4444-444444444444","credential":"opaque URL-safe credential","authorization_valid_until":"2026-08-16T12:39:56.789012Z","server_time":"2026-08-09T12:39:56.789012Z"}
 ```
 
-Persist UUID, private-key reference, credential, and deadline atomically. If
-the completion response is lost, do not assume the credential is recoverable;
-use the administrative recovery flow instead of blindly replaying completion.
+Persist UUID, private-key reference, credential, deadline, and server-time
+anchor atomically. If the successful completion response is lost, replay the
+**exact same** completion request and proof within the fixed ten-minute
+recovery window. Do not create a new preview or alter the proof. Each accepted
+recovery replay rotates the unknown credential and returns a fresh one; persist
+only that returned credential. The window starts with the first successful
+completion and never extends.
 
 `confirmed:false` fails completion without incrementing proof counters. An
 invalid HMAC increments both the request and invitation counters; on the fifth
 invalid proof the invitation is revoked. Expired or already-completed requests,
-used or revoked invitations, and replayed completion attempts fail. Successful
-completion consumes both the request and invitation, so it cannot be replayed.
+used or revoked invitations, changed proof/request/mode bindings, and replay
+after the recovery window fail. Successful completion consumes the invitation
+for new provisioning, but that consumption does not prevent the exact bounded
+lost-response recovery replay. Administrative replay invalidation, invitation
+revocation, and tablet removal also block recovery.
 
 ## Reactivation: byte-exact flow
 

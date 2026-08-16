@@ -507,39 +507,47 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
 def _replay_successful_completion(
     *, request_id: UUID, challenge_response: bytes, reactivation: bool
 ) -> tuple[AppInstallation, str]:
-    request = (
-        AdoptionRequest.objects.select_for_update()
-        .select_related(
-            "invitation__tablet__department",
-            "reactivation_invitation__app_installation__tablet__department",
-        )
-        .get(pk=request_id)
-    )
+    request = AdoptionRequest.objects.select_for_update(of=("self",)).get(pk=request_id)
     now = timezone.now()
-    invitation = request.reactivation_invitation or request.invitation
-    if (request.reactivation_invitation is not None) != reactivation:
+    if (request.reactivation_invitation_id is not None) != reactivation:
         raise TabletError(
             "Adoption request mode does not match the completion endpoint.", code="invalid_request"
+        )
+    invitation: AdoptionInvitation | ReactivationInvitation
+    installation: AppInstallation
+    if request.reactivation_invitation_id is not None:
+        invitation = ReactivationInvitation.objects.select_for_update(of=("self",)).get(
+            pk=request.reactivation_invitation_id
+        )
+        installation = (
+            AppInstallation.objects.select_for_update(of=("self",))
+            .select_related("tablet__department")
+            .get(pk=invitation.app_installation_id)
+        )
+    elif request.invitation_id is not None:
+        invitation = AdoptionInvitation.objects.select_for_update(of=("self",)).get(
+            pk=request.invitation_id
+        )
+        installation = (
+            AppInstallation.objects.select_for_update(of=("self",))
+            .select_related("tablet__department")
+            .get(installation_uuid=request.installation_uuid)
+        )
+    else:
+        raise TabletError(
+            "Completion recovery is not available.", code="adoption_request_completed"
         )
     if (
         request.completed_at is None
         or request.completion_replay_valid_until is None
         or request.completion_replay_valid_until <= now
         or request.completion_replay_invalidated_at is not None
-        or invitation is None
         or invitation.revoked_at is not None
         or not hmac.compare_digest(bytes(request.expected_hmac_digest), challenge_response)
     ):
         raise TabletError(
             "Completion recovery is not available.", code="adoption_request_completed"
         )
-    installation = (
-        request.reactivation_invitation.app_installation
-        if request.reactivation_invitation is not None
-        else AppInstallation.objects.select_for_update().get(
-            installation_uuid=request.installation_uuid
-        )
-    )
     if installation.status in (AppInstallation.Status.REVOKED, AppInstallation.Status.REPLACED):
         raise TabletError("Completion recovery is not available.", code="installation_inactive")
     credential = generate_credential()

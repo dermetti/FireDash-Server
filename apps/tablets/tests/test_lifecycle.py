@@ -1,10 +1,13 @@
 """PostgreSQL-backed tests for tablet lifecycle, adoption, lease, stale, and concurrency."""
 
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
 import pytest
-from django.db import transaction
+from django.db import close_old_connections, connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.assignments.models import TabletVehicleAssignment
@@ -13,7 +16,7 @@ from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE
 from apps.publications.manifests import request_manifest
 from apps.publications.models import SignedManifest
-from apps.tablets.models import AppInstallation, Tablet
+from apps.tablets.models import AdoptionRequest, AppInstallation, Tablet
 from apps.tablets.services import (
     TabletError,
     check_in,
@@ -138,6 +141,9 @@ def test_successful_adoption_completion_can_recover_once_response_is_lost(operat
         challenge_response=challenge.request.expected_hmac_digest,
         confirmed=True,
     )
+    request = AdoptionRequest.objects.get(pk=challenge.request.id)
+    replay_valid_until = request.completion_replay_valid_until
+    assert replay_valid_until is not None
     replay_installation, recovery_credential = complete_adoption(
         request_id=challenge.request.id,
         challenge_response=challenge.request.expected_hmac_digest,
@@ -145,9 +151,67 @@ def test_successful_adoption_completion_can_recover_once_response_is_lost(operat
     )
     assert replay_installation.id == installation.id
     assert recovery_credential != first_credential
+    assert (
+        AppInstallation.objects.filter(installation_uuid=installation.installation_uuid).count()
+        == 1
+    )
     installation.refresh_from_db()
+    request.refresh_from_db()
+    assert request.completion_replay_valid_until == replay_valid_until
     assert not verify_credential(installation=installation, credential=first_credential)
     assert verify_credential(installation=installation, credential=recovery_credential)
+
+
+def test_adoption_completion_replay_rejects_expiry_invalidation_and_changed_proof(
+    operational_tablet,
+):
+    user, tablet = operational_tablet
+
+    def completed_request():
+        _, token = create_adoption_invitation(actor=user, tablet=tablet)
+        challenge = create_adoption_request(
+            token=token,
+            installation_uuid=uuid.uuid4(),
+            app_version="1.0.0",
+            hpke_public_key=_p256_public_key(),
+            hpke_ciphersuite=HPKE_CIPHERSUITE,
+        )
+        complete_adoption(
+            request_id=challenge.request.id,
+            challenge_response=challenge.request.expected_hmac_digest,
+            confirmed=True,
+        )
+        return challenge
+
+    expired = completed_request()
+    AdoptionRequest.objects.filter(pk=expired.request.id).update(
+        completion_replay_valid_until=timezone.now() - timedelta(seconds=1)
+    )
+    with pytest.raises(TabletError, match="not available"):
+        complete_adoption(
+            request_id=expired.request.id,
+            challenge_response=expired.request.expected_hmac_digest,
+            confirmed=True,
+        )
+
+    invalidated = completed_request()
+    AdoptionRequest.objects.filter(pk=invalidated.request.id).update(
+        completion_replay_invalidated_at=timezone.now()
+    )
+    with pytest.raises(TabletError, match="not available"):
+        complete_adoption(
+            request_id=invalidated.request.id,
+            challenge_response=invalidated.request.expected_hmac_digest,
+            confirmed=True,
+        )
+
+    changed_proof = completed_request()
+    with pytest.raises(TabletError, match="not available"):
+        complete_adoption(
+            request_id=changed_proof.request.id,
+            challenge_response=b"not-the-original-proof",
+            confirmed=True,
+        )
 
 
 def test_version_only_telemetry_preserves_build_when_version_is_unchanged(operational_tablet):
@@ -238,6 +302,106 @@ def test_reactivation_requires_valid_token_and_restores_lease(operational_tablet
     assert new_credential != first_credential
     assert verify_credential(installation=reactivated, credential=new_credential)
     assert not verify_credential(installation=reactivated, credential=first_credential)
+
+    reactivation_request = AdoptionRequest.objects.get(pk=reactivation_challenge.request.id)
+    replay_valid_until = reactivation_request.completion_replay_valid_until
+    assert replay_valid_until is not None
+    replayed, recovered_credential = complete_adoption(
+        request_id=reactivation_challenge.request.id,
+        challenge_response=reactivation_challenge.request.expected_hmac_digest,
+        confirmed=True,
+        reactivation=True,
+    )
+    reactivated.refresh_from_db()
+    reactivation_request.refresh_from_db()
+    assert replayed.id == reactivated.id
+    assert recovered_credential != new_credential
+    assert not verify_credential(installation=reactivated, credential=new_credential)
+    assert verify_credential(installation=reactivated, credential=recovered_credential)
+    assert reactivation_request.completion_replay_valid_until == replay_valid_until
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_adoption_completion_replays_serialize_credential_rotation(operational_tablet):
+    user, tablet = operational_tablet
+    _, token = create_adoption_invitation(actor=user, tablet=tablet)
+    challenge = create_adoption_request(
+        token=token,
+        installation_uuid=uuid.uuid4(),
+        app_version="1.0.0",
+        hpke_public_key=_p256_public_key(),
+        hpke_ciphersuite=HPKE_CIPHERSUITE,
+    )
+    installation, _ = complete_adoption(
+        request_id=challenge.request.id,
+        challenge_response=challenge.request.expected_hmac_digest,
+        confirmed=True,
+    )
+    barrier = threading.Barrier(2)
+
+    def replay() -> tuple[AppInstallation, str]:
+        close_old_connections()
+        try:
+            barrier.wait(timeout=10)
+            return complete_adoption(
+                request_id=challenge.request.id,
+                challenge_response=challenge.request.expected_hmac_digest,
+                confirmed=True,
+            )
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: replay(), range(2)))
+
+    assert {result[0].id for result in results} == {installation.id}
+    assert (
+        AppInstallation.objects.filter(installation_uuid=installation.installation_uuid).count()
+        == 1
+    )
+    installation.refresh_from_db()
+    assert (
+        sum(
+            verify_credential(installation=installation, credential=result[1]) for result in results
+        )
+        == 1
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_postgresql_replay_lock_avoids_nullable_outer_join(operational_tablet):
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL locking semantics are required for this regression test.")
+    user, tablet = operational_tablet
+    _, token = create_adoption_invitation(actor=user, tablet=tablet)
+    challenge = create_adoption_request(
+        token=token,
+        installation_uuid=uuid.uuid4(),
+        app_version="1.0.0",
+        hpke_public_key=_p256_public_key(),
+        hpke_ciphersuite=HPKE_CIPHERSUITE,
+    )
+    complete_adoption(
+        request_id=challenge.request.id,
+        challenge_response=challenge.request.expected_hmac_digest,
+        confirmed=True,
+    )
+
+    with CaptureQueriesContext(connection) as captured:
+        complete_adoption(
+            request_id=challenge.request.id,
+            challenge_response=challenge.request.expected_hmac_digest,
+            confirmed=True,
+        )
+
+    locking_sql = [
+        entry["sql"].upper()
+        for entry in captured.captured_queries
+        if "FOR UPDATE" in entry["sql"].upper()
+    ]
+    assert locking_sql
+    assert all("LEFT OUTER JOIN" not in sql for sql in locking_sql)
+    assert any("FOR UPDATE OF" in sql for sql in locking_sql)
 
 
 def test_remove_tablet_revokes_installations_and_grants(operational_tablet):

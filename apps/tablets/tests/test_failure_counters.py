@@ -14,6 +14,7 @@ from apps.tablets.services import (
     complete_adoption,
     create_adoption_invitation,
     create_adoption_request,
+    verify_credential,
 )
 
 from .conftest import _adopt, _p256_public_key  # noqa: E402
@@ -162,7 +163,7 @@ def test_failure_accounting_does_not_consume_invitation(db, operational_tablet):
     assert install.status == AppInstallation.Status.ACTIVE
 
 
-def test_replay_after_successful_adoption_still_fails(db, operational_tablet):
+def test_replay_after_successful_adoption_returns_a_fresh_credential(db, operational_tablet):
     user, tablet = operational_tablet
     _, token = create_adoption_invitation(actor=user, tablet=tablet)
     key = _p256_public_key()
@@ -173,17 +174,21 @@ def test_replay_after_successful_adoption_still_fails(db, operational_tablet):
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
-    complete_adoption(
+    installation, first_credential = complete_adoption(
         request_id=challenge.request.id,
         challenge_response=challenge.request.expected_hmac_digest,
         confirmed=True,
     )
-    with pytest.raises(TabletError, match="already been completed"):
-        complete_adoption(
-            request_id=challenge.request.id,
-            challenge_response=challenge.request.expected_hmac_digest,
-            confirmed=True,
-        )
+    replayed, recovered_credential = complete_adoption(
+        request_id=challenge.request.id,
+        challenge_response=challenge.request.expected_hmac_digest,
+        confirmed=True,
+    )
+    installation.refresh_from_db()
+    assert replayed.id == installation.id
+    assert recovered_credential != first_credential
+    assert not verify_credential(installation=installation, credential=first_credential)
+    assert verify_credential(installation=installation, credential=recovered_credential)
 
 
 def test_unconfirmed_does_not_increment_failure_counter(db, operational_tablet):
