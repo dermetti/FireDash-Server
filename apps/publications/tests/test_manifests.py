@@ -14,6 +14,7 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
 from apps.organizations.models import Department, Station, Vehicle
+from apps.publications.feature_services import set_department_feature
 from apps.publications.hpke import HPKEContext, HPKEError, hpke_open, serialize_p256_public_key
 from apps.publications.manifests import canonical_manifest_payload, request_manifest
 from apps.publications.models import (
@@ -199,6 +200,107 @@ def test_web_manifest_queues_grant_without_reading_kek_and_worker_fulfills_it(
             recipient_private_key=private_key,
             context=HPKEContext(**{**context.__dict__, "version_number": 8}),
         )
+
+
+def test_enabled_optional_klgv_publication_uses_normal_grant_and_manifest_pipeline(
+    grant_context, tmp_path
+):
+    installation, required_publication, private_key, cek, kek = grant_context
+    department = installation.tablet.department
+    actor = department.created_by
+    set_department_feature(
+        actor=actor, department=department, feature_code="klgv_plans", enabled=True
+    )
+    scope = DatasetScopeState.objects.create(
+        department=department, dataset_type_code="department_klgv_plans", source_revision=1
+    )
+    optional_id = uuid.uuid4()
+    DatasetPublication.objects.create(
+        id=optional_id,
+        department=department,
+        dataset_type_code="department_klgv_plans",
+        scope_state=scope,
+        version_number=1,
+        schema_version=1,
+        source_revision=1,
+        status=DatasetPublication.Status.PUBLISHED,
+        artifact_ready=True,
+        artifact_status=DatasetPublication.ArtifactStatus.READY,
+        artifact_path=f"{department.id}/{optional_id}/artifact.bin",
+        artifact_size=101,
+        artifact_sha256="b" * 64,
+        artifact_nonce=b"o" * 12,
+        artifact_wrapped_cek=keywrap.aes_key_wrap(kek, cek),
+        artifact_encryption_algorithm="AES-256-GCM",
+        artifact_wrapping_algorithm="AES-KW-RFC3394",
+        artifact_kek_version="1",
+        artifact_signature=b"t" * 64,
+        artifact_signature_algorithm="Ed25519",
+        artifact_signing_key_version="1",
+    )
+    assert required_publication.dataset_type_code == "department_hydrants"
+
+    kek_path = tmp_path / "kek"
+    kek_path.write_bytes(kek)
+    signing_path = tmp_path / "signing"
+    signing_path.write_bytes(b"s" * 32)
+    ring_path = tmp_path / "signing-ring.json"
+    ring_path.write_text(
+        json.dumps(
+            {
+                "keys": {
+                    "1": base64.b64encode(
+                        Ed25519PrivateKey.from_private_bytes(b"s" * 32)
+                        .public_key()
+                        .public_bytes_raw()
+                    ).decode("ascii")
+                }
+            }
+        ),
+        encoding="ascii",
+    )
+    request_manifest(installation=installation)
+    with override_settings(
+        PUBLICATION_KEK_CREDENTIAL_PATH=kek_path,
+        PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path,
+        PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH=ring_path,
+    ):
+        assert process_next_dataset_key_grant() is not None
+        assert process_next_dataset_key_grant() is not None
+        signed = process_next_signed_manifest()
+    assert signed is not None and signed.status == SignedManifest.Status.READY
+    datasets = signed.payload["datasets"]
+    assert isinstance(datasets, list)
+    optional = next(item for item in datasets if item["type"] == "department_klgv_plans")
+    assert optional["required"] is False
+    assert optional["scope"] == "department"
+    assert optional["schema_version"] == 1
+    assert optional["artifact_format"] == "zip"
+    assert optional["key_grant"]["scheme"] == "HPKE"
+    optional_grant = DatasetKeyGrant.objects.get(
+        publication_id=optional_id, app_installation=installation
+    )
+    assert optional_grant.hpke_encapsulated_key is not None
+    assert optional_grant.hpke_wrapped_content_key is not None
+    assert (
+        hpke_open(
+            encapsulated_key=optional_grant.hpke_encapsulated_key,
+            ciphertext=optional_grant.hpke_wrapped_content_key,
+            recipient_private_key=private_key,
+            context=HPKEContext(
+                publication_id=optional_id,
+                installation_id=installation.id,
+                tablet_id=installation.tablet_id,
+                department_id=department.id,
+                station_id=None,
+                dataset_type_code="department_klgv_plans",
+                version_number=1,
+                schema_version=1,
+                ciphertext_sha256="b" * 64,
+            ),
+        )
+        == cek
+    )
 
 
 def test_manifest_requests_coalesce_by_installation_and_current_state(grant_context):

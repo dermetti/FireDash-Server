@@ -53,8 +53,13 @@ versions may contain gaps. Scheduled, manual, and bulk-expedited origins are
 recorded separately. Rollback is an explicit recovery action to a known-good
 historical publication.
 
-Current registered dataset types are `department_hydrants`,
-`department_fire_plans`, and `station_personnel`.
+Current required production dataset types are `department_hydrants`,
+`department_fire_plans`, and `station_personnel`. The internal,
+feature-disabled `department_klgv_plans` registry entry proves additive v1
+dataset evolution: it is department-scoped, ZIP-backed, schema version 1, and
+optional, so older tablets ignore it safely until they support it. It remains a
+single complete encrypted artifact; it is not the planned v2 individual-PDF
+delivery design.
 
 ## Tablet cryptography
 

@@ -64,7 +64,8 @@ def _login_with_reauth(client, user):
 
 
 def _pending_tablet(department, **kwargs):
-    return Tablet.objects.create(department=department, display_name="Command iPad", **kwargs)
+    values = {"display_name": "Command iPad", **kwargs}
+    return Tablet.objects.create(department=department, **values)
 
 
 def _assign(tablet, vehicle, actor):
@@ -277,7 +278,7 @@ def test_tablet_list_htx_returns_partial_and_direct_reload_renders_full_page(
     )
     assert partial.status_code == 200
     partial_html = partial.content.decode()
-    assert "tablet-results" in partial_html
+    assert "Showing 1 of 1 tablet." in partial_html
     assert "<html" not in partial_html
 
     # The same URL without the HX header must render the complete management page so a
@@ -325,6 +326,7 @@ def _adopted_installation(tablet, credential_hash="f" * 64, fingerprint="b" * 64
 def test_ordinary_pages_never_expose_device_secrets(client, tablet_ui_scope):
     scope = tablet_ui_scope
     tablet = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE)
+    _assign(tablet, scope.vehicle, scope.admin)
     _adopted_installation(tablet)
     _, token = create_adoption_invitation(actor=scope.admin, tablet=tablet)
     client.force_login(scope.admin)

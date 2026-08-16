@@ -768,6 +768,14 @@ class FakeIPadClient:
                 fail(f"{dataset_type}: version must be positive integer")
             if not isinstance(dataset["schema_version"], int) or dataset["schema_version"] <= 0:
                 fail(f"{dataset_type}: schema_version must be positive integer")
+            if not isinstance(dataset["required"], bool):
+                fail(f"{dataset_type}: required must be boolean")
+            if dataset["minimum_app_version"] is not None and not isinstance(
+                dataset["minimum_app_version"], str
+            ):
+                fail(f"{dataset_type}: minimum_app_version must be string or null")
+            if not isinstance(dataset["artifact_format"], str) or not dataset["artifact_format"]:
+                fail(f"{dataset_type}: artifact_format must be a non-empty string")
             if not isinstance(dataset["encrypted_size"], int) or dataset["encrypted_size"] <= 0:
                 fail(f"{dataset_type}: encrypted_size must be positive integer")
             if not re.fullmatch(r"[0-9a-f]{64}", dataset["ciphertext_sha256"]):
@@ -831,6 +839,46 @@ class FakeIPadClient:
                 f"v{dataset['version']} / schema {dataset['schema_version']} / "
                 f"{dataset['publication_id']} / {dataset['encrypted_size']} encrypted bytes"
             )
+
+    def _unsupported_dataset_reason(self, dataset: dict[str, Any]) -> str | None:
+        """Return why this fake client cannot activate a dataset entry, if any."""
+        dataset_type = dataset["type"]
+        supported = datasets.SUPPORTED_DATASETS.get(dataset_type)
+        if supported is None:
+            return "dataset type is not implemented by this client"
+        artifact_format, schema_versions = supported
+        if dataset["artifact_format"] != artifact_format:
+            return "artifact format is not implemented by this client"
+        if dataset["schema_version"] not in schema_versions:
+            return "schema version is not implemented by this client"
+        minimum = dataset["minimum_app_version"]
+        if minimum is not None:
+            try:
+                required = tuple(
+                    int(part)
+                    for part in require_app_version(
+                        minimum, label=f"{dataset_type}.minimum_app_version"
+                    ).split(".")
+                )
+            except Exception:
+                return "minimum_app_version is invalid"
+            current = tuple(int(part) for part in self.app_version.split("."))
+            if current < required:
+                return f"requires app version {minimum}"
+        return None
+
+    def select_compatible_datasets(self, manifest: dict[str, Any]) -> set[str]:
+        """Enforce required/optional manifest compatibility before downloading data."""
+        supported: set[str] = set()
+        for dataset in manifest["datasets"]:
+            reason = self._unsupported_dataset_reason(dataset)
+            if reason is None:
+                supported.add(dataset["type"])
+                continue
+            if dataset["required"]:
+                fail(f"{dataset['type']}: required dataset is unsupported: {reason}")
+            self.out.line(f"  optional dataset ignored: {dataset['type']} ({reason})")
+        return supported
 
     @staticmethod
     def scope_for_dataset(dataset: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -1030,12 +1078,15 @@ class FakeIPadClient:
 
         self.verify_manifest_signature(manifest, key_cache)
         self.validate_manifest_structure(manifest, config)
+        supported_dataset_types = self.select_compatible_datasets(manifest)
         etag = self.verify_manifest_etag(response, manifest)
 
         crypto = self.state.load_private_key()
         dataset_results: dict[str, Any] = {}
 
         for dataset in manifest["datasets"]:
+            if dataset["type"] not in supported_dataset_types:
+                continue
             if dataset_types is not None and dataset["type"] not in dataset_types:
                 continue
             dataset_results[dataset["type"]] = self.verify_dataset(

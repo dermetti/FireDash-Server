@@ -103,6 +103,34 @@ _DEFINITIONS = (
         feature_code="publications",
         internal_only=False,
     ),
+    # A future document collection. It is deliberately internal and behind its
+    # own disabled-by-default feature until an approved KLGV source model/UI
+    # exists; its inclusion here proves additive optional v1 dataset evolution.
+    DatasetTypeDefinition(
+        code="department_klgv_plans",
+        display_name="Department KLGV plans",
+        scope="department",
+        artifact_format="zip",
+        current_schema_version=1,
+        encryption_required=True,
+        minimum_app_version=None,
+        builder_service="department_klgv_plans",
+        validator_service="summary",
+        summary_schema=MappingProxyType(
+            {
+                "document_count": "item_count",
+                "total_accepted_bytes": "non_negative_integer",
+                "total_pages": "non_negative_integer",
+                "source_revision": "non_negative_integer",
+            }
+        ),
+        required=False,
+        supported_schema_versions=(1,),
+        minimum_supported_schema_version=1,
+        maximum_supported_schema_version=1,
+        feature_code="klgv_plans",
+        internal_only=True,
+    ),
     # This deliberately has no production source data. It proves that a new
     # department-scoped type is carried by the registry projection, not SQL checks.
     DatasetTypeDefinition(

@@ -11,7 +11,7 @@ class FeatureDisabledError(ValueError):
 
 def is_feature_enabled(*, department, feature_code: str) -> bool:
     try:
-        get_feature_definition(feature_code)
+        definition = get_feature_definition(feature_code)
     except FeatureRegistryError as error:
         raise FeatureDisabledError(str(error)) from error
     feature = (
@@ -19,8 +19,9 @@ def is_feature_enabled(*, department, feature_code: str) -> bool:
         .only("enabled")
         .first()
     )
-    # Existing departments retain Phase 6 availability until an administrator opts out.
-    return feature is None or feature.enabled
+    # Existing publication functionality retains its enabled-by-default behavior;
+    # future optional features may explicitly default to disabled.
+    return definition.default_enabled if feature is None else feature.enabled
 
 
 def require_feature(*, department, feature_code: str) -> None:

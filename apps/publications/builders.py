@@ -10,6 +10,7 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
+from apps.publications.pdf_bundles import PdfBundleError, read_accepted_pdf
 from apps.publications.registry import DatasetTypeDefinition
 from apps.reference_data.models import FirePlan, Hydrant
 
@@ -134,6 +135,22 @@ def _build_personnel(*, department, station, source_revision: int) -> dict[str, 
     }
 
 
+def _unconfigured_klgv_source(*, department, station, source_revision: int) -> dict[str, object]:
+    if station is not None:
+        raise PublicationBuildError("KLGV plan builder requires a department scope.")
+    # Workstream 3 deliberately introduces no guessed document-management
+    # source model. The optional feature is disabled until such a source uses
+    # the same accepted-PDF sanitizer path as FirePlan.
+    raise PublicationBuildError("KLGV plan source is not configured.")
+
+
+def _unconfigured_klgv_artifact(*, department, station, source_revision: int) -> bytes:
+    _unconfigured_klgv_source(
+        department=department, station=station, source_revision=source_revision
+    )
+    raise AssertionError("unreachable")
+
+
 def build_artifact(
     *, definition: DatasetTypeDefinition, department, station, source_revision: int
 ) -> bytes:
@@ -226,10 +243,12 @@ def _artifact_fire_plans(*, department, station, source_revision: int) -> bytes:
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         manifest = []
         for plan in FirePlan.objects.filter(department=department, active=True).order_by("id"):
-            document_path = settings.REFERENCE_DATA_ACCEPTED_ROOT / plan.document_key
             try:
-                document = document_path.read_bytes()
-            except OSError as error:
+                document = read_accepted_pdf(
+                    document_key=plan.document_key,
+                    accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT,
+                )
+            except PdfBundleError as error:
                 raise PublicationBuildError(
                     "Accepted fire-plan document is unavailable."
                 ) from error
@@ -259,6 +278,7 @@ BUILDERS.update(
         "department_hydrants": _build_hydrants,
         "department_fire_plans": _build_fire_plans,
         "station_personnel": _build_personnel,
+        "department_klgv_plans": _unconfigured_klgv_source,
         "test_department_incidents": lambda *, department, station, source_revision: {
             "incident_count": 0,
             "source_revision": source_revision,
@@ -271,6 +291,7 @@ ARTIFACT_BUILDERS.update(
         "department_hydrants": _artifact_hydrants,
         "department_fire_plans": _artifact_fire_plans,
         "station_personnel": _artifact_personnel,
+        "department_klgv_plans": _unconfigured_klgv_artifact,
         "test_department_incidents": lambda **_: _json_bytes({"incidents": []}),
     }
 )
@@ -295,6 +316,7 @@ def build_change_summary(
             "commander_eligible_count",
             "verified_commander_email_count",
         ),
+        "department_klgv_plans": ("document_count", "total_accepted_bytes", "total_pages"),
     }
     fields = fields_by_type.get(definition.code, ("item_count",))
     source_revision = current.get("source_revision")

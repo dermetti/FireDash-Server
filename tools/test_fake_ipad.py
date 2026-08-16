@@ -8,6 +8,7 @@ header placement, secret redaction, and CLI exit codes.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import hmac
 import io
@@ -774,6 +775,110 @@ def test_complete_manifest_contract_fixture_uses_the_live_client_verifier(tmp_pa
         url="https://test.example/api/v1/tablet/manifest",
     )
     assert client.verify_manifest_etag(response, manifest) == fixture["expected_manifest_etag"]
+
+
+def _signed_manifest_with_klgv_optional_dataset(*, required: bool):
+    fixture_path = (
+        Path(__file__).resolve().parent.parent
+        / "apps"
+        / "publications"
+        / "tests"
+        / "fixtures"
+        / "complete_manifest_contract.json"
+    )
+    manifest = copy.deepcopy(json.loads(fixture_path.read_text(encoding="utf-8"))["wire_manifest"])
+    dataset = copy.deepcopy(manifest["datasets"][0])
+    publication_id = str(uuid.uuid4())
+    dataset.update(
+        {
+            "publication_id": publication_id,
+            "type": "department_klgv_plans",
+            "scope": "department",
+            "required": required,
+            "artifact_format": "zip",
+            "download_url": f"/api/v1/tablet/datasets/{publication_id}/download",
+        }
+    )
+    manifest["datasets"].append(dataset)
+    signer = ed25519.Ed25519PrivateKey.generate()
+    manifest["signing_key_version"] = "1"
+    unsigned = {key: value for key, value in manifest.items() if key != "signature"}
+    manifest["signature"] = base64.b64encode(signer.sign(canonical_json_bytes(unsigned))).decode()
+    return manifest, signer.public_key().public_bytes_raw()
+
+
+def test_verified_manifest_ignores_unknown_optional_dataset_and_syncs_known_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    manifest, public_key = _signed_manifest_with_klgv_optional_dataset(required=False)
+    state = DeviceState(tmp_path / "state")
+    state.ensure_identity(server_url="https://test.example", app_version="1.0.0")
+    state.store_installation(
+        installation_id=manifest["configuration"]["installation_id"],
+        tablet_id=manifest["configuration"]["tablet_id"],
+        credential="test-credential",
+        authorization_valid_until=manifest["authorization_valid_until"],
+    )
+    api = StubApi()
+    api.handlers["/api/v1/tablet/signing-keys/1"] = lambda b, r: (
+        200,
+        {
+            "algorithm": "Ed25519",
+            "version": "1",
+            "public_key": base64.b64encode(public_key).decode(),
+        },
+        {},
+    )
+    api.handlers["/api/v1/tablet/manifest"] = lambda b, r: (304, b"", {})
+    client = _client(state, api)
+    verified: list[str] = []
+    monkeypatch.setattr(
+        client,
+        "verify_dataset",
+        lambda dataset, config, crypto, cache: verified.append(dataset["type"]) or {},
+    )
+
+    etag_payload = copy.deepcopy(manifest)
+    etag_payload.pop("generated_at")
+    response = HttpResponse(
+        status=200,
+        headers={"etag": f'"{hashlib.sha256(canonical_json_bytes(etag_payload)).hexdigest()}"'},
+        body=json.dumps(manifest).encode(),
+        url="https://test.example/api/v1/tablet/manifest",
+    )
+    _, _, result = client.verify_manifest_and_datasets(response, manifest["configuration"])
+
+    assert "department_klgv_plans" not in verified
+    assert verified == [manifest["datasets"][0]["type"]]
+    assert set(result) == set(verified)
+
+
+def test_verified_manifest_rejects_unknown_required_dataset_before_activation(tmp_path: Path):
+    manifest, public_key = _signed_manifest_with_klgv_optional_dataset(required=True)
+    state = DeviceState(tmp_path / "state")
+    state.ensure_identity(server_url="https://test.example", app_version="1.0.0")
+    state.store_installation(
+        installation_id=manifest["configuration"]["installation_id"],
+        tablet_id=manifest["configuration"]["tablet_id"],
+        credential="test-credential",
+        authorization_valid_until=manifest["authorization_valid_until"],
+    )
+    api = StubApi()
+    api.handlers["/api/v1/tablet/signing-keys/1"] = lambda b, r: (
+        200,
+        {
+            "algorithm": "Ed25519",
+            "version": "1",
+            "public_key": base64.b64encode(public_key).decode(),
+        },
+        {},
+    )
+    client = _client(state, api)
+    client.verify_manifest_signature(manifest, {})
+    client.validate_manifest_structure(manifest, manifest["configuration"])
+
+    with pytest.raises(ClientError, match="required dataset is unsupported"):
+        client.select_compatible_datasets(manifest)
 
 
 def test_terminal_matrix_allows_status_only_and_denies_operational_endpoints(tmp_path: Path):

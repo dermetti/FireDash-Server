@@ -159,20 +159,22 @@ def test_configuration_and_manifest_use_bearer_installation_scope(api_context, t
     )
     with override_settings(PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH=signing_ring_path):
         signing_key = client.get("/api/v1/tablet/signing-keys/1", **_authorization(credential))
+        historical_key = client.get("/api/v1/tablet/signing-keys/0", **_authorization(credential))
+        unknown_key = client.get(
+            "/api/v1/tablet/signing-keys/unknown", **_authorization(credential)
+        )
     assert signing_key.status_code == 200
     assert signing_key.json() == {
         "algorithm": "Ed25519",
         "version": "1",
         "public_key": base64.b64encode(signing_public_path.read_bytes()).decode("ascii"),
     }
-    historical_key = client.get("/api/v1/tablet/signing-keys/0", **_authorization(credential))
     assert historical_key.status_code == 200
     assert historical_key.json() == {
         "algorithm": "Ed25519",
         "version": "0",
         "public_key": base64.b64encode(historical_public_key).decode("ascii"),
     }
-    unknown_key = client.get("/api/v1/tablet/signing-keys/unknown", **_authorization(credential))
     assert unknown_key.status_code == 404
 
     not_modified = client.get(

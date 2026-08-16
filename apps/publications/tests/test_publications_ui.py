@@ -192,9 +192,9 @@ def test_current_publication_remains_visible_with_replacement_states(
     assert "Safe replacement failure." in failed_page
     assert "Known-good publication v7 remains active." in failed_page
 
-    replacement = _published(department=department, scope=scope, version_number=9)
     current.status = DatasetPublication.Status.SUPERSEDED
     current.save(update_fields=("status",))
+    replacement = _published(department=department, scope=scope, version_number=9)
     scope.latest_built_publication = replacement
     scope.current_published_publication = replacement
     scope.dirty_since = None

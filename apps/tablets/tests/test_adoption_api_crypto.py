@@ -123,7 +123,7 @@ def test_adoption_preview_wire_timestamp_matches_hpke_context(crypto_api_context
             {
                 "token": token,
                 "installation_uuid": str(installation_uuid),
-                "app_version": "1.0",
+                "app_version": "1.0.0",
                 "hpke_public_key": base64.b64encode(public_key).decode("ascii"),
                 "hpke_ciphersuite": HPKE_CIPHERSUITE,
             }

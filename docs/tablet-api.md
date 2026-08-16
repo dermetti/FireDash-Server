@@ -569,8 +569,14 @@ manifest. An unsupported optional dataset may be ignored only when the server
 marks that entry `required:false`; retain existing verified data rather than
 activating an unverified replacement. The current production datasets
 `department_hydrants`, `department_fire_plans`, and `station_personnel` are all
-`required:true`, schema version 1, with no minimum app version. The internal
-test-only dataset is not a production client contract.
+`required:true`, schema version 1, with no minimum app version.
+`department_klgv_plans` is a registered future-style department dataset with
+`required:false`, schema version 1, and `artifact_format:"zip"`; it is
+server-feature-disabled and not yet an iOS rendering requirement. It
+demonstrates the deliberately additive v1 rule: an older client verifies the
+complete manifest, ignores that unsupported optional entry, and continues with
+all supported required entries. The internal test-only dataset is not a
+production client contract.
 
 ### `department_hydrants` (`artifact_format: geojson`)
 
@@ -598,6 +604,32 @@ and reject ZIP traversal, duplicate entries, undeclared files, or decompression
 sizes that violate local safety limits. Never trust a ZIP member path to choose
 an output path.
 
+### `department_klgv_plans` (`artifact_format: zip`, optional future dataset)
+
+When this department-scoped feature is later enabled, its *single complete v1
+artifact* uses PDF document bundle schema v1. The plaintext ZIP has exactly:
+
+```text
+manifest.json
+documents/<lowercase-uuid>.pdf
+```
+
+`manifest.json` is UTF-8 JSON with exactly `schema_version:1`, a non-negative
+`source_revision`, and `documents`, sorted by document UUID. Each document has
+`id`, non-empty `title`, ID-derived `path`, lower-case 64-hex `sha256`, and a
+positive `page_count`; `category` is optional. The path must be exactly
+`documents/{id}.pdf`. Every ZIP member must be declared exactly once; reject
+duplicate members/IDs, undeclared PDFs, traversal or backslash paths, symbolic
+links, hash mismatches, malformed UUIDs, and local-limit violations.
+
+This does **not** change `department_fire_plans`: its existing monolithic ZIP
+layout remains frozen. Nor is it an individual-PDF sync protocol. In v1 both
+document collections are whole encrypted artifacts and use normal 200/304
+whole-object verification; Range/206 is not application-level incremental
+synchronisation. A future v2 may introduce an authoritative document catalog
+and independently encrypted immutable PDFs, but v1 adds no speculative fields
+for that work.
+
 ### `station_personnel` (`artifact_format: json`)
 
 The plaintext is:
@@ -609,16 +641,22 @@ The plaintext is:
 `commander_email` may be `null`; it is populated only when verified. Require
 the plaintext `station_id` to equal the manifest/configuration station scope.
 
+## Swift compatibility / acceptance checklist
+
+Before releasing an iOS implementation, prove it against the adoption proof,
+HPKE DatasetKeyGrant, complete SignedManifest, and artifact-signature/AES-GCM
+vectors below. Exercise lost completion-response recovery; 202 with a delay of
+at least `Retry-After`; manifest and artifact 304; exact historical signing-key
+lookup; same-origin download enforcement; lease expiry; and REVOKED/REPLACED
+purge. A candidate manifest with an unsupported `required:false` dataset must
+activate its supported required entries; an unsupported required type, schema,
+or minimum app version must block activation.
+
 ## Current known limitations / interoperability gaps
 
 - **Trust-bootstrap limitation:** authenticated HTTPS to FireDash supplies the
   initial public-key trust. There is no independent signing root or public-key
   pinning mechanism.
-- **Validation gap in this environment:** database-backed tablet/manifest API
-  tests may be unavailable when the development PostgreSQL server rejects the
-  host in `pg_hba.conf` or the configured role cannot create `test_firedash`.
-  That is an environment/test-permission gap, not by itself evidence of a
-  protocol defect. Do not weaken database roles or HBA policy to run them.
 
 ## Frozen vectors and contract sources
 

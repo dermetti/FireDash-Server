@@ -27,7 +27,7 @@ def test_invalid_proof_increments_failure_count_once(db, operational_tablet):
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -48,7 +48,7 @@ def test_failure_count_persists_after_service_raises(db, operational_tablet):
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -70,7 +70,7 @@ def test_attempts_after_lockout_fail_without_resetting_counter(db, operational_t
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -100,7 +100,7 @@ def test_concurrent_invalid_attempts_do_not_lose_increments(db, operational_tabl
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -137,7 +137,7 @@ def test_failure_accounting_does_not_consume_invitation(db, operational_tablet):
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -151,7 +151,7 @@ def test_failure_accounting_does_not_consume_invitation(db, operational_tablet):
     second_challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -170,7 +170,7 @@ def test_replay_after_successful_adoption_returns_a_fresh_credential(db, operati
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )
@@ -198,7 +198,7 @@ def test_unconfirmed_does_not_increment_failure_counter(db, operational_tablet):
     challenge = create_adoption_request(
         token=token,
         installation_uuid=uuid.uuid4(),
-        app_version="1.0",
+        app_version="1.0.0",
         hpke_public_key=key,
         hpke_ciphersuite=HPKE_CIPHERSUITE,
     )

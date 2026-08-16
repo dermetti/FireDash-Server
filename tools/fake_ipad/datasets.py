@@ -12,6 +12,7 @@ import json
 import re
 import zipfile
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from tools.fake_ipad.crypto import sha256_hex
@@ -25,6 +26,17 @@ _EXTENSIONS = {
     "department_fire_plans": "zip",
     "station_personnel": "json",
 }
+
+# This is intentionally the capability table of the current fake/iOS-equivalent
+# client, not a reflection of the server registry. Unknown optional entries are
+# skipped only after their signed manifest entry has been authenticated.
+SUPPORTED_DATASETS = MappingProxyType(
+    {
+        "department_hydrants": ("geojson", frozenset({1})),
+        "department_fire_plans": ("zip", frozenset({1})),
+        "station_personnel": ("json", frozenset({1})),
+    }
+)
 
 
 def save_plaintext_artifact(*, state_dir: Path, dataset_type: str, plaintext: bytes) -> None:
