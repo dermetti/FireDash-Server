@@ -53,7 +53,21 @@ def drain_publication_build_activation_wakes() -> int:
     for offset, name in enumerate(names):
         if name != PUBLICATION_BUILD_WAKE_FD_NAME:
             continue
-        listener = socket.socket(fileno=SYSTEMD_LISTEN_FD_START + offset)
+        inherited_fd = SYSTEMD_LISTEN_FD_START + offset
+        try:
+            # socket.socket(fileno=...) assumes ownership and closes its FD.
+            # Keep systemd's inherited listener open for the whole oneshot so
+            # the post-build drain can consume wakes that arrived mid-cycle.
+            duplicate_fd = os.dup(inherited_fd)
+        except OSError:
+            logger.warning("Could not duplicate the publication build wake socket.")
+            continue
+        try:
+            listener = socket.socket(fileno=duplicate_fd)
+        except OSError:
+            os.close(duplicate_fd)
+            logger.warning("Could not duplicate the publication build wake socket.")
+            continue
         try:
             listener.setblocking(False)
             while True:
@@ -67,7 +81,6 @@ def drain_publication_build_activation_wakes() -> int:
                 client.close()
                 drained += 1
         finally:
-            # The process owns its inherited copy.  systemd keeps the unit's
-            # listening socket alive for future activations.
+            # This closes only our duplicate, never the systemd activation FD.
             listener.close()
     return drained

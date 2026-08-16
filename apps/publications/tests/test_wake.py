@@ -123,20 +123,21 @@ def test_socket_activation_drain_consumes_all_connect_and_close_wakes(monkeypatc
         def close(self):
             self.closed = True
 
+    pending_clients = [Client(), Client()]
+
     class Listener:
         closed = False
         nonblocking = None
 
         def __init__(self, _family=None, _type=None, *, fileno=None):
-            assert fileno == 3
-            self.clients = [Client(), Client()]
+            assert fileno == 70
 
         def setblocking(self, value):
             self.nonblocking = value
 
         def accept(self):
-            if self.clients:
-                return self.clients.pop(), None
+            if pending_clients:
+                return pending_clients.pop(), None
             raise BlockingIOError
 
         def close(self):
@@ -152,11 +153,81 @@ def test_socket_activation_drain_consumes_all_connect_and_close_wakes(monkeypatc
     monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
     monkeypatch.setenv("LISTEN_FDS", "1")
     monkeypatch.setenv("LISTEN_FDNAMES", PUBLICATION_BUILD_WAKE_FD_NAME)
-    with patch("apps.publications.wake.socket.socket", side_effect=socket_factory):
+    with (
+        patch("apps.publications.wake.os.dup", return_value=70) as duplicate,
+        patch("apps.publications.wake.socket.socket", side_effect=socket_factory),
+    ):
         assert drain_publication_build_activation_wakes() == 2
     listener = listeners[0]
+    duplicate.assert_called_once_with(3)
     assert listener.nonblocking is False
     assert listener.closed is True
+
+
+def test_activation_drain_preserves_original_fd_for_a_second_drain(monkeypatch):
+    class Client:
+        def close(self):
+            pass
+
+    pending_clients = [Client()]
+    listener_fds = []
+
+    class Listener:
+        def __init__(self, _family=None, _type=None, *, fileno=None):
+            listener_fds.append(fileno)
+
+        def setblocking(self, _value):
+            pass
+
+        def accept(self):
+            if pending_clients:
+                return pending_clients.pop(), None
+            raise BlockingIOError
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
+    monkeypatch.setenv("LISTEN_FDS", "1")
+    monkeypatch.setenv("LISTEN_FDNAMES", PUBLICATION_BUILD_WAKE_FD_NAME)
+    with (
+        patch("apps.publications.wake.os.dup", side_effect=[70, 71]) as duplicate,
+        patch("apps.publications.wake.socket.socket", side_effect=Listener),
+    ):
+        assert drain_publication_build_activation_wakes() == 1
+        # A wake arriving during the build is consumed by the post-build drain.
+        pending_clients.append(Client())
+        assert drain_publication_build_activation_wakes() == 1
+
+    assert duplicate.call_args_list[0].args == duplicate.call_args_list[1].args == (3,)
+    assert listener_fds == [70, 71]
+
+
+def test_activation_drain_empty_completion_does_not_warn_or_wrap_original_fd(monkeypatch, caplog):
+    class Listener:
+        def __init__(self, _family=None, _type=None, *, fileno=None):
+            assert fileno == 70
+
+        def setblocking(self, _value):
+            pass
+
+        def accept(self):
+            raise BlockingIOError
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
+    monkeypatch.setenv("LISTEN_FDS", "1")
+    monkeypatch.setenv("LISTEN_FDNAMES", PUBLICATION_BUILD_WAKE_FD_NAME)
+    with (
+        patch("apps.publications.wake.os.dup", return_value=70) as duplicate,
+        patch("apps.publications.wake.socket.socket", side_effect=Listener),
+    ):
+        assert drain_publication_build_activation_wakes() == 0
+
+    duplicate.assert_called_once_with(3)
+    assert "Could not drain the publication build wake socket." not in caplog.text
 
 
 def test_timer_or_manual_build_has_no_activation_socket(monkeypatch):
