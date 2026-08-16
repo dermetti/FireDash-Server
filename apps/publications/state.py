@@ -46,6 +46,14 @@ STATE_BADGE = {
     FAILED: "danger",
 }
 
+CURRENT_UPDATE_LABELS = {
+    UPDATE_QUEUED: "Update scheduled",
+    QUEUED: "Update scheduled",
+    BUILDING: "Building update",
+    FAILED: "Update failed",
+    NEEDS_REBUILD: "Update required",
+}
+
 
 def compute_scope_state(
     *,
@@ -129,12 +137,21 @@ def scope_operational_states(department, *, now=None) -> list[dict[str, Any]]:
                 "distributed_version": (
                     current_published.version_number if current_published else None
                 ),
+                "current_published_at": (
+                    current_published.published_at if current_published else None
+                ),
                 "latest_built_version": latest_built.version_number if latest_built else None,
                 "latest_built_status": latest_built.status if latest_built else None,
                 "latest_built_publication_id": latest_built.id if latest_built else None,
                 "latest_publication_id": scope.latest_publication_id,
                 "current_published_publication_id": (
                     current_published.id if current_published else None
+                ),
+                "current_update_label": (
+                    CURRENT_UPDATE_LABELS.get(state) if current_published else None
+                ),
+                "current_update_badge": (
+                    STATE_BADGE.get(state) if current_published and state != CURRENT else None
                 ),
                 "build_error": scope.latest_build_error if state == FAILED else None,
                 "last_activity": scope.latest_built_at or scope.updated_at,

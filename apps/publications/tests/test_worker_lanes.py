@@ -144,6 +144,25 @@ def test_build_one_shot_never_invokes_delivery_cycle():
     delivery.assert_not_called()
 
 
+def test_socket_activated_build_drains_wakes_before_and_after_one_build_cycle():
+    command = Command()
+    command.stdout = Mock()
+    with (
+        patch(
+            "apps.publications.management.commands.process_publication_jobs.drain_publication_build_activation_wakes",
+            side_effect=[3, 2],
+        ) as drain,
+        patch(
+            "apps.publications.management.commands.process_publication_jobs.process_build_cycle",
+            return_value=BuildCycleResult(dataset_builds=1, recovered=0, elapsed_seconds=0.01),
+        ) as build,
+    ):
+        command.handle(delivery=False, build=True, forever=False, poll_seconds=2.0)
+
+    assert drain.call_count == 2
+    build.assert_called_once()
+
+
 def test_invalid_delivery_poll_interval_is_rejected():
     with pytest.raises(ValueError, match="must be positive"):
         Command().handle(delivery=True, build=False, forever=False, poll_seconds=0)

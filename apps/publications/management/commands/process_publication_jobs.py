@@ -2,6 +2,7 @@ import time
 
 from django.core.management.base import BaseCommand
 
+from apps.publications.wake import drain_publication_build_activation_wakes
 from apps.publications.work_cycle import (
     process_build_cycle,
     process_delivery_cycle,
@@ -37,7 +38,14 @@ class Command(BaseCommand):
                         f"elapsed={delivery.elapsed_seconds:.3f}s"
                     )
             elif options["build"]:
-                build = process_build_cycle()
+                # Consume connect-and-close wakeups before and after the
+                # bounded build cycle.  The second drain coalesces wakeups
+                # that arrived while the authoritative PostgreSQL work ran.
+                drain_publication_build_activation_wakes()
+                try:
+                    build = process_build_cycle()
+                finally:
+                    drain_publication_build_activation_wakes()
                 processed = build.processed
                 self.stdout.write(
                     "Publication build cycle: "

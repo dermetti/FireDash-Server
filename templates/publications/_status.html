@@ -4,17 +4,30 @@
      hx-trigger="load delay:{{ poll_seconds }}s, every {{ poll_seconds }}s"
      hx-swap="outerHTML">
   <section class="mb-4">
+    <div class="card shadow-sm"><div class="card-body">
+      <h2 class="h6 text-body-secondary mb-3">Publication status</h2>
+      <div class="row g-3 text-center">
+        <div class="col-6 col-sm"><div class="fs-3 fw-semibold">{{ summary.total }}</div><div class="text-body-secondary small">Scopes</div></div>
+        <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-success">{{ summary.current }}</div><div class="text-body-secondary small">Current</div></div>
+        <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-info">{{ summary.scheduled }}</div><div class="text-body-secondary small">Scheduled</div></div>
+        <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-info">{{ summary.building }}</div><div class="text-body-secondary small">Building</div></div>
+        <div class="col-6 col-sm"><div class="fs-3 fw-semibold {% if summary.attention %}text-danger{% endif %}">{{ summary.attention }}</div><div class="text-body-secondary small">Attention</div></div>
+      </div>
+    </div></div>
+  </section>
+
+  <section class="mb-4">
     <h2 class="h4">Scheduled updates</h2>
-    {% if scheduled %}<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Dataset</th><th>Next run</th><th>Origin</th><th class="text-end">Action</th></tr></thead><tbody>
-      {% for row in scheduled %}<tr><td>{{ row.dataset_name }}<div class="text-body-secondary small">{{ row.scope_label }}</div></td><td>{% if row.active_job_not_before %}{{ row.active_job_not_before|date:"j M H:i" }}{% else %}Ready now{% endif %}</td><td>{{ row.active_job_trigger_type|default:"SCHEDULED" }}</td><td class="text-end"><form method="post" action="{% url 'publications-scope-rebuild' row.scope_id %}">{% csrf_token %}<button class="btn btn-sm btn-primary">Build &amp; publish now</button></form></td></tr>{% endfor %}
+    {% if scheduled %}<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Dataset</th><th>Status</th><th>Next run</th><th>Origin</th><th class="text-end">Action</th></tr></thead><tbody>
+      {% for row in scheduled %}<tr><td>{{ row.dataset_name }}<div class="text-body-secondary small">{{ row.scope_label }}</div></td><td>{% if row.state == "BUILDING" %}<span class="spinner-border spinner-border-sm text-primary me-2" aria-hidden="true"></span>Building now{% else %}<span class="badge text-bg-{{ row.state_badge }}">{{ row.state_label }}</span>{% endif %}</td><td>{% if row.state == "BUILDING" %}In progress{% elif row.active_job_not_before %}{{ row.active_job_not_before|date:"j M H:i" }}{% else %}Ready now{% endif %}</td><td>{{ row.active_job_trigger_type|default:"SCHEDULED" }}</td><td class="text-end">{% if row.state != "BUILDING" %}<form method="post" action="{% url 'publications-scope-rebuild' row.scope_id %}">{% csrf_token %}<button class="btn btn-sm btn-primary">Build &amp; publish now</button></form>{% endif %}</td></tr>{% endfor %}
     </tbody></table></div>{% else %}<p class="text-body-secondary">No scheduled updates.</p>{% endif %}
   </section>
 
   <section class="mb-4">
-    <h2 class="h4">Building / publishing</h2>
-    {% if building %}<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Dataset</th><th>Started</th><th>Origin</th></tr></thead><tbody>
-      {% for row in building %}<tr><td><span class="spinner-border spinner-border-sm text-primary me-2" aria-hidden="true"></span>{{ row.dataset_name }}<div class="text-body-secondary small">{{ row.scope_label }}</div></td><td>{{ row.last_activity|date:"j M Y H:i" }}</td><td>{{ row.active_job_trigger_type|default:"SCHEDULED" }}</td></tr>{% endfor %}
-    </tbody></table></div>{% else %}<p class="text-body-secondary">No builds are running.</p>{% endif %}
+    <h2 class="h4">Current publications</h2>
+    {% if current %}<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Dataset</th><th>Version</th><th>Published</th><th>Status</th><th class="text-end">Details</th></tr></thead><tbody>
+      {% for row in current %}<tr><td>{{ row.dataset_name }}<div class="text-body-secondary small">{{ row.scope_label }}</div></td><td><strong>v{{ row.distributed_version }}</strong></td><td>{{ row.current_published_at|date:"j M Y H:i" }}</td><td>{% if row.current_update_label %}<span class="badge text-bg-{{ row.current_update_badge }}">{{ row.current_update_label }}</span>{% else %}<span class="badge text-bg-success">Current</span>{% endif %}</td><td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="{% url 'publications-review' row.current_published_publication_id %}">View</a></td></tr>{% endfor %}
+    </tbody></table></div>{% else %}<p class="text-body-secondary">No current publications.</p>{% endif %}
   </section>
 
   <section class="mb-4">
@@ -24,18 +37,11 @@
     </tbody></table></div>{% else %}<p class="text-body-secondary">No publication failures need attention.</p>{% endif %}
   </section>
 
-  <section class="mb-4">
-    <h2 class="h4">Current publications</h2>
-    {% if current %}<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Dataset</th><th>Version</th><th>Last activity</th><th class="text-end">Details</th></tr></thead><tbody>
-      {% for row in current %}<tr><td>{{ row.dataset_name }}<div class="text-body-secondary small">{{ row.scope_label }}</div></td><td><strong>v{{ row.distributed_version }}</strong></td><td>{{ row.last_activity|date:"j M Y H:i" }}</td><td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="{% url 'publications-review' row.current_published_publication_id %}">View</a></td></tr>{% endfor %}
-    </tbody></table></div>{% else %}<p class="text-body-secondary">No current publications.</p>{% endif %}
-  </section>
-
   <section>
-    <h2 class="h4">History</h2>
+    <h2 class="h4">Previous versions</h2>
     <div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th>Dataset</th><th>Publication</th><th>Status</th><th>Origin</th><th class="d-none d-md-table-cell">Activity</th><th class="text-end">Action</th></tr></thead><tbody>
-      {% for publication in history_page %}<tr><td>{{ publication.dataset_type_code|dataset_display_name }}{% if publication.station %}<div class="text-body-secondary small">{{ publication.station.name }}</div>{% endif %}</td><td><strong>v{{ publication.version_number }}</strong></td><td><span class="badge text-bg-{{ publication.status|publication_status_badge }}">{{ publication.status|publication_status_label }}</span></td><td>{{ publication.build_origin|default:"HISTORICAL" }}</td><td class="d-none d-md-table-cell">{{ publication.created_at|date:"j M Y H:i" }}</td><td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="{% url 'publications-review' publication.id %}">View{% if publication.status == "SUPERSEDED" %} / rollback{% endif %}</a></td></tr>{% empty %}<tr><td colspan="6" class="text-center text-body-secondary py-4">No previous publications or build attempts.</td></tr>{% endfor %}
+      {% for publication in previous_versions_page %}<tr><td>{{ publication.dataset_type_code|dataset_display_name }}{% if publication.station %}<div class="text-body-secondary small">{{ publication.station.name }}</div>{% endif %}</td><td><strong>v{{ publication.version_number }}</strong></td><td><span class="badge text-bg-{{ publication.status|publication_status_badge }}">{{ publication.status|publication_status_label }}</span></td><td>{{ publication.build_origin|default:"HISTORICAL" }}</td><td class="d-none d-md-table-cell">{{ publication.published_at|date:"j M Y H:i" }}</td><td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="{% url 'publications-review' publication.id %}">View / rollback</a></td></tr>{% empty %}<tr><td colspan="6" class="text-center text-body-secondary py-4">No previous distributed publications.</td></tr>{% endfor %}
     </tbody></table></div>
-    {% if history_page.paginator.num_pages > 1 %}<nav class="mt-3" aria-label="Publication history pages"><ul class="pagination pagination-sm">{% if history_page.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ history_page.previous_page_number }}">Previous</a></li>{% endif %}<li class="page-item disabled"><span class="page-link">Page {{ history_page.number }} of {{ history_page.paginator.num_pages }}</span></li>{% if history_page.has_next %}<li class="page-item"><a class="page-link" href="?page={{ history_page.next_page_number }}">Next</a></li>{% endif %}</ul></nav>{% endif %}
+    {% if previous_versions_page.paginator.num_pages > 1 %}<nav class="mt-3" aria-label="Previous publication version pages"><ul class="pagination pagination-sm">{% if previous_versions_page.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ previous_versions_page.previous_page_number }}">Previous</a></li>{% endif %}<li class="page-item disabled"><span class="page-link">Page {{ previous_versions_page.number }} of {{ previous_versions_page.paginator.num_pages }}</span></li>{% if previous_versions_page.has_next %}<li class="page-item"><a class="page-link" href="?page={{ previous_versions_page.next_page_number }}">Next</a></li>{% endif %}</ul></nav>{% endif %}
   </section>
 </div>

@@ -1,5 +1,6 @@
 """One-bit systemd socket wakeup and transactional rebuild regression tests."""
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -11,7 +12,11 @@ from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
 from apps.publications.models import DatasetScopeState, PublicationJob
 from apps.publications.services import bulk_request_rebuilds, request_rebuild
-from apps.publications.wake import wake_publication_build_worker
+from apps.publications.wake import (
+    PUBLICATION_BUILD_WAKE_FD_NAME,
+    drain_publication_build_activation_wakes,
+    wake_publication_build_worker,
+)
 
 
 @pytest.fixture
@@ -109,6 +114,66 @@ def test_unavailable_wake_socket_leaves_failure_nonfatal(caplog):
     with patch("apps.publications.wake.socket.socket", side_effect=OSError("unavailable")):
         assert wake_publication_build_worker() is False
     assert "nightly timer remains fallback" in caplog.text
+
+
+def test_socket_activation_drain_consumes_all_connect_and_close_wakes(monkeypatch):
+    class Client:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Listener:
+        closed = False
+        nonblocking = None
+
+        def __init__(self, _family=None, _type=None, *, fileno=None):
+            assert fileno == 3
+            self.clients = [Client(), Client()]
+
+        def setblocking(self, value):
+            self.nonblocking = value
+
+        def accept(self):
+            if self.clients:
+                return self.clients.pop(), None
+            raise BlockingIOError
+
+        def close(self):
+            self.closed = True
+
+    listeners = []
+
+    def socket_factory(_family=None, _type=None, *, fileno=None):
+        listener = Listener(fileno=fileno)
+        listeners.append(listener)
+        return listener
+
+    monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
+    monkeypatch.setenv("LISTEN_FDS", "1")
+    monkeypatch.setenv("LISTEN_FDNAMES", PUBLICATION_BUILD_WAKE_FD_NAME)
+    with patch("apps.publications.wake.socket.socket", side_effect=socket_factory):
+        assert drain_publication_build_activation_wakes() == 2
+    listener = listeners[0]
+    assert listener.nonblocking is False
+    assert listener.closed is True
+
+
+def test_timer_or_manual_build_has_no_activation_socket(monkeypatch):
+    monkeypatch.delenv("LISTEN_FDS", raising=False)
+    monkeypatch.delenv("LISTEN_PID", raising=False)
+    with patch("apps.publications.wake.socket.socket") as socket_factory:
+        assert drain_publication_build_activation_wakes() == 0
+    socket_factory.assert_not_called()
+
+
+def test_activation_drain_ignores_unrecognised_inherited_descriptors(monkeypatch):
+    monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
+    monkeypatch.setenv("LISTEN_FDS", "1")
+    monkeypatch.setenv("LISTEN_FDNAMES", "unrelated-service-socket")
+    with patch("apps.publications.wake.socket.socket") as socket_factory:
+        assert drain_publication_build_activation_wakes() == 0
+    socket_factory.assert_not_called()
 
 
 def test_web_wake_helper_has_no_systemctl_sudo_or_dbus_escalation():

@@ -219,7 +219,8 @@ done
 [[ $(systemctl is-enabled fire-publication-build.socket 2>/dev/null) == enabled ]] && ok "fire-publication-build.socket enabled" || fail "fire-publication-build.socket not enabled"
 [[ $(systemctl is-active fire-publication-build.socket 2>/dev/null) == active ]] && ok "fire-publication-build.socket active" || fail "fire-publication-build.socket not active"
 if systemctl cat fire-publication-build.socket 2>/dev/null | grep -q '^SocketGroup=fire_backend' \
-    && systemctl cat fire-publication-build.socket 2>/dev/null | grep -q '^SocketMode=0660'; then
+    && systemctl cat fire-publication-build.socket 2>/dev/null | grep -q '^SocketMode=0660' \
+    && systemctl cat fire-publication-build.socket 2>/dev/null | grep -q '^FileDescriptorName=publication-build-wake'; then
     ok "publication build wake socket is limited to fire_backend"
 else
     fail "publication build wake socket permissions unexpected"

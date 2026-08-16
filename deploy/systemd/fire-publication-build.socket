@@ -3,6 +3,7 @@ Description=FireDash publication build wake socket
 
 [Socket]
 ListenStream=/run/fire-backend/publication-build.sock
+FileDescriptorName=publication-build-wake
 SocketGroup=fire_backend
 SocketMode=0660
 DirectoryMode=0750

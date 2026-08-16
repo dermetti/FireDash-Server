@@ -22,7 +22,6 @@ from apps.publications.services import (
 )
 from apps.publications.state import (
     BUILDING,
-    CURRENT,
     FAILED,
     NEEDS_REBUILD,
     NOT_PUBLISHED,
@@ -53,39 +52,38 @@ def _publication_status_context(request: HttpRequest, department: Department) ->
     """Build the bounded view model shared by the full page and HTMX partial."""
     rows = scope_operational_states(department)
     raw = operational_summary(rows)
+    current = [row for row in rows if row["current_published_publication_id"] is not None]
     summary = {
         "total": raw["total"],
-        "current": raw["CURRENT"],
+        "current": len(current),
         "scheduled": raw["UPDATE_QUEUED"] + raw["QUEUED"],
         "building": raw["BUILDING"],
         "attention": raw["FAILED"] + raw["NEEDS_REBUILD"] + raw["NOT_PUBLISHED"],
     }
-    scheduled = [row for row in rows if row["state"] in (UPDATE_QUEUED, QUEUED)]
-    building = [row for row in rows if row["state"] == BUILDING]
+    scheduled = [row for row in rows if row["state"] in (UPDATE_QUEUED, QUEUED, BUILDING)]
     attention = [row for row in rows if row["state"] in (FAILED, NEEDS_REBUILD, NOT_PUBLISHED)]
-    current = [row for row in rows if row["state"] == CURRENT]
     job_origin = PublicationJob.objects.filter(build_publication_id=OuterRef("pk")).order_by(
         "-created_at"
     )
-    history = (
-        DatasetPublication.objects.filter(department=department)
-        .exclude(status=DatasetPublication.Status.PUBLISHED)
+    previous_versions = (
+        DatasetPublication.objects.filter(
+            department=department, status=DatasetPublication.Status.SUPERSEDED
+        )
         .select_related("station", "created_by", "published_by")
         .annotate(build_origin=Subquery(job_origin.values("trigger_type")[:1]))
         .order_by("-created_at")
     )
-    paginator = Paginator(history, HISTORY_PAGE_SIZE)
-    history_page = paginator.get_page(request.GET.get("page"))
+    paginator = Paginator(previous_versions, HISTORY_PAGE_SIZE)
+    previous_versions_page = paginator.get_page(request.GET.get("page"))
     return {
         "department": department,
         "summary": summary,
         "scheduled": scheduled,
-        "building": building,
         "attention": attention,
         "current": current,
-        "history_page": history_page,
+        "previous_versions_page": previous_versions_page,
         # Fast while work is moving; low-cost refreshes while idle catch nightly work.
-        "poll_seconds": 5 if scheduled or building else 30,
+        "poll_seconds": 5 if scheduled else 30,
     }
 
 

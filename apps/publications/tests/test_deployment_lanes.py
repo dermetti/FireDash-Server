@@ -45,6 +45,7 @@ def test_build_service_socket_and_timer_have_narrow_nightly_contract():
     assert "LoadCredential=publication-kek:" in build
     assert "LoadCredential=publication-signing-key:" in build
     assert "ListenStream=/run/fire-backend/publication-build.sock" in socket
+    assert "FileDescriptorName=publication-build-wake" in socket
     assert "SocketGroup=fire_backend" in socket
     assert "SocketMode=0660" in socket
     assert "Service=fire-publication-build.service" in socket
@@ -74,5 +75,6 @@ def test_verifier_checks_lane_commands_socket_security_and_credential_separation
     assert "fire-publication-build.socket active" in verifier
     assert "publication build timer is scheduled nightly at 00:05" in verifier
     assert "root:fire_backend:660" in verifier
+    assert "FileDescriptorName=publication-build-wake" in verifier
     assert "maintenance service does not load KEK/private signing key" in verifier
     assert "fire_backend has no passwordless sudo privilege" in verifier

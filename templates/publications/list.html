@@ -6,19 +6,6 @@
 <p class="text-body-secondary">Source changes are coalesced for the nightly build. Successful current builds publish automatically; a failed build leaves the last known-good dataset active.</p>
 
 <section class="mb-4">
-  <div class="card shadow-sm"><div class="card-body">
-    <h2 class="h6 text-body-secondary mb-3">Publication status</h2>
-    <div class="row g-3 text-center">
-      <div class="col-6 col-sm"><div class="fs-3 fw-semibold">{{ summary.total }}</div><div class="text-body-secondary small">Scopes</div></div>
-      <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-success">{{ summary.current }}</div><div class="text-body-secondary small">Current</div></div>
-      <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-info">{{ summary.scheduled }}</div><div class="text-body-secondary small">Scheduled</div></div>
-      <div class="col-6 col-sm"><div class="fs-3 fw-semibold text-info">{{ summary.building }}</div><div class="text-body-secondary small">Building</div></div>
-      <div class="col-6 col-sm"><div class="fs-3 fw-semibold {% if summary.attention %}text-danger{% endif %}">{{ summary.attention }}</div><div class="text-body-secondary small">Attention</div></div>
-    </div>
-  </div></div>
-</section>
-
-<section class="mb-4">
   <form method="post" action="{% url 'publications-bulk-rebuild' department.id %}">
     {% csrf_token %}
     <button type="submit" class="btn btn-primary">Build &amp; publish affected datasets now</button>
