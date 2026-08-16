@@ -30,7 +30,9 @@ def imports(request: HttpRequest, department_id) -> HttpResponse:
         if key in request.GET
     }
     form = ImportUploadForm(request.POST or None, request.FILES or None, initial=initial)
-    station_field = cast(ModelChoiceField[Station], form.fields["station"])
+    # Django's runtime form field classes are not PEP 585 generics.  Keep the
+    # precise type for static checking without evaluating a subscription.
+    station_field = cast("ModelChoiceField[Station]", form.fields["station"])
     station_field.queryset = Station.objects.filter(department=department, active=True)
     if request.method == "POST" and form.is_valid():
         source = form.cleaned_data["source"]
