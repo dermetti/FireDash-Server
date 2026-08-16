@@ -6,7 +6,7 @@ class HydrantImportForm(forms.Form):
 
 
 class HydrantForm(forms.Form):
-    external_identifier = forms.CharField(max_length=255, required=False)
+    external_identifier = forms.CharField(max_length=255)
     longitude = forms.FloatField(min_value=-180, max_value=180)
     latitude = forms.FloatField(min_value=-90, max_value=90)
     hydrant_type = forms.CharField(max_length=128, required=False)
@@ -20,9 +20,12 @@ class HydrantForm(forms.Form):
 
 class FirePlanUploadForm(forms.Form):
     document = forms.FileField()
+    external_id = forms.CharField(max_length=255)
     object_name = forms.CharField(max_length=255)
     object_reference = forms.CharField(max_length=255, required=False)
-    address = forms.CharField(required=False, widget=forms.Textarea)
+    address = forms.CharField(widget=forms.Textarea)
+    postal_code = forms.CharField(max_length=32, required=False)
+    city = forms.CharField(max_length=255, required=False)
     longitude = forms.FloatField(min_value=-180, max_value=180, required=False)
     latitude = forms.FloatField(min_value=-90, max_value=90, required=False)
 
@@ -33,6 +36,13 @@ class FirePlanUploadForm(forms.Form):
         if (longitude is None) != (latitude is None):
             raise forms.ValidationError("Provide both longitude and latitude, or neither.")
         return cleaned
+
+
+class KlgvPlanUploadForm(forms.Form):
+    document = forms.FileField()
+    external_id = forms.CharField(max_length=255)
+    title = forms.CharField(max_length=255)
+    category = forms.CharField(max_length=128, required=False)
 
 
 class ActiveForm(forms.Form):

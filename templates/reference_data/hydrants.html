@@ -5,25 +5,14 @@
 {% endblock %}
 {% block content %}
 <h1>{{ department.name }} Hydrants</h1>
-<div class="row">
-  <div class="col-md-4">
-    <div class="card mb-4"><div class="card-body">
-    <h5>Create Hydrant</h5>
-    <a href="{% url 'reference-data-hydrant-create' department.id %}" class="btn btn-outline-primary">New Hydrant</a>
-    </div></div>
-    <div class="card"><div class="card-body">
-    <h5>Import Hydrants</h5>
-    <form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Import</button></form>
-    </div></div>
-  </div>
-  <div class="col-md-8">
-    <div class="list-group">
+<p class="text-body-secondary">Manage department hydrants and publish changes through the normal reviewable import workflow.</p>
+<section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><div class="d-flex gap-4 flex-wrap"><span><strong>{{ hydrants|length }}</strong> records</span><span>EPSG:4326</span><span>Publication updates are scheduled after confirmation.</span></div></div></section>
+<section class="mb-4"><h2 class="h5">Actions</h2><div class="d-flex gap-3 flex-wrap"><div><a href="{% url 'reference-data-hydrant-create' department.id %}" class="btn btn-primary">Add hydrant</a><p class="text-body-secondary mb-0 mt-2">Create a one-record preview before confirmation.</p></div><div><a href="{% url 'ingestion-imports' department.id %}?domain=hydrants&amp;import_format=geojson&amp;import_mode=merge" class="btn btn-outline-primary">Import hydrants</a><p class="text-body-secondary mb-0 mt-2">CSV, JSON, or GeoJSON. GeoJSON is preferred.</p></div></div></section>
+<section><h2 class="h5">Existing hydrants</h2><div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th>Identifier</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       {% for hydrant in hydrants %}
-      <a href="{% url 'reference-data-hydrant-manage' hydrant.id %}" class="list-group-item list-group-item-action d-flex justify-content-between">{{ hydrant.external_identifier|default:"Unnamed hydrant" }} <span class="badge bg-{% if hydrant.active %}success{% else %}secondary{% endif %}">{{ hydrant.status }}</span></a>
+      <tr><td>{{ hydrant.external_identifier }}</td><td><span class="badge bg-{% if hydrant.active %}success{% else %}secondary{% endif %}">{{ hydrant.status }}</span></td><td><a class="btn btn-sm btn-outline-secondary" href="{% url 'reference-data-hydrant-manage' hydrant.id %}">Edit</a></td></tr>
       {% empty %}
-      <div class="list-group-item text-muted">No hydrants.</div>
+      <tr><td colspan="3" class="text-body-secondary">No hydrants. Add the first hydrant to begin.</td></tr>
       {% endfor %}
-    </div>
-  </div>
-</div>
+    </tbody></table></div></section>
 {% endblock %}

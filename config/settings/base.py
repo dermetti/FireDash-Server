@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "apps.assignments",
     "apps.authorization",
     "apps.audit",
+    "apps.ingestion",
     "apps.portal",
     "apps.health",
 ]
@@ -131,6 +132,23 @@ REFERENCE_DATA_SANITIZER_OUTPUT_ROOT = Path(
 )
 REFERENCE_DATA_ACCEPTED_ROOT = Path(
     get_env("REFERENCE_DATA_ACCEPTED_ROOT", default="/var/lib/fire-backend/fire-plans")
+)
+INGESTION_STAGING_ROOT = Path(
+    get_env("INGESTION_STAGING_ROOT", default="/var/lib/fire-backend/import-staging")
+)
+MAX_STRUCTURED_IMPORT_BYTES = get_typed_env(
+    "MAX_STRUCTURED_IMPORT_BYTES", int, default=20 * 1024 * 1024
+)
+MAX_STRUCTURED_IMPORT_ROWS = get_typed_env("MAX_STRUCTURED_IMPORT_ROWS", int, default=20_000)
+MAX_IMPORT_VALIDATION_ERRORS = get_typed_env("MAX_IMPORT_VALIDATION_ERRORS", int, default=200)
+MAX_PDF_PACKAGE_BYTES = get_typed_env("MAX_PDF_PACKAGE_BYTES", int, default=200 * 1024 * 1024)
+MAX_PDF_PACKAGE_EXPANDED_BYTES = get_typed_env(
+    "MAX_PDF_PACKAGE_EXPANDED_BYTES", int, default=500 * 1024 * 1024
+)
+MAX_PDF_PACKAGE_MEMBERS = get_typed_env("MAX_PDF_PACKAGE_MEMBERS", int, default=1_000)
+IMPORT_PREVIEW_RETENTION_DAYS = get_typed_env("IMPORT_PREVIEW_RETENTION_DAYS", int, default=7)
+IMPORT_APPLIED_SOURCE_RETENTION_DAYS = get_typed_env(
+    "IMPORT_APPLIED_SOURCE_RETENTION_DAYS", int, default=30
 )
 MAX_PDF_INPUT_BYTES = get_typed_env("MAX_PDF_INPUT_BYTES", int, default=100 * 1024 * 1024)
 MAX_PDF_OUTPUT_BYTES = get_typed_env("MAX_PDF_OUTPUT_BYTES", int, default=150 * 1024 * 1024)

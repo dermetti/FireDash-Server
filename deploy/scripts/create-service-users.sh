@@ -38,6 +38,7 @@ install -d -o root -g fire_backend -m 0750 /etc/fire-backend
 install -d -o fire_backend -g fire_pdf_sanitizer -m 2710 /var/lib/fire-backend/quarantine
 install -d -o fire_backend -g fire_pdf_sanitizer -m 2710 /var/lib/fire-backend/sanitizer-output
 install -d -o fire_backend -g fire_backend -m 0750 /var/lib/fire-backend/fire-plans
+install -d -o fire_backend -g fire_backend -m 0750 /var/lib/fire-backend/import-staging
 usermod -a -G fire_backend fire_publication
 usermod -a -G fire_nginx fire_publication
 usermod -a -G fire_nginx www-data

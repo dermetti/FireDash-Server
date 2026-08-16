@@ -10,7 +10,7 @@ from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
 from apps.publications.services import mark_dirty
 from apps.reference_data.hydrants import NormalizedHydrant, parse_feature_collection
-from apps.reference_data.models import FirePlan, Hydrant, HydrantImportPreview
+from apps.reference_data.models import FirePlan, Hydrant, HydrantImportPreview, KlgvPlan
 from apps.reference_data.pdf_sandbox import PdfSanitizerError, sanitize
 from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
 from apps.reference_data.storage import (
@@ -222,6 +222,8 @@ def accept_fire_plan(
 def set_fire_plan_active(*, actor, fire_plan, active: bool):
     require_department_admin(actor, fire_plan.department)
     previous_active = fire_plan.active
+    if previous_active == active:
+        return fire_plan
     fire_plan.active = active
     fire_plan.save(update_fields=("active", "updated_at"))
     record_event(
@@ -242,6 +244,34 @@ def set_fire_plan_active(*, actor, fire_plan, active: bool):
         department=fire_plan.department, dataset_type_code="department_fire_plans", actor=actor
     )
     return fire_plan
+
+
+@transaction.atomic
+def set_klgv_plan_active(*, actor, klgv_plan: KlgvPlan, active: bool) -> KlgvPlan:
+    """Explicit lifecycle action; an import omission never reaches this path."""
+    require_department_admin(actor, klgv_plan.department)
+    if klgv_plan.active == active:
+        return klgv_plan
+    klgv_plan.active = active
+    klgv_plan.save(update_fields=("active", "updated_at"))
+    record_event(
+        action=(
+            "reference_data.klgv_plan_activated"
+            if active
+            else "reference_data.klgv_plan_deactivated"
+        ),
+        actor_user=actor,
+        department=klgv_plan.department,
+        target_type="klgv_plan",
+        target_uuid=klgv_plan.id,
+        metadata={"active": active},
+    )
+    mark_dirty(
+        department=klgv_plan.department,
+        dataset_type_code="department_klgv_plans",
+        actor=actor,
+    )
+    return klgv_plan
 
 
 def _probable_duplicate_count(*, department, features: list[NormalizedHydrant]) -> int:

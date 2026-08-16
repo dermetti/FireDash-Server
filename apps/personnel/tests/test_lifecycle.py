@@ -82,7 +82,10 @@ def test_anonymization_removes_identifying_fields_after_retention(department_adm
 
 
 @pytest.mark.django_db
-def test_personnel_create_and_update_forms_persist_submitted_values(client, department_admin):
+def test_personnel_forms_create_and_confirm_import_batches(
+    client, department_admin, settings, tmp_path
+):
+    settings.INGESTION_STAGING_ROOT = tmp_path / "private-import-staging"
     actor, department, station = department_admin
     client.force_login(actor)
 
@@ -97,6 +100,12 @@ def test_personnel_create_and_update_forms_persist_submitted_values(client, depa
     )
 
     assert response.status_code == 302
+    from apps.ingestion.models import ImportBatch
+    from apps.ingestion.services import apply_preview
+
+    batch = ImportBatch.objects.get(department=department)
+    assert not Person.objects.filter(department=department, personnel_number="42").exists()
+    apply_preview(actor=actor, batch_id=batch.id)
     person = Person.objects.get(department=department, personnel_number="42")
     assert (person.first_name, person.last_name, person.display_name, person.active) == (
         "Alex",
@@ -107,13 +116,15 @@ def test_personnel_create_and_update_forms_persist_submitted_values(client, depa
 
     response = client.post(
         reverse("personnel-detail", args=(department.id, person.id)),
-        {"personnel_number": "43", "first_name": "Taylor", "last_name": "Updated"},
+        {"personnel_number": "42", "first_name": "Taylor", "last_name": "Updated"},
     )
 
     assert response.status_code == 302
+    batch = ImportBatch.objects.exclude(pk=batch.id).get(department=department)
+    apply_preview(actor=actor, batch_id=batch.id)
     person.refresh_from_db()
     assert (person.personnel_number, person.display_name, person.active) == (
-        "43",
+        "42",
         "Taylor Updated",
         True,
     )

@@ -1,0 +1,7 @@
+# Fire Plans v1
+
+For one document, upload one PDF with `external_id`, `object_name`, `street_address`, optional `postal_code`, `city`, and optional paired `latitude`/`longitude` (WGS84/EPSG:4326). `external_id` is the logical identity; the same ID updates that plan. A blank optional value preserves existing curated metadata. Nonblank coordinate changes are shown in preview before confirmation.
+
+For many documents upload one ZIP containing exactly `manifest.csv` and the declared PDFs. The CSV columns are exactly `external_id,filename,object_name,street_address,postal_code,city,latitude,longitude,action`; `action` is `upsert` or explicit `deactivate`. `filename` names only the ZIP member and is never identity. Missing rows do nothing. PDF packages are limited to 200 MiB compressed, 500 MiB expanded, and 999 documents.
+
+Every new/replaced PDF passes FireDash quarantine, validation and sanitizer before canonical acceptance. ZIP traversal, absolute paths, symlinks, duplicate/undeclared members and missing declarations are rejected. `source_pdf_sha256` is the original upload hash; the accepted sanitized PDF hash is separate; publication ciphertext SHA-256 is a third, unrelated value. Same bytes under a new filename deduplicate; changed bytes with the same external ID replace that logical plan. Explicit deactivation retains the canonical row and excludes it only from future publications.

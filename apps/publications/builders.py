@@ -10,9 +10,14 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
-from apps.publications.pdf_bundles import PdfBundleError, read_accepted_pdf
+from apps.publications.pdf_bundles import (
+    AcceptedPdfBundleDocument,
+    PdfBundleError,
+    build_pdf_bundle_v1,
+    read_accepted_pdf,
+)
 from apps.publications.registry import DatasetTypeDefinition
-from apps.reference_data.models import FirePlan, Hydrant
+from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
 
 MAX_HYDRANT_STATUS_BUCKETS = 50
 BUILDERS: dict[str, Callable[..., dict[str, object]]] = {}
@@ -135,20 +140,40 @@ def _build_personnel(*, department, station, source_revision: int) -> dict[str, 
     }
 
 
-def _unconfigured_klgv_source(*, department, station, source_revision: int) -> dict[str, object]:
+def _build_klgv_plans(*, department, station, source_revision: int) -> dict[str, object]:
     if station is not None:
         raise PublicationBuildError("KLGV plan builder requires a department scope.")
-    # Workstream 3 deliberately introduces no guessed document-management
-    # source model. The optional feature is disabled until such a source uses
-    # the same accepted-PDF sanitizer path as FirePlan.
-    raise PublicationBuildError("KLGV plan source is not configured.")
-
-
-def _unconfigured_klgv_artifact(*, department, station, source_revision: int) -> bytes:
-    _unconfigured_klgv_source(
-        department=department, station=station, source_revision=source_revision
+    aggregates = KlgvPlan.objects.filter(department=department, active=True).aggregate(
+        document_count=Count("id"),
+        total_accepted_bytes=Sum("file_size"),
+        total_pages=Sum("page_count"),
     )
-    raise AssertionError("unreachable")
+    return {
+        "document_count": aggregates["document_count"],
+        "total_accepted_bytes": aggregates["total_accepted_bytes"] or 0,
+        "total_pages": aggregates["total_pages"] or 0,
+        "source_revision": source_revision,
+    }
+
+
+def _artifact_klgv_plans(*, department, station, source_revision: int) -> bytes:
+    if station is not None:
+        raise PublicationBuildError("KLGV plan artifact requires a department scope.")
+    documents = [
+        AcceptedPdfBundleDocument(
+            id=plan.id,
+            title=plan.title,
+            document_key=plan.document_key,
+            sha256=plan.sanitized_pdf_sha256,
+            page_count=plan.page_count,
+            category=plan.category or None,
+        )
+        for plan in KlgvPlan.objects.filter(department=department, active=True).order_by("id")
+    ]
+    try:
+        return build_pdf_bundle_v1(documents=documents, source_revision=source_revision)
+    except PdfBundleError as error:
+        raise PublicationBuildError("Accepted KLGV document is unavailable.") from error
 
 
 def build_artifact(
@@ -278,7 +303,7 @@ BUILDERS.update(
         "department_hydrants": _build_hydrants,
         "department_fire_plans": _build_fire_plans,
         "station_personnel": _build_personnel,
-        "department_klgv_plans": _unconfigured_klgv_source,
+        "department_klgv_plans": _build_klgv_plans,
         "test_department_incidents": lambda *, department, station, source_revision: {
             "incident_count": 0,
             "source_revision": source_revision,
@@ -291,7 +316,7 @@ ARTIFACT_BUILDERS.update(
         "department_hydrants": _artifact_hydrants,
         "department_fire_plans": _artifact_fire_plans,
         "station_personnel": _artifact_personnel,
-        "department_klgv_plans": _unconfigured_klgv_artifact,
+        "department_klgv_plans": _artifact_klgv_plans,
         "test_department_incidents": lambda **_: _json_bytes({"incidents": []}),
     }
 )

@@ -1,0 +1,2 @@
+external_id,filename,object_name,street_address,postal_code,city,latitude,longitude,action
+FP-DEMO-001,school.pdf,Example School,Example Street 1,12345,Exampletown,50.110924,8.682127,upsert

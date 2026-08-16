@@ -182,7 +182,10 @@ def test_confirm_preview_rejects_expired_preview(reference_data_roles):
 
 
 @pytest.mark.django_db
-def test_hydrant_forms_persist_submitted_values_and_status(client, reference_data_roles):
+def test_hydrant_forms_create_and_confirm_import_batches(
+    client, reference_data_roles, settings, tmp_path
+):
+    settings.INGESTION_STAGING_ROOT = tmp_path / "private-import-staging"
     department_admin, _, _, department = reference_data_roles
     client.force_login(department_admin)
 
@@ -199,6 +202,12 @@ def test_hydrant_forms_persist_submitted_values_and_status(client, reference_dat
     )
 
     assert response.status_code == 302
+    from apps.ingestion.models import ImportBatch
+    from apps.ingestion.services import apply_preview
+
+    batch = ImportBatch.objects.get(department=department)
+    assert not Hydrant.objects.filter(department=department, external_identifier="H-42").exists()
+    apply_preview(actor=department_admin, batch_id=batch.id)
     hydrant = Hydrant.objects.get(department=department, external_identifier="H-42")
     assert (hydrant.hydrant_type, hydrant.diameter_mm, hydrant.status, hydrant.active) == (
         "Wet barrel",
@@ -210,7 +219,7 @@ def test_hydrant_forms_persist_submitted_values_and_status(client, reference_dat
     response = client.post(
         reverse("reference-data-hydrant-manage", args=(hydrant.id,)),
         {
-            "external_identifier": "H-43",
+            "external_identifier": "H-42",
             "longitude": "-73.9",
             "latitude": "40.7",
             "hydrant_type": "Dry barrel",
@@ -220,6 +229,8 @@ def test_hydrant_forms_persist_submitted_values_and_status(client, reference_dat
     )
 
     assert response.status_code == 302
+    batch = ImportBatch.objects.exclude(pk=batch.id).get(department=department)
+    apply_preview(actor=department_admin, batch_id=batch.id)
     hydrant.refresh_from_db()
     assert (
         hydrant.external_identifier,
@@ -227,7 +238,7 @@ def test_hydrant_forms_persist_submitted_values_and_status(client, reference_dat
         hydrant.location.y,
         hydrant.active,
     ) == (
-        "H-43",
+        "H-42",
         pytest.approx(-73.9),
         pytest.approx(40.7),
         True,

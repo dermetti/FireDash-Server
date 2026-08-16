@@ -58,6 +58,16 @@ Current required production dataset types are `department_hydrants`,
 feature-disabled `department_klgv_plans` registry entry proves additive v1
 dataset evolution: it is department-scoped, ZIP-backed, schema version 1, and
 optional, so older tablets ignore it safely until they support it. It remains a
+
+## Canonical data ingestion
+
+Canonical source changes enter through persistent import batches rather than
+publication code. An uploaded source is bounded, parsed and (for PDFs)
+sanitized into a side-effect-free preview. A human confirmation rechecks the
+exact staged SHA-256 and baseline, commits canonical rows atomically, then
+marks each unique affected dataset scope dirty once. Imports never create
+artifacts, publication attempts, grants, manifests, encryption, or signatures.
+The normal build/delivery lanes remain responsible for those steps.
 single complete encrypted artifact; it is not the planned v2 individual-PDF
 delivery design.
 

@@ -32,6 +32,53 @@ provided validation workflow. Upload fire-plan PDFs only through the
 quarantine and sanitisation workflow; an accepted file is the version used for
 publication. Do not place PDFs directly into server storage.
 
+## Canonical data imports
+
+Imports use a deliberate **upload → preview → confirm** lifecycle. A preview
+stores an exact source-file SHA-256 and shows adds, updates, deactivations,
+unchanged rows, and bounded validation errors; it never changes canonical data
+or starts publication work. Confirming applies that exact private staged source
+once, atomically. If canonical data changed after preview, or staging is
+missing or hash-mismatched, create a new preview instead of overwriting newer
+work. **Import applied** means canonical data was committed; the existing
+publication pipeline subsequently coalesces and publishes the affected scope.
+
+Every data page provides **Add one** and **Import many**. Both create the same
+one- or many-record `ImportBatch`; neither form writes a canonical record
+directly. Hydrants accept a manual record or UTF-8 CSV, JSON, and GeoJSON
+Point data in EPSG:4326 (`longitude`, then `latitude`). GeoJSON is preferred
+for exchange. Merge leaves absent hydrants unchanged; **authoritative snapshot**
+is batch-only, prominently shows its deactivation count, and affects only its
+own department.
+
+Personnel accepts a manual person or UTF-8 CSV/JSON batch. It is add/update
+only: absence never offboards a person or ends an assignment. A new manual or
+batch person requires an explicit home station.
+
+Fire Plans and KLGV support either one PDF plus its metadata form or one ZIP
+with `manifest.csv` and the declared PDFs. Stable `external_id` is the logical
+identity; a filename identifies a ZIP member only. Every PDF follows
+quarantine, validation, and the sanitizer before it can become canonical. A
+blank optional metadata field never erases curated metadata; coordinate
+differences are shown in preview. KLGV is optional and remains disabled for
+tablet distribution until its department feature is enabled. Download the
+versioned plain-text templates from each import page; no spreadsheet or
+proprietary GIS format is supported.
+
+The upload page links directly to the exact UTF-8 schemas: `hydrants-v1.geojson`
+(preferred) and `hydrants-v1.csv`; `personnel-v1.csv` and
+`personnel-v1.json`; `fire-plans-manifest-v1.csv`; and
+`klgv-plans-manifest-v1.csv`. PDF batch templates are `manifest.csv` files:
+place the manifest and every declared PDF at the root of one ZIP. Fire Plan
+columns are `external_id`, `filename`, `object_name`, `street_address`,
+`postal_code`, `city`, `latitude`, `longitude`, and `action`; KLGV uses
+`external_id`, `filename`, `title`, `category`, and `action`. `action` is
+`upsert` or explicit `deactivate`; absence from a ZIP never deactivates a
+document.
+
+Raw uploads are private, bounded, and retained only for the configured staging
+period; their contents are never copied into audit events.
+
 ## Publications
 
 The Publications page is organised as:

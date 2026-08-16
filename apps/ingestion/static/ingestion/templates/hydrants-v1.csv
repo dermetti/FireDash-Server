@@ -1,0 +1,2 @@
+external_identifier,longitude,latitude,hydrant_type,diameter_mm,status
+HYD-DEMO-001,8.682127,50.110924,underground,100,ACTIVE

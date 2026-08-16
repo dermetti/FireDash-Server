@@ -13,9 +13,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.test import override_settings
 
+from apps.accounts.models import User
+from apps.organizations.models import Department
 from apps.publications import artifacts
 from apps.publications.artifacts import _signature_payload, build_encrypted_artifact
-from apps.publications.builders import PublicationBuildError, build_summary
+from apps.publications.builders import build_summary
 from apps.publications.features import get_feature_definition
 from apps.publications.pdf_bundles import (
     AcceptedPdfBundleDocument,
@@ -59,15 +61,27 @@ def test_klgv_registry_is_department_scoped_optional_and_internal():
     assert get_feature_definition("klgv_plans").default_enabled is False
 
 
-def test_klgv_builder_fails_closed_until_a_sanitized_source_model_exists():
+@pytest.mark.django_db
+def test_klgv_builder_uses_the_canonical_klgv_source_model():
     definition = get_dataset_definition("department_klgv_plans")
-    with pytest.raises(PublicationBuildError, match="source is not configured"):
-        build_summary(
-            definition=definition,
-            department=SimpleNamespace(),
-            station=None,
-            source_revision=1,
-        )
+    department = Department.objects.create(
+        name="KLGV source",
+        short_code="KLGV",
+        created_by=User.objects.create_user(
+            "klgv-source@example.test", "KLGV source", "safe-password"
+        ),
+    )
+    assert build_summary(
+        definition=definition,
+        department=department,
+        station=None,
+        source_revision=1,
+    ) == {
+        "document_count": 0,
+        "total_accepted_bytes": 0,
+        "total_pages": 0,
+        "source_revision": 1,
+    }
 
 
 def test_pdf_bundle_v1_has_deterministic_schema_paths_hashes_and_order(tmp_path: Path):

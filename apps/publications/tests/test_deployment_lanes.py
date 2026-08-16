@@ -64,6 +64,8 @@ def test_maintenance_is_credential_free_and_legacy_worker_is_retired_by_installe
     assert "[Install]" not in maintenance
     assert "cleanup_signed_manifests" in maintenance
     assert "cleanup_orphan_artifacts" in maintenance
+    assert "cleanup_import_staging" in maintenance
+    assert "/var/lib/fire-backend/import-staging" in maintenance
     assert "disable --now fire-publication-worker.timer" in installer
     assert "stop fire-publication-worker.service" in installer
     assert "enable --now fire-publication-delivery.service" in installer

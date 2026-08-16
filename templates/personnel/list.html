@@ -5,25 +5,17 @@
 {% endblock %}
 {% block content %}
 <h1>{{ department.name }} Personnel</h1>
-<div class="row">
-  <div class="col-md-8">
-    <div class="list-group mb-4">
+<p class="text-body-secondary">Personnel imports add or update records only. They never offboard people or end assignments.</p>
+<section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><strong>{{ people|length }}</strong> visible personnel records. Station scopes publish after confirmed changes.</div></section>
+{% if department_admin %}<section class="mb-4"><h2 class="h5">Actions</h2><div class="d-flex gap-3 flex-wrap"><div><button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#add-person">Add person</button><p class="text-body-secondary mb-0 mt-2">Create a one-person preview with a required home station.</p></div><div><a href="{% url 'ingestion-imports' department.id %}?domain=personnel&amp;import_format=csv&amp;import_mode=upsert" class="btn btn-outline-primary">Import personnel</a><p class="text-body-secondary mb-0 mt-2">CSV or JSON. Absence never removes personnel.</p></div></div></section>
+<div class="collapse mb-4" id="add-person"><section class="card"><div class="card-body"><h2 class="h5">Add person</h2><form method="post">{% csrf_token %}{{ form.as_p }}
+ {% include "components/searchable_selector.html" with selector_id="home-station" label="Home Station" field_name="home_station_id" endpoint=station_selector_endpoint options=station_options %}
+<button class="btn btn-primary mt-2" type="submit">Create preview</button></form></div></section></div>{% endif %}
+<section><h2 class="h5">Existing personnel</h2><div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th>Person</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       {% for person in people %}
-      <a href="{% url 'personnel-detail' department.id person.id %}" class="list-group-item list-group-item-action d-flex justify-content-between">
-        {{ person.display_name }} <span class="badge bg-{% if person.lifecycle_status == 'ACTIVE' %}success{% else %}secondary{% endif %}">{{ person.lifecycle_status }}</span>
-      </a>
+      <tr><td>{{ person.display_name }}<div class="text-body-secondary small">{{ person.personnel_number }}</div></td><td><span class="badge bg-{% if person.lifecycle_status == 'ACTIVE' %}success{% else %}secondary{% endif %}">{{ person.lifecycle_status }}</span></td><td><a class="btn btn-sm btn-outline-secondary" href="{% url 'personnel-detail' department.id person.id %}">Actions</a></td></tr>
       {% empty %}
-      <div class="list-group-item text-muted">No personnel records.</div>
+      <tr><td colspan="3" class="text-body-secondary">No personnel records. Add a person or import personnel.</td></tr>
       {% endfor %}
-    </div>
-  </div>
-  {% if department_admin %}<div class="col-md-4">
-    <div class="card"><div class="card-body">
-    <h5>Create Personnel</h5>
-    <form method="post">{% csrf_token %}{{ form.as_p }}
-     {% include "components/searchable_selector.html" with selector_id="home-station" label="Home Station" field_name="home_station_id" endpoint=station_selector_endpoint options=station_options %}
-    <button class="btn btn-primary mt-2" type="submit">Create</button></form>
-    </div></div>
-  </div>{% endif %}
-</div>
+    </tbody></table></div></section>
 {% endblock %}

@@ -384,6 +384,7 @@ fi
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/publications) == "fire_publication:fire_nginx:2750" ]] && ok "publications 2750" || fail "publications ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/publications/.tmp) == "fire_publication:fire_publication:700" ]] && ok "publications/.tmp 0700" || fail "publications/.tmp ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/fire-plans) == "fire_backend:fire_backend:750" ]] && ok "fire-plans 0750" || fail "fire-plans ownership/mode unexpected"
+[[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/import-staging) == "fire_backend:fire_backend:750" ]] && ok "import staging 0750" || fail "import staging ownership/mode unexpected"
 
 neg_read() { # user path description
     local user=$1 path=$2 desc=$3

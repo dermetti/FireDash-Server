@@ -1,0 +1,19 @@
+# Dataset ingestion
+
+FireDash imports canonical operational data through a preview-and-confirm workflow.  Use **Add one** for a single record or **Import many** for a file/package; both follow the same rules.
+
+`input -> validation -> preview -> confirmation -> canonical database mutation -> affected scopes marked dirty -> existing publication pipeline`
+
+An applied import does **not** directly create a DatasetPublication, ciphertext, signature, HPKE grant, or SignedManifest.  Those are later produced by the normal protected publication pipeline.
+
+Each preview is bound to the exact staged upload SHA-256 and the canonical state observed during validation.  Confirmation rechecks both.  A changed/missing upload or stale preview must be recreated; confirmation is atomic and applies at most once.  Preview can be cancelled without changing canonical data.
+
+Department Administrators can work only in their department; they may import personnel for any active station in that department.  Audit records retain safe batch metadata and counts, not raw personnel/PDF content.  Staged uploads are private and removed by maintenance after the configured preview/applied retention periods.
+
+Format references:
+
+- [Hydrants v1](formats/hydrants-v1.md)
+- [Personnel v1](formats/personnel-v1.md)
+- [Fire Plans v1](formats/fire-plans-v1.md)
+- [KLGV Plans v1](formats/klgv-plans-v1.md)
+- [PDF bundle v1](formats/pdf-bundle-v1.md)

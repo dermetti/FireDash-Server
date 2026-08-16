@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ department.name }} KLGV Plans{% endblock %}
+{% block content %}
+<h1>{{ department.name }} KLGV Plans</h1>
+<p class="text-body-secondary">KLGV is an optional feature. Documents are sanitized and previewed before confirmation.</p>
+<section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><strong>{{ plans|length }}</strong> canonical KLGV documents. Distribution remains disabled until the department feature is enabled.</div></section>
+<section class="mb-4"><h2 class="h5">Actions</h2><div class="d-flex gap-3 flex-wrap"><div><button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#add-klgv">Add KLGV plan</button><p class="text-body-secondary mb-0 mt-2">Upload one PDF with its stable document identifier.</p></div><div><a href="{% url 'ingestion-imports' department.id %}?domain=klgv_plans&amp;import_format=zip&amp;import_mode=upsert" class="btn btn-outline-primary">Import KLGV plans</a><p class="text-body-secondary mb-0 mt-2">One ZIP containing manifest.csv and declared PDFs.</p></div></div></section>
+<div class="collapse mb-4" id="add-klgv"><section class="card"><div class="card-body"><h2 class="h5">Add KLGV plan</h2><form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Create preview</button></form></div></section></div>
+<section><h2 class="h5">Existing KLGV plans</h2><div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th>Plan</th><th>Status</th><th>Actions</th></tr></thead><tbody>{% for plan in plans %}<tr><td>{{ plan.title }}<div class="text-body-secondary small">{{ plan.external_identifier }}</div></td><td><span class="badge bg-{% if plan.active %}success{% else %}secondary{% endif %}">{% if plan.active %}Active{% else %}Inactive{% endif %}</span></td><td><a class="btn btn-sm btn-outline-secondary" href="{% url 'reference-data-klgv-plan-detail' plan.id %}">Actions</a></td></tr>{% empty %}<tr><td colspan="3" class="text-body-secondary">No KLGV plans. Add one or import a package.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

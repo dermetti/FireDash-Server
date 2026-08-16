@@ -2,7 +2,7 @@ from django import forms
 
 
 class PersonForm(forms.Form):
-    personnel_number = forms.CharField(max_length=128, required=False)
+    personnel_number = forms.CharField(max_length=128)
     first_name = forms.CharField(max_length=128)
     last_name = forms.CharField(max_length=128)
 

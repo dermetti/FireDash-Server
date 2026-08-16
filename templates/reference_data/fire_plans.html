@@ -5,21 +5,15 @@
 {% endblock %}
 {% block content %}
 <h1>{{ department.name }} Fire Plans</h1>
-<div class="row">
-  <div class="col-md-4">
-    <div class="card"><div class="card-body">
-    <h5>Upload</h5>
-    <form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Upload</button></form>
-    </div></div>
-  </div>
-  <div class="col-md-8">
-    <div class="list-group">
+<p class="text-body-secondary">Accepted PDFs are sanitized before a preview can be confirmed.</p>
+<section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><strong>{{ fire_plans|length }}</strong> canonical documents. Publication follows confirmation.</div></section>
+<section class="mb-4"><h2 class="h5">Actions</h2><div class="d-flex gap-3 flex-wrap"><div><button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#add-fire-plan">Add Fire Plan</button><p class="text-body-secondary mb-0 mt-2">Upload one PDF with its stable external identifier.</p></div><div><a href="{% url 'ingestion-imports' department.id %}?domain=fire_plans&amp;import_format=zip&amp;import_mode=upsert" class="btn btn-outline-primary">Import Fire Plans</a><p class="text-body-secondary mb-0 mt-2">One ZIP with manifest.csv and declared PDFs.</p></div></div></section>
+<div class="collapse mb-4" id="add-fire-plan"><section class="card"><div class="card-body"><h2 class="h5">Add Fire Plan</h2><form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Create preview</button></form></div></section></div>
+<section><h2 class="h5">Existing Fire Plans</h2><div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th>Plan</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       {% for plan in fire_plans %}
-      <a href="{% url 'reference-data-fire-plan-detail' plan.id %}" class="list-group-item list-group-item-action d-flex justify-content-between">{{ plan.object_name }} <span class="badge bg-{% if plan.active %}success{% else %}secondary{% endif %}">{{ plan.file_size|filesizeformat }}</span></a>
+      <tr><td>{{ plan.object_name }}<div class="text-body-secondary small">{{ plan.external_identifier }}</div></td><td><span class="badge bg-{% if plan.active %}success{% else %}secondary{% endif %}">{% if plan.active %}Active{% else %}Inactive{% endif %}</span></td><td><a class="btn btn-sm btn-outline-secondary" href="{% url 'reference-data-fire-plan-detail' plan.id %}">Actions</a></td></tr>
       {% empty %}
-      <div class="list-group-item text-muted">No fire plans.</div>
+      <tr><td colspan="3" class="text-body-secondary">No Fire Plans. Add a PDF or import a package.</td></tr>
       {% endfor %}
-    </div>
-  </div>
-</div>
+    </tbody></table></div></section>
 {% endblock %}

@@ -10,6 +10,8 @@ from django.views.decorators.http import require_http_methods
 
 from apps.accounts.reauth import require_recent_reauthentication
 from apps.authorization.scopes import active_department_ids, active_station_ids
+from apps.ingestion.models import ImportBatch
+from apps.ingestion.services import ImportError, create_single_preview
 from apps.organizations.models import Department, Station
 from apps.personnel.forms import (
     CommanderEligibilityForm,
@@ -21,12 +23,10 @@ from apps.personnel.models import Person
 from apps.personnel.services import (
     PersonnelError,
     anonymize_person,
-    create_person,
     offboard_person,
     set_commander_eligibility,
     set_commander_email,
     set_retention_policy,
-    update_person,
     verify_commander_email,
     visible_to_user,
 )
@@ -61,17 +61,27 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
         if not department_admin:
             return HttpResponse(status=403)
         form = PersonForm(request.POST)
-        home_station = get_object_or_404(Station, pk=request.POST.get("home_station_id"))
+        home_station = get_object_or_404(
+            Station,
+            pk=request.POST.get("home_station_id"),
+            department=department,
+            active=True,
+        )
         if form.is_valid():
             try:
-                create_person(
+                batch = create_single_preview(
                     actor=request.user,
                     department=department,
-                    home_station=home_station,
-                    **form.cleaned_data,
+                    domain=ImportBatch.Domain.PERSONNEL,
+                    values={
+                        **form.cleaned_data,
+                        "incident_commander_eligible": False,
+                    },
+                    station=home_station,
+                    original_filename="manual-personnel-v1.csv",
                 )
-                return redirect("personnel-list", department_id=department.id)
-            except PersonnelError as error:
+                return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
+            except (PersonnelError, ImportError) as error:
                 form.add_error(None, str(error))
     else:
         form = PersonForm()
@@ -117,9 +127,18 @@ def person_detail(request: HttpRequest, department_id, person_id) -> HttpRespons
         return HttpResponse(status=403)
     if request.method == "POST" and form.is_valid():
         try:
-            update_person(actor=request.user, person=person, **form.cleaned_data)
-            return redirect("personnel-detail", department_id=department_id, person_id=person.id)
-        except PersonnelError as error:
+            batch = create_single_preview(
+                actor=request.user,
+                department=person.department,
+                domain=ImportBatch.Domain.PERSONNEL,
+                values={
+                    **form.cleaned_data,
+                    "incident_commander_eligible": person.incident_commander_eligible,
+                },
+                original_filename="manual-personnel-v1.csv",
+            )
+            return redirect("ingestion-preview", department_id=department_id, batch_id=batch.id)
+        except (PersonnelError, ImportError) as error:
             form.add_error(None, str(error))
     return render(
         request,

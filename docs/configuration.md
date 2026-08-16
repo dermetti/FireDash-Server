@@ -45,6 +45,22 @@ application environment settings.
 | `PDF_SANITIZER_MEMORY_MAX_BYTES` | 512 MiB |
 | `PDF_SANITIZER_BROKER_SOCKET` | `/run/fire-pdf-sanitizer-broker/broker.sock` |
 
+Canonical ingestion stages source uploads privately before administrator
+confirmation. The staging root must not be Nginx-served and must be writable
+only by the application identity; it contains no publication credentials.
+
+| Setting | Default |
+| --- | --- |
+| `INGESTION_STAGING_ROOT` | `/var/lib/fire-backend/import-staging` |
+| `MAX_STRUCTURED_IMPORT_BYTES` | 20 MiB |
+| `MAX_STRUCTURED_IMPORT_ROWS` | 20,000 |
+| `MAX_IMPORT_VALIDATION_ERRORS` | 200 |
+| `MAX_PDF_PACKAGE_BYTES` | 200 MiB |
+| `MAX_PDF_PACKAGE_EXPANDED_BYTES` | 500 MiB |
+| `MAX_PDF_PACKAGE_MEMBERS` | 1,000 |
+| `IMPORT_PREVIEW_RETENTION_DAYS` | `7` |
+| `IMPORT_APPLIED_SOURCE_RETENTION_DAYS` | `30` |
+
 The broker socket is a local service boundary, not a public API.
 
 ## Publications

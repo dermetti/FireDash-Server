@@ -109,6 +109,16 @@ periodically run a restore drill into an isolated environment. A successful
 backup command is not proof of recoverability. Never restore over production
 as part of an investigation.
 
+## Canonical import staging
+
+Import sources and temporary sanitized PDF outputs live under the private
+`INGESTION_STAGING_ROOT`, never under the release tree or an Nginx location.
+`fire-publication-maintenance.service` runs `python manage.py
+cleanup_import_staging` without publication credentials to expire unapplied
+previews after seven days and applied source material after 30 days (or the
+configured retention). This cleanup does not change canonical records,
+publication artifacts, audit history, or keys.
+
 ## Safe troubleshooting
 
 Run `nginx -t` before an Nginx reload and run the deployment verifier after

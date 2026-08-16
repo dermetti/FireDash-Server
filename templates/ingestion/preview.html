@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Import preview{% endblock %}
+{% block content %}
+<h1>Import preview</h1>
+<p class="text-body-secondary">{{ batch.domain }} &middot; {{ batch.import_mode }} &middot; {{ batch.original_filename }}</p>
+<section class="card mb-4">
+  <div class="card-body">
+    <h2 class="h5">Status</h2>
+    <p class="mb-0">Batch <code>{{ batch.id }}</code> &middot; SHA-256 <code>{{ batch.upload_sha256 }}</code></p>
+  </div>
+</section>
+<section class="mb-4">
+  <h2 class="h5">Proposed canonical changes</h2>
+  <div class="d-flex flex-wrap gap-4"><span><strong>{{ batch.add_count }}</strong> add</span><span><strong>{{ batch.update_count }}</strong> update</span><span><strong>{{ batch.deactivate_count }}</strong> deactivate</span><span><strong>{{ batch.unchanged_count }}</strong> unchanged</span></div>
+  {% if batch.deactivate_count %}<div class="alert alert-warning mt-3 mb-0">This authoritative hydrant snapshot will deactivate {{ batch.deactivate_count }} existing record(s).</div>{% endif %}
+</section>
+{% if batch.validation_errors %}<section class="alert alert-danger"><h2 class="h5">Validation requires attention</h2><pre class="mb-0">{{ batch.validation_errors }}</pre></section>{% endif %}
+{% if batch.validation_summary.coordinate_conflicts %}<section class="alert alert-warning"><h2 class="h5">Coordinate changes require review</h2><ul class="mb-0">{% for conflict in batch.validation_summary.coordinate_conflicts %}<li><code>{{ conflict.external_identifier }}</code>: {{ conflict.existing.latitude }}, {{ conflict.existing.longitude }} → {{ conflict.incoming.latitude }}, {{ conflict.incoming.longitude }}</li>{% endfor %}</ul></section>{% endif %}
+<section>
+  <h2 class="h5">Actions</h2>
+  {% if batch.status == "PREVIEW_READY" %}
+    <p class="text-body-secondary">Confirmation applies the exact staged source atomically. Publication is scheduled only after canonical changes commit.</p>
+    <form method="post" class="d-inline">{% csrf_token %}<button class="btn btn-danger">Confirm canonical changes</button></form>
+    <form method="post" action="{% url 'ingestion-cancel' department.id batch.id %}" class="d-inline ms-2">{% csrf_token %}<button class="btn btn-outline-secondary">Cancel preview</button></form>
+  {% else %}
+    <p class="text-body-secondary">This batch cannot be confirmed in its current state.</p>
+  {% endif %}
+</section>
+{% endblock %}

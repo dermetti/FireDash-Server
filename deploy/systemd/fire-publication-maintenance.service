@@ -12,6 +12,7 @@ Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env
 ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_orphan_artifacts
 ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_signed_manifests
+ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_import_staging
 TimeoutStartSec=120s
 UMask=0077
 NoNewPrivileges=true
@@ -28,3 +29,4 @@ MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/var/lib/fire-backend/fire-plans
 ReadWritePaths=/var/lib/fire-backend/publications
+ReadWritePaths=/var/lib/fire-backend/import-staging

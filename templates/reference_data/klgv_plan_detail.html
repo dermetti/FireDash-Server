@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ plan.title }}{% endblock %}
+{% block content %}
+<h1>{{ plan.title }}</h1>
+<dl class="row">
+  <dt class="col-sm-3">Identifier</dt><dd class="col-sm-9">{{ plan.external_identifier }}</dd>
+  <dt class="col-sm-3">Pages</dt><dd class="col-sm-9">{{ plan.page_count }}</dd>
+  <dt class="col-sm-3">Active</dt><dd class="col-sm-9">{{ plan.active|yesno:"Yes,No" }}</dd>
+</dl>
+<section class="card"><div class="card-body"><h2 class="h5">Lifecycle</h2><p class="text-body-secondary">Changing this status is explicit. It retains this canonical record and schedules the next department bundle; it never rewrites historical publications.</p><form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Confirm status change</button></form></div></section>
+{% endblock %}
