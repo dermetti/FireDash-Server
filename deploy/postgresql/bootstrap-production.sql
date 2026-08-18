@@ -49,7 +49,7 @@ BEGIN
     END IF;
 END $$;
 
-SELECT 'CREATE DATABASE fire_backend OWNER database_owner'
+SELECT 'CREATE DATABASE fire_backend OWNER database_owner TEMPLATE template0 ENCODING ''UTF8'' LC_COLLATE ''C.utf8'' LC_CTYPE ''C.utf8'''
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'fire_backend')
 \gexec
 
@@ -62,6 +62,17 @@ BEGIN
         WHERE database.datname = 'fire_backend' AND owner.rolname = 'database_owner'
     ) THEN
         RAISE EXCEPTION 'fire_backend must be owned by database_owner';
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_database
+        WHERE datname = 'fire_backend'
+          AND (pg_encoding_to_char(encoding) <> 'UTF8' OR datcollate <> 'C.utf8' OR datctype <> 'C.utf8')
+    ) THEN
+        RAISE EXCEPTION 'fire_backend has incompatible encoding/locale; logical UTF-8 migration is required before rerunning installer';
     END IF;
 END $$;
 

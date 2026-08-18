@@ -1,4 +1,3 @@
-import uuid
 from datetime import timedelta
 
 from django.contrib.gis.geos import Point
@@ -10,20 +9,7 @@ from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
 from apps.publications.services import mark_dirty
 from apps.reference_data.hydrants import NormalizedHydrant, parse_feature_collection
-from apps.reference_data.models import FirePlan, Hydrant, HydrantImportPreview, KlgvPlan
-from apps.reference_data.pdf_sandbox import PdfSanitizerError, sanitize
-from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
-from apps.reference_data.storage import (
-    StorageError,
-    cleanup,
-    output_path,
-    promote_to_accepted,
-    write_quarantine,
-)
-
-
-class ReferenceDataError(ValueError):
-    pass
+from apps.reference_data.models import Hydrant, HydrantImportPreview, KlgvPlan
 
 
 @transaction.atomic
@@ -148,74 +134,6 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
     )
     mark_dirty(department=hydrant.department, dataset_type_code="department_hydrants", actor=actor)
     return hydrant
-
-
-def accept_fire_plan(
-    *,
-    actor,
-    department,
-    uploaded_file,
-    object_name: str,
-    object_reference: str = "",
-    address: str = "",
-    location: Point | None = None,
-):
-    """Accept only a revalidated, sandbox-sanitized PDF into private storage."""
-    require_department_admin(actor, department)
-    quarantine = sanitized = accepted = None
-    try:
-        quarantine = write_quarantine(uploaded_file)
-        validate_pdf(quarantine, original_filename=uploaded_file.name)
-        sanitized = output_path(job_id=quarantine.parent.name)
-        sanitize(quarantined_input=quarantine, sanitized_output=sanitized)
-        file_size, page_count, digest = validate_pdf(sanitized)
-        plan_id = uuid.uuid4()
-        document_key = f"{plan_id}.pdf"
-        accepted = promote_to_accepted(sanitized, document_key)
-        with transaction.atomic():
-            fire_plan = FirePlan.objects.create(
-                id=plan_id,
-                department=department,
-                object_name=object_name.strip(),
-                object_reference=object_reference.strip(),
-                address=address.strip(),
-                location=location,
-                document_key=document_key,
-                original_filename=uploaded_file.name[:255],
-                file_size=file_size,
-                page_count=page_count,
-                sha256=digest,
-                uploaded_by=actor,
-            )
-            record_event(
-                action="reference_data.fire_plan_accepted",
-                actor_user=actor,
-                department=department,
-                target_type="fire_plan",
-                target_uuid=fire_plan.id,
-                metadata={"file_size": file_size, "page_count": page_count, "sha256": digest},
-            )
-            mark_dirty(
-                department=department, dataset_type_code="department_fire_plans", actor=actor
-            )
-        return fire_plan
-    except (StorageError, PdfValidationError, PdfSanitizerError) as error:
-        cleanup(accepted)
-        record_event(
-            action=(
-                "reference_data.pdf_sanitizer_failed"
-                if isinstance(error, PdfSanitizerError)
-                else "reference_data.pdf_rejected"
-            ),
-            actor_user=actor,
-            department=department,
-            target_type="fire_plan_upload",
-            metadata={"error_code": getattr(error, "code", "validation_failed")},
-        )
-        raise ReferenceDataError("Fire plan was rejected.") from error
-    finally:
-        cleanup(quarantine)
-        cleanup(sanitized)
 
 
 @transaction.atomic

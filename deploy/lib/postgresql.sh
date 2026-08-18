@@ -9,6 +9,14 @@ PG_CONF_DIR=/etc/postgresql/17/main
 FIREDASH_PGCONF=$PG_CONF_DIR/conf.d/90-firedash.conf
 HBA=$PG_CONF_DIR/pg_hba.conf
 
+firedash_database_locale() {
+    printf '%s\n' 'UTF8|C.utf8|C.utf8'
+}
+
+firedash_database_locale_supported() {
+    [[ ${1:-} == "$(firedash_database_locale)" ]]
+}
+
 firedash_pgconf_content() {
     cat <<'EOF'
 listen_addresses = '127.0.0.1'

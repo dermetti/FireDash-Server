@@ -35,9 +35,20 @@ BEGIN
     END IF;
 END $$;
 
-SELECT 'CREATE DATABASE firedash_test_template OWNER database_owner TEMPLATE template0'
+SELECT 'CREATE DATABASE firedash_test_template OWNER database_owner TEMPLATE template0 ENCODING ''UTF8'' LC_COLLATE ''C.utf8'' LC_CTYPE ''C.utf8'''
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'firedash_test_template')
 \gexec
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_database
+        WHERE datname = 'firedash_test_template'
+          AND (pg_encoding_to_char(encoding) <> 'UTF8' OR datcollate <> 'C.utf8' OR datctype <> 'C.utf8')
+    ) THEN
+        RAISE EXCEPTION 'firedash_test_template has incompatible encoding/locale; recreate the disposable test template as UTF-8 before running tests';
+    END IF;
+END $$;
 
 \connect fire_backend
 ALTER DATABASE firedash_test_template ALLOW_CONNECTIONS true;

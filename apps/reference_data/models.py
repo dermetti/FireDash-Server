@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.contrib.gis.db import models
+from django.core.exceptions import ValidationError
 
 from apps.organizations.models import Department
 
@@ -43,8 +44,7 @@ class FirePlan(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="fire_plans")
     external_identifier = models.CharField(max_length=255, blank=True)
-    object_name = models.CharField(max_length=255)
-    object_reference = models.CharField(max_length=255, blank=True)
+    object_name = models.CharField(max_length=255, blank=True)
     address = models.TextField(blank=True)
     postal_code = models.CharField(max_length=32, blank=True)
     city = models.CharField(max_length=255, blank=True)
@@ -65,12 +65,34 @@ class FirePlan(models.Model):
     class Meta:
         indexes = [models.Index(fields=("department", "active"))]
         constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(external_identifier="") | ~models.Q(address=""),
+                name="fire_plan_requires_external_identifier_or_address",
+            ),
             models.UniqueConstraint(
                 fields=("department", "external_identifier"),
                 condition=~models.Q(external_identifier=""),
                 name="unique_fire_plan_external_identifier_per_department",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=("department", "address"),
+                condition=models.Q(external_identifier="") & ~models.Q(address=""),
+                name="unique_fire_plan_address_identity_per_department",
+            ),
         ]
+
+    def clean(self) -> None:
+        super().clean()
+        self.external_identifier = self.external_identifier.strip()
+        self.address = self.address.strip()
+        if not self.external_identifier and not self.address:
+            raise ValidationError(
+                {"address": "Address is required when no external identifier is available."}
+            )
+
+    @property
+    def display_label(self) -> str:
+        return self.object_name or self.address or self.external_identifier
 
 
 class KlgvPlan(models.Model):

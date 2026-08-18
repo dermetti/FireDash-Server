@@ -127,3 +127,46 @@ database role privileges, and unit hardening with read-only inspection first.
 Do not loosen PostgreSQL HBA, disable audit triggers, expose credential files,
 or recursively change ownership or modes to make a command work. Escalate a
 key compromise according to [security.md](security.md).
+
+## PostgreSQL encoding repair
+
+`fire_backend` must be `UTF8` with `LC_COLLATE` and `LC_CTYPE` both `C.utf8`.
+The installer creates a new database from `template0` with exactly those values,
+independent of `LANG` or other process locale settings. It refuses an existing
+database with a different encoding or locale; it never changes, drops, or
+reinitializes that database in place.
+
+For an existing incompatible database, schedule a separately approved
+maintenance migration. Do not use the normal installer as a repair tool:
+
+1. Quiesce application writers using the normal deployment maintenance
+   procedure and take a retained logical custom-format UTF-8 backup with the
+   backup role:
+
+   ```sh
+   pg_dump --format=custom --encoding=UTF8 --file=<root-only-dump> fire_backend
+   ```
+
+   Keep the dump root-only and inspect its command diagnostics; this is not a
+   request to repair non-UTF-8 bytes.
+2. Create a distinct replacement database owned by `database_owner` with
+   `TEMPLATE template0`, `ENCODING UTF8`, `LC_COLLATE C.utf8`, and `LC_CTYPE
+   C.utf8`. Apply the FireDash database `CONNECT`/schema grants to that new
+   database; do not use `--create` or `--clean` during this repair.
+3. Restore the custom dump directly into that replacement:
+
+   ```sh
+   pg_restore --exit-on-error --dbname=<replacement-database> <root-only-dump>
+   ```
+
+   The restore must stop visibly on an invalid UTF-8 byte sequence; do not
+   transliterate, strip, or otherwise repair stored bytes.
+4. Before any cutover, verify Django migrations/checks, role access,
+   audit immutability, extensions, canonical/publication/ingestion state, and a
+   representative Unicode round trip. Only then use an approved maintenance
+   cutover procedure to swap database names while application connections are
+   stopped; retain the old database under a retired name until acceptance.
+
+Keep the old database and logical dump until the replacement is accepted. Do
+not rewrite audit/history rows, publication metadata, or historical signatures
+as part of this repair.

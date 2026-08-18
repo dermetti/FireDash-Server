@@ -33,14 +33,14 @@ class PdfPackageEntry:
 
 FIRE_PLAN_COLUMNS = frozenset(
     {
-        "external_id",
+        "external_identifier",
         "filename",
         "object_name",
-        "street_address",
+        "address",
         "postal_code",
         "city",
-        "latitude",
         "longitude",
+        "latitude",
         "action",
     }
 )
@@ -70,16 +70,23 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
         expected_columns = FIRE_PLAN_COLUMNS if domain == "fire_plans" else KLGV_COLUMNS
         rows = _read_manifest(archive.read("manifest.csv"), expected_columns)
         entries = []
-        seen_ids: set[str] = set()
+        seen_identities: set[tuple[str, str]] = set()
         declared: set[str] = set()
         for index, row in enumerate(rows, 2):
-            external_id = _required(row, "external_id", index)
-            if external_id in seen_ids:
-                raise ImportValidationError("PDF package has duplicate external_id values.")
-            seen_ids.add(external_id)
             action = row["action"] or "upsert"
             if action not in {"upsert", "deactivate"}:
                 raise ImportValidationError(f"Row {index}: invalid action.")
+            if domain == "fire_plans":
+                external_id = row["external_identifier"].strip()
+                address = row["address"].strip()
+                identity = _identity(external_identifier=external_id, address=address, index=index)
+            else:
+                external_id = _required(row, "external_id", index)
+                address = ""
+                identity = ("external_identifier", external_id)
+            if identity in seen_identities:
+                raise ImportValidationError("PDF package has duplicate Fire Plan identities.")
+            seen_identities.add(identity)
             filename = row["filename"]
             if action == "deactivate":
                 if filename:
@@ -102,18 +109,16 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
                 except KeyError as error:
                     raise ImportValidationError(f"Row {index}: declared PDF is missing.") from error
             if domain == "fire_plans":
-                latitude = _optional_coordinate(row["latitude"], -90, 90, index)
                 longitude = _optional_coordinate(row["longitude"], -180, 180, index)
+                latitude = _optional_coordinate(row["latitude"], -90, 90, index)
                 if (latitude is None) != (longitude is None):
                     raise ImportValidationError("Latitude and longitude must be supplied together.")
                 entries.append(
                     PdfPackageEntry(
                         external_identifier=external_id,
                         filename=filename,
-                        title=_required(row, "object_name", index) if action == "upsert" else "",
-                        address=(
-                            _required(row, "street_address", index) if action == "upsert" else ""
-                        ),
+                        title=row["object_name"].strip() if action == "upsert" else "",
+                        address=address if action == "upsert" else address,
                         postal_code=row["postal_code"],
                         city=row["city"],
                         category="",
@@ -174,6 +179,16 @@ def _required(row: dict[str, str], field: str, number: int) -> str:
     if not value or len(value) > 255:
         raise ImportValidationError(f"Row {number}: {field} is required.")
     return value
+
+
+def _identity(*, external_identifier: str, address: str, index: int) -> tuple[str, str]:
+    if external_identifier:
+        return ("external_identifier", external_identifier)
+    if address:
+        return ("address", address)
+    raise ImportValidationError(
+        f"Row {index}: external_identifier or address is required for a Fire Plan."
+    )
 
 
 def _optional_coordinate(value: str, minimum: float, maximum: float, number: int) -> float | None:

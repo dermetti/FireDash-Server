@@ -7,6 +7,7 @@ from apps.ingestion.parsers import parse_hydrants, parse_personnel
 from apps.ingestion.pdf_packages import parse_pdf_package
 
 ROOT = Path(__file__).resolve().parents[1] / "static" / "ingestion" / "templates"
+DOCS = Path(__file__).resolve().parents[3] / "docs" / "formats" / "fire-plans-v1.md"
 
 
 def test_structured_templates_are_utf8_and_parse_with_the_real_importers():
@@ -24,10 +25,11 @@ def test_pdf_manifest_templates_have_the_exact_documented_columns():
     fire = (ROOT / "fire-plans-manifest-v1.csv").read_text(encoding="utf-8")
     klgv = (ROOT / "klgv-plans-manifest-v1.csv").read_text(encoding="utf-8")
     assert fire.splitlines()[0] == (
-        "external_id,filename,object_name,street_address,postal_code,city,latitude,longitude,action"
+        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action"
     )
     assert klgv.splitlines()[0] == "external_id,filename,title,category,action"
     assert not any(".xlsx" in value or ".xls" in value for value in (fire, klgv))
+    assert fire.splitlines()[0] in DOCS.read_text(encoding="utf-8")
 
 
 def test_pdf_manifest_templates_parse_with_the_real_package_importer():

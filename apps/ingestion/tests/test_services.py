@@ -11,6 +11,7 @@ from django.contrib.gis.geos import Point
 from django.db import close_old_connections, connection
 
 from apps.accounts.models import User
+from apps.assignments.models import PersonnelStationAssignment
 from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership
 from apps.ingestion.models import ImportBatch
@@ -28,9 +29,11 @@ from apps.publications.models import (
     DatasetKeyGrant,
     DatasetPublication,
     DatasetScopeState,
+    PublicationJob,
     SignedManifest,
 )
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
+from apps.reference_data.services import set_fire_plan_active, set_klgv_plan_active
 
 
 @pytest.fixture
@@ -75,7 +78,11 @@ def sanitizer_stub(settings, tmp_path, monkeypatch):
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
+    calls: list[object] = []
+    settings.INGESTION_TEST_SANITIZER_CALLS = calls
+
     def sanitize(*, quarantined_input, sanitized_output):
+        calls.append(quarantined_input)
         shutil.copyfile(quarantined_input, sanitized_output)
 
     def validate(path, **kwargs):
@@ -404,13 +411,13 @@ def test_single_and_batch_fire_plan_inputs_share_identity_noop_and_dirty_once(
         department=department,
         domain=ImportBatch.Domain.FIRE_PLANS,
         values={
-            "external_id": "FP-1",
+            "external_identifier": "FP-1",
             "object_name": "School",
-            "street_address": "Main 1",
+            "address": "Main 1",
             "postal_code": "12345",
             "city": "Town",
-            "latitude": "50.1",
             "longitude": "8.2",
+            "latitude": "50.1",
         },
         pdf_bytes=source_pdf,
     )
@@ -419,8 +426,8 @@ def test_single_and_batch_fire_plan_inputs_share_identity_noop_and_dirty_once(
     assert original.source_pdf_sha256 == hashlib.sha256(source_pdf).hexdigest()
 
     manifest = (
-        "external_id,filename,object_name,street_address,postal_code,city,latitude,longitude,action\n"
-        "FP-1,renamed.pdf,School,Main 1,12345,Town,50.1,8.2,upsert\n"
+        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+        "FP-1,renamed.pdf,School,Main 1,12345,Town,8.2,50.1,upsert\n"
     )
     batch = create_preview(
         actor=actor,
@@ -440,6 +447,104 @@ def test_single_and_batch_fire_plan_inputs_share_identity_noop_and_dirty_once(
         ).source_revision
         == 1
     )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_address_identity_single_and_zip_inputs_converge_without_sanitizer_churn(
+    context, sanitizer_stub, settings
+):
+    actor, department = context
+    values: dict[str, object] = {
+        "external_identifier": "",
+        "object_name": "Bauhaus Wandsbek",
+        "address": "Wandsbeker Zollstrasse 95",
+        "postal_code": "22041",
+        "city": "Hamburg",
+        "longitude": "10.123",
+        "latitude": "53.456",
+    }
+    first = create_single_preview(
+        actor=actor,
+        department=department,
+        domain=ImportBatch.Domain.FIRE_PLANS,
+        values=values,
+        pdf_bytes=b"address-plan",
+    )
+    apply_preview(actor=actor, batch_id=first.id)
+    plan = FirePlan.objects.get(department=department, external_identifier="")
+    manifest = (
+        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+        ",renamed.pdf,Bauhaus Wandsbek,Wandsbeker Zollstrasse 95,"
+        "22041,Hamburg,10.123,53.456,upsert\n"
+    )
+    repeat = create_preview(
+        actor=actor,
+        department=department,
+        domain=ImportBatch.Domain.FIRE_PLANS,
+        import_format=ImportBatch.Format.ZIP,
+        import_mode=ImportBatch.Mode.UPSERT,
+        filename="address-plan.zip",
+        payload=pdf_package(manifest, "renamed.pdf", b"address-plan"),
+    )
+    assert (repeat.add_count, repeat.update_count, repeat.unchanged_count) == (0, 0, 1)
+    assert len(settings.INGESTION_TEST_SANITIZER_CALLS) == 1
+    apply_preview(actor=actor, batch_id=repeat.id)
+    assert FirePlan.objects.get(pk=plan.pk).address == "Wandsbeker Zollstrasse 95"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fire_plan_external_identifier_address_change_is_update_but_address_identity_change_is_add(
+    context, sanitizer_stub
+):
+    actor, department = context
+    external: dict[str, object] = {
+        "external_identifier": "PLAN-123",
+        "object_name": "Plan",
+        "address": "Old 1",
+        "postal_code": "",
+        "city": "",
+        "longitude": "",
+        "latitude": "",
+    }
+    apply_preview(
+        actor=actor,
+        batch_id=create_single_preview(
+            actor=actor,
+            department=department,
+            domain=ImportBatch.Domain.FIRE_PLANS,
+            values=external,
+            pdf_bytes=b"same-pdf",
+        ).id,
+    )
+    assert (
+        create_single_preview(
+            actor=actor,
+            department=department,
+            domain=ImportBatch.Domain.FIRE_PLANS,
+            values=external | {"address": "New 1"},
+            pdf_bytes=b"same-pdf",
+        ).update_count
+        == 1
+    )
+    address_identity = external | {"external_identifier": "", "address": "Address 1"}
+    apply_preview(
+        actor=actor,
+        batch_id=create_single_preview(
+            actor=actor,
+            department=department,
+            domain=ImportBatch.Domain.FIRE_PLANS,
+            values=address_identity,
+            pdf_bytes=b"same-pdf",
+        ).id,
+    )
+    changed_address = create_single_preview(
+        actor=actor,
+        department=department,
+        domain=ImportBatch.Domain.FIRE_PLANS,
+        values=address_identity | {"address": "Address 2"},
+        pdf_bytes=b"same-pdf",
+    )
+    assert (changed_address.add_count, changed_address.update_count) == (1, 0)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -466,22 +571,381 @@ def test_single_and_batch_klgv_inputs_share_normal_publication_scope(context, sa
         == 1
     )
 
-    manifest = "external_id,filename,title,category,action\nKLGV-1,new.pdf,Plan,site,upsert\n"
-    batch = create_preview(
+
+@pytest.mark.django_db(transaction=True)
+def test_personnel_repeat_is_semantic_noop_for_manual_csv_and_json(context):
+    actor, department = context
+    station = Station.objects.create(department=department, name="Home", short_code="HOM")
+    values = {
+        "personnel_number": "P-1",
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "incident_commander_eligible": True,
+    }
+    first = create_single_preview(
         actor=actor,
         department=department,
-        domain=ImportBatch.Domain.KLGV_PLANS,
-        import_format=ImportBatch.Format.ZIP,
-        import_mode=ImportBatch.Mode.UPSERT,
-        filename="klgv.zip",
-        payload=pdf_package(manifest, "new.pdf", source_pdf),
+        domain=ImportBatch.Domain.PERSONNEL,
+        values=values,
+        station=station,
     )
-    assert batch.unchanged_count == 1
-    apply_preview(actor=actor, batch_id=batch.id)
-    assert KlgvPlan.objects.get(pk=plan.pk).document_key == plan.document_key
+    apply_preview(actor=actor, batch_id=first.id)
+    person = Person.objects.get(department=department, personnel_number="P-1")
+    updated_at = person.updated_at
+    scope = DatasetScopeState.objects.get(department=department, station=station)
+    revision = scope.source_revision
+    job_count = PublicationJob.objects.filter(department=department).count()
+    for import_format, payload in (
+        (
+            ImportBatch.Format.CSV,
+            b"personnel_number,first_name,last_name,incident_commander_eligible\nP-1,Ada,Lovelace,true\n",
+        ),
+        (
+            ImportBatch.Format.JSON,
+            b'[{"personnel_number":"P-1","first_name":"Ada","last_name":"Lovelace","incident_commander_eligible":true}]',
+        ),
+    ):
+        repeat = create_preview(
+            actor=actor,
+            department=department,
+            domain=ImportBatch.Domain.PERSONNEL,
+            import_format=import_format,
+            import_mode=ImportBatch.Mode.UPSERT,
+            filename="people",
+            payload=payload,
+            station=station,
+        )
+        assert (repeat.add_count, repeat.update_count, repeat.unchanged_count) == (0, 0, 1)
+        apply_preview(actor=actor, batch_id=repeat.id)
+    person.refresh_from_db()
+    scope.refresh_from_db()
+    assert person.updated_at == updated_at
+    assert scope.source_revision == revision
+    assert PublicationJob.objects.filter(department=department).count() == job_count
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("domain", [ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS])
+def test_identical_pdf_reimport_skips_sanitizer_and_noop_dirtying(
+    context, sanitizer_stub, settings, domain
+):
+    actor, department = context
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        set_department_feature(
+            actor=actor, department=department, feature_code="klgv_plans", enabled=True
+        )
+        values: dict[str, object] = {"external_id": "D-1", "title": "Plan", "category": "site"}
+        code = "department_klgv_plans"
+    else:
+        values = {
+            "external_identifier": "D-1",
+            "object_name": "Plan",
+            "address": "Road",
+            "postal_code": "",
+            "city": "",
+            "longitude": "",
+            "latitude": "",
+        }
+        code = "department_fire_plans"
+    first = create_single_preview(
+        actor=actor, department=department, domain=domain, values=values, pdf_bytes=b"pdf-one"
+    )
+    assert len(settings.INGESTION_TEST_SANITIZER_CALLS) == 1
+    apply_preview(actor=actor, batch_id=first.id)
+    scope = DatasetScopeState.objects.get(department=department, dataset_type_code=code)
+    revision = scope.source_revision
+    repeat = create_single_preview(
+        actor=actor, department=department, domain=domain, values=values, pdf_bytes=b"pdf-one"
+    )
+    assert (repeat.add_count, repeat.update_count, repeat.unchanged_count) == (0, 0, 1)
+    assert len(settings.INGESTION_TEST_SANITIZER_CALLS) == 1
+    apply_preview(actor=actor, batch_id=repeat.id)
+    scope.refresh_from_db()
+    assert scope.source_revision == revision
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"first_name": "Grace"},
+        {"last_name": "Hopper"},
+        {"incident_commander_eligible": False},
+    ],
+)
+def test_personnel_managed_field_changes_are_updates_and_stale_previews_fail(context, change):
+    actor, department = context
+    station = Station.objects.create(department=department, name="P", short_code="PER")
+    values = {
+        "personnel_number": "P-2",
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "incident_commander_eligible": True,
+    }
+    apply_preview(
+        actor=actor,
+        batch_id=create_single_preview(
+            actor=actor,
+            department=department,
+            domain=ImportBatch.Domain.PERSONNEL,
+            values=values,
+            station=station,
+        ).id,
+    )
+    candidate = create_single_preview(
+        actor=actor,
+        department=department,
+        domain=ImportBatch.Domain.PERSONNEL,
+        values=values | change,
+        station=station,
+    )
+    assert (candidate.add_count, candidate.update_count, candidate.unchanged_count) == (0, 1, 0)
+    applied = apply_preview(actor=actor, batch_id=candidate.id)
+    assert (applied.add_count, applied.update_count, applied.unchanged_count) == (0, 1, 0)
+    stale = create_single_preview(
+        actor=actor,
+        department=department,
+        domain=ImportBatch.Domain.PERSONNEL,
+        values=values | change,
+        station=station,
+    )
+    person = Person.objects.get(department=department, personnel_number="P-2")
+    person.first_name = "Changed"
+    person.save(update_fields=("first_name", "updated_at"))
+    with pytest.raises(ImportError, match="re-preview"):
+        apply_preview(actor=actor, batch_id=stale.id)
+    assert PersonnelStationAssignment.objects.filter(person=person, ended_at__isnull=True).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("domain", [ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS])
+def test_pdf_document_convergence_update_stale_zip_and_lifecycle_matrix(
+    context, sanitizer_stub, settings, domain
+):
+    actor, department = context
+    model: type[FirePlan] | type[KlgvPlan]
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        set_department_feature(
+            actor=actor, department=department, feature_code="klgv_plans", enabled=True
+        )
+        values: dict[str, object] = {"external_id": "M-1", "title": "Plan", "category": "one"}
+        changed_values = values | {"title": "Renamed", "category": "two"}
+        model, code = KlgvPlan, "department_klgv_plans"
+        manifest = "external_id,filename,title,category,action\nM-1,same.pdf,Plan,one,upsert\n"
+    else:
+        values = {
+            "external_identifier": "M-1",
+            "object_name": "Plan",
+            "address": "Road",
+            "postal_code": "1",
+            "city": "Town",
+            "longitude": "",
+            "latitude": "",
+        }
+        changed_values = values | {
+            "object_name": "Renamed",
+            "address": "New road",
+            "postal_code": "2",
+            "city": "Elsewhere",
+        }
+        model, code = FirePlan, "department_fire_plans"
+        manifest = (
+            "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+            "M-1,same.pdf,Plan,Road,1,Town,,,upsert\n"
+        )
+    first = create_single_preview(
+        actor=actor, department=department, domain=domain, values=values, pdf_bytes=b"one"
+    )
+    assert first.add_count == 1
+    apply_preview(actor=actor, batch_id=first.id)
+    document = model.objects.get(department=department, external_identifier="M-1")
+    scope = DatasetScopeState.objects.get(department=department, dataset_type_code=code)
+    revision, updated_at, jobs = (
+        scope.source_revision,
+        document.updated_at,
+        PublicationJob.objects.filter(department=department).count(),
+    )
+    zip_repeat = create_preview(
+        actor=actor,
+        department=department,
+        domain=domain,
+        import_format="zip",
+        import_mode="upsert",
+        filename="same.zip",
+        payload=pdf_package(manifest, "same.pdf", b"one"),
+    )
+    assert (zip_repeat.update_count, zip_repeat.unchanged_count) == (0, 1)
+    apply_preview(actor=actor, batch_id=zip_repeat.id)
+    document.refresh_from_db()
+    scope.refresh_from_db()
     assert (
-        DatasetScopeState.objects.get(
-            department=department, dataset_type_code="department_klgv_plans"
-        ).source_revision
-        == 1
+        document.updated_at,
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+    ) == (updated_at, revision, jobs)
+    metadata = create_single_preview(
+        actor=actor, department=department, domain=domain, values=changed_values, pdf_bytes=b"one"
     )
+    assert metadata.update_count == 1
+    assert metadata.validation_summary["updates"]
+    assert apply_preview(actor=actor, batch_id=metadata.id).update_count == 1
+    replacement = create_single_preview(
+        actor=actor, department=department, domain=domain, values=changed_values, pdf_bytes=b"two"
+    )
+    assert replacement.update_count == 1
+    assert len(settings.INGESTION_TEST_SANITIZER_CALLS) == 2
+    apply_preview(actor=actor, batch_id=replacement.id)
+    stale = create_single_preview(
+        actor=actor, department=department, domain=domain, values=changed_values, pdf_bytes=b"two"
+    )
+    document.refresh_from_db()
+    document.active = False
+    document.save(update_fields=("active", "updated_at"))
+    with pytest.raises(ImportError, match="re-preview"):
+        apply_preview(actor=actor, batch_id=stale.id)
+    document.refresh_from_db()
+    scope.refresh_from_db()
+    before_revision, before_jobs, before_updated = (
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+        document.updated_at,
+    )
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        assert isinstance(document, KlgvPlan)
+        set_klgv_plan_active(actor=actor, klgv_plan=document, active=False)
+    else:
+        set_fire_plan_active(actor=actor, fire_plan=document, active=False)
+    document.refresh_from_db()
+    scope.refresh_from_db()
+    assert (
+        document.updated_at,
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+    ) == (before_updated, before_revision, before_jobs)
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        assert isinstance(document, KlgvPlan)
+        set_klgv_plan_active(actor=actor, klgv_plan=document, active=True)
+        set_klgv_plan_active(actor=actor, klgv_plan=document, active=True)
+    else:
+        set_fire_plan_active(actor=actor, fire_plan=document, active=True)
+        set_fire_plan_active(actor=actor, fire_plan=document, active=True)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("domain", [ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS])
+def test_pdf_zip_omission_and_lifecycle_noops_have_no_side_effects(
+    context, sanitizer_stub, settings, domain
+):
+    actor, department = context
+    model: type[FirePlan] | type[KlgvPlan]
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        set_department_feature(
+            actor=actor, department=department, feature_code="klgv_plans", enabled=True
+        )
+
+        def values(identifier):
+            return {"external_id": identifier, "title": identifier, "category": "site"}
+
+        model, code = KlgvPlan, "department_klgv_plans"
+        manifest = "external_id,filename,title,category,action\nA,a.pdf,A,site,upsert\n"
+    else:
+
+        def values(identifier):
+            return {
+                "external_identifier": identifier,
+                "object_name": identifier,
+                "address": "Road",
+                "postal_code": "",
+                "city": "",
+                "longitude": "",
+                "latitude": "",
+            }
+
+        model, code = FirePlan, "department_fire_plans"
+        manifest = (
+            "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+            "A,a.pdf,A,Road,,,,,upsert\n"
+        )
+    for identifier in ("A", "B"):
+        apply_preview(
+            actor=actor,
+            batch_id=create_single_preview(
+                actor=actor,
+                department=department,
+                domain=domain,
+                values=values(identifier),
+                pdf_bytes=identifier.encode(),
+            ).id,
+        )
+    omitted = model.objects.get(department=department, external_identifier="B")
+    scope = DatasetScopeState.objects.get(department=department, dataset_type_code=code)
+    omitted_updated, revision, jobs, calls = (
+        omitted.updated_at,
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+        len(settings.INGESTION_TEST_SANITIZER_CALLS),
+    )
+    only_a = create_preview(
+        actor=actor,
+        department=department,
+        domain=domain,
+        import_format="zip",
+        import_mode="upsert",
+        filename="only-a.zip",
+        payload=pdf_package(manifest, "a.pdf", b"A"),
+    )
+    assert (only_a.deactivate_count, only_a.unchanged_count) == (0, 1)
+    apply_preview(actor=actor, batch_id=only_a.id)
+    omitted.refresh_from_db()
+    scope.refresh_from_db()
+    assert (
+        omitted.active,
+        omitted.updated_at,
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+        len(settings.INGESTION_TEST_SANITIZER_CALLS),
+    ) == (True, omitted_updated, revision, jobs, calls)
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        assert isinstance(omitted, KlgvPlan)
+        set_klgv_plan_active(actor=actor, klgv_plan=omitted, active=False)
+    else:
+        assert isinstance(omitted, FirePlan)
+        set_fire_plan_active(actor=actor, fire_plan=omitted, active=False)
+    omitted.refresh_from_db()
+    scope.refresh_from_db()
+    after_deactivate = (
+        omitted.updated_at,
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+    )
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        assert isinstance(omitted, KlgvPlan)
+        set_klgv_plan_active(actor=actor, klgv_plan=omitted, active=False)
+        set_klgv_plan_active(actor=actor, klgv_plan=omitted, active=True)
+    else:
+        set_fire_plan_active(actor=actor, fire_plan=omitted, active=False)
+        set_fire_plan_active(actor=actor, fire_plan=omitted, active=True)
+    omitted.refresh_from_db()
+    scope.refresh_from_db()
+    assert (
+        omitted.updated_at,
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+    ) != after_deactivate
+    after_activate = (
+        omitted.updated_at,
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+    )
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        assert isinstance(omitted, KlgvPlan)
+        set_klgv_plan_active(actor=actor, klgv_plan=omitted, active=True)
+    else:
+        set_fire_plan_active(actor=actor, fire_plan=omitted, active=True)
+    omitted.refresh_from_db()
+    scope.refresh_from_db()
+    assert (
+        omitted.updated_at,
+        scope.source_revision,
+        PublicationJob.objects.filter(department=department).count(),
+    ) == after_activate

@@ -1,2 +1,3 @@
-external_id,filename,object_name,street_address,postal_code,city,latitude,longitude,action
-FP-DEMO-001,school.pdf,Example School,Example Street 1,12345,Exampletown,50.110924,8.682127,upsert
+external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action
+FP-DEMO-001,school.pdf,Example School,,,,8.682127,50.110924,upsert
+,address-plan.pdf,Example Building,Wandsbeker Zollstraße 95,22041,Hamburg,10.123000,53.456000,upsert

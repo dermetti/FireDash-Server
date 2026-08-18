@@ -7,6 +7,8 @@ ROOT=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
 
 # shellcheck source=lib/common.sh
 source "$SELF_DIR/lib/common.sh"
+# shellcheck source=lib/postgresql.sh
+source "$SELF_DIR/lib/postgresql.sh"
 
 FAIL=0
 fail() { log_err "FAIL: $*"; FAIL=$((FAIL + 1)); }
@@ -70,6 +72,13 @@ for r in database_owner application_runtime backup_role; do
 done
 runtime_attrs=$(pg_as database_owner "$OWNER_PW" "SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname='application_runtime'")
 [[ $runtime_attrs == t ]] && ok "application_runtime attributes hardened" || fail "application_runtime has unsafe attributes"
+
+database_locale=$(pg_as_postgres "SELECT pg_encoding_to_char(encoding) || '|' || datcollate || '|' || datctype FROM pg_database WHERE datname='fire_backend'")
+if firedash_database_locale_supported "$database_locale"; then
+    ok "fire_backend UTF8 / C.utf8 database locale"
+else
+    fail "fire_backend encoding/locale must be $(firedash_database_locale) (got: $database_locale)"
+fi
 
 pg_as database_owner "$OWNER_PW" "SELECT 1 FROM pg_extension WHERE extname='postgis'" | grep -q 1 && ok "postgis installed" || fail "postgis missing"
 pg_as database_owner "$OWNER_PW" "SELECT 1 FROM pg_extension WHERE extname='btree_gist'" | grep -q 1 && ok "btree_gist installed" || fail "btree_gist missing"

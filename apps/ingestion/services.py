@@ -132,25 +132,25 @@ def _single_pdf_package(*, domain: str, values: dict[str, object], pdf_bytes: by
     fields: tuple[str, ...]
     if domain == ImportBatch.Domain.FIRE_PLANS:
         fields = (
-            "external_id",
+            "external_identifier",
             "filename",
             "object_name",
-            "street_address",
+            "address",
             "postal_code",
             "city",
-            "latitude",
             "longitude",
+            "latitude",
             "action",
         )
         row = {
-            "external_id": values.get("external_id", ""),
+            "external_identifier": values.get("external_identifier", ""),
             "filename": "document.pdf",
             "object_name": values.get("object_name", ""),
-            "street_address": values.get("street_address", ""),
+            "address": values.get("address", ""),
             "postal_code": values.get("postal_code", ""),
             "city": values.get("city", ""),
-            "latitude": values.get("latitude", ""),
             "longitude": values.get("longitude", ""),
+            "latitude": values.get("latitude", ""),
             "action": "upsert",
         }
     else:
@@ -271,13 +271,17 @@ def create_preview(
                 raise ImportError("Personnel imports support upsert mode only.")
             intent = parse_personnel(payload=payload, import_format=import_format)
             baseline = _personnel_baseline(department=department)
-            counts = _preview_personnel(intent=intent, baseline=baseline)
+            counts, updates = _preview_personnel(intent=intent, department=department)
         elif domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
             if import_format != ImportBatch.Format.ZIP or import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("PDF package imports require ZIP upsert mode.")
-            intent = _sanitize_pdf_preview(batch=batch, payload=payload, domain=domain)
+            intent = _sanitize_pdf_preview(
+                batch=batch, payload=payload, department=department, domain=domain
+            )
             baseline = _document_baseline(department=department, domain=domain)
-            counts = _preview_documents(intent=intent, department=department, domain=domain)
+            counts, updates = _preview_documents(
+                intent=intent, department=department, domain=domain
+            )
         else:
             raise ImportError("This import domain is not available through structured ingestion.")
     except (ImportValidationError, ImportError) as error:
@@ -316,6 +320,12 @@ def create_preview(
     batch.validation_summary = {"error_count": 0, "row_count": len(intent)}
     if domain == ImportBatch.Domain.HYDRANTS:
         batch.validation_summary["updates"] = hydrant_updates
+    elif domain in {
+        ImportBatch.Domain.PERSONNEL,
+        ImportBatch.Domain.FIRE_PLANS,
+        ImportBatch.Domain.KLGV_PLANS,
+    }:
+        batch.validation_summary["updates"] = updates
     if domain == ImportBatch.Domain.FIRE_PLANS:
         batch.validation_summary["coordinate_conflicts"] = _coordinate_conflicts(
             department=department, intent=intent
@@ -381,13 +391,52 @@ def _preview_hydrants(*, intent, department, mode):
     return (add, update, deactivate, unchanged), details
 
 
-def _preview_personnel(*, intent, baseline):
-    return (
-        sum(row["personnel_number"] not in baseline for row in intent),
-        sum(row["personnel_number"] in baseline for row in intent),
-        0,
-        0,
+def _personnel_changed(*, current: Person, proposed: dict[str, object]) -> bool:
+    return any(
+        getattr(current, field) != proposed[field]
+        for field in ("personnel_number", "first_name", "last_name", "incident_commander_eligible")
     )
+
+
+def _preview_personnel(*, intent, department):
+    existing = {
+        person.personnel_number: person
+        for person in Person.objects.filter(
+            department=department,
+            personnel_number__isnull=False,
+            lifecycle_status=Person.LifecycleStatus.ACTIVE,
+        )
+    }
+    add = update = unchanged = 0
+    details: list[dict[str, object]] = []
+    for row in intent:
+        current = existing.get(row["personnel_number"])
+        if current is None:
+            add += 1
+        elif _personnel_changed(current=current, proposed=row):
+            update += 1
+            if len(details) < settings.MAX_IMPORT_VALIDATION_ERRORS:
+                fields = [
+                    field
+                    for field in ("first_name", "last_name", "incident_commander_eligible")
+                    if getattr(current, field) != row[field]
+                ]
+                details.append(
+                    {
+                        "external_identifier": row["personnel_number"],
+                        "fields": [
+                            {
+                                "name": field,
+                                "current": getattr(current, field),
+                                "proposed": row[field],
+                            }
+                            for field in fields
+                        ],
+                    }
+                )
+        else:
+            unchanged += 1
+    return (add, update, 0, unchanged), details
 
 
 @transaction.atomic
@@ -593,8 +642,7 @@ def _apply_personnel(*, batch, rows):
             add += 1
             changed_people.append(person)
         elif (
-            any(getattr(person, field) != value for field, value in row.items())
-            or person.display_name != display_name
+            _personnel_changed(current=person, proposed=row) or person.display_name != display_name
         ):
             for field, value in row.items():
                 setattr(person, field, value)
@@ -617,6 +665,23 @@ def _apply_personnel(*, batch, rows):
     return scopes, (add, update, 0, unchanged)
 
 
+def _document_identity_key(document_or_row, *, domain: str) -> str:
+    """Return the canonical import identity, never storage/persistence metadata."""
+    external_identifier = str(
+        document_or_row["external_identifier"]
+        if isinstance(document_or_row, dict)
+        else document_or_row.external_identifier
+    ).strip()
+    if domain != ImportBatch.Domain.FIRE_PLANS:
+        return f"external_identifier:{external_identifier}"
+    address = str(
+        document_or_row["address"] if isinstance(document_or_row, dict) else document_or_row.address
+    ).strip()
+    if external_identifier:
+        return f"external_identifier:{external_identifier}"
+    return f"address:{address}"
+
+
 def _document_baseline(*, department, domain: str) -> dict[str, str]:
     if domain == ImportBatch.Domain.FIRE_PLANS:
         rows = FirePlan.objects.filter(department=department).only(
@@ -630,7 +695,7 @@ def _document_baseline(*, department, domain: str) -> dict[str, str]:
             "city",
         )
         return {
-            row.external_identifier: _fingerprint(
+            _document_identity_key(row, domain=domain): _fingerprint(
                 {
                     "updated_at": row.updated_at.isoformat(),
                     "active": row.active,
@@ -652,7 +717,7 @@ def _document_baseline(*, department, domain: str) -> dict[str, str]:
         "category",
     )
     return {
-        row.external_identifier: _fingerprint(
+        _document_identity_key(row, domain=domain): _fingerprint(
             {
                 "updated_at": row.updated_at.isoformat(),
                 "active": row.active,
@@ -667,10 +732,14 @@ def _document_baseline(*, department, domain: str) -> dict[str, str]:
 
 def _preview_documents(*, intent, department, domain):
     model = FirePlan if domain == ImportBatch.Domain.FIRE_PLANS else KlgvPlan
-    existing = {row.external_identifier: row for row in model.objects.filter(department=department)}
+    existing = {
+        _document_identity_key(row, domain=domain): row
+        for row in model.objects.filter(department=department)
+    }
     add = update = deactivate = unchanged = 0
+    details: list[dict[str, object]] = []
     for row in intent:
-        current = existing.get(row["external_identifier"])
+        current = existing.get(_document_identity_key(row, domain=domain))
         if row["action"] == "deactivate":
             if current is not None and current.active:
                 deactivate += 1
@@ -683,21 +752,26 @@ def _preview_documents(*, intent, department, domain):
             current=current, row=row, model=model
         ) or _document_metadata_changes(current=current, row=row, model=model):
             update += 1
+            if len(details) < settings.MAX_IMPORT_VALIDATION_ERRORS:
+                fields = _document_changed_fields(current=current, row=row, model=model)
+                details.append(
+                    {"external_identifier": row["external_identifier"], "fields": fields}
+                )
         else:
             unchanged += 1
-    return add, update, deactivate, unchanged
+    return (add, update, deactivate, unchanged), details
 
 
 def _coordinate_conflicts(*, department, intent) -> list[dict[str, object]]:
     existing = {
-        plan.external_identifier: plan
+        _document_identity_key(plan, domain=ImportBatch.Domain.FIRE_PLANS): plan
         for plan in FirePlan.objects.filter(department=department).only(
             "external_identifier", "location"
         )
     }
     conflicts: list[dict[str, object]] = []
     for row in intent:
-        current = existing.get(row["external_identifier"])
+        current = existing.get(_document_identity_key(row, domain=ImportBatch.Domain.FIRE_PLANS))
         incoming = _location(row)
         if current is None or current.location is None or incoming is None:
             continue
@@ -713,13 +787,18 @@ def _coordinate_conflicts(*, department, intent) -> list[dict[str, object]]:
 
 
 def _sanitize_pdf_preview(
-    *, batch: ImportBatch, payload: bytes, domain: str
+    *, batch: ImportBatch, payload: bytes, department, domain: str
 ) -> list[dict[str, object]]:
     """Use the production quarantine/broker path, but keep output private/staged.
 
     This deliberately does not promote anything into canonical accepted storage.
     """
     entries = parse_pdf_package(payload=payload, domain=domain)
+    model = FirePlan if domain == ImportBatch.Domain.FIRE_PLANS else KlgvPlan
+    existing = {
+        _document_identity_key(row, domain=domain): row
+        for row in model.objects.filter(department=department)
+    }
     result: list[dict[str, object]] = []
     try:
         for entry in entries:
@@ -739,6 +818,23 @@ def _sanitize_pdf_preview(
                 result.append(metadata)
                 continue
             source_sha256 = hashlib.sha256(entry.pdf_bytes or b"").hexdigest()
+            current = existing.get(_document_identity_key(metadata, domain=domain))
+            if current is not None and current.source_pdf_sha256 == source_sha256:
+                result.append(
+                    metadata
+                    | {
+                        "source_pdf_sha256": source_sha256,
+                        "sanitized_pdf_sha256": (
+                            current.sha256
+                            if isinstance(current, FirePlan)
+                            else current.sanitized_pdf_sha256
+                        ),
+                        "file_size": current.file_size,
+                        "page_count": current.page_count,
+                        "content_reused": True,
+                    }
+                )
+                continue
             quarantine = sanitized = None
             try:
                 uploaded = SimpleUploadedFile(
@@ -780,13 +876,12 @@ def _sanitize_pdf_preview(
 def _apply_documents(*, batch: ImportBatch):
     model = FirePlan if batch.domain == ImportBatch.Domain.FIRE_PLANS else KlgvPlan
     existing = {
-        row.external_identifier: row
+        _document_identity_key(row, domain=batch.domain): row
         for row in model.objects.select_for_update().filter(department=batch.department)
     }
     add = update = deactivate = unchanged = 0
     for row in batch.normalized_intent["rows"]:
-        external_id = row["external_identifier"]
-        current = existing.get(external_id)
+        current = existing.get(_document_identity_key(row, domain=batch.domain))
         if row["action"] == "deactivate":
             if current is not None and current.active:
                 current.active = False
@@ -795,16 +890,18 @@ def _apply_documents(*, batch: ImportBatch):
             else:
                 unchanged += 1
             continue
-        sanitized_path = settings.INGESTION_STAGING_ROOT / row["sanitized_staging_key"]
-        if (
-            not sanitized_path.is_file()
-            or hashlib.sha256(sanitized_path.read_bytes()).hexdigest()
-            != row["sanitized_pdf_sha256"]
-        ):
-            raise ImportError("Sanitized preview output is unavailable; create a new preview.")
         is_new_content = current is None or _document_content_changed(
             current=current, row=row, model=model
         )
+        sanitized_path = None
+        if is_new_content:
+            sanitized_path = settings.INGESTION_STAGING_ROOT / row["sanitized_staging_key"]
+            if (
+                not sanitized_path.is_file()
+                or hashlib.sha256(sanitized_path.read_bytes()).hexdigest()
+                != row["sanitized_pdf_sha256"]
+            ):
+                raise ImportError("Sanitized preview output is unavailable; create a new preview.")
         if current is None:
             current = _create_document(
                 batch=batch, row=row, model=model, sanitized_path=sanitized_path
@@ -844,7 +941,6 @@ def _create_document(*, batch, row, model, sanitized_path):
             **common,
             object_name=row["title"],
             address=row["address"],
-            object_reference="",
             location=_location(row),
             postal_code=row["postal_code"],
             city=row["city"],
@@ -871,12 +967,14 @@ def _replace_document_content(*, current, row, model, sanitized_path):
     if model is FirePlan:
         current.sha256 = row["sanitized_pdf_sha256"]
         current.source_pdf_sha256 = row["source_pdf_sha256"]
-        current.object_name = row["title"]
-        current.address = row["address"]
-        if row["postal_code"]:
-            current.postal_code = row["postal_code"]
-        if row["city"]:
-            current.city = row["city"]
+        for field, value in (
+            ("object_name", row["title"]),
+            ("address", row["address"]),
+            ("postal_code", row["postal_code"]),
+            ("city", row["city"]),
+        ):
+            if value:
+                setattr(current, field, value)
         current.location = _location(row) or current.location
     else:
         current.sanitized_pdf_sha256 = row["sanitized_pdf_sha256"]
@@ -909,11 +1007,42 @@ def _merge_document_metadata(*, current, row, model) -> bool:
 
 
 def _document_content_changed(*, current, row, model) -> bool:
-    return bool(
-        current.sha256 != row["sanitized_pdf_sha256"]
-        if model is FirePlan
-        else current.sanitized_pdf_sha256 != row["sanitized_pdf_sha256"]
-    )
+    return bool(current.source_pdf_sha256 != row["source_pdf_sha256"])
+
+
+def _document_changed_fields(*, current, row, model) -> list[dict[str, object]]:
+    fields: list[dict[str, object]] = []
+    if _document_content_changed(current=current, row=row, model=model):
+        fields.append(
+            {"name": "source_pdf", "current": "existing PDF", "proposed": "replacement PDF"}
+        )
+    if model is FirePlan:
+        pairs = (
+            ("title", "object_name", row["title"]),
+            ("address", "address", row["address"]),
+            ("postal_code", "postal_code", row["postal_code"]),
+            ("city", "city", row["city"]),
+        )
+        for label, attribute, proposed in pairs:
+            if proposed and getattr(current, attribute) != proposed:
+                fields.append(
+                    {"name": label, "current": getattr(current, attribute), "proposed": proposed}
+                )
+        if _location(row) is not None and current.location != _location(row):
+            fields.append(
+                {
+                    "name": "location",
+                    "current": "existing location",
+                    "proposed": "replacement location",
+                }
+            )
+    else:
+        for label, proposed in (("title", row["title"]), ("category", row["category"])):
+            if proposed and getattr(current, label) != proposed:
+                fields.append(
+                    {"name": label, "current": getattr(current, label), "proposed": proposed}
+                )
+    return fields
 
 
 def _document_metadata_changes(*, current, row, model) -> bool:

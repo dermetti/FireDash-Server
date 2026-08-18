@@ -108,6 +108,7 @@ def test_fire_plan_deactivation_marks_dirty_and_queues(lifecycle_context):
     admin, department, _, _ = lifecycle_context
     plan = FirePlan.objects.create(
         department=department,
+        external_identifier="SITE-A",
         object_name="Site A",
         document_key=f"{uuid.uuid4()}.pdf",
         original_filename="site-a.pdf",
@@ -182,6 +183,7 @@ def test_inactive_fire_plan_excluded_from_rebuilt_artifact(lifecycle_context, tm
     digest = hashlib.sha256(pdf).hexdigest()
     plan = FirePlan.objects.create(
         department=department,
+        external_identifier="SITE-A",
         object_name="Site A",
         document_key=f"{uuid.uuid4()}.pdf",
         original_filename="site-a.pdf",
