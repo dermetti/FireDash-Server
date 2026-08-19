@@ -77,7 +77,7 @@ The broker socket is a local service boundary, not a public API.
 | `SIGNED_MANIFEST_RETENTION_DAYS` | `30` |
 | `PUBLICATION_ARTIFACT_ROOT` | `/var/lib/fire-backend/publications` |
 | `PUBLICATION_ARTIFACT_TEMP_ROOT` | `/var/lib/fire-backend/publications/.tmp` |
-| `PUBLICATION_ARTIFACT_MAX_BYTES` | 100 MiB |
+| `PUBLICATION_ARTIFACT_MAX_BYTES` | 600 MiB (temporary compatibility ceiling, not the ~2,800 Fire Plan scale solution) |
 | `PUBLICATION_ARTIFACT_STALE_SECONDS` | `3600` |
 | `PUBLICATION_KEK_VERSION` | `1` |
 | `PUBLICATION_SIGNING_KEY_VERSION` | `1` |

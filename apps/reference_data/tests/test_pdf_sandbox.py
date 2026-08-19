@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.test import override_settings
 
-from apps.reference_data.pdf_sandbox import PdfSanitizerError, PdfSanitizerTimeout, sanitize
+from apps.reference_data.pdf_sandbox import (
+    PdfSanitizerContentError,
+    PdfSanitizerError,
+    PdfSanitizerTimeout,
+    sanitize,
+)
 
 
 def _job_id() -> str:
@@ -87,7 +92,39 @@ def test_sanitizer_broker_failure_is_categorized(tmp_path: Path) -> None:
         patch("apps.reference_data.pdf_sandbox.Path.is_file", return_value=True),
         patch("apps.reference_data.pdf_sandbox.socket.socket", return_value=client),
     ):
+        with pytest.raises(PdfSanitizerContentError):
+            sanitize(
+                quarantined_input=tmp_path / _job_id() / "input.pdf",
+                sanitized_output=tmp_path / _job_id() / "sanitized.pdf",
+            )
+
+
+def test_sanitizer_output_failure_is_infrastructure_fatal(tmp_path: Path) -> None:
+    client = _mock_client(b"ERR output\n")
+
+    with (
+        patch("apps.reference_data.pdf_sandbox.sys.platform", "linux"),
+        patch("apps.reference_data.pdf_sandbox.Path.exists", return_value=True),
+        patch("apps.reference_data.pdf_sandbox.Path.is_file", return_value=True),
+        patch("apps.reference_data.pdf_sandbox.socket.socket", return_value=client),
+    ):
         with pytest.raises(PdfSanitizerError):
+            sanitize(
+                quarantined_input=tmp_path / _job_id() / "input.pdf",
+                sanitized_output=tmp_path / _job_id() / "sanitized.pdf",
+            )
+
+
+def test_sanitizer_broker_timeout_status_is_categorized(tmp_path: Path) -> None:
+    client = _mock_client(b"ERR timeout\n")
+
+    with (
+        patch("apps.reference_data.pdf_sandbox.sys.platform", "linux"),
+        patch("apps.reference_data.pdf_sandbox.Path.exists", return_value=True),
+        patch("apps.reference_data.pdf_sandbox.Path.is_file", return_value=True),
+        patch("apps.reference_data.pdf_sandbox.socket.socket", return_value=client),
+    ):
+        with pytest.raises(PdfSanitizerTimeout):
             sanitize(
                 quarantined_input=tmp_path / _job_id() / "input.pdf",
                 sanitized_output=tmp_path / _job_id() / "sanitized.pdf",

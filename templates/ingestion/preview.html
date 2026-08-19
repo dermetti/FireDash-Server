@@ -12,17 +12,73 @@
 <section class="mb-4">
   <h2 class="h5">Proposed canonical changes</h2>
   <div class="d-flex flex-wrap gap-4"><span><strong>{{ batch.add_count }}</strong> add</span><span><strong>{{ batch.update_count }}</strong> update</span><span><strong>{{ batch.deactivate_count }}</strong> deactivate</span><span><strong>{{ batch.unchanged_count }}</strong> unchanged</span></div>
+  {% if batch.validation_summary.total_document_count %}<div class="text-body-secondary mt-2"><strong>{{ batch.validation_summary.ready_document_count }}</strong> ready &middot; <strong>{{ batch.validation_summary.rejected_document_count }}</strong> rejected &middot; <strong>{{ batch.validation_summary.total_document_count }}</strong> total documents</div>{% endif %}
   {% if batch.deactivate_count %}<div class="alert alert-warning mt-3 mb-0">This authoritative hydrant snapshot will deactivate {{ batch.deactivate_count }} existing record(s).</div>{% endif %}
 </section>
 {% if batch.validation_errors %}<section class="alert alert-danger"><h2 class="h5">Validation requires attention</h2><pre class="mb-0">{{ batch.validation_errors }}</pre></section>{% endif %}
+{% if batch.validation_summary.document_failures %}
+<section class="alert alert-warning"><h2 class="h5">Rejected documents</h2><p class="mb-1">{{ batch.validation_summary.rejected_document_count }} document(s) were rejected and will be skipped.</p><ul class="mb-0">{% for failure in batch.validation_summary.document_failures %}<li><code>{{ failure.filename }}</code> &mdash; {{ failure.message }} <span class="text-body-secondary">({{ failure.code }})</span></li>{% endfor %}</ul></section>
+{% endif %}
 {% if batch.validation_summary.coordinate_conflicts %}<section class="alert alert-warning"><h2 class="h5">Coordinate changes require review</h2><ul class="mb-0">{% for conflict in batch.validation_summary.coordinate_conflicts %}<li><code>{{ conflict.external_identifier }}</code>: {{ conflict.existing.latitude }}, {{ conflict.existing.longitude }} → {{ conflict.incoming.latitude }}, {{ conflict.incoming.longitude }}</li>{% endfor %}</ul></section>{% endif %}
-{% if batch.validation_summary.updates %}
-<section class="card mb-4"><div class="card-body"><h2 class="h5">Update details</h2><p class="text-body-secondary">Showing changed fields for up to {{ batch.validation_summary.updates|length }} records.{% if batch.validation_summary.updates_truncated %} Additional update details exist but are not shown.{% endif %}</p><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Identifier</th><th>Field</th><th>Current</th><th>Proposed</th></tr></thead><tbody>{% for update in batch.validation_summary.updates %}{% for field in update.fields %}<tr><td><code>{{ update.external_identifier }}</code></td><td>{{ field.name }}</td><td>{{ field.current }}</td><td>{{ field.proposed }}</td></tr>{% endfor %}{% endfor %}</tbody></table></div></div></section>
+{% if review %}
+<section class="mb-4"><h2 class="h5">Update review wizard</h2>
+<p class="text-body-secondary">{{ review.summary.total }} proposed update(s) &middot; <strong>{{ review.summary.pending }}</strong> pending &middot; <strong>{{ review.summary.approved }}</strong> approved &middot; <strong>{{ review.summary.skipped }}</strong> skipped. Only approved updates are applied; skipped updates have no canonical, PDF, or publication effect. Rejected documents (listed separately) are distinct from skipped updates.</p>
+{% if review.current %}
+<div class="card mb-3"><div class="card-body">
+  <h6 class="mb-1">Update {{ review.index|add:"1" }} of {{ review.summary.total }}</h6>
+  <p class="text-body-secondary mb-2"><code>{{ review.current.incoming_filename }}</code> &rarr; existing record <code>{{ review.current.matched_record_id }}</code> &middot; matched by <strong>{{ review.current.identity_strategy }}</strong> &middot; value <code>{{ review.current.matched_value }}</code></p>
+  {% if review.current.decision != "pending" %}<p class="mb-2">Current decision: <strong>{{ review.current.decision }}</strong></p>{% endif %}
+  {% if review.current.fields %}
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Field</th><th>Current</th><th>Proposed</th></tr></thead><tbody>
+  {% for field in review.current.fields %}
+    {% if field.name == "location" %}
+    <tr><td>{{ field.label }}</td><td>{{ field.current.longitude }}, {{ field.current.latitude }}</td><td>{{ field.proposed.longitude }}, {{ field.proposed.latitude }}{% if field.distance_km %} <span class="text-danger">(moved {{ field.distance_km }} km)</span>{% endif %}</td></tr>
+    {% else %}
+    <tr><td>{{ field.label }}</td><td><code>{{ field.current }}</code></td><td><code>{{ field.proposed }}</code></td></tr>
+    {% endif %}
+  {% endfor %}
+  </tbody></table></div>
+  {% else %}
+  <p class="text-body-secondary">Field details beyond the display limit; the decision still applies.</p>
+  {% endif %}
+  <div class="mt-2">
+    <form method="post" action="{% url 'ingestion-review-approve' department.id batch.id review.current.key %}" class="d-inline">{% csrf_token %}<button class="btn btn-success btn-sm">Approve this update</button></form>
+    <form method="post" action="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" class="d-inline ms-2">{% csrf_token %}<button class="btn btn-outline-secondary btn-sm">Skip this update</button></form>
+  </div>
+  <nav class="mt-3">
+    {% if review.previous_index is not None %}<a class="btn btn-sm btn-outline-primary" href="?review={{ review.previous_index }}">Previous</a>{% endif %}
+    {% if review.next_index is not None %}<a class="btn btn-sm btn-outline-primary ms-1" href="?review={{ review.next_index }}">Next</a>{% endif %}
+  </nav>
+</div></div>
+{% endif %}
+<form method="post" action="{% url 'ingestion-review-approve-all' department.id batch.id %}" onsubmit="return confirm('Approve all pending updates?');">{% csrf_token %}<input type="hidden" name="confirm" value="true"><button class="btn btn-warning btn-sm">Approve all pending updates</button></form>
+</section>
+{% elif batch.validation_summary.updates %}
+<section class="mb-4"><h2 class="h5">Update review</h2><p class="text-body-secondary">Showing up to {{ batch.validation_summary.updates|length }} update(s).{% if batch.validation_summary.updates_truncated %} Additional update details exist but are not shown.{% endif %}</p>
+{% for update in batch.validation_summary.updates %}
+<div class="card mb-3"><div class="card-body">
+  <h6 class="mb-1"><code>{{ update.incoming_filename }}</code> &rarr; existing record <code>{{ update.matched_record_id }}</code></h6>
+  <p class="text-body-secondary mb-2">Matched by <strong>{{ update.identity_strategy }}</strong>{% if update.identity_strategy == "address_fallback" %} (no external identifier supplied; matched by exact address){% endif %}; matched value <code>{{ update.matched_value }}</code></p>
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Field</th><th>Current</th><th>Proposed</th></tr></thead><tbody>
+  {% for field in update.fields %}
+    {% if field.name == "location" %}
+    <tr><td>{{ field.label }}</td><td>{{ field.current.longitude }}, {{ field.current.latitude }}</td><td>{{ field.proposed.longitude }}, {{ field.proposed.latitude }}{% if field.distance_km %} <span class="text-danger">(moved {{ field.distance_km }} km)</span>{% endif %}</td></tr>
+    {% else %}
+    <tr><td>{{ field.label }}</td><td><code>{{ field.current }}</code></td><td><code>{{ field.proposed }}</code></td></tr>
+    {% endif %}
+  {% endfor %}
+  </tbody></table></div>
+</div></div>
+{% endfor %}
+</section>
 {% endif %}
 <section>
   <h2 class="h5">Actions</h2>
-  {% if batch.status == "PREVIEW_READY" %}
-    <p class="text-body-secondary">Confirmation applies the exact staged source atomically. Publication is scheduled only after canonical changes commit.</p>
+  {% if batch.status == "PREVIEW_READY" and review and review.summary.pending > 0 %}
+    <div class="alert alert-warning mb-0">Pending updates must be approved or skipped before this import can be confirmed.</div>
+    <form method="post" action="{% url 'ingestion-cancel' department.id batch.id %}" class="d-inline mt-3">{% csrf_token %}<button class="btn btn-outline-secondary">Cancel preview</button></form>
+  {% elif batch.status == "PREVIEW_READY" %}
+    <p class="text-body-secondary">Confirmation applies the exact staged source atomically, applying only approved updates. Publication is scheduled only after canonical changes commit.</p>
     <form method="post" class="d-inline">{% csrf_token %}<button class="btn btn-danger">Confirm canonical changes</button></form>
     <form method="post" action="{% url 'ingestion-cancel' department.id batch.id %}" class="d-inline ms-2">{% csrf_token %}<button class="btn btn-outline-secondary">Cancel preview</button></form>
   {% else %}

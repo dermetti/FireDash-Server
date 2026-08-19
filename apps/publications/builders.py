@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import zipfile
 from collections.abc import Callable
 from io import BytesIO
@@ -18,6 +19,8 @@ from apps.publications.pdf_bundles import (
 )
 from apps.publications.registry import DatasetTypeDefinition
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
+
+logger = logging.getLogger(__name__)
 
 MAX_HYDRANT_STATUS_BUCKETS = 50
 BUILDERS: dict[str, Callable[..., dict[str, object]]] = {}
@@ -188,8 +191,22 @@ def build_artifact(
     if not isinstance(artifact, bytes):
         raise PublicationBuildError("Artifact builder returned invalid content.")
     if len(artifact) > settings.PUBLICATION_ARTIFACT_MAX_BYTES:
-        raise PublicationBuildError("Artifact exceeds the configured size limit.")
+        logger.warning(
+            "Publication artifact exceeds ceiling dataset_type_code=%s plaintext_bytes=%d "
+            "ceiling_bytes=%d",
+            definition.code,
+            len(artifact),
+            settings.PUBLICATION_ARTIFACT_MAX_BYTES,
+        )
+        raise PublicationBuildError(
+            f"Publication artifact is {_mib(len(artifact))}; configured maximum is "
+            f"{_mib(settings.PUBLICATION_ARTIFACT_MAX_BYTES)}."
+        )
     return artifact
+
+
+def _mib(value: int) -> str:
+    return f"{value / (1024 * 1024):.1f} MiB"
 
 
 def _json_bytes(value: object) -> bytes:

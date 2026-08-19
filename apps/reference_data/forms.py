@@ -1,8 +1,32 @@
 from django import forms
 
+from apps.reference_data.models import Hydrant
+
 
 class HydrantImportForm(forms.Form):
     geojson = forms.FileField()
+
+
+class HydrantFilterForm(forms.Form):
+    """Server-side filters for the bounded Hydrant list."""
+
+    q = forms.CharField(
+        max_length=255,
+        required=False,
+        label="Identifier",
+        help_text="Partial identifier match.",
+    )
+    status = forms.ChoiceField(
+        choices=[("", "All statuses"), *Hydrant.Status.choices],
+        required=False,
+    )
+    hydrant_type = forms.CharField(
+        max_length=128,
+        required=False,
+        label="Hydrant type",
+        help_text="Partial type match.",
+    )
+    diameter_mm = forms.IntegerField(min_value=1, required=False, label="Diameter (mm)")
 
 
 class HydrantForm(forms.Form):

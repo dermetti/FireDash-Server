@@ -96,10 +96,28 @@ def test_run_job_invokes_only_fixed_sanitizer_template(broker: ModuleType) -> No
     close.assert_called_once_with(fd)
 
 
-def test_run_job_handles_sanitizer_failure(broker: ModuleType) -> None:
-    result = MagicMock(returncode=1)
+@pytest.mark.parametrize(
+    "returncode",
+    [1, 2, 3, 203],
+)
+def test_run_job_treats_every_nonzero_as_infrastructure_fatal(
+    broker: ModuleType, returncode: int
+) -> None:
+    # qpdf uses exit status 2 for both document-content rejections and for
+    # operational failures (I/O, permissions, filesystem, bad invocation), so the
+    # broker must not interpret any non-zero ``start --wait`` result as a
+    # skippable content rejection. Every non-zero result is infrastructure-fatal.
+    result = MagicMock(returncode=returncode)
     with patch.object(broker.subprocess, "run", return_value=result):
-        assert broker.run_job(JOB) == "ERR failed"
+        assert broker.run_job(JOB) == "ERR output"
+
+
+def test_run_job_has_no_exit_status_content_classification(broker: ModuleType) -> None:
+    # There must be no code path that maps a qpdf exit status to a content
+    # rejection token; content vs infrastructure is intentionally not inferable
+    # from the unit exit status.
+    assert not hasattr(broker, "_classify_unit_failure")
+    assert not hasattr(broker, "_show_unit_state")
 
 
 def test_run_job_handles_timeout(broker: ModuleType) -> None:
@@ -113,7 +131,7 @@ def test_run_job_handles_timeout(broker: ModuleType) -> None:
 
 def test_run_job_handles_oserror(broker: ModuleType) -> None:
     with patch.object(broker.subprocess, "run", side_effect=OSError()):
-        assert broker.run_job(JOB) == "ERR failed"
+        assert broker.run_job(JOB) == "ERR output"
 
 
 def test_run_job_rejects_missing_output(broker: ModuleType) -> None:
@@ -122,7 +140,7 @@ def test_run_job_rejects_missing_output(broker: ModuleType) -> None:
         patch.object(broker.subprocess, "run", return_value=result),
         patch.object(broker.os, "open", side_effect=OSError()),
     ):
-        assert broker.run_job(JOB) == "ERR failed"
+        assert broker.run_job(JOB) == "ERR output"
 
 
 def test_run_job_rejects_non_regular_output(broker: ModuleType) -> None:
@@ -138,7 +156,7 @@ def test_run_job_rejects_non_regular_output(broker: ModuleType) -> None:
         ),
         patch.object(broker.os, "close") as close,
     ):
-        assert broker.run_job(JOB) == "ERR failed"
+        assert broker.run_job(JOB) == "ERR output"
     close.assert_called_once_with(fd)
 
 
@@ -155,7 +173,7 @@ def test_run_job_rejects_oversized_output(broker: ModuleType) -> None:
         ),
         patch.object(broker.os, "close") as close,
     ):
-        assert broker.run_job(JOB) == "ERR failed"
+        assert broker.run_job(JOB) == "ERR output"
     close.assert_called_once_with(fd)
 
 
@@ -172,7 +190,7 @@ def test_run_job_handles_finalization_failure(broker: ModuleType) -> None:
         patch.object(broker.os, "fchown", side_effect=OSError(), create=True),
         patch.object(broker.os, "close") as close,
     ):
-        assert broker.run_job(JOB) == "ERR failed"
+        assert broker.run_job(JOB) == "ERR output"
     close.assert_called_once_with(fd)
 
 

@@ -1,5 +1,8 @@
+from urllib.parse import urlencode
+
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
@@ -13,11 +16,14 @@ from apps.organizations.models import Department
 from apps.reference_data.forms import (
     ActiveForm,
     FirePlanUploadForm,
+    HydrantFilterForm,
     HydrantForm,
     KlgvPlanUploadForm,
 )
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
 from apps.reference_data.services import set_fire_plan_active, set_klgv_plan_active
+
+HYDRANT_LIST_PAGE_SIZE = 100
 
 
 def _department_or_403(request: HttpRequest, department_id) -> Department:
@@ -40,12 +46,34 @@ def _department_or_403(request: HttpRequest, department_id) -> Department:
 @require_http_methods(["GET"])
 def hydrants(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
+    form = HydrantFilterForm(request.GET or None)
+    queryset = Hydrant.objects.filter(department=department).order_by("external_identifier", "id")
+    if form.is_valid():
+        data = form.cleaned_data
+        if data.get("q"):
+            queryset = queryset.filter(external_identifier__icontains=data["q"])
+        if data.get("status"):
+            queryset = queryset.filter(status=data["status"])
+        if data.get("hydrant_type"):
+            queryset = queryset.filter(hydrant_type__icontains=data["hydrant_type"])
+        if data.get("diameter_mm"):
+            queryset = queryset.filter(diameter_mm=data["diameter_mm"])
+    paginator = Paginator(queryset, HYDRANT_LIST_PAGE_SIZE)
+    page = paginator.get_page(request.GET.get("page", 1))
+    page_query = urlencode(
+        [(key, value) for key, values in request.GET.lists() if key != "page" for value in values]
+    )
     return render(
         request,
         "reference_data/hydrants.html",
         {
             "department": department,
-            "hydrants": Hydrant.objects.filter(department=department),
+            "form": form,
+            "hydrants": page.object_list,
+            "page": page,
+            "total_count": paginator.count,
+            "page_query": page_query,
+            "status_choices": Hydrant.Status.choices,
         },
     )
 

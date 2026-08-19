@@ -452,6 +452,14 @@ def test_postgresql_stale_preview_from_another_connection_requires_repreview(con
     if connection.vendor != "postgresql":
         pytest.skip("ImportBatch stale-preview coverage requires PostgreSQL.")
     actor, department = context
+    Hydrant.objects.create(
+        department=department,
+        external_identifier="H-1",
+        location=Point(8.1, 50.2, srid=4326),
+        hydrant_type="dry",
+        diameter_mm=100,
+        status=Hydrant.Status.ACTIVE,
+    )
     batch = create_preview(
         actor=actor,
         department=department,
@@ -461,16 +469,17 @@ def test_postgresql_stale_preview_from_another_connection_requires_repreview(con
         filename="h.csv",
         payload=hydrant_csv("H-1,8.1,50.2,wet,150,ACTIVE"),
     )
+    assert batch.update_count == 1
 
     def concurrent_change():
         close_old_connections()
         try:
-            Hydrant.objects.create(
+            hydrant = Hydrant.objects.get(
                 department=Department.objects.get(pk=department.pk),
-                external_identifier="H-CONCURRENT",
-                location=Point(8.2, 50.3, srid=4326),
-                status=Hydrant.Status.ACTIVE,
+                external_identifier="H-1",
             )
+            hydrant.diameter_mm = 999
+            hydrant.save(update_fields=("diameter_mm", "updated_at"))
         finally:
             close_old_connections()
 

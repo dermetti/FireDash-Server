@@ -7,11 +7,27 @@ from django.conf import settings
 
 
 class PdfSanitizerError(RuntimeError):
+    """A sanitizer infrastructure/worker failure (fatal for the package)."""
+
     code = "sanitizer_failure"
 
 
 class PdfSanitizerTimeout(PdfSanitizerError):
+    """The sanitizer did not complete in time (infrastructure failure)."""
+
     code = "sanitizer_timeout"
+
+
+class PdfSanitizerContentError(PdfSanitizerError):
+    """The sanitizer positively typed this document as content (skippable).
+
+    This is only raised when the broker has a reliable, positive content-rejection
+    signal. The current qpdf/systemd interface cannot provide one, so this type is
+    reserved for a future broker interface; ambiguous qpdf failures are always
+    reported as ``PdfSanitizerError`` and remain fatal.
+    """
+
+    code = "sanitizer_content_rejected"
 
 
 _JOB_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -52,7 +68,16 @@ def sanitize(*, quarantined_input: Path, sanitized_output: Path) -> None:
         raise PdfSanitizerTimeout("PDF sanitizer timed out.") from error
     except OSError as error:
         raise PdfSanitizerError("PDF sanitizer broker is unavailable.") from error
-    if status != "OK":
-        raise PdfSanitizerError("PDF sanitizer rejected the document.")
-    if not sanitized_output.is_file():
-        raise PdfSanitizerError("PDF sanitizer did not produce an output file.")
+    if status == "OK":
+        if not sanitized_output.is_file():
+            raise PdfSanitizerError("PDF sanitizer did not produce an output file.")
+        return
+    if status == "ERR failed":
+        # Reserved for a future positively-typed content rejection. The broker
+        # currently never emits this token because qpdf's exit status 2 does not
+        # distinguish document content from operational failure; ambiguous qpdf
+        # failures are reported as ``ERR output`` and remain fatal.
+        raise PdfSanitizerContentError("PDF sanitizer rejected the document.")
+    if status == "ERR timeout":
+        raise PdfSanitizerTimeout("PDF sanitizer timed out.")
+    raise PdfSanitizerError("PDF sanitizer broker rejected the request.")

@@ -58,6 +58,25 @@ Current required production dataset types are `department_hydrants`,
 feature-disabled `department_klgv_plans` registry entry proves additive v1
 dataset evolution: it is department-scoped, ZIP-backed, schema version 1, and
 optional, so older tablets ignore it safely until they support it. It remains a
+single complete encrypted artifact; it is not the planned v2 individual-PDF
+delivery design.
+
+Department Fire Plans are currently published as one monolithic ZIP of every
+active plan (`_artifact_fire_plans`), so a larger `PUBLICATION_ARTIFACT_MAX_BYTES`
+is only a temporary compatibility ceiling, not the ~2,800-plan scale solution.
+The target Fire Plan architecture is a signed, versioned authoritative department
+manifest plus immutable, individually encrypted Fire Plan PDF artifacts: each
+manifest generation lists every canonical Fire Plan with its immutable encrypted
+artifact/version/hash/size, unchanged PDFs reuse existing artifacts, and only
+changed/new PDFs produce new artifacts. Tablet sync fetches and verifies the
+latest signed generation, compares with the locally active generation, reuses
+identical local artifacts, downloads only missing/changed artifacts, verifies and
+decrypts each required new artifact, then atomically activates the new generation
+only after everything required is ready; documents absent from the new manifest
+are deleted/gc'd only after activation, and any failed download/decrypt/import
+retains the previous complete generation. Deterministic keys/nonces are never
+derived for deduplication; deduplication reuses already-built immutable artifacts
+when sanitized content is unchanged.
 
 ## Canonical data ingestion
 
@@ -68,8 +87,6 @@ exact staged SHA-256 and baseline, commits canonical rows atomically, then
 marks each unique affected dataset scope dirty once. Imports never create
 artifacts, publication attempts, grants, manifests, encryption, or signatures.
 The normal build/delivery lanes remain responsible for those steps.
-single complete encrypted artifact; it is not the planned v2 individual-PDF
-delivery design.
 
 ## Tablet cryptography
 

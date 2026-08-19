@@ -219,8 +219,15 @@ def validate_publication_artifact_layout(*, root: Path, temp_root: Path) -> None
 validate_publication_artifact_layout(
     root=PUBLICATION_ARTIFACT_ROOT, temp_root=PUBLICATION_ARTIFACT_TEMP_ROOT
 )
+# The plaintext publication bundle ceiling. TEMPORARY compatibility value only:
+# department Fire Plans are still built as one monolithic ZIP of every active
+# plan (``_artifact_fire_plans``), so the ceiling is sized to the single-package
+# ingestion envelope (MAX_PDF_PACKAGE_EXPANDED_BYTES = 512 MiB + framing/AEAD
+# overhead), NOT to the ~2,800-plan production target. The scale solution is the
+# per-document architecture (signed generation manifest + immutable individual
+# encrypted PDF artifacts); do not treat a larger monolithic ceiling as scalable.
 PUBLICATION_ARTIFACT_MAX_BYTES = get_typed_env(
-    "PUBLICATION_ARTIFACT_MAX_BYTES", int, default=100 * 1024 * 1024
+    "PUBLICATION_ARTIFACT_MAX_BYTES", int, default=600 * 1024 * 1024
 )
 PUBLICATION_ARTIFACT_STALE_SECONDS = get_typed_env(
     "PUBLICATION_ARTIFACT_STALE_SECONDS", int, default=3600

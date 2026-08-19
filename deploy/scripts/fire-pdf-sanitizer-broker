@@ -49,7 +49,16 @@ def _owner_ids() -> tuple[int, int]:
 
 
 def run_job(job_id: str) -> str:
-    """Run the sanitizer for *job_id*; return an ``OK``/``ERR`` status token."""
+    """Run the sanitizer for *job_id*; return an ``OK``/``ERR`` status token.
+
+    Any non-zero ``systemctl start --wait`` result is reported as infrastructure
+    (``ERR output``). qpdf's exit status 2 is ambiguous: it is returned both for
+    a genuine document-content rejection *and* for operational failures (I/O,
+    permissions, filesystem, output, or a bad invocation), so the broker must
+    never infer a skippable content rejection from the unit exit status alone.
+    Content rejection remains the caller's pre-validation responsibility; the
+    broker only reports success or infrastructure failure.
+    """
     unit = f"fire-pdf-sanitizer@{job_id}.service"
     output = os.path.join(SANITIZER_OUTPUT_ROOT, job_id, OUTPUT_NAME)
     try:
@@ -65,24 +74,24 @@ def run_job(job_id: str) -> str:
     except subprocess.TimeoutExpired:
         return "ERR timeout"
     except OSError:
-        return "ERR failed"
+        return "ERR output"
     if result.returncode != 0:
-        return "ERR failed"
+        return "ERR output"
     try:
         # Open with O_NOFOLLOW and finalize on the fd to avoid a path-based
         # TOCTOU window between lstat and chown/chmod.
         fd = os.open(output, os.O_RDONLY | _O_NOFOLLOW)
     except OSError:
-        return "ERR failed"
+        return "ERR output"
     try:
         entry = os.fstat(fd)
         if not stat.S_ISREG(entry.st_mode) or entry.st_size > MAX_OUTPUT_BYTES:
-            return "ERR failed"
+            return "ERR output"
         uid, gid = _owner_ids()
         os.fchown(fd, uid, gid)
         os.fchmod(fd, OUTPUT_MODE)
     except (OSError, KeyError):
-        return "ERR failed"
+        return "ERR output"
     finally:
         os.close(fd)
     return "OK"

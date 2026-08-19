@@ -10,7 +10,15 @@ from django.views.decorators.http import require_http_methods
 from apps.authorization.services import require_department_admin
 from apps.ingestion.forms import ImportUploadForm
 from apps.ingestion.models import ImportBatch
-from apps.ingestion.services import ImportError, apply_preview, cancel_preview, create_preview
+from apps.ingestion.services import (
+    ImportError,
+    apply_preview,
+    approve_all_review_decisions,
+    cancel_preview,
+    create_preview,
+    review_context,
+    set_review_decision,
+)
 from apps.organizations.models import Department, Station
 
 
@@ -69,13 +77,75 @@ def preview(request: HttpRequest, department_id, batch_id) -> HttpResponse:
     batch = get_object_or_404(ImportBatch, pk=batch_id, department=department)
     if request.method == "POST":
         try:
-            apply_preview(actor=request.user, batch_id=batch.id)
+            applied = apply_preview(actor=request.user, batch_id=batch.id)
         except ImportError as error:
             messages.error(request, str(error))
         else:
-            messages.success(request, "Import applied; publication is scheduled separately.")
+            rejected = len(applied.validation_summary.get("document_failures", []))
+            if rejected:
+                messages.warning(
+                    request,
+                    f"Import applied with {rejected} rejected document(s); "
+                    "publication is scheduled separately.",
+                )
+            else:
+                messages.success(request, "Import applied; publication is scheduled separately.")
             return redirect("ingestion-imports", department_id=department.id)
-    return render(request, "ingestion/preview.html", {"department": department, "batch": batch})
+    return render(
+        request,
+        "ingestion/preview.html",
+        {"department": department, "batch": batch, "review": _review_context(request, batch)},
+    )
+
+
+def _review_context(request: HttpRequest, batch: ImportBatch) -> dict[str, object] | None:
+    if batch.domain not in {
+        ImportBatch.Domain.FIRE_PLANS,
+        ImportBatch.Domain.KLGV_PLANS,
+    }:
+        return None
+    try:
+        index = int(request.GET.get("review", "0"))
+    except (TypeError, ValueError):
+        index = 0
+    return review_context(batch, index)
+
+
+def _review_decide(request, department_id, batch_id, key, decision) -> HttpResponse:
+    department = _department(request, department_id)
+    batch = get_object_or_404(ImportBatch, pk=batch_id, department=department)
+    try:
+        set_review_decision(actor=request.user, batch_id=batch.id, key=key, decision=decision)
+    except ImportError as error:
+        messages.error(request, str(error))
+    return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
+
+
+@login_required
+@require_http_methods(["POST"])
+def review_approve(request: HttpRequest, department_id, batch_id, key) -> HttpResponse:
+    return _review_decide(request, department_id, batch_id, key, "approved")
+
+
+@login_required
+@require_http_methods(["POST"])
+def review_skip(request: HttpRequest, department_id, batch_id, key) -> HttpResponse:
+    return _review_decide(request, department_id, batch_id, key, "skipped")
+
+
+@login_required
+@require_http_methods(["POST"])
+def review_approve_all(request: HttpRequest, department_id, batch_id) -> HttpResponse:
+    department = _department(request, department_id)
+    batch = get_object_or_404(ImportBatch, pk=batch_id, department=department)
+    if request.POST.get("confirm") != "true":
+        messages.error(request, "Approve-all requires explicit confirmation.")
+        return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
+    try:
+        approve_all_review_decisions(actor=request.user, batch_id=batch.id)
+    except ImportError as error:
+        messages.error(request, str(error))
+    return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
 
 
 @login_required

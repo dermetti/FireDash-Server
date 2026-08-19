@@ -34,7 +34,7 @@ from apps.organizations.models import Station
 from apps.personnel.models import Person
 from apps.publications.services import mark_dirty
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
-from apps.reference_data.pdf_sandbox import PdfSanitizerError, sanitize
+from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitizerError, sanitize
 from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
 from apps.reference_data.storage import (
     StorageError as ReferenceDataStorageError,
@@ -228,18 +228,45 @@ def _fingerprint(value: object) -> str:
     ).hexdigest()
 
 
-def _hydrant_baseline(*, department) -> dict[str, str]:
+def _hydrant_identifiers(rows) -> list[str]:
+    """Return the deduplicated, sorted, non-empty identifiers present in *rows*.
+
+    The baseline and comparison set are scoped to these identifiers so a manual
+    one-record edit never materializes or fingerprints the whole department.
+    """
+    return sorted(
+        {str(row["external_identifier"]) for row in rows if str(row["external_identifier"])}
+    )
+
+
+def _hydrant_baseline(*, department, identifiers) -> dict[str, str]:
+    """Fingerprint only the canonical hydrants relevant to *identifiers*.
+
+    The set of identifiers is taken directly from the import, so this scales
+    O(number of imported identifiers), not O(department hydrant count).  All
+    fields later read by ``_hydrant_business_values`` are declared in ``only``
+    so no deferred-field N+1 query can occur.
+    """
+    identifiers = [identifier for identifier in identifiers if identifier]
+    if not identifiers:
+        return {}
     return {
-        identifier: _fingerprint(
+        hydrant.external_identifier: _fingerprint(
             {
                 "updated_at": hydrant.updated_at.isoformat(),
                 "business_values": _hydrant_business_values(hydrant),
             }
         )
         for hydrant in Hydrant.objects.filter(
-            department=department, external_identifier__gt=""
-        ).only("external_identifier", "updated_at", "status", "location")
-        for identifier in [hydrant.external_identifier]
+            department=department, external_identifier__in=identifiers
+        ).only(
+            "external_identifier",
+            "updated_at",
+            "status",
+            "location",
+            "hydrant_type",
+            "diameter_mm",
+        )
     }
 
 
@@ -309,12 +336,16 @@ def create_preview(
         station=station,
         staging_key=f"pending-{__import__('uuid').uuid4()}.source",
     )
+    document_failures: list[dict[str, str]] = []
+    total_documents = 0
     try:
         if domain == ImportBatch.Domain.HYDRANTS:
             if import_mode != ImportBatch.Mode.MERGE:
                 raise ImportError("Hydrant imports require merge mode.")
             intent = parse_hydrants(payload=payload, import_format=import_format)
-            baseline = _hydrant_baseline(department=department)
+            baseline = _hydrant_baseline(
+                department=department, identifiers=_hydrant_identifiers(intent)
+            )
             counts, hydrant_updates, updates_truncated = _preview_hydrants(
                 intent=intent, department=department
             )
@@ -329,11 +360,13 @@ def create_preview(
         elif domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
             if import_format != ImportBatch.Format.ZIP or import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("PDF package imports require ZIP upsert mode.")
-            intent = _sanitize_pdf_preview(
+            intent, document_failures, total_documents = _sanitize_pdf_preview(
                 batch=batch, payload=payload, department=department, domain=domain
             )
+            if document_failures and not intent:
+                raise ImportError("No documents in this package were accepted.")
             baseline = _document_baseline(department=department, domain=domain)
-            counts, updates, updates_truncated = _preview_documents(
+            counts, updates, updates_truncated, review_items = _preview_documents(
                 intent=intent, department=department, domain=domain
             )
         else:
@@ -381,10 +414,19 @@ def create_preview(
     }:
         batch.validation_summary["updates"] = updates
     batch.validation_summary["updates_truncated"] = updates_truncated
+    if domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
+        batch.validation_summary["review_items"] = review_items
+        batch.validation_summary["review_decisions"] = {}
+        batch.validation_summary["skipped_update_count"] = 0
     if domain == ImportBatch.Domain.FIRE_PLANS:
         batch.validation_summary["coordinate_conflicts"] = _coordinate_conflicts(
             department=department, intent=intent
         )
+    if domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
+        batch.validation_summary["document_failures"] = document_failures
+        batch.validation_summary["total_document_count"] = total_documents
+        batch.validation_summary["ready_document_count"] = len(intent)
+        batch.validation_summary["rejected_document_count"] = len(document_failures)
     batch.save()
     record_event(
         action="ingestion.preview_created",
@@ -401,15 +443,21 @@ def create_preview(
             "update": counts[1],
             "deactivate": counts[2],
             "unchanged": counts[3],
+            "ready_documents": total_documents - len(document_failures),
+            "rejected_documents": len(document_failures),
+            "rejection_codes": ",".join(failure["code"] for failure in document_failures),
         },
     )
     return batch
 
 
 def _preview_hydrants(*, intent, department):
+    identifiers = _hydrant_identifiers(intent)
     existing = {
         hydrant.external_identifier: hydrant
-        for hydrant in Hydrant.objects.filter(department=department, external_identifier__gt="")
+        for hydrant in Hydrant.objects.filter(
+            department=department, external_identifier__in=identifiers
+        )
     }
     add = update = unchanged = 0
     details: list[dict[str, object]] = []
@@ -510,7 +558,12 @@ def apply_preview(*, actor, batch_id) -> ImportBatch:
     try:
         if batch.domain == ImportBatch.Domain.HYDRANTS:
             rows = parse_hydrants(payload=payload, import_format=batch.import_format)
-            if _hydrant_baseline(department=batch.department) != batch.baseline:
+            if (
+                _hydrant_baseline(
+                    department=batch.department, identifiers=_hydrant_identifiers(rows)
+                )
+                != batch.baseline
+            ):
                 raise ImportError("Canonical hydrants changed; re-preview is required.")
             scopes, counts = _apply_hydrants(batch=batch, rows=rows)
         elif batch.domain == ImportBatch.Domain.PERSONNEL:
@@ -556,6 +609,7 @@ def apply_preview(*, actor, batch_id) -> ImportBatch:
             "deactivate_count",
             "unchanged_count",
             "affected_scopes",
+            "validation_summary",
         )
     )
     record_event(
@@ -572,6 +626,11 @@ def apply_preview(*, actor, batch_id) -> ImportBatch:
             "deactivate": counts[2],
             "unchanged": counts[3],
             "affected_scope_count": len(scopes),
+            "skipped_updates": batch.validation_summary.get("skipped_update_count", 0),
+            "rejected_documents": len(batch.validation_summary.get("document_failures", [])),
+            "rejection_codes": ",".join(
+                failure["code"] for failure in batch.validation_summary.get("document_failures", [])
+            ),
         },
     )
     return batch
@@ -621,10 +680,11 @@ def cancel_preview(*, actor, batch_id) -> ImportBatch:
 
 
 def _apply_hydrants(*, batch, rows):
+    identifiers = _hydrant_identifiers(rows)
     existing = {
         hydrant.external_identifier: hydrant
         for hydrant in Hydrant.objects.select_for_update().filter(
-            department=batch.department, external_identifier__gt=""
+            department=batch.department, external_identifier__in=identifiers
         )
     }
     add = update = unchanged = 0
@@ -746,6 +806,33 @@ def _document_identity_key(document_or_row, *, domain: str) -> str:
     return f"address:{address}"
 
 
+def _identity_match(row: dict[str, object], *, domain: str) -> dict[str, str]:
+    """Describe which identity rule matched an incoming row (for the review wizard)."""
+    external_identifier = str(row.get("external_identifier", "") or "").strip()
+    if domain != ImportBatch.Domain.FIRE_PLANS:
+        return {"strategy": "external_identifier", "value": external_identifier}
+    address = str(row.get("address", "") or "").strip()
+    if external_identifier:
+        return {"strategy": "external_identifier", "value": external_identifier}
+    return {"strategy": "address_fallback", "value": address}
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Geodesic distance in kilometres (mean-earth-radius haversine)."""
+    import math
+
+    radius = 6371.0088
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(a))
+
+
+def _mib_format(value: int) -> str:
+    return f"{value / (1024 * 1024):.2f} MiB"
+
+
 def _document_baseline(*, department, domain: str) -> dict[str, str]:
     if domain == ImportBatch.Domain.FIRE_PLANS:
         rows = FirePlan.objects.filter(department=department).only(
@@ -802,6 +889,7 @@ def _preview_documents(*, intent, department, domain):
     }
     add = update = deactivate = unchanged = 0
     details: list[dict[str, object]] = []
+    review_items: list[dict[str, object]] = []
     for row in intent:
         current = existing.get(_document_identity_key(row, domain=domain))
         if row["action"] == "deactivate":
@@ -816,14 +904,159 @@ def _preview_documents(*, intent, department, domain):
             current=current, row=row, model=model
         ) or _document_metadata_changes(current=current, row=row, model=model):
             update += 1
+            detail = _document_update_detail(current=current, row=row, model=model, domain=domain)
+            review_items.append(
+                {field: value for field, value in detail.items() if field != "fields"}
+            )
             if len(details) < settings.MAX_IMPORT_VALIDATION_ERRORS:
-                fields = _document_changed_fields(current=current, row=row, model=model)
-                details.append(
-                    {"external_identifier": row["external_identifier"], "fields": fields}
-                )
+                details.append(detail)
         else:
             unchanged += 1
-    return (add, update, deactivate, unchanged), details, update > len(details)
+    return (add, update, deactivate, unchanged), details, update > len(details), review_items
+
+
+def _document_update_detail(*, current, row, model, domain) -> dict[str, object]:
+    """Build a review-wizard explanation for one matched canonical update."""
+    match = _identity_match(row, domain=domain)
+    return {
+        "key": str(current.id),
+        "external_identifier": row["external_identifier"],
+        "matched_record_id": str(current.id),
+        "identity_strategy": match["strategy"],
+        "matched_value": match["value"],
+        "incoming_filename": row.get("original_filename", ""),
+        "fields": _document_changed_fields(current=current, row=row, model=model),
+    }
+
+
+_REVIEW_DECISIONS = ("approved", "skipped")
+
+
+def _review_keys(batch: ImportBatch) -> list[str]:
+    """Return the ordered identity keys of every proposed document update."""
+    return [
+        str(item["key"])
+        for item in batch.validation_summary.get("review_items", [])
+        if isinstance(item, dict) and item.get("key")
+    ]
+
+
+def _review_decisions(batch: ImportBatch) -> dict[str, str]:
+    """Return the persisted per-update decisions (``approved``/``skipped`` only)."""
+    raw = batch.validation_summary.get("review_decisions", {})
+    return {
+        str(key): str(value["decision"])
+        for key, value in raw.items()
+        if isinstance(value, dict) and value.get("decision") in _REVIEW_DECISIONS
+    }
+
+
+def _review_summary(batch: ImportBatch) -> dict[str, int]:
+    keys = _review_keys(batch)
+    decisions = _review_decisions(batch)
+    approved = sum(1 for key in keys if decisions.get(key) == "approved")
+    skipped = sum(1 for key in keys if decisions.get(key) == "skipped")
+    return {
+        "total": len(keys),
+        "pending": len(keys) - approved - skipped,
+        "approved": approved,
+        "skipped": skipped,
+    }
+
+
+@transaction.atomic
+def set_review_decision(*, actor, batch_id, key: str, decision: str) -> ImportBatch:
+    """Record one approve/skip decision for a proposed document update.
+
+    Decisions persist on the batch (JSON, no migration) and are therefore bound to
+    the exact staged preview; any canonical mutation after review re-triggers the
+    stale-baseline check in ``apply_preview``.
+    """
+    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    require_department_admin(actor, batch.department)
+    if batch.status != ImportBatch.Status.PREVIEW_READY:
+        raise ImportError("Only a ready preview can be reviewed.")
+    if batch.domain not in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
+        raise ImportError("Update review is only available for document imports.")
+    if decision not in _REVIEW_DECISIONS:
+        raise ImportError("Invalid review decision.")
+    if key not in _review_keys(batch):
+        raise ImportError("Review target is not a proposed update.")
+    decisions = dict(batch.validation_summary.get("review_decisions", {}))
+    decisions[key] = {
+        "decision": decision,
+        "decided_at": timezone.now().isoformat(),
+        "decided_by": str(actor.id),
+    }
+    batch.validation_summary["review_decisions"] = decisions
+    batch.save(update_fields=("validation_summary",))
+    record_event(
+        action=f"ingestion.review_{decision}",
+        actor_user=actor,
+        department=batch.department,
+        target_type="import_batch",
+        target_uuid=batch.id,
+        metadata={"domain": batch.domain, "review_key": key},
+    )
+    return batch
+
+
+@transaction.atomic
+def approve_all_review_decisions(*, actor, batch_id) -> ImportBatch:
+    """Approve every pending update; requires an explicit UI confirmation."""
+    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    require_department_admin(actor, batch.department)
+    if batch.status != ImportBatch.Status.PREVIEW_READY:
+        raise ImportError("Only a ready preview can be reviewed.")
+    if batch.domain not in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
+        raise ImportError("Update review is only available for document imports.")
+    decisions = dict(batch.validation_summary.get("review_decisions", {}))
+    now = timezone.now().isoformat()
+    actor_id = str(actor.id)
+    for key in _review_keys(batch):
+        decisions[key] = {"decision": "approved", "decided_at": now, "decided_by": actor_id}
+    batch.validation_summary["review_decisions"] = decisions
+    batch.save(update_fields=("validation_summary",))
+    record_event(
+        action="ingestion.review_approve_all",
+        actor_user=actor,
+        department=batch.department,
+        target_type="import_batch",
+        target_uuid=batch.id,
+        metadata={"domain": batch.domain, "approved_count": len(_review_keys(batch))},
+    )
+    return batch
+
+
+def review_context(batch: ImportBatch, index: int = 0) -> dict[str, object]:
+    """Build the wizard view context for one document-import preview."""
+    items = [
+        item for item in batch.validation_summary.get("review_items", []) if isinstance(item, dict)
+    ]
+    decisions = _review_decisions(batch)
+    total = len(items)
+    index = max(0, min(index, total - 1)) if total else 0
+    current: dict[str, object] | None = None
+    if total:
+        item = dict(items[index])
+        key = str(item["key"])
+        item["decision"] = decisions.get(key, "pending")
+        detail_fields = {
+            str(detail["key"]): detail["fields"]
+            for detail in batch.validation_summary.get("updates", [])
+            if isinstance(detail, dict) and detail.get("key")
+        }
+        item["fields"] = detail_fields.get(key, [])
+        current = item
+    return {
+        "items": items,
+        "summary": _review_summary(batch),
+        "index": index,
+        "current": current,
+        "previous_index": index - 1 if total and index > 0 else None,
+        "next_index": index + 1 if total and index < total - 1 else None,
+        "domain": batch.domain,
+    }
 
 
 def _coordinate_conflicts(*, department, intent) -> list[dict[str, object]]:
@@ -852,10 +1085,15 @@ def _coordinate_conflicts(*, department, intent) -> list[dict[str, object]]:
 
 def _sanitize_pdf_preview(
     *, batch: ImportBatch, payload: bytes, department, domain: str
-) -> list[dict[str, object]]:
-    """Use the production quarantine/broker path, but keep output private/staged.
+) -> tuple[list[dict[str, object]], list[dict[str, str]], int]:
+    """Prepare each document through the quarantine/broker path, keeping outputs staged.
 
-    This deliberately does not promote anything into canonical accepted storage.
+    A structurally valid package supports partial acceptance: a pre-validation
+    content/safety rejection (``PdfValidationError``) is skipped and recorded,
+    while package/sanitizer-infrastructure failures still abort the whole preview.
+    Sanitizer-stage content rejections are only skipped when positively typed
+    (``PdfSanitizerContentError``); ambiguous qpdf failures remain fatal.
+    Returns ``(rows, failures, total)``.
     """
     entries = parse_pdf_package(payload=payload, domain=domain)
     model = FirePlan if domain == ImportBatch.Domain.FIRE_PLANS else KlgvPlan
@@ -864,6 +1102,7 @@ def _sanitize_pdf_preview(
         for row in model.objects.filter(department=department)
     }
     result: list[dict[str, object]] = []
+    failures: list[dict[str, str]] = []
     try:
         for entry in entries:
             metadata: dict[str, object] = {
@@ -919,12 +1158,33 @@ def _sanitize_pdf_preview(
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 shutil.copyfile(sanitized, target)
                 os.chmod(target, 0o600)
-            except (
-                PdfSanitizerError,
-                PdfValidationError,
-                ReferenceDataStorageError,
-                OSError,
-            ) as error:
+            except PdfSanitizerContentError as error:
+                _log_sanitizer_failure(
+                    batch=batch,
+                    domain=domain,
+                    filename=entry.filename,
+                    source_sha256=source_sha256,
+                    job_uuid=(quarantine.parent.name if quarantine is not None else ""),
+                    stage=stage,
+                    error=error,
+                    input_bytes=len(entry.pdf_bytes or b""),
+                )
+                failures.append(_document_failure(entry.filename, error))
+                continue
+            except PdfValidationError as error:
+                _log_sanitizer_failure(
+                    batch=batch,
+                    domain=domain,
+                    filename=entry.filename,
+                    source_sha256=source_sha256,
+                    job_uuid=(quarantine.parent.name if quarantine is not None else ""),
+                    stage=stage,
+                    error=error,
+                    input_bytes=len(entry.pdf_bytes or b""),
+                )
+                failures.append(_document_failure(entry.filename, error))
+                continue
+            except (PdfSanitizerError, ReferenceDataStorageError, OSError) as error:
                 _log_sanitizer_failure(
                     batch=batch,
                     domain=domain,
@@ -954,16 +1214,26 @@ def _sanitize_pdf_preview(
             if key := row.get("sanitized_staging_key"):
                 remove_staged(key=str(key))
         raise
-    return result
+    return result, failures, len(entries)
+
+
+def _document_failure(filename: str, error: BaseException) -> dict[str, str]:
+    """Build a safe, deterministic per-document rejection record."""
+    return {
+        "filename": filename,
+        "code": str(getattr(error, "code", None) or "invalid_pdf"),
+        "message": str(error),
+    }
 
 
 def _apply_documents(*, batch: ImportBatch):
     model = FirePlan if batch.domain == ImportBatch.Domain.FIRE_PLANS else KlgvPlan
+    decisions = _review_decisions(batch)
     existing = {
         _document_identity_key(row, domain=batch.domain): row
         for row in model.objects.select_for_update().filter(department=batch.department)
     }
-    add = update = deactivate = unchanged = 0
+    add = update = deactivate = unchanged = skipped = 0
     for row in batch.normalized_intent["rows"]:
         current = existing.get(_document_identity_key(row, domain=batch.domain))
         if row["action"] == "deactivate":
@@ -974,9 +1244,24 @@ def _apply_documents(*, batch: ImportBatch):
             else:
                 unchanged += 1
             continue
-        is_new_content = current is None or _document_content_changed(
-            current=current, row=row, model=model
-        )
+        if current is None:
+            content_changed = False
+        else:
+            content_changed = _document_content_changed(current=current, row=row, model=model)
+            metadata_changed = _document_metadata_changes(current=current, row=row, model=model)
+            if content_changed or metadata_changed:
+                # A proposed update is gated on an explicit review decision. Pending
+                # blocks confirmation; skipped produces zero canonical/PDF/publication
+                # effect; only approved updates mutate canonical rows.
+                decision = decisions.get(str(current.id))
+                if decision not in _REVIEW_DECISIONS:
+                    raise ImportError(
+                        "Pending update review requires approval or skip before import."
+                    )
+                if decision == "skipped":
+                    skipped += 1
+                    continue
+        is_new_content = current is None or content_changed
         sanitized_path = None
         if is_new_content:
             sanitized_path = settings.INGESTION_STAGING_ROOT / row["sanitized_staging_key"]
@@ -1000,6 +1285,7 @@ def _apply_documents(*, batch: ImportBatch):
             update += 1
         else:
             unchanged += 1
+    batch.validation_summary["skipped_update_count"] = skipped
     code = "department_fire_plans" if model is FirePlan else "department_klgv_plans"
     scopes = [(code, None)] if add or update or deactivate else []
     return scopes, (add, update, deactivate, unchanged)
@@ -1097,34 +1383,88 @@ def _document_content_changed(*, current, row, model) -> bool:
 def _document_changed_fields(*, current, row, model) -> list[dict[str, object]]:
     fields: list[dict[str, object]] = []
     if _document_content_changed(current=current, row=row, model=model):
-        fields.append(
-            {"name": "source_pdf", "current": "existing PDF", "proposed": "replacement PDF"}
+        sanitized_current = (
+            current.sha256 if isinstance(current, FirePlan) else current.sanitized_pdf_sha256
+        )
+        fields.extend(
+            (
+                {
+                    "name": "source_pdf_sha256",
+                    "label": "Source PDF SHA-256",
+                    "current": current.source_pdf_sha256 or "",
+                    "proposed": row["source_pdf_sha256"],
+                },
+                {
+                    "name": "sanitized_pdf_sha256",
+                    "label": "Sanitized PDF SHA-256",
+                    "current": sanitized_current or "",
+                    "proposed": row["sanitized_pdf_sha256"],
+                },
+                {
+                    "name": "pdf_size",
+                    "label": "PDF size",
+                    "current": _mib_format(current.file_size),
+                    "proposed": _mib_format(row["file_size"]),
+                },
+                {
+                    "name": "page_count",
+                    "label": "Pages",
+                    "current": current.page_count,
+                    "proposed": row["page_count"],
+                },
+            )
         )
     if model is FirePlan:
-        pairs = (
-            ("title", "object_name", row["title"]),
-            ("address", "address", row["address"]),
-            ("postal_code", "postal_code", row["postal_code"]),
-            ("city", "city", row["city"]),
-        )
-        for label, attribute, proposed in pairs:
+        for name, label, attribute, proposed in (
+            ("object_name", "Object name", "object_name", row["title"]),
+            ("address", "Address", "address", row["address"]),
+            ("postal_code", "Postal code", "postal_code", row["postal_code"]),
+            ("city", "City", "city", row["city"]),
+        ):
             if proposed and getattr(current, attribute) != proposed:
                 fields.append(
-                    {"name": label, "current": getattr(current, attribute), "proposed": proposed}
+                    {
+                        "name": name,
+                        "label": label,
+                        "current": getattr(current, attribute) or "",
+                        "proposed": proposed,
+                    }
                 )
-        if _location(row) is not None and current.location != _location(row):
+        incoming_location = _location(row)
+        if incoming_location is not None and current.location != incoming_location:
             fields.append(
                 {
                     "name": "location",
-                    "current": "existing location",
-                    "proposed": "replacement location",
+                    "label": "Location",
+                    "current": {"longitude": current.location.x, "latitude": current.location.y},
+                    "proposed": {
+                        "longitude": incoming_location.x,
+                        "latitude": incoming_location.y,
+                    },
+                    "distance_km": round(
+                        _haversine_km(
+                            current.location.y,
+                            current.location.x,
+                            incoming_location.y,
+                            incoming_location.x,
+                        ),
+                        3,
+                    ),
                 }
             )
     else:
-        for label, proposed in (("title", row["title"]), ("category", row["category"])):
-            if proposed and getattr(current, label) != proposed:
+        for name, label, proposed in (
+            ("title", "Title", row["title"]),
+            ("category", "Category", row["category"]),
+        ):
+            if proposed and getattr(current, name) != proposed:
                 fields.append(
-                    {"name": label, "current": getattr(current, label), "proposed": proposed}
+                    {
+                        "name": name,
+                        "label": label,
+                        "current": getattr(current, name),
+                        "proposed": proposed,
+                    }
                 )
     return fields
 
