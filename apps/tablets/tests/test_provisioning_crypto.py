@@ -8,7 +8,12 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 from django.utils import timezone
 
-from apps.publications.hpke import hpke_open, hpke_seal
+from apps.publications.hpke import (
+    hpke_open,
+    hpke_seal,
+    public_key_fingerprint,
+    serialize_p256_public_key,
+)
 from apps.tablets.models import AppInstallation
 from apps.tablets.services import (
     ADOPTION_PROTOCOL,
@@ -221,3 +226,75 @@ def test_canonical_protocol_datetime_never_uses_offset_suffix():
     value = datetime(2026, 8, 14, 15, 0, 0, 123456, tzinfo=UTC)
     assert canonical_protocol_datetime(value).endswith("Z")
     assert "+00:00" not in canonical_protocol_datetime(value)
+
+
+# --- HPKE framing / fingerprint contract --------------------------------------
+
+
+def test_adoption_hpke_wire_framing_lengths():
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    context = AdoptionChallengeContext(
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        "d" * 64,
+        timezone.now() + timedelta(minutes=5),
+        "adoption",
+    )
+    nonce = b"x" * 32
+    encapsulated_key, ciphertext = hpke_seal(
+        plaintext=nonce, recipient_public_key=private_key.public_key(), context=context
+    )
+
+    assert len(encapsulated_key) == 65
+    assert encapsulated_key[:1] == b"\x04"
+    assert len(ciphertext) == 48  # 32-byte plaintext + 16-byte GCM tag
+    assert len(encapsulated_key + ciphertext) == 113
+    assert len(nonce) == 32
+    assert (
+        hpke_open(
+            encapsulated_key=encapsulated_key,
+            ciphertext=ciphertext,
+            recipient_private_key=private_key,
+            context=context,
+        )
+        == nonce
+    )
+
+
+def test_public_key_fingerprint_is_sha256_of_65_byte_uncompressed_point():
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    encoded = serialize_p256_public_key(private_key.public_key())
+    assert len(encoded) == 65
+    assert encoded[:1] == b"\x04"
+    assert public_key_fingerprint(private_key.public_key()) == hashlib.sha256(encoded).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("microsecond", "expected"),
+    (
+        (0, "2026-08-14T15:00:00Z"),
+        (1, "2026-08-14T15:00:00.000001Z"),
+        (120000, "2026-08-14T15:00:00.120000Z"),
+        (999999, "2026-08-14T15:00:00.999999Z"),
+    ),
+)
+def test_canonical_protocol_datetime_fixed_fractional_cases(microsecond, expected):
+    value = datetime(2026, 8, 14, 15, 0, 0, microsecond, tzinfo=UTC)
+    assert canonical_protocol_datetime(value) == expected
+
+
+def test_adoption_response_expires_at_matches_context_bytes():
+    # The preview response ``expires_at`` string must byte-match the value bound
+    # into AdoptionChallengeContext.info(); semantic equality is not sufficient.
+    expires_at = datetime(2026, 8, 14, 15, 0, 0, 120000, tzinfo=UTC)
+    context = AdoptionChallengeContext(
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        "e" * 64,
+        expires_at,
+        "adoption",
+    )
+    response_expires_at = canonical_protocol_datetime(expires_at)
+    assert f'"expires_at":"{response_expires_at}"'.encode("ascii") in context.info()

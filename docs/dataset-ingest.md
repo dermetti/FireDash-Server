@@ -11,7 +11,7 @@ Each preview is bound to the exact staged upload SHA-256 and the canonical state
 Department Administrators can work only in their department; they may import personnel for any active station in that department.  Audit records retain safe batch metadata and counts, not raw personnel/PDF content.  Staged uploads are private and removed by maintenance after the configured preview/applied retention periods.
 
 For Fire Plans, upload either one PDF with its metadata or one ZIP containing
-`manifest.csv` and the declared PDFs. A nonblank External ID is the preferred
+`fire-plans-manifest-v1.csv` and the declared PDFs. A nonblank External ID is the preferred
 identity. If no External ID exists, the exact trimmed address is the fallback
 identity; it is not fuzzy-matched. Filename is ZIP transport metadata only.
 An omitted ZIP row never deactivates a Fire Plan.

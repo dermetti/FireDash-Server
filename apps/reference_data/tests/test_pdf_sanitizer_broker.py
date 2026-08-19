@@ -188,3 +188,15 @@ def test_broker_unit_files_use_accept_yes_and_inetd_stdio() -> None:
     assert "StandardOutput=inherit" in service_unit
     assert "StandardError=journal" in service_unit
     assert "NoNewPrivileges=true" in service_unit
+
+
+def test_sanitizer_unit_tolerates_qpdf_warnings_only_exit() -> None:
+    root = Path(__file__).resolve().parents[3]
+    sanitizer_unit = (root / "deploy" / "systemd" / "fire-pdf-sanitizer@.service").read_text()
+
+    # qpdf exits 3 on warnings-without-errors; --warning-exit-0 maps that to 0 so
+    # the oneshot unit does not fail on recoverable structural warnings while a
+    # real qpdf error (status 2) still fails the unit.
+    assert "--warning-exit-0" in sanitizer_unit
+    assert "ExecStart=/usr/bin/qpdf" in sanitizer_unit
+    assert "--deterministic-id" in sanitizer_unit

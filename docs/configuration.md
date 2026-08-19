@@ -73,7 +73,7 @@ The broker socket is a local service boundary, not a public API.
 | `PUBLICATION_JOB_MAX_ATTEMPTS` | `3` |
 | `PUBLICATION_BUILD_WAKE_SOCKET_PATH` | `/run/fire-backend/publication-build.sock` |
 | `PUBLICATION_BUILD_WAKE_TIMEOUT_SECONDS` | `1.0` |
-| `PUBLICATION_BUILD_SUMMARY_MAX_ITEMS` | `10000` |
+| `PUBLICATION_BUILD_SUMMARY_MAX_ITEMS` | `50000` |
 | `SIGNED_MANIFEST_RETENTION_DAYS` | `30` |
 | `PUBLICATION_ARTIFACT_ROOT` | `/var/lib/fire-backend/publications` |
 | `PUBLICATION_ARTIFACT_TEMP_ROOT` | `/var/lib/fire-backend/publications/.tmp` |

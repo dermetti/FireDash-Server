@@ -11,8 +11,8 @@ with an External ID is metadata-only. A blank optional value preserves existing
 curated metadata. Nonblank coordinate changes are shown in preview before
 confirmation.
 
-For many documents upload one ZIP containing exactly `manifest.csv` and the
-declared PDFs. The CSV columns are exactly
+For many documents upload one ZIP containing exactly `fire-plans-manifest-v1.csv`
+and the declared PDFs. The CSV columns are exactly
 `external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action`;
 `action` is `upsert` or explicit `deactivate`. For either action, provide the
 External ID or the fallback address. `filename` names only the ZIP member and

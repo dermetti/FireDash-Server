@@ -5,7 +5,7 @@ import pytest
 from django.test import override_settings
 
 from apps.ingestion.parsers import ImportValidationError, parse_hydrants
-from apps.ingestion.pdf_packages import parse_pdf_package
+from apps.ingestion.pdf_packages import FIRE_PLAN_MANIFEST_NAME, parse_pdf_package
 
 
 def geojson_payload(count: int) -> bytes:
@@ -46,7 +46,7 @@ def test_geojson_byte_size_limit_is_enforced():
 def _package(manifest: str, files: dict[str, bytes]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
-        archive.writestr("manifest.csv", manifest)
+        archive.writestr(FIRE_PLAN_MANIFEST_NAME, manifest)
         for name, content in files.items():
             archive.writestr(name, content)
     return output.getvalue()

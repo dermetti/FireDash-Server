@@ -1,4 +1,5 @@
 import uuid
+from typing import cast
 
 import pytest
 from django.test import override_settings
@@ -134,3 +135,63 @@ def test_bounded_string_integer_map_retains_category_and_value_validation():
     summary["status_counts"] = {"ACTIVE": True}
     with pytest.raises(PublicationBuildError, match="invalid summary value"):
         _validate("department_hydrants", summary)
+
+
+def test_hydrant_summary_supports_50000_items_by_default():
+    definition = get_dataset_definition("department_hydrants")
+    for count in (38_000, 50_000):
+        validate_summary(
+            definition=definition,
+            summary={
+                "active_count": count,
+                "source_revision": 1,
+                "status_counts": {"ACTIVE": count},
+            },
+        )
+
+
+def test_hydrant_summary_still_bounded_above_50000():
+    definition = get_dataset_definition("department_hydrants")
+    with pytest.raises(PublicationBuildError, match="item limit"):
+        validate_summary(
+            definition=definition,
+            summary={
+                "active_count": 50_001,
+                "source_revision": 1,
+                "status_counts": {"ACTIVE": 50_001},
+            },
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("hydrant_count", [38_000, 50_000])
+def test_large_hydrant_department_builds_summary(hydrant_count):
+    from django.contrib.gis.geos import Point
+
+    from apps.accounts.models import User
+    from apps.organizations.models import Department
+    from apps.publications.builders import build_summary
+    from apps.reference_data.models import Hydrant
+
+    user = User.objects.create_user("builder@example.test", "Builder", "safe-password")
+    department = Department.objects.create(name="Large", short_code="LRG", created_by=user)
+    Hydrant.objects.bulk_create(
+        Hydrant(
+            department=department,
+            external_identifier=f"H-{i}",
+            location=Point(8.0, 50.0, srid=4326),
+            status="ACTIVE",
+        )
+        for i in range(hydrant_count)
+    )
+
+    summary = build_summary(
+        definition=get_dataset_definition("department_hydrants"),
+        department=department,
+        station=None,
+        source_revision=1,
+    )
+
+    assert summary["active_count"] == hydrant_count
+    status_counts = cast(dict[str, int], summary["status_counts"])
+    assert status_counts["ACTIVE"] == hydrant_count

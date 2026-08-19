@@ -56,7 +56,8 @@ only: absence never offboards a person or ends an assignment. A new manual or
 batch person requires an explicit home station.
 
 Fire Plans and KLGV support either one PDF plus its metadata form or one ZIP
-with `manifest.csv` and the declared PDFs. A Fire Plan uses a nonblank
+with a manifest and the declared PDFs. A Fire Plan ZIP uses
+`fire-plans-manifest-v1.csv`; a KLGV ZIP uses `manifest.csv`. A Fire Plan uses a nonblank
 `external_identifier` as its logical identity, or its exact address when no
 External ID is available; a filename identifies a ZIP member only. Every PDF follows
 quarantine, validation, and the sanitizer before it can become canonical. A
@@ -69,8 +70,9 @@ proprietary GIS format is supported.
 The upload page links directly to the exact UTF-8 schemas: `hydrants-v1.geojson`
 (preferred) and `hydrants-v1.csv`; `personnel-v1.csv` and
 `personnel-v1.json`; `fire-plans-manifest-v1.csv`; and
-`klgv-plans-manifest-v1.csv`. PDF batch templates are `manifest.csv` files:
-place the manifest and every declared PDF at the root of one ZIP. Fire Plan
+`klgv-plans-manifest-v1.csv`. PDF batch ZIPs are manifest + PDF files:
+place the Fire Plan manifest (`fire-plans-manifest-v1.csv`) or KLGV manifest
+(`manifest.csv`) and every declared PDF at the root of one ZIP. Fire Plan
 columns are `external_identifier`, `filename`, `object_name`, `address`,
 `postal_code`, `city`, `longitude`, `latitude`, and `action`; KLGV uses
 `external_id`, `filename`, `title`, `category`, and `action`. `action` is

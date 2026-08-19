@@ -46,10 +46,21 @@ FIRE_PLAN_COLUMNS = frozenset(
 )
 KLGV_COLUMNS = frozenset({"external_id", "filename", "title", "category", "action"})
 
+# Canonical ZIP member names. Fire Plans use the versioned manifest name produced
+# by the curation tool; KLGV keeps its existing documented ``manifest.csv`` name.
+FIRE_PLAN_MANIFEST_NAME = "fire-plans-manifest-v1.csv"
+KLGV_MANIFEST_NAME = "manifest.csv"
+
+
+def manifest_member_name(domain: str) -> str:
+    """Return the canonical manifest member name for a PDF package domain."""
+    return FIRE_PLAN_MANIFEST_NAME if domain == "fire_plans" else KLGV_MANIFEST_NAME
+
 
 def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
     if len(payload) > settings.MAX_INGEST_UPLOAD_BYTES:
         raise ImportValidationError("PDF package exceeds the configured size limit.")
+    manifest_name = manifest_member_name(domain)
     try:
         archive = zipfile.ZipFile(io.BytesIO(payload))
     except zipfile.BadZipFile as error:
@@ -65,10 +76,10 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
             raise ImportValidationError("PDF package expanded size limit exceeded.")
         for info in infos:
             _safe_member(info)
-        if names.count("manifest.csv") != 1:
-            raise ImportValidationError("PDF package requires exactly one manifest.csv.")
+        if names.count(manifest_name) != 1:
+            raise ImportValidationError(f"PDF package requires exactly one {manifest_name}.")
         expected_columns = FIRE_PLAN_COLUMNS if domain == "fire_plans" else KLGV_COLUMNS
-        rows = _read_manifest(archive.read("manifest.csv"), expected_columns)
+        rows = _read_manifest(archive.read(manifest_name), expected_columns)
         entries = []
         seen_identities: set[tuple[str, str]] = set()
         declared: set[str] = set()
@@ -148,7 +159,7 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
                         pdf_bytes=pdf,
                     )
                 )
-        undeclared = set(names) - {"manifest.csv"} - declared
+        undeclared = set(names) - {manifest_name} - declared
         if undeclared:
             raise ImportValidationError("PDF package contains undeclared members.")
         return entries

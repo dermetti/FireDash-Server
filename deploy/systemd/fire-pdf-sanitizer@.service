@@ -19,4 +19,4 @@ TasksMax=32
 MemoryMax=512M
 CPUQuota=100%
 TimeoutStartSec=60s
-ExecStart=/usr/bin/qpdf --deterministic-id --object-streams=disable /run/fire-pdf-sanitizer/input.pdf /run/fire-pdf-sanitizer/output/sanitized.pdf
+ExecStart=/usr/bin/qpdf --deterministic-id --object-streams=disable --warning-exit-0 /run/fire-pdf-sanitizer/input.pdf /run/fire-pdf-sanitizer/output/sanitized.pdf

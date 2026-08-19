@@ -9,6 +9,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import shutil
 import uuid
@@ -27,7 +28,7 @@ from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
 from apps.ingestion.models import ImportBatch
 from apps.ingestion.parsers import ImportValidationError, parse_hydrants, parse_personnel
-from apps.ingestion.pdf_packages import parse_pdf_package
+from apps.ingestion.pdf_packages import manifest_member_name, parse_pdf_package
 from apps.ingestion.storage import ImportStorageError, read_staged, remove_staged, stage_upload
 from apps.organizations.models import Station
 from apps.personnel.models import Person
@@ -54,6 +55,43 @@ class ImportError(ValueError):
 # written with bulk_create/bulk_update in batches of this size inside a single
 # surrounding transaction; the chunk size never changes the logical outcome.
 _INGESTION_BULK_BATCH_SIZE = 1_000
+
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_log_filename(filename: str) -> str:
+    """Return a log-safe, truncated ZIP member filename (no control characters)."""
+    safe = "".join(
+        ch if (ch.isprintable() and ch not in "\r\n\t") else "?" for ch in (filename or "")
+    )
+    return safe[:200]
+
+
+def _log_sanitizer_failure(
+    *,
+    batch,
+    domain: str,
+    filename: str,
+    source_sha256: str,
+    job_uuid: str,
+    stage: str,
+    error: BaseException,
+    input_bytes: int,
+) -> None:
+    """Log only safe diagnostic metadata for a rejected PDF sanitizer stage."""
+    logger.warning(
+        "PDF sanitizer rejected member batch_id=%s domain=%s filename=%r source_sha256=%s "
+        "sanitizer_job=%s stage=%s exception=%s code=%s input_bytes=%d",
+        str(batch.id),
+        domain,
+        _sanitize_log_filename(filename),
+        source_sha256,
+        job_uuid,
+        stage,
+        type(error).__name__,
+        str(getattr(error, "code", "") or ""),
+        input_bytes,
+    )
 
 
 def create_single_preview(
@@ -179,7 +217,7 @@ def _single_pdf_package(*, domain: str, values: dict[str, object], pdf_bytes: by
     manifest = _csv_payload(fields, row)
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.csv", manifest)
+        archive.writestr(manifest_member_name(domain), manifest)
         archive.writestr("document.pdf", pdf_bytes)
     return output.getvalue()
 
@@ -862,15 +900,20 @@ def _sanitize_pdf_preview(
                 )
                 continue
             quarantine = sanitized = None
+            stage = "quarantine_write"
             try:
                 uploaded = SimpleUploadedFile(
                     entry.filename, entry.pdf_bytes or b"", content_type="application/pdf"
                 )
                 quarantine = write_quarantine(uploaded)
+                stage = "input_validation"
                 validate_pdf(quarantine, original_filename=entry.filename)
+                stage = "sanitize"
                 sanitized = output_path(job_id=quarantine.parent.name)
                 sanitize(quarantined_input=quarantine, sanitized_output=sanitized)
+                stage = "output_validation"
                 file_size, page_count, sanitized_sha256 = validate_pdf(sanitized)
+                stage = "staging_copy"
                 output_key = f"{batch.id}.{uuid.uuid4()}.sanitized.pdf"
                 target = settings.INGESTION_STAGING_ROOT / output_key
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -882,6 +925,16 @@ def _sanitize_pdf_preview(
                 ReferenceDataStorageError,
                 OSError,
             ) as error:
+                _log_sanitizer_failure(
+                    batch=batch,
+                    domain=domain,
+                    filename=entry.filename,
+                    source_sha256=source_sha256,
+                    job_uuid=(quarantine.parent.name if quarantine is not None else ""),
+                    stage=stage,
+                    error=error,
+                    input_bytes=len(entry.pdf_bytes or b""),
+                )
                 raise ImportError("PDF package was rejected by the PDF safety pipeline.") from error
             finally:
                 cleanup(quarantine)

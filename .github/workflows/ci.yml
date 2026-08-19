@@ -172,6 +172,7 @@ jobs:
           bash deploy/tests/test_nginx_etag.sh
           bash deploy/tests/test_nginx_body_size.sh
           bash deploy/tests/test_deprecated_env.sh
+          bash deploy/tests/test_pub_summary_ceiling.sh
 
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run

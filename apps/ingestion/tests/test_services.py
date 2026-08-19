@@ -15,6 +15,7 @@ from apps.assignments.models import PersonnelStationAssignment
 from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership
 from apps.ingestion.models import ImportBatch
+from apps.ingestion.pdf_packages import manifest_member_name
 from apps.ingestion.services import (
     ImportError,
     apply_preview,
@@ -69,10 +70,10 @@ def hydrant_geojson(*identifiers):
     return json.dumps({"type": "FeatureCollection", "features": features}).encode()
 
 
-def pdf_package(manifest: str, filename: str, pdf: bytes) -> bytes:
+def pdf_package(manifest: str, filename: str, pdf: bytes, *, domain: str = "fire_plans") -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("manifest.csv", manifest)
+        archive.writestr(manifest_member_name(domain), manifest)
         archive.writestr(filename, pdf)
     return output.getvalue()
 
@@ -852,7 +853,7 @@ def test_pdf_document_convergence_update_stale_zip_and_lifecycle_matrix(
         import_format="zip",
         import_mode="upsert",
         filename="same.zip",
-        payload=pdf_package(manifest, "same.pdf", b"one"),
+        payload=pdf_package(manifest, "same.pdf", b"one", domain=domain),
     )
     assert (zip_repeat.update_count, zip_repeat.unchanged_count) == (0, 1)
     apply_preview(actor=actor, batch_id=zip_repeat.id)
@@ -972,7 +973,7 @@ def test_pdf_zip_omission_and_lifecycle_noops_have_no_side_effects(
         import_format="zip",
         import_mode="upsert",
         filename="only-a.zip",
-        payload=pdf_package(manifest, "a.pdf", b"A"),
+        payload=pdf_package(manifest, "a.pdf", b"A", domain=domain),
     )
     assert (only_a.deactivate_count, only_a.unchanged_count) == (0, 1)
     apply_preview(actor=actor, batch_id=only_a.id)

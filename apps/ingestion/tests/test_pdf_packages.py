@@ -4,14 +4,22 @@ import zipfile
 import pytest
 
 from apps.ingestion.parsers import ImportValidationError
-from apps.ingestion.pdf_packages import parse_pdf_package
+from apps.ingestion.pdf_packages import FIRE_PLAN_MANIFEST_NAME, parse_pdf_package
 
 
 def package(manifest: str, **files: bytes) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("manifest.csv", manifest)
+        archive.writestr(FIRE_PLAN_MANIFEST_NAME, manifest)
         for name, content in files.items():
+            archive.writestr(name, content)
+    return output.getvalue()
+
+
+def raw_package(members: dict[str, str | bytes]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        for name, content in members.items():
             archive.writestr(name, content)
     return output.getvalue()
 
@@ -103,3 +111,40 @@ def test_pdf_package_rejects_undeclared_or_unsafe_members(member):
     files = {"plan.pdf": b"%PDF", member: b"%PDF"}
     with pytest.raises(ImportValidationError):
         parse_pdf_package(payload=package(manifest, **files), domain="fire_plans")
+
+
+def test_fire_plan_rejects_legacy_manifest_csv_alias():
+    manifest = fire_manifest("FP-1,plan.pdf,School,Main 1,,,,,upsert\n")
+    payload = raw_package({"manifest.csv": manifest, "plan.pdf": b"%PDF-1.4\n"})
+    with pytest.raises(ImportValidationError, match="fire-plans-manifest-v1.csv"):
+        parse_pdf_package(payload=payload, domain="fire_plans")
+
+
+def test_fire_plan_missing_versioned_manifest_is_rejected():
+    payload = raw_package({"plan.pdf": b"%PDF-1.4\n"})
+    with pytest.raises(ImportValidationError, match="fire-plans-manifest-v1.csv"):
+        parse_pdf_package(payload=payload, domain="fire_plans")
+
+
+def test_fire_plan_duplicate_versioned_manifest_is_rejected():
+    manifest = fire_manifest("FP-1,plan.pdf,School,Main 1,,,,,upsert\n")
+    payload = raw_package(
+        {
+            FIRE_PLAN_MANIFEST_NAME: manifest,
+            "dupe.csv": manifest,
+            "plan.pdf": b"%PDF-1.4\n",
+        }
+    )
+    # The second versioned manifest is an undeclared member.
+    with pytest.raises(ImportValidationError):
+        parse_pdf_package(payload=payload, domain="fire_plans")
+
+
+def test_fire_plan_unicode_filename_is_accepted():
+    manifest = fire_manifest("FP-1,l\u00f6schplan.pdf,School,Main 1,,,,,upsert\n")
+    entries = parse_pdf_package(
+        payload=package(manifest, **{"l\u00f6schplan.pdf": b"%PDF-1.4\n"}),
+        domain="fire_plans",
+    )
+    assert entries[0].filename == "l\u00f6schplan.pdf"
+    assert entries[0].pdf_bytes == b"%PDF-1.4\n"

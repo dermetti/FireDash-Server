@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 from apps.ingestion.parsers import parse_hydrants, parse_personnel
-from apps.ingestion.pdf_packages import parse_pdf_package
+from apps.ingestion.pdf_packages import manifest_member_name, parse_pdf_package
 
 ROOT = Path(__file__).resolve().parents[1] / "static" / "ingestion" / "templates"
 DOCS = Path(__file__).resolve().parents[3] / "docs" / "formats" / "fire-plans-v1.md"
@@ -41,7 +41,7 @@ def test_pdf_manifest_templates_parse_with_the_real_package_importer():
         rows = list(csv.DictReader(io.StringIO(manifest.decode("utf-8"))))
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w") as archive:
-            archive.writestr("manifest.csv", manifest)
+            archive.writestr(manifest_member_name(domain), manifest)
             for row in rows:
                 archive.writestr(row["filename"], b"test-pdf")
         assert parse_pdf_package(payload=payload.getvalue(), domain=domain)
