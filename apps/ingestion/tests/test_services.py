@@ -50,6 +50,25 @@ def hydrant_csv(*rows):
     return (header + "\n".join(rows)).encode()
 
 
+def hydrant_geojson(*identifiers):
+    import json
+
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [8.0, 50.0]},
+            "properties": {
+                "external_identifier": identifier,
+                "hydrant_type": "wet",
+                "diameter_mm": None,
+                "status": "ACTIVE",
+            },
+        }
+        for identifier in identifiers
+    ]
+    return json.dumps({"type": "FeatureCollection", "features": features}).encode()
+
+
 def pdf_package(manifest: str, filename: str, pdf: bytes) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
@@ -185,7 +204,7 @@ def test_hash_mismatch_and_stale_preview_fail_closed(context):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_authoritative_snapshot_deactivates_only_in_scope(context):
+def test_absent_hydrant_stays_active_on_geojson_merge(context):
     actor, department = context
     Hydrant.objects.create(
         department=department,
@@ -197,15 +216,76 @@ def test_authoritative_snapshot_deactivates_only_in_scope(context):
         actor=actor,
         department=department,
         domain="hydrants",
-        import_format="csv",
-        import_mode="authoritative_snapshot",
-        filename="h.csv",
-        payload=hydrant_csv("NEW,8.1,50.2,wet,150,ACTIVE"),
+        import_format="geojson",
+        import_mode="merge",
+        filename="h.geojson",
+        payload=hydrant_geojson("NEW"),
     )
-    assert batch.deactivate_count == 1
+    assert batch.deactivate_count == 0
+    apply_preview(actor=actor, batch_id=batch.id)
+    assert Hydrant.objects.get(department=department, external_identifier="OLD").status == "ACTIVE"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_explicit_inactive_status_deactivates_hydrant(context):
+    actor, department = context
+    Hydrant.objects.create(
+        department=department,
+        external_identifier="H-1",
+        location=Point(8, 50, srid=4326),
+        status="ACTIVE",
+    )
+    batch = create_preview(
+        actor=actor,
+        department=department,
+        domain="hydrants",
+        import_format="csv",
+        import_mode="merge",
+        filename="h.csv",
+        payload=hydrant_csv("H-1,8.0,50.0,wet,150,INACTIVE"),
+    )
+    assert batch.update_count == 1
     apply_preview(actor=actor, batch_id=batch.id)
     assert (
-        Hydrant.objects.get(department=department, external_identifier="OLD").status == "INACTIVE"
+        Hydrant.objects.get(department=department, external_identifier="H-1").status == "INACTIVE"
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_chunking_preserves_explicit_deactivate_and_absent_semantics(context, monkeypatch):
+    actor, department = context
+    monkeypatch.setattr("apps.ingestion.services._INGESTION_BULK_BATCH_SIZE", 2)
+    for identifier in ("ABSENT", "DEACTIVATE", "UPDATE"):
+        Hydrant.objects.create(
+            department=department,
+            external_identifier=identifier,
+            location=Point(8, 50, srid=4326),
+            status="ACTIVE",
+        )
+    rows = [
+        "DEACTIVATE,8.1,50.1,wet,150,INACTIVE",
+        "UPDATE,8.2,50.2,wet,125,ACTIVE",
+    ]
+    batch = create_preview(
+        actor=actor,
+        department=department,
+        domain="hydrants",
+        import_format="csv",
+        import_mode="merge",
+        filename="h.csv",
+        payload=hydrant_csv(*rows),
+    )
+    assert batch.deactivate_count == 0
+    apply_preview(actor=actor, batch_id=batch.id)
+    assert (
+        Hydrant.objects.get(department=department, external_identifier="ABSENT").status == "ACTIVE"
+    )
+    assert (
+        Hydrant.objects.get(department=department, external_identifier="DEACTIVATE").status
+        == "INACTIVE"
+    )
+    assert (
+        Hydrant.objects.get(department=department, external_identifier="UPDATE").diameter_mm == 125
     )
 
 
@@ -949,3 +1029,84 @@ def test_pdf_zip_omission_and_lifecycle_noops_have_no_side_effects(
         scope.source_revision,
         PublicationJob.objects.filter(department=department).count(),
     ) == after_activate
+
+
+@pytest.mark.django_db(transaction=True)
+def test_large_hydrant_import_chunks_are_atomic_and_dirty_once(context, monkeypatch):
+    actor, department = context
+    monkeypatch.setattr("apps.ingestion.services._INGESTION_BULK_BATCH_SIZE", 3)
+    rows = [f"H-{i},{8.0 + i / 1000},50.0,wet,100,ACTIVE" for i in range(10)]
+    batch = create_preview(
+        actor=actor,
+        department=department,
+        domain="hydrants",
+        import_format="csv",
+        import_mode="merge",
+        filename="h.csv",
+        payload=hydrant_csv(*rows),
+    )
+    assert (batch.add_count, batch.update_count, batch.unchanged_count) == (10, 0, 0)
+    apply_preview(actor=actor, batch_id=batch.id)
+    assert Hydrant.objects.filter(department=department).count() == 10
+    scope = DatasetScopeState.objects.get(
+        department=department, dataset_type_code="department_hydrants"
+    )
+    assert scope.source_revision == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_preview_bounds_update_details_and_reports_truncation(context, settings):
+    actor, department = context
+    settings.MAX_IMPORT_VALIDATION_ERRORS = 2
+    for i in range(5):
+        Hydrant.objects.create(
+            department=department,
+            external_identifier=f"H-{i}",
+            location=Point(8.0, 50.0, srid=4326),
+            status="ACTIVE",
+        )
+    rows = [f"H-{i},{8.0 + i / 1000},50.0,wet,{100 + i},ACTIVE" for i in range(5)]
+    batch = create_preview(
+        actor=actor,
+        department=department,
+        domain="hydrants",
+        import_format="csv",
+        import_mode="merge",
+        filename="h.csv",
+        payload=hydrant_csv(*rows),
+    )
+    assert batch.update_count == 5
+    assert len(batch.validation_summary["updates"]) == 2
+    assert batch.validation_summary["updates_truncated"] is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_multiple_fire_plan_batches_coalesce_into_one_publication_job(context, sanitizer_stub):
+    actor, department = context
+    for identifier in ("FP-A", "FP-B", "FP-C"):
+        apply_preview(
+            actor=actor,
+            batch_id=create_single_preview(
+                actor=actor,
+                department=department,
+                domain=ImportBatch.Domain.FIRE_PLANS,
+                values={
+                    "external_identifier": identifier,
+                    "object_name": identifier,
+                    "address": "Road",
+                    "postal_code": "",
+                    "city": "",
+                    "longitude": "",
+                    "latitude": "",
+                },
+                pdf_bytes=identifier.encode(),
+            ).id,
+        )
+    pending = PublicationJob.objects.filter(
+        department=department,
+        dataset_type_code="department_fire_plans",
+        status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+    )
+    assert pending.count() == 1
+    assert pending.get().source_revision == 3
+    assert FirePlan.objects.filter(department=department).count() == 3

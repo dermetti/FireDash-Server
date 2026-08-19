@@ -456,6 +456,13 @@ else
     fi
 fi
 
+# The outer request-size boundary must sit above the application's aggregate
+# upload ceiling (MAX_INGEST_UPLOAD_BYTES = 256 MiB), never equal to or below it,
+# so multipart framing overhead cannot clip a near-limit upload.
+grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]+300m;[[:space:]]*$' "$nginx_site" \
+    && ok "Nginx client_max_body_size is 300m (above the 256 MiB upload ceiling)" \
+    || fail "Nginx client_max_body_size is not 300m"
+
 neg_read fire_backend "$SECRET_DIR/publication-kek" "publication KEK"
 neg_read fire_backend "$SECRET_DIR/publication-signing-key" "private signing key"
 neg_read www-data "$SECRET_DIR/publication-kek" "credential file"

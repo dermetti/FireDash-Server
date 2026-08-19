@@ -48,7 +48,7 @@ KLGV_COLUMNS = frozenset({"external_id", "filename", "title", "category", "actio
 
 
 def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
-    if len(payload) > settings.MAX_PDF_PACKAGE_BYTES:
+    if len(payload) > settings.MAX_INGEST_UPLOAD_BYTES:
         raise ImportValidationError("PDF package exceeds the configured size limit.")
     try:
         archive = zipfile.ZipFile(io.BytesIO(payload))
@@ -56,7 +56,7 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
         raise ImportValidationError("PDF package is not a valid ZIP archive.") from error
     with archive:
         infos = archive.infolist()
-        if not infos or len(infos) > settings.MAX_PDF_PACKAGE_MEMBERS:
+        if not infos or len(infos) > settings.MAX_PDF_PACKAGE_DOCUMENTS + 1:
             raise ImportValidationError("PDF package member limit exceeded.")
         names = [info.filename for info in infos]
         if len(names) != len(set(names)):
@@ -108,6 +108,10 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
                     pdf = archive.read(filename)
                 except KeyError as error:
                     raise ImportValidationError(f"Row {index}: declared PDF is missing.") from error
+                if len(pdf) > settings.MAX_PDF_INPUT_BYTES:
+                    raise ImportValidationError(
+                        f"Row {index}: PDF exceeds the configured size limit."
+                    )
             if domain == "fire_plans":
                 longitude = _optional_coordinate(row["longitude"], -180, 180, index)
                 latitude = _optional_coordinate(row["latitude"], -90, 90, index)
@@ -169,7 +173,7 @@ def _read_manifest(payload: bytes, expected_columns: frozenset[str]) -> list[dic
             "PDF package manifest columns do not match the documented schema."
         )
     rows = list(reader)
-    if len(rows) > settings.MAX_PDF_PACKAGE_MEMBERS - 1:
+    if len(rows) > settings.MAX_PDF_PACKAGE_DOCUMENTS:
         raise ImportValidationError("PDF package document limit exceeded.")
     return rows
 

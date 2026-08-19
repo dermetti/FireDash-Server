@@ -91,8 +91,12 @@ If required sandbox properties are unavailable in the LXC, PDF uploads must
 fail rather than falling back to a direct converter invocation.
 
 Install compatible GEOS/GDAL libraries for GeoDjango/PostGIS and configure
-`GDAL_LIBRARY_PATH` where normal discovery cannot find GDAL. Keep Nginx
-`client_max_body_size` aligned with `MAX_PDF_INPUT_BYTES`. Accepted fire plans
+`GDAL_LIBRARY_PATH` where normal discovery cannot find GDAL. Nginx
+`client_max_body_size` (300m) is the outer request-size boundary and sits modestly
+above the application's precise aggregate file/archive ceiling
+`MAX_INGEST_UPLOAD_BYTES` (256 MiB) so multipart framing overhead cannot clip a
+near-limit upload; individual PDFs are bounded separately by `MAX_PDF_INPUT_BYTES`
+in the application. Accepted fire plans
 remain private under `/var/lib/fire-backend/fire-plans`; they are neither a
 static directory nor an Nginx media alias.
 

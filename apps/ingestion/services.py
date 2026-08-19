@@ -35,11 +35,25 @@ from apps.publications.services import mark_dirty
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
 from apps.reference_data.pdf_sandbox import PdfSanitizerError, sanitize
 from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
-from apps.reference_data.storage import cleanup, output_path, promote_to_accepted, write_quarantine
+from apps.reference_data.storage import (
+    StorageError as ReferenceDataStorageError,
+)
+from apps.reference_data.storage import (
+    cleanup,
+    output_path,
+    promote_to_accepted,
+    write_quarantine,
+)
 
 
 class ImportError(ValueError):
     """Safe user-facing ingestion failure."""
+
+
+# Internal bulk-write chunk size. Large authoritative hydrant snapshots are
+# written with bulk_create/bulk_update in batches of this size inside a single
+# surrounding transaction; the chunk size never changes the logical outcome.
+_INGESTION_BULK_BATCH_SIZE = 1_000
 
 
 def create_single_preview(
@@ -239,7 +253,7 @@ def create_preview(
     """Stage and parse one exact upload without touching canonical records."""
     require_department_admin(actor, department)
     maximum_bytes = (
-        settings.MAX_PDF_PACKAGE_BYTES
+        settings.MAX_INGEST_UPLOAD_BYTES
         if domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}
         else settings.MAX_STRUCTURED_IMPORT_BYTES
     )
@@ -259,19 +273,21 @@ def create_preview(
     )
     try:
         if domain == ImportBatch.Domain.HYDRANTS:
-            if import_mode not in {ImportBatch.Mode.MERGE, ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT}:
-                raise ImportError("Hydrant imports require merge or authoritative snapshot mode.")
+            if import_mode != ImportBatch.Mode.MERGE:
+                raise ImportError("Hydrant imports require merge mode.")
             intent = parse_hydrants(payload=payload, import_format=import_format)
             baseline = _hydrant_baseline(department=department)
-            counts, hydrant_updates = _preview_hydrants(
-                intent=intent, department=department, mode=import_mode
+            counts, hydrant_updates, updates_truncated = _preview_hydrants(
+                intent=intent, department=department
             )
         elif domain == ImportBatch.Domain.PERSONNEL:
             if import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("Personnel imports support upsert mode only.")
             intent = parse_personnel(payload=payload, import_format=import_format)
             baseline = _personnel_baseline(department=department)
-            counts, updates = _preview_personnel(intent=intent, department=department)
+            counts, updates, updates_truncated = _preview_personnel(
+                intent=intent, department=department
+            )
         elif domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
             if import_format != ImportBatch.Format.ZIP or import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("PDF package imports require ZIP upsert mode.")
@@ -279,7 +295,7 @@ def create_preview(
                 batch=batch, payload=payload, department=department, domain=domain
             )
             baseline = _document_baseline(department=department, domain=domain)
-            counts, updates = _preview_documents(
+            counts, updates, updates_truncated = _preview_documents(
                 intent=intent, department=department, domain=domain
             )
         else:
@@ -326,6 +342,7 @@ def create_preview(
         ImportBatch.Domain.KLGV_PLANS,
     }:
         batch.validation_summary["updates"] = updates
+    batch.validation_summary["updates_truncated"] = updates_truncated
     if domain == ImportBatch.Domain.FIRE_PLANS:
         batch.validation_summary["coordinate_conflicts"] = _coordinate_conflicts(
             department=department, intent=intent
@@ -351,12 +368,11 @@ def create_preview(
     return batch
 
 
-def _preview_hydrants(*, intent, department, mode):
+def _preview_hydrants(*, intent, department):
     existing = {
         hydrant.external_identifier: hydrant
         for hydrant in Hydrant.objects.filter(department=department, external_identifier__gt="")
     }
-    incoming = {row["external_identifier"] for row in intent}
     add = update = unchanged = 0
     details: list[dict[str, object]] = []
     for row in intent:
@@ -385,10 +401,9 @@ def _preview_hydrants(*, intent, department, mode):
                     )
             else:
                 unchanged += 1
-    deactivate = (
-        len(set(existing) - incoming) if mode == ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT else 0
-    )
-    return (add, update, deactivate, unchanged), details
+    # Hydrant lifecycle deactivation is explicit only: absence from an import
+    # never deactivates; an explicit ``status=INACTIVE`` is an update.
+    return (add, update, 0, unchanged), details, update > len(details)
 
 
 def _personnel_changed(*, current: Person, proposed: dict[str, object]) -> bool:
@@ -436,7 +451,7 @@ def _preview_personnel(*, intent, department):
                 )
         else:
             unchanged += 1
-    return (add, update, 0, unchanged), details
+    return (add, update, 0, unchanged), details, update > len(details)
 
 
 @transaction.atomic
@@ -574,11 +589,12 @@ def _apply_hydrants(*, batch, rows):
             department=batch.department, external_identifier__gt=""
         )
     }
-    add = update = deactivate = unchanged = 0
-    incoming = set()
+    add = update = unchanged = 0
+    to_create: list[Hydrant] = []
+    to_update: list[Hydrant] = []
+    now = timezone.now()
     for row in rows:
         identifier = row["external_identifier"]
-        incoming.add(identifier)
         values = {
             "location": Point(row["longitude"], row["latitude"], srid=4326),
             "hydrant_type": row["hydrant_type"],
@@ -587,28 +603,38 @@ def _apply_hydrants(*, batch, rows):
         }
         hydrant = existing.get(identifier)
         if hydrant is None:
-            Hydrant.objects.create(
-                department=batch.department,
-                external_identifier=identifier,
-                source_metadata={},
-                **values,
+            to_create.append(
+                Hydrant(
+                    department=batch.department,
+                    external_identifier=identifier,
+                    source_metadata={},
+                    created_at=now,
+                    updated_at=now,
+                    **values,
+                )
             )
             add += 1
         elif _hydrant_changed_fields(current=hydrant, proposed=row):
             for field, value in values.items():
                 setattr(hydrant, field, value)
-            hydrant.save()
+            hydrant.updated_at = now
+            to_update.append(hydrant)
             update += 1
         else:
             unchanged += 1
-    if batch.import_mode == ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT:
-        for identifier, hydrant in existing.items():
-            if identifier not in incoming and hydrant.status == Hydrant.Status.ACTIVE:
-                hydrant.status = Hydrant.Status.INACTIVE
-                hydrant.save(update_fields=("status", "updated_at"))
-                deactivate += 1
-    scopes = [("department_hydrants", None)] if (add or update or deactivate) else []
-    return scopes, (add, update, deactivate, unchanged)
+    if to_create:
+        Hydrant.objects.bulk_create(to_create, batch_size=_INGESTION_BULK_BATCH_SIZE)
+    if to_update:
+        Hydrant.objects.bulk_update(
+            to_update,
+            fields=("location", "hydrant_type", "diameter_mm", "status", "updated_at"),
+            batch_size=_INGESTION_BULK_BATCH_SIZE,
+        )
+    # Hydrant lifecycle deactivation is explicit only: absence from an import
+    # never deactivates a record. Deactivation is an update where the imported
+    # row explicitly sets status=INACTIVE.
+    scopes = [("department_hydrants", None)] if (add or update) else []
+    return scopes, (add, update, 0, unchanged)
 
 
 def _apply_personnel(*, batch, rows):
@@ -759,7 +785,7 @@ def _preview_documents(*, intent, department, domain):
                 )
         else:
             unchanged += 1
-    return (add, update, deactivate, unchanged), details
+    return (add, update, deactivate, unchanged), details, update > len(details)
 
 
 def _coordinate_conflicts(*, department, intent) -> list[dict[str, object]]:
@@ -850,7 +876,12 @@ def _sanitize_pdf_preview(
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 shutil.copyfile(sanitized, target)
                 os.chmod(target, 0o600)
-            except (PdfSanitizerError, PdfValidationError, OSError) as error:
+            except (
+                PdfSanitizerError,
+                PdfValidationError,
+                ReferenceDataStorageError,
+                OSError,
+            ) as error:
                 raise ImportError("PDF package was rejected by the PDF safety pipeline.") from error
             finally:
                 cleanup(quarantine)

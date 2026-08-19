@@ -99,6 +99,8 @@ def _rows(payload: bytes, import_format: str, fields: frozenset[str]) -> list[Ma
 
 
 def _geojson_hydrants(payload: bytes) -> list[dict[str, object]]:
+    if len(payload) > settings.MAX_STRUCTURED_IMPORT_BYTES:
+        raise ImportValidationError("Structured import exceeds the configured size limit.")
     try:
         document = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -110,7 +112,7 @@ def _geojson_hydrants(payload: bytes) -> list[dict[str, object]]:
     ):
         raise ImportValidationError("GeoJSON must be a FeatureCollection.")
     features = document.get("features")
-    if not isinstance(features, list) or len(features) > settings.MAX_STRUCTURED_IMPORT_ROWS:
+    if not isinstance(features, list) or len(features) > settings.MAX_HYDRANT_GEOJSON_FEATURES:
         raise ImportValidationError("GeoJSON feature limit exceeded.")
     rows = []
     for number, feature in enumerate(features, 1):

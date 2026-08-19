@@ -140,12 +140,17 @@ MAX_STRUCTURED_IMPORT_BYTES = get_typed_env(
     "MAX_STRUCTURED_IMPORT_BYTES", int, default=20 * 1024 * 1024
 )
 MAX_STRUCTURED_IMPORT_ROWS = get_typed_env("MAX_STRUCTURED_IMPORT_ROWS", int, default=20_000)
+# Hydrant GeoJSON features are a separate, higher hard limit than CSV/JSON rows;
+# one authoritative snapshot may contain tens of thousands of hydrants.
+MAX_HYDRANT_GEOJSON_FEATURES = get_typed_env("MAX_HYDRANT_GEOJSON_FEATURES", int, default=50_000)
 MAX_IMPORT_VALIDATION_ERRORS = get_typed_env("MAX_IMPORT_VALIDATION_ERRORS", int, default=200)
-MAX_PDF_PACKAGE_BYTES = get_typed_env("MAX_PDF_PACKAGE_BYTES", int, default=200 * 1024 * 1024)
+# Aggregate upload/request ceiling for a Fire Plan/KLGV ZIP package. Individual
+# PDFs remain bounded separately by MAX_PDF_INPUT_BYTES.
+MAX_INGEST_UPLOAD_BYTES = get_typed_env("MAX_INGEST_UPLOAD_BYTES", int, default=256 * 1024 * 1024)
 MAX_PDF_PACKAGE_EXPANDED_BYTES = get_typed_env(
-    "MAX_PDF_PACKAGE_EXPANDED_BYTES", int, default=500 * 1024 * 1024
+    "MAX_PDF_PACKAGE_EXPANDED_BYTES", int, default=512 * 1024 * 1024
 )
-MAX_PDF_PACKAGE_MEMBERS = get_typed_env("MAX_PDF_PACKAGE_MEMBERS", int, default=1_000)
+MAX_PDF_PACKAGE_DOCUMENTS = get_typed_env("MAX_PDF_PACKAGE_DOCUMENTS", int, default=250)
 IMPORT_PREVIEW_RETENTION_DAYS = get_typed_env("IMPORT_PREVIEW_RETENTION_DAYS", int, default=7)
 IMPORT_APPLIED_SOURCE_RETENTION_DAYS = get_typed_env(
     "IMPORT_APPLIED_SOURCE_RETENTION_DAYS", int, default=30

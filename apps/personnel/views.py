@@ -153,20 +153,23 @@ def commander_eligibility(request: HttpRequest, department_id, person_id) -> Htt
     person = _person_or_404(request, department_id, person_id)
     form = CommanderEligibilityForm(request.POST)
     if form.is_valid():
-        station = None
-        if person.department_id not in active_department_ids(request.user):
-            station = get_object_or_404(
-                Station,
-                pk=request.POST.get("station_id"),
-                department_id=department_id,
-                id__in=active_station_ids(request.user),
+        try:
+            station = None
+            if person.department_id not in active_department_ids(request.user):
+                station = get_object_or_404(
+                    Station,
+                    pk=request.POST.get("station_id"),
+                    department_id=department_id,
+                    id__in=active_station_ids(request.user),
+                )
+            set_commander_eligibility(
+                actor=request.user,
+                person=person,
+                eligible=form.cleaned_data["eligible"],
+                station=station,
             )
-        set_commander_eligibility(
-            actor=request.user,
-            person=person,
-            eligible=form.cleaned_data["eligible"],
-            station=station,
-        )
+        except PersonnelError as error:
+            messages.error(request, str(error))
     return redirect("personnel-detail", department_id=department_id, person_id=person.id)
 
 
@@ -176,7 +179,10 @@ def commander_email(request: HttpRequest, department_id, person_id) -> HttpRespo
     person = _person_or_404(request, department_id, person_id)
     form = CommanderEmailForm(request.POST)
     if form.is_valid():
-        set_commander_email(actor=request.user, person=person, email=form.cleaned_data["email"])
+        try:
+            set_commander_email(actor=request.user, person=person, email=form.cleaned_data["email"])
+        except PersonnelError as error:
+            messages.error(request, str(error))
     return redirect("personnel-detail", department_id=department_id, person_id=person.id)
 
 
@@ -188,7 +194,10 @@ def verify_email(request: HttpRequest, department_id, person_id) -> HttpResponse
         return_url=reverse("personnel-detail", args=(department_id, person_id)),
     )
     person = _person_or_404(request, department_id, person_id)
-    verify_commander_email(actor=request.user, person=person)
+    try:
+        verify_commander_email(actor=request.user, person=person)
+    except PersonnelError as error:
+        messages.error(request, str(error))
     return redirect("personnel-detail", department_id=department_id, person_id=person.id)
 
 
@@ -200,8 +209,12 @@ def offboard(request: HttpRequest, department_id, person_id) -> HttpResponse:
         return_url=reverse("personnel-detail", args=(department_id, person_id)),
     )
     person = _person_or_404(request, department_id, person_id)
-    offboard_person(actor=request.user, person=person)
-    messages.success(request, "Personnel record offboarded.")
+    try:
+        offboard_person(actor=request.user, person=person)
+    except PersonnelError as error:
+        messages.error(request, str(error))
+    else:
+        messages.success(request, "Personnel record offboarded.")
     return redirect("personnel-list", department_id=department_id)
 
 
@@ -213,7 +226,10 @@ def anonymize(request: HttpRequest, department_id, person_id) -> HttpResponse:
         return_url=reverse("personnel-detail", args=(department_id, person_id)),
     )
     person = _person_or_404(request, department_id, person_id)
-    anonymize_person(actor=request.user, person=person)
+    try:
+        anonymize_person(actor=request.user, person=person)
+    except PersonnelError as error:
+        messages.error(request, str(error))
     return redirect("personnel-list", department_id=department_id)
 
 

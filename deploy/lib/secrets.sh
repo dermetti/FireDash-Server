@@ -17,13 +17,44 @@ sys.stdout.buffer.write(Ed25519PrivateKey.from_private_bytes(seed).public_key().
 PY
 }
 
+# Fail closed if a legacy FireDash environment carries variable names that the
+# current release renamed. FireDash never silently migrates, rewrites, or ignores
+# a configured value; the operator must explicitly migrate/remove the deprecated
+# names before the installer proceeds.
+require_no_deprecated_env_vars() {
+    [[ -f $ENV_FILE ]] || return 0
+    local matches
+    matches=$(grep -E '^(MAX_PDF_PACKAGE_BYTES|MAX_PDF_PACKAGE_MEMBERS)=' "$ENV_FILE" 2>/dev/null || true)
+    [[ -n $matches ]] || return 0
+    log_err "deprecated environment variable(s) detected:"
+    local line name replacement
+    while IFS= read -r line; do
+        name=${line%%=*}
+        case "$name" in
+            MAX_PDF_PACKAGE_BYTES) replacement="MAX_INGEST_UPLOAD_BYTES" ;;
+            MAX_PDF_PACKAGE_MEMBERS) replacement="MAX_PDF_PACKAGE_DOCUMENTS" ;;
+            *) replacement="<unknown replacement>" ;;
+        esac
+        log_err "  $line"
+        log_err "    -> migrate to $replacement, then remove the deprecated name"
+    done <<<"$matches"
+    log_err "FireDash will not rewrite or ignore these values automatically."
+    die "deprecated environment configuration must be migrated before continuing"
+}
+
 # Render /etc/fire-backend/fire-backend.env. Empty runtime_password/secret_key reuse existing values.
 render_env() {
     local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1
+    local ingest_upload_bytes=268435456 pdf_package_documents=250
     if [[ -f $ENV_FILE ]]; then
         [[ -z $runtime_password ]] && runtime_password=$(env_value "$ENV_FILE" POSTGRES_PASSWORD)
         [[ -z $secret_key ]] && secret_key=$(env_value "$ENV_FILE" DJANGO_SECRET_KEY)
         signing_key_version=$(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION)
+        local existing
+        existing=$(env_value "$ENV_FILE" MAX_INGEST_UPLOAD_BYTES)
+        [[ -n $existing ]] && ingest_upload_bytes=$existing
+        existing=$(env_value "$ENV_FILE" MAX_PDF_PACKAGE_DOCUMENTS)
+        [[ -n $existing ]] && pdf_package_documents=$existing
     fi
     [[ -n $runtime_password ]] || die "runtime database password is unavailable"
     [[ -n $secret_key ]] || die "Django SECRET_KEY is unavailable"
@@ -31,6 +62,7 @@ render_env() {
     [[ -n $signing_key_version ]] || signing_key_version=1
     [[ $signing_key_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
         || die "PUBLICATION_SIGNING_KEY_VERSION is invalid"
+    require_no_deprecated_env_vars
     local tmp
     tmp=$(mktemp)
     cat > "$tmp" <<EOF
@@ -59,10 +91,11 @@ IMPORT_PREVIEW_RETENTION_DAYS=7
 IMPORT_APPLIED_SOURCE_RETENTION_DAYS=30
 MAX_STRUCTURED_IMPORT_BYTES=20971520
 MAX_STRUCTURED_IMPORT_ROWS=20000
+MAX_HYDRANT_GEOJSON_FEATURES=50000
 MAX_IMPORT_VALIDATION_ERRORS=200
-MAX_PDF_PACKAGE_BYTES=209715200
-MAX_PDF_PACKAGE_EXPANDED_BYTES=524288000
-MAX_PDF_PACKAGE_MEMBERS=1000
+MAX_INGEST_UPLOAD_BYTES=$ingest_upload_bytes
+MAX_PDF_PACKAGE_EXPANDED_BYTES=536870912
+MAX_PDF_PACKAGE_DOCUMENTS=$pdf_package_documents
 MAX_PDF_INPUT_BYTES=104857600
 MAX_PDF_OUTPUT_BYTES=157286400
 MAX_PDF_PAGES=500

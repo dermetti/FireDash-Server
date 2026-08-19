@@ -24,7 +24,6 @@ class ImportUploadForm(forms.Form):
     import_mode = forms.ChoiceField(
         choices=(
             (ImportBatch.Mode.MERGE, "Merge"),
-            (ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT, "Authoritative snapshot"),
             (ImportBatch.Mode.UPSERT, "Upsert"),
         )
     )
@@ -45,7 +44,7 @@ class ImportUploadForm(forms.Form):
                     ImportBatch.Format.JSON,
                     ImportBatch.Format.GEOJSON,
                 },
-                "modes": {ImportBatch.Mode.MERGE, ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT},
+                "modes": {ImportBatch.Mode.MERGE},
             },
             ImportBatch.Domain.PERSONNEL: {
                 "formats": {ImportBatch.Format.CSV, ImportBatch.Format.JSON},

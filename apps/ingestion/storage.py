@@ -11,7 +11,7 @@ class ImportStorageError(ValueError):
 
 
 def stage_upload(*, batch_id, payload: bytes) -> tuple[str, str]:
-    if len(payload) > settings.MAX_PDF_PACKAGE_BYTES:
+    if len(payload) > settings.MAX_INGEST_UPLOAD_BYTES:
         raise ImportStorageError("Import exceeds the configured upload limit.")
     root = settings.INGESTION_STAGING_ROOT
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
