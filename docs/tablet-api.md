@@ -595,8 +595,44 @@ The ZIP contains `manifest.json` and one sanitized PDF per plan at exactly
 `plans/{uuid}.pdf`. The manifest is:
 
 ```json
-{"source_revision":42,"fire_plans":[{"id":"plan UUID","sha256":"64-lowercase-hex","page_count":12,"path":"plans/plan UUID.pdf"}]}
+{
+  "source_revision": 42,
+  "fire_plans": [
+    {
+      "id": "12345678-1234-1234-1234-123456789abc",
+      "external_identifier": null,
+      "object_name": "Das Rauhe Haus",
+      "address": "Am Stadtrand 56 und 56 a",
+      "postal_code": "22047",
+      "city": "Hamburg",
+      "longitude": 10.09873774,
+      "latitude": 53.59229519,
+      "sha256": "<64 lowercase hex>",
+      "page_count": 12,
+      "path": "plans/12345678-1234-1234-1234-123456789abc.pdf"
+    }
+  ]
+}
 ```
+
+This metadata lives inside the decrypted `department_fire_plans` dataset
+artifact, not in the top-level tablet dataset manifest. Each entry carries the
+operational Fire Plan metadata from the canonical record so the tablet can
+display, search, and place a plan without inspecting its PDF:
+
+- `external_identifier` is **nullable**: it is `null` when the canonical Fire
+  Plan has no external identifier (its address is then the identity). It is
+  never serialized as an invented value.
+- `object_name` is optional/nullable; it reflects the canonical `object_name`.
+- `address`, `postal_code`, and `city` reflect the canonical Fire Plan metadata
+  and are `null` when the canonical value is blank.
+- `longitude` and `latitude` are nullable numeric WGS84 (EPSG:4326) coordinates;
+  `longitude` (Point.x) comes before `latitude` (Point.y) in the schema, and
+  missing coordinates are represented as JSON `null` (never `0`, `0.0`, `""`,
+  or `"0,0"`).
+- The PDF file continues to be referenced through `path`, exactly
+  `plans/{id}.pdf`.
+- `sha256` continues to cover the referenced sanitized PDF.
 
 Require each declared path to be exactly its ID-derived `plans/{uuid}.pdf`,
 validate every PDF SHA-256 and page count as appropriate to the client parser,

@@ -215,6 +215,13 @@ def _json_bytes(value: object) -> bytes:
     )
 
 
+def _zip_info(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o100600 << 16
+    return info
+
+
 def _artifact_hydrants(*, department, station, source_revision: int) -> bytes:
     if station is not None:
         raise PublicationBuildError("Hydrant artifact requires a department scope.")
@@ -299,17 +306,25 @@ def _artifact_fire_plans(*, department, station, source_revision: int) -> bytes:
                     "Accepted fire-plan document hash does not match metadata."
                 )
             archive_name = f"plans/{plan.id}.pdf"
-            archive.writestr(archive_name, document)
+            archive.writestr(_zip_info(archive_name), document)
+            plan_location = plan.location
             manifest.append(
                 {
                     "id": str(plan.id),
+                    "external_identifier": plan.external_identifier or None,
+                    "object_name": plan.object_name or None,
+                    "address": plan.address or None,
+                    "postal_code": plan.postal_code or None,
+                    "city": plan.city or None,
+                    "longitude": plan_location.x if plan_location is not None else None,
+                    "latitude": plan_location.y if plan_location is not None else None,
                     "sha256": plan.sha256,
                     "page_count": plan.page_count,
                     "path": archive_name,
                 }
             )
         archive.writestr(
-            "manifest.json",
+            _zip_info("manifest.json"),
             _json_bytes({"source_revision": source_revision, "fire_plans": manifest}),
         )
     return output.getvalue()

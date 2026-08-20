@@ -225,8 +225,39 @@ def validate_fire_plans(plaintext: bytes, dataset: dict[str, Any], out: Output) 
         for index, plan in enumerate(plans):
             if not isinstance(plan, dict):
                 fail(f"fire_plans[{index}] must be object")
-            require_keys(plan, ["id", "sha256", "page_count", "path"], label=f"fire_plans[{index}]")
+            require_keys(
+                plan,
+                [
+                    "id",
+                    "external_identifier",
+                    "object_name",
+                    "address",
+                    "postal_code",
+                    "city",
+                    "longitude",
+                    "latitude",
+                    "sha256",
+                    "page_count",
+                    "path",
+                ],
+                label=f"fire_plans[{index}]",
+            )
             require_uuid(plan["id"], label=f"fire_plans[{index}].id")
+            for field in ("external_identifier", "object_name", "address", "postal_code", "city"):
+                value = plan[field]
+                if value is not None and not isinstance(value, str):
+                    fail(f"fire_plans[{index}].{field} must be string or null")
+            longitude = plan["longitude"]
+            latitude = plan["latitude"]
+            if (longitude is None) != (latitude is None):
+                fail(f"fire_plans[{index}] longitude and latitude must be paired or both null")
+            if longitude is not None:
+                if not isinstance(longitude, int | float) or isinstance(longitude, bool):
+                    fail(f"fire_plans[{index}].longitude must be numeric or null")
+                if not isinstance(latitude, int | float) or isinstance(latitude, bool):
+                    fail(f"fire_plans[{index}].latitude must be numeric or null")
+                if not (-180 <= longitude <= 180 and -90 <= latitude <= 90):
+                    fail(f"fire_plans[{index}] coordinates outside lon/lat bounds")
             if not re.fullmatch(r"[0-9a-f]{64}", plan["sha256"]):
                 fail(f"fire_plans[{index}].sha256 malformed")
             if not isinstance(plan["page_count"], int) or plan["page_count"] <= 0:
@@ -252,8 +283,8 @@ def validate_fire_plans(plaintext: bytes, dataset: dict[str, Any], out: Output) 
             if sha256_hex(pdf) != plan["sha256"]:
                 fail(f"Fire-plan PDF SHA-256 mismatch: {path_string}")
 
-            with_address += int(isinstance(plan.get("address"), dict))
-            with_location += int(isinstance(plan.get("location"), dict))
+            with_address += int(bool(plan["address"]))
+            with_location += int(longitude is not None)
 
         pdf_files = {
             name for name in names if name.startswith("plans/") and name.lower().endswith(".pdf")

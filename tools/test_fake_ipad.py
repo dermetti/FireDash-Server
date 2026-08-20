@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import uuid
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -974,3 +975,64 @@ def test_validate_plaintext_saves_artifact_when_requested(tmp_path: Path):
         plaintext, dataset, config, out, save_plaintext=True, state_dir=tmp_path / "state"
     )
     assert (tmp_path / "state" / "last-plaintext" / "department_hydrants.geojson").exists()
+
+
+def _fire_plan_entry(**overrides: Any) -> dict[str, Any]:
+    plan_id = str(uuid.uuid4())
+    entry: dict[str, Any] = {
+        "id": plan_id,
+        "external_identifier": "SITE-A",
+        "object_name": "Das Rauhe Haus",
+        "address": "Am Stadtrand 56 und 56 a",
+        "postal_code": "22047",
+        "city": "Hamburg",
+        "longitude": 10.09873774,
+        "latitude": 53.59229519,
+        "page_count": 12,
+        "path": f"plans/{plan_id}.pdf",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def _fire_plan_archive(entries: list[dict[str, Any]]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for entry in entries:
+            pdf = b"%PDF-1.4\n%%EOF\n" + json.dumps(entry, sort_keys=True).encode()
+            entry["sha256"] = hashlib.sha256(pdf).hexdigest()
+            archive.writestr(entry["path"], pdf)
+        archive.writestr(
+            "manifest.json",
+            json.dumps({"source_revision": 42, "fire_plans": entries}, sort_keys=True).encode(),
+        )
+    return output.getvalue()
+
+
+def test_validate_fire_plans_accepts_extended_manifest():
+    archive = _fire_plan_archive([_fire_plan_entry()])
+    dataset = {"type": "department_fire_plans", "schema_version": 1}
+    result = datasets.validate_fire_plans(archive, dataset, Output())
+    assert result["fire_plans"] == 1
+    assert result["with_address"] == 1
+    assert result["with_location"] == 1
+
+
+def test_validate_fire_plans_accepts_nullable_fields():
+    entry = _fire_plan_entry(
+        external_identifier=None, object_name=None, longitude=None, latitude=None
+    )
+    archive = _fire_plan_archive([entry])
+    dataset = {"type": "department_fire_plans", "schema_version": 1}
+    result = datasets.validate_fire_plans(archive, dataset, Output())
+    assert result["with_address"] == 1
+    assert result["with_location"] == 0
+
+
+def test_validate_fire_plans_requires_new_metadata():
+    entry = _fire_plan_entry()
+    del entry["longitude"]
+    archive = _fire_plan_archive([entry])
+    dataset = {"type": "department_fire_plans", "schema_version": 1}
+    with pytest.raises(ClientError):
+        datasets.validate_fire_plans(archive, dataset, Output())
