@@ -32,10 +32,18 @@ def _ctx(user, path="/"):
     return _nav_context(request)
 
 
-def _item_labels(context):
+def _child_labels(context):
     return [
-        item["label"] for section in context["nav_sections"] for item in section.get("items", [])
+        item["label"] for section in context["nav_sections"] for item in section.get("children", [])
     ]
+
+
+def _all_labels(context):
+    labels = []
+    for section in context["nav_sections"]:
+        labels.append(section["label"])
+        labels.extend(item["label"] for item in section.get("children", []))
+    return labels
 
 
 @pytest.mark.django_db
@@ -43,7 +51,8 @@ def test_system_admin_nav_has_no_department_operational_links(nav_roles):
     system_admin, _, _, _, _, _ = nav_roles
     context = _ctx(system_admin)
     assert context["nav_role"] == "system"
-    labels = _item_labels(context)
+    labels = _all_labels(context)
+    assert "Departments" in labels
     assert "Personnel" not in labels
     assert "Tablets" not in labels
     assert "Stations" not in labels
@@ -55,7 +64,7 @@ def test_department_admin_nav_is_department_wide_without_mode_selector(nav_roles
     context = _ctx(dept_admin)
     assert context["nav_role"] == "department"
     assert context["nav_department"] == department
-    labels = _item_labels(context)
+    labels = _all_labels(context)
     assert "Personnel" in labels
     assert "Tablets" in labels
     assert "Stations" in labels
@@ -85,13 +94,34 @@ def test_station_admin_multiple_assignments_fail_safely_in_nav(nav_roles):
 
 
 @pytest.mark.django_db
-def test_nav_has_no_dead_links(nav_roles):
+def test_system_admin_not_demoted_by_department_membership(nav_roles):
+    system_admin, _, _, department, _, _ = nav_roles
+    DepartmentMembership.objects.create(
+        user=system_admin, department=department, created_by=system_admin
+    )
+    context = _ctx(system_admin)
+    assert context["nav_role"] == "system"
+    assert "Departments" in _all_labels(context)
+
+
+@pytest.mark.django_db
+def test_department_admin_not_demoted_by_station_assignment(nav_roles):
+    _, dept_admin, _, _, s1, _ = nav_roles
+    StationAdminAssignment.objects.create(user=dept_admin, station=s1, created_by=dept_admin)
+    context = _ctx(dept_admin)
+    assert context["nav_role"] == "department"
+    assert "nav_station" not in context
+
+
+@pytest.mark.django_db
+def test_nav_has_no_blank_labels_or_urls(nav_roles):
     for user in nav_roles[:3]:
         context = _ctx(user)
         for section in context["nav_sections"]:
+            assert section["label"]
             if "url" in section:
                 assert section["url"]
-            for item in section.get("items", []):
+            for item in section.get("children", []):
                 assert item["label"]
                 assert item["url"]
 
@@ -108,3 +138,15 @@ def test_authenticated_pages_render_shared_shell(client, nav_roles):
     assert "Distributed Data" in content
     # The old station scope-switch selector is gone.
     assert 'onchange="window.location=this.value"' not in content
+
+
+@pytest.mark.django_db
+def test_rendered_navigation_has_no_blank_links(client, nav_roles):
+    _, dept_admin, _, department, _, _ = nav_roles
+    client.force_login(dept_admin)
+    response = client.get(reverse("tablet-list", args=(department.id,)))
+    content = response.content.decode()
+    assert 'href=""' not in content
+    # The single shared navigation source is rendered by both the desktop
+    # sidebar and the Offcanvas.
+    assert content.count("Distributed Data") >= 2

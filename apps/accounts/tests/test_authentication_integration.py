@@ -46,7 +46,7 @@ def _set_pending_mfa(client, user: User) -> None:
 
 
 @pytest.mark.django_db
-def test_login_uses_htmx_mfa_transition_and_browser_redirect_fallback(client) -> None:
+def test_login_always_redirects_to_mfa_and_never_swaps_fragment(client) -> None:
     user = User.objects.create_user("admin@example.test", "Admin", "safe-password")
     _confirmed_device(user)
 
@@ -56,9 +56,8 @@ def test_login_uses_htmx_mfa_transition_and_browser_redirect_fallback(client) ->
         HTTP_HX_REQUEST="true",
     )
 
-    assert htmx_response.status_code == 200
-    assert b'id="authentication-card"' in htmx_response.content
-    assert b"Verify authentication" in htmx_response.content
+    assert htmx_response.status_code == 302
+    assert htmx_response.url == reverse("accounts-mfa-verify")
     assert client.session["pending_mfa_user_id"] == str(user.id)
 
     browser_response = client.post(

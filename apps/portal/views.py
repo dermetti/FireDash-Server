@@ -52,9 +52,9 @@ def _mark_active(sections: list[dict[str, object]], path: str) -> None:
     for section in sections:
         if section.get("url") == path:
             section["active"] = True
-        items = section.get("items")
-        if isinstance(items, list):
-            for item in items:
+        children = section.get("children")
+        if isinstance(children, list):
+            for item in children:
                 if isinstance(item, dict) and item.get("url") == path:
                     item["active"] = True
 
@@ -75,7 +75,7 @@ def _nav_context(request):
             {"label": "Departments", "url": reverse("portal-system-departments")},
             {
                 "label": "System Administration",
-                "items": [
+                "children": [
                     {
                         "label": "API Compatibility",
                         "url": reverse("portal-system-api-compatibility"),
@@ -98,7 +98,7 @@ def _nav_context(request):
             {"label": "Overview", "url": reverse("dashboard")},
             {
                 "label": "Distributed Data",
-                "items": [
+                "children": [
                     {
                         "label": "Publications",
                         "url": reverse("publications-list", args=(department.id,)),
@@ -124,14 +124,14 @@ def _nav_context(request):
             },
             {
                 "label": "Infrastructure",
-                "items": [
+                "children": [
                     {"label": "Stations", "url": reverse("portal-stations", args=(department.id,))},
                     {"label": "Tablets", "url": reverse("tablet-list", args=(department.id,))},
                 ],
             },
             {
                 "label": "Administration",
-                "items": [
+                "children": [
                     {
                         "label": "Administrator Accounts",
                         "url": reverse("portal-department-manage", args=(department.id,)),
@@ -170,7 +170,7 @@ def _nav_context(request):
             sections.append(
                 {
                     "label": "Station",
-                    "items": [
+                    "children": [
                         {
                             "label": "Station Details",
                             "url": reverse("portal-station-manage", args=(station.id,)),

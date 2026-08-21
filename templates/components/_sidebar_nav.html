@@ -1,12 +1,12 @@
 <nav class="nav flex-column" aria-label="Primary navigation">
   {% for section in nav_sections %}
-    {% if section.items %}
+    {% if section.url %}
+      <a class="nav-link {% if section.active %}active{% endif %}" {% if section.active %}aria-current="page"{% endif %} href="{{ section.url }}">{{ section.label }}</a>
+    {% else %}
       <p class="text-uppercase small fw-semibold text-body-secondary mt-3 mb-1">{{ section.label }}</p>
-      {% for item in section.items %}
+      {% for item in section.children %}
         <a class="nav-link {% if item.active %}active{% endif %}" {% if item.active %}aria-current="page"{% endif %} href="{{ item.url }}">{{ item.label }}</a>
       {% endfor %}
-    {% else %}
-      <a class="nav-link {% if section.active %}active{% endif %}" {% if section.active %}aria-current="page"{% endif %} href="{{ section.url }}">{{ section.label }}</a>
     {% endif %}
   {% empty %}
     <p class="text-body-secondary">No administrative role is assigned to this account.</p>

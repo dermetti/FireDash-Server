@@ -50,7 +50,7 @@ def test_default_page_caps_at_100(client, hydrant_list_context):
     assert len(response.context["hydrants"]) == 100
     assert response.context["total_count"] == 250
     assert response.context["page"].number == 1
-    assert response.context["page"].has_next is True
+    assert response.context["page"].has_next()
 
 
 @pytest.mark.django_db

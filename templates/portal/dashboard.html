@@ -1,37 +1,35 @@
 {% extends "base.html" %}
 {% block title %}Overview{% endblock %}
 {% block content %}
-{% include "components/_page_header.html" with title="Overview" description="Select a module to continue." %}
+{% include "components/_page_header.html" with title="Overview" description="FireDash administration overview." %}
 {% if nav_station_ambiguous %}<div class="alert alert-danger">This account has multiple active station assignments. Contact a System or Department Administrator to correct the configuration.</div>{% endif %}
-{% if nav_sections %}
-  <div class="row g-3">
-    {% for section in nav_sections %}
-      {% if section.label == "Overview" %}
-        {# The overview is the current page; do not render a self-link card. #}
-      {% elif section.items %}
-        <div class="col-md-6 col-xl-4">
-          <div class="card h-100 shadow-sm">
-            <div class="card-body">
-              <h2 class="h5 mb-2">{{ section.label }}</h2>
-              <div class="d-grid gap-1">
-                {% for item in section.items %}<a class="btn btn-outline-secondary text-start" href="{{ item.url }}">{{ item.label }}</a>{% endfor %}
-              </div>
-            </div>
-          </div>
+<div class="card shadow-sm">
+  <div class="card-body">
+    {% if nav_role == "system" %}
+      <p>You are administering the FireDash server.</p>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-outline-primary" href="{% url 'portal-system-departments' %}">Departments</a>
+        <a class="btn btn-outline-primary" href="{% url 'portal-system-api-compatibility' %}">API Compatibility</a>
+      </div>
+    {% elif nav_role == "department" %}
+      <p>You are administering <strong>{{ nav_department.name }}</strong>.</p>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-outline-primary" href="{% url 'portal-stations' nav_department.id %}">Stations</a>
+        <a class="btn btn-outline-primary" href="{% url 'tablet-list' nav_department.id %}">Tablets</a>
+      </div>
+    {% elif nav_role == "station" %}
+      {% if nav_station %}
+        <p>You are administering <strong>{{ nav_station.name }}</strong>.</p>
+        <div class="d-flex gap-2 flex-wrap">
+          <a class="btn btn-outline-primary" href="{% url 'portal-station-manage' nav_station.id %}">Station Details</a>
+          <a class="btn btn-outline-primary" href="{% url 'personnel-list' nav_station.department_id %}">Personnel</a>
         </div>
       {% else %}
-        <div class="col-md-6 col-xl-4">
-          <div class="card h-100 shadow-sm">
-            <div class="card-body">
-              <h2 class="h5 mb-2">{{ section.label }}</h2>
-              <a class="btn btn-outline-secondary text-start" href="{{ section.url }}">Open {{ section.label }}</a>
-            </div>
-          </div>
-        </div>
+        <p class="text-body-secondary">No single station context could be determined for this account.</p>
       {% endif %}
-    {% endfor %}
+    {% else %}
+      <p class="text-body-secondary">No administrative role is currently assigned to this account.</p>
+    {% endif %}
   </div>
-{% else %}
-  <div class="alert alert-warning">No administrative role is currently assigned to this account.</div>
-{% endif %}
+</div>
 {% endblock %}

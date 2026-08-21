@@ -67,8 +67,6 @@ def account_login(request: HttpRequest) -> HttpResponse:
                 request.session.cycle_key()
                 request.session["pending_mfa_user_id"] = str(user.id)
                 request.session["pending_mfa_started_at"] = timezone_now_timestamp()
-                if request.headers.get("HX-Request") == "true":
-                    return render(request, "accounts/_mfa_form.html", {"form": TokenForm()})
                 return redirect(
                     "accounts-mfa-verify" if user.mfa_enabled else "accounts-mfa-enroll"
                 )
@@ -186,12 +184,7 @@ def mfa_verify(request: HttpRequest) -> HttpResponse:
                 target_uuid=user.id,
             )
             messages.error(request, "Invalid verification code.")
-    template = (
-        "accounts/_mfa_form.html"
-        if request.headers.get("HX-Request") == "true"
-        else "accounts/mfa_verify.html"
-    )
-    return _no_store(render(request, template, {"form": form}))
+    return _no_store(render(request, "accounts/mfa_verify.html", {"form": form}))
 
 
 @never_cache

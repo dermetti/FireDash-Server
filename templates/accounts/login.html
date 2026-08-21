@@ -3,7 +3,7 @@
 {% block auth_content %}
 <div id="authentication-card">
   <h1 class="h4 mb-3">Sign in</h1>
-  <form method="post" novalidate hx-post="{% url 'accounts-login' %}" hx-target="#authentication-card" hx-swap="outerHTML">{% csrf_token %}
+  <form method="post" novalidate>{% csrf_token %}
     {% for field in form %}{% include "components/_form_field.html" %}{% endfor %}
     <button class="btn btn-primary w-100">Sign in</button>
   </form>
