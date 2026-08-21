@@ -1,0 +1,25 @@
+<header class="sticky-top">
+<nav class="navbar navbar-dark bg-dark" aria-label="Top bar">
+  <div class="container-fluid">
+    <button class="navbar-toggler d-lg-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#navOffcanvas" aria-controls="navOffcanvas" aria-label="Open navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <a class="navbar-brand" href="{% url 'dashboard' %}">FireDash</a>
+    {% if nav_scope_label %}<span class="navbar-text text-light-emphasis small d-none d-md-inline">{{ nav_scope_label }}</span>{% endif %}
+    <div class="ms-auto d-flex align-items-center gap-3">
+      {# Structural placeholder for the Stage 3 attention indicator. #}
+      <span class="text-warning small d-none" aria-hidden="true"></span>
+      <div class="dropdown">
+        <a class="nav-link dropdown-toggle text-light" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+          {{ user.display_name }}
+        </a>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item" href="{% url 'accounts-reauthenticate' %}">Reauthenticate</a></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><form method="post" action="{% url 'accounts-logout' %}" class="m-0">{% csrf_token %}<button class="dropdown-item" type="submit">Sign out</button></form></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</nav>
+</header>

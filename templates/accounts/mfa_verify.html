@@ -1,3 +1,10 @@
 {% extends "accounts/auth_base.html" %}
 {% block title %}Verify authentication | FireDash{% endblock %}
-{% block auth_content %}<h1 class="h4 mb-2">Verify authentication</h1><p class="text-muted">Enter the code from your authenticator app.</p><form method="post">{% csrf_token %}<div class="mb-3">{{ form.token.label_tag }}{{ form.token }}{% for error in form.token.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><button class="btn btn-primary w-100">Verify</button></form>{% endblock %}
+{% block auth_content %}
+<h1 class="h4 mb-2">Verify authentication</h1>
+<p class="text-body-secondary">Enter the code from your authenticator app.</p>
+<form method="post">{% csrf_token %}
+  {% include "components/_form_field.html" with field=form.token %}
+  <button class="btn btn-primary w-100">Verify</button>
+</form>
+{% endblock %}

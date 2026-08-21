@@ -10,68 +10,29 @@
   {% block head %}{% endblock %}
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-3">
-  <div class="container">
-    <a class="navbar-brand" href="{% url 'dashboard' %}">FireDash</a>
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMain">
-      <span class="navbar-toggler-icon"></span>
-    </button>
-    <div class="collapse navbar-collapse" id="navbarMain">
-      <ul class="navbar-nav me-auto">
-        {% if nav_system %}
-        <li class="nav-item"><a class="nav-link" href="{% url 'portal-system-departments' %}">System Administration</a></li>
-        {% elif nav_department %}
-        <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Overview</a></li>
-        <li class="nav-item"><a class="nav-link" href="{% url 'portal-department-manage' nav_department.id %}">Administrators</a></li>
-         <li class="nav-item"><a class="nav-link" href="{% url 'portal-stations' nav_department.id %}">Stations</a></li>
-         <li class="nav-item"><a class="nav-link" href="{% url 'personnel-list' nav_department.id %}">Personnel</a></li>
-         <li class="nav-item"><a class="nav-link" href="{% url 'tablet-list' nav_department.id %}">Tablets</a></li>
-         <li class="nav-item"><a class="nav-link" href="{% url 'portal-department-audit' nav_department.id %}">Audit</a></li>
-        {% elif nav_station %}
-        <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Overview</a></li>
-        <li class="nav-item"><a class="nav-link" href="{% url 'personnel-list' nav_station.department_id %}?nav=station&amp;station={{ nav_station.id }}">Personnel</a></li>
-        {% endif %}
-      </ul>
-      <span class="navbar-text me-2">
-        {% if nav_department %}<small class="text-info">{{ nav_department.short_code }}</small>{% endif %}
-        {% if nav_station %}<small class="text-info-emphasis">&rarr; {{ nav_station.short_code }}</small>{% endif %}
-        {% if nav_system %}<small class="text-warning">System</small>{% endif %}
-      </span>
-      <ul class="navbar-nav">
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">{{ user.display_name }}</a>
-          <ul class="dropdown-menu dropdown-menu-end">
-            <li><a class="dropdown-item" href="{% url 'accounts-reauthenticate' %}">Reauthenticate</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><form method="post" action="{% url 'accounts-logout' %}" class="m-0">{% csrf_token %}<button class="dropdown-item">Sign out</button></form></li>
-          </ul>
-        </li>
-      </ul>
+  {% include "components/_topbar.html" %}
+  <div class="container-fluid">
+    <div class="row">
+      <aside class="d-none d-lg-block col-lg-3 col-xl-2 border-end bg-body-tertiary p-3 vh-100 position-sticky top-0">
+        {% include "components/_sidebar_nav.html" %}
+      </aside>
+      <main class="col-lg-9 col-xl-10 px-3 px-lg-4 py-4">
+        {% include "components/_alerts.html" %}
+        {% block content %}{% endblock %}
+      </main>
     </div>
   </div>
-</nav>
-{% if nav_mode %}<div class="container mb-3"><div class="d-flex gap-2 small">
-  {% if nav_departments and nav_stations %}
-  {% if nav_mode == "department" %}<strong class="text-primary">Department</strong>{% else %}<a href="?nav=department" class="text-decoration-none">Department</a>{% endif %}
-  <span class="text-muted">|</span>
-  {% if nav_mode == "station" %}<strong class="text-info">Station</strong>{% else %}<a href="?nav=station" class="text-decoration-none">Station</a>{% endif %}
-  {% endif %}
-  {% if nav_mode == "station" and nav_stations %}
-  <label class="ms-2">Station:</label>
-   <select class="form-select form-select-sm" style="width:auto" onchange="window.location=this.value">
-     {% if not nav_station %}<option value="" selected disabled>Select station...</option>{% endif %}
-    {% for s in nav_stations %}
-    <option value="?nav=station&station={{ s.id }}" {% if nav_station.id == s.id %}selected{% endif %}>{{ s.name }}</option>
-    {% endfor %}
-  </select>
-  {% endif %}
-</div></div>{% endif %}
-<div class="container">
-  {% if messages %}{% for message in messages %}<div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags|default:'info' }}{% endif %} alert-dismissible fade show">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>{% endfor %}{% endif %}
-  {% block content %}{% endblock %}
-</div>
-<script src="{% static 'vendor/bootstrap/bootstrap.bundle.min.js' %}"></script>
-<script>window.addEventListener('pageshow',function(e){if(e.persisted)location.reload()});</script>
-{% block scripts %}{% endblock %}
+  <div class="offcanvas offcanvas-start" tabindex="-1" id="navOffcanvas" aria-labelledby="navOffcanvasLabel">
+    <div class="offcanvas-header">
+      <h2 class="offcanvas-title h5 mb-0" id="navOffcanvasLabel">FireDash</h2>
+      <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close navigation"></button>
+    </div>
+    <div class="offcanvas-body">
+      {% include "components/_sidebar_nav.html" %}
+    </div>
+  </div>
+  <script src="{% static 'vendor/bootstrap/bootstrap.bundle.min.js' %}"></script>
+  <script>window.addEventListener('pageshow',function(e){if(e.persisted)location.reload()});</script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -1,67 +1,37 @@
 {% extends "base.html" %}
-{% block title %}FireDash Administration{% endblock %}
-{% block nav_links %}
-{% if is_system_admin %}<li class="nav-item"><span class="nav-link text-warning">System Admin</span></li>{% endif %}
-{% if departments %}<li class="nav-item"><span class="nav-link text-info">Department Admin</span></li>{% endif %}
-{% endblock %}
-
+{% block title %}Overview{% endblock %}
 {% block content %}
-<div class="row">
-  {% if is_system_admin %}
-  <div class="col-md-4 mb-4">
-    <div class="card border-danger">
-      <div class="card-header bg-danger text-white"><h5 class="mb-0">System Administration</h5></div>
-      <div class="card-body">
-        <a href="{% url 'portal-system-departments' %}" class="btn btn-outline-danger btn-sm w-100 mb-2">Manage Departments</a>
-        <a href="{% url 'portal-system-api-compatibility' %}" class="btn btn-outline-danger btn-sm w-100">API Compatibility</a>
-      </div>
-    </div>
-  </div>
-  {% endif %}
-
-  {% if departments %}
-  <div class="col-md-4 mb-4">
-    <div class="card border-primary">
-      <div class="card-header bg-primary text-white"><h5 class="mb-0">Department Administration</h5></div>
-      <div class="card-body">
-        {% for department in departments %}
-        <div class="mb-3">
-          <strong>{{ department.name }}</strong>
-          <div class="d-grid gap-1 mt-1">
-            <a href="{% url 'portal-department-manage' department.id %}" class="btn btn-outline-primary btn-sm">Administrators</a>
-            <a href="{% url 'portal-stations' department.id %}" class="btn btn-outline-primary btn-sm">Stations</a>
-            <a href="{% url 'personnel-list' department.id %}" class="btn btn-outline-primary btn-sm">Personnel</a>
-            <a href="{% url 'personnel-retention-policy' department.id %}" class="btn btn-outline-primary btn-sm">Retention Policy</a>
-            <a href="{% url 'reference-data-hydrants' department.id %}" class="btn btn-outline-primary btn-sm">Hydrants</a>
-            <a href="{% url 'reference-data-fire-plans' department.id %}" class="btn btn-outline-primary btn-sm">Fire Plans</a>
-            <a href="{% url 'portal-department-audit' department.id %}" class="btn btn-outline-primary btn-sm">Audit</a>
-            <a href="{% url 'publications-list' department.id %}" class="btn btn-outline-primary btn-sm">Publications</a>
+{% include "components/_page_header.html" with title="Overview" description="Select a module to continue." %}
+{% if nav_station_ambiguous %}<div class="alert alert-danger">This account has multiple active station assignments. Contact a System or Department Administrator to correct the configuration.</div>{% endif %}
+{% if nav_sections %}
+  <div class="row g-3">
+    {% for section in nav_sections %}
+      {% if section.label == "Overview" %}
+        {# The overview is the current page; do not render a self-link card. #}
+      {% elif section.items %}
+        <div class="col-md-6 col-xl-4">
+          <div class="card h-100 shadow-sm">
+            <div class="card-body">
+              <h2 class="h5 mb-2">{{ section.label }}</h2>
+              <div class="d-grid gap-1">
+                {% for item in section.items %}<a class="btn btn-outline-secondary text-start" href="{{ item.url }}">{{ item.label }}</a>{% endfor %}
+              </div>
+            </div>
           </div>
         </div>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
-  {% endif %}
-
-  {% if stations %}
-  <div class="col-md-4 mb-4">
-    <div class="card border-info">
-      <div class="card-header bg-info text-white"><h5 class="mb-0">Station Administration</h5></div>
-      <div class="card-body">
-        {% for station in stations %}
-        <div class="mb-3">
-          <strong>{{ station.name }}</strong> <small class="text-muted">({{ station.department.name }})</small>
-          <div class="d-grid gap-1 mt-1">
-            <a href="{% url 'portal-station-manage' station.id %}" class="btn btn-outline-info btn-sm">Station Details</a>
-            <a href="{% url 'portal-vehicles' station.id %}" class="btn btn-outline-info btn-sm">Vehicles</a>
-            <a href="{% url 'personnel-list' station.department_id %}" class="btn btn-outline-info btn-sm">Personnel</a>
+      {% else %}
+        <div class="col-md-6 col-xl-4">
+          <div class="card h-100 shadow-sm">
+            <div class="card-body">
+              <h2 class="h5 mb-2">{{ section.label }}</h2>
+              <a class="btn btn-outline-secondary text-start" href="{{ section.url }}">Open {{ section.label }}</a>
+            </div>
           </div>
         </div>
-        {% endfor %}
-      </div>
-    </div>
+      {% endif %}
+    {% endfor %}
   </div>
-  {% endif %}
-</div>
+{% else %}
+  <div class="alert alert-warning">No administrative role is currently assigned to this account.</div>
+{% endif %}
 {% endblock %}

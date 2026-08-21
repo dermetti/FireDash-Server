@@ -3,6 +3,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import User
+from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership, StationAdminAssignment
 from apps.organizations.models import Department, Station, Vehicle
 from apps.personnel.services import create_person
@@ -28,10 +29,10 @@ def station_admin_scope(db):
     station_two = Station.objects.create(
         department=department, name="Station Two", short_code="TWO"
     )
-    for station in (station_one, station_two):
-        StationAdminAssignment.objects.create(
-            user=station_admin, station=station, created_by=department_admin
-        )
+    # A Station Administrator administers exactly ONE station.
+    StationAdminAssignment.objects.create(
+        user=station_admin, station=station_one, created_by=department_admin
+    )
     person_one = create_person(
         actor=department_admin,
         department=department,
@@ -55,40 +56,62 @@ def station_admin_scope(db):
 
 
 @pytest.mark.django_db
-def test_station_admin_must_explicitly_select_station_for_personnel_and_eligibility(
-    client, station_admin_scope
-):
+def test_station_admin_reaches_personnel_without_station_param(client, station_admin_scope):
+    station_admin, department, station_one, _, person_one, _, _ = station_admin_scope
+    client.force_login(station_admin)
+
+    people_url = reverse("personnel-list", args=(department.id,))
+    response = client.get(people_url)
+
+    assert response.status_code == 200
+    assert list(response.context["people"]) == [person_one]
+
+
+@pytest.mark.django_db
+def test_station_admin_cannot_view_other_station_personnel(client, station_admin_scope):
+    station_admin, department, _, station_two, _, person_two, _ = station_admin_scope
+    client.force_login(station_admin)
+
+    response = client.get(reverse("personnel-detail", args=(department.id, person_two.id)))
+    assert response.status_code == 404
+
+    assert client.get(reverse("portal-station-manage", args=(station_two.id,))).status_code == 403
+
+
+@pytest.mark.django_db
+def test_station_admin_multiple_assignments_fail_safely(client, station_admin_scope):
+    station_admin, department, station_one, station_two, _, _, _ = station_admin_scope
+    StationAdminAssignment.objects.create(
+        user=station_admin, station=station_two, created_by=station_admin
+    )
+    client.force_login(station_admin)
+
+    response = client.get(reverse("personnel-list", args=(department.id,)))
+
+    assert response.status_code == 403
+    assert AuditEvent.objects.filter(action="authorization.station_admin_ambiguous_scope").exists()
+
+
+@pytest.mark.django_db
+def test_station_admin_eligibility_is_station_scoped(client, station_admin_scope):
     station_admin, department, station_one, station_two, person_one, person_two, _ = (
         station_admin_scope
     )
     client.force_login(station_admin)
 
-    people_url = reverse("personnel-list", args=(department.id,))
-    assert client.get(people_url).status_code == 404
-
-    station_one_people = client.get(people_url, {"station": station_one.id})
-    assert station_one_people.status_code == 200
-    assert list(station_one_people.context["people"]) == [person_one]
-
-    station_two_people = client.get(people_url, {"station": station_two.id})
-    assert station_two_people.status_code == 200
-    assert list(station_two_people.context["people"]) == [person_two]
-
     response = client.post(
-        reverse("personnel-eligibility", args=(department.id, person_two.id)),
-        {"eligible": "on", "station_id": station_two.id},
+        reverse("personnel-eligibility", args=(department.id, person_one.id)),
+        {"eligible": "on", "station_id": station_one.id},
     )
     assert response.status_code == 302
-    person_two.refresh_from_db()
-    assert person_two.incident_commander_eligible is True
+    person_one.refresh_from_db()
+    assert person_one.incident_commander_eligible is True
 
-    response = client.post(
-        reverse("personnel-eligibility", args=(department.id, person_two.id)),
-        {"eligible": "", "station_id": station_one.id},
+    # The other station's person is not visible at all.
+    assert (
+        client.get(reverse("personnel-detail", args=(department.id, person_two.id))).status_code
+        == 404
     )
-    assert response.status_code == 403
-    person_two.refresh_from_db()
-    assert person_two.incident_commander_eligible is True
 
 
 @pytest.mark.django_db
@@ -123,7 +146,7 @@ def test_station_admin_is_denied_department_wide_routes_and_personnel_mutations(
 
     assert (
         client.post(
-            f"{reverse('personnel-list', args=(department.id,))}?station={station.id}",
+            reverse("personnel-list", args=(department.id,)),
             {"first_name": "New", "last_name": "Person", "home_station_id": station.id},
         ).status_code
         == 403

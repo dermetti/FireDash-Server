@@ -11,7 +11,13 @@ from apps.accounts.models import User
 from apps.accounts.reauth import require_recent_reauthentication
 from apps.audit.models import AuditEvent
 from apps.authorization.models import ApiVersionCompatibilityPolicy, StationAdminAssignment
-from apps.authorization.scopes import active_department_ids, active_station_ids, is_system_admin
+from apps.authorization.scopes import (
+    StationAdminContextError,
+    active_department_ids,
+    active_station_ids,
+    is_system_admin,
+    station_admin_station,
+)
 from apps.authorization.services import (
     change_department_status,
     create_department,
@@ -41,42 +47,165 @@ from apps.portal.forms import (
 )
 
 
+def _mark_active(sections: list[dict[str, object]], path: str) -> None:
+    """Mark the nav section/item whose URL matches the current request path."""
+    for section in sections:
+        if section.get("url") == path:
+            section["active"] = True
+        items = section.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and item.get("url") == path:
+                    item["active"] = True
+
+
 def _nav_context(request):
-    ctx: dict[str, object] = {}
-    ctx["is_system_admin"] = is_system_admin(request.user)
-    if ctx["is_system_admin"]:
-        # System administration is intentionally isolated from customer operations.
-        return {"is_system_admin": True, "nav_system": True, "nav_mode": "system"}
-    depts = Department.objects.filter(id__in=active_department_ids(request.user))
-    ctx["nav_departments"] = depts
-    if depts:
-        ctx["nav_department"] = depts.order_by("name").first()
-    station_ids = active_station_ids(request.user)
-    nav_stations = Station.objects.filter(id__in=station_ids)
-    ctx["nav_stations"] = nav_stations
-    nav_mode = request.GET.get("nav", "")
-    if nav_mode == "department" and depts:
-        ctx["nav_mode"] = "department"
-    elif nav_mode == "station" and station_ids:
-        ctx["nav_mode"] = "station"
-        station_param = request.GET.get("station")
-        if station_param:
-            try:
-                s = nav_stations.get(pk=station_param)
-                ctx["nav_station"] = s
-            except Station.DoesNotExist:
-                pass
-        elif nav_stations.count() == 1:
-            ctx["nav_station"] = nav_stations.first()
-    elif depts and station_ids:
-        ctx["nav_mode"] = "department"
-    elif depts:
-        ctx["nav_mode"] = "department"
-    elif station_ids:
-        ctx["nav_mode"] = "station"
-        if nav_stations.count() == 1:
-            ctx["nav_station"] = nav_stations.first()
-    return ctx
+    """Build the centralized, role-aware navigation context for the shell.
+
+    The context is intentionally prefixed with ``nav_`` so it never collides
+    with per-view template context. There is no ``?nav=`` mode selector: a
+    Department Administrator is always department-wide, and a Station
+    Administrator is always bound to a single station.
+    """
+    user = request.user
+    path = request.path
+    if is_system_admin(user):
+        sections: list[dict[str, object]] = [
+            {"label": "Overview", "url": reverse("dashboard")},
+            {"label": "Departments", "url": reverse("portal-system-departments")},
+            {
+                "label": "System Administration",
+                "items": [
+                    {
+                        "label": "API Compatibility",
+                        "url": reverse("portal-system-api-compatibility"),
+                    },
+                ],
+            },
+        ]
+        _mark_active(sections, path)
+        return {
+            "is_system_admin": True,
+            "nav_role": "system",
+            "nav_sections": sections,
+            "nav_scope_label": "FireDash Server / System",
+        }
+
+    department_ids = list(active_department_ids(user))
+    if department_ids:
+        department = Department.objects.get(pk=department_ids[0])
+        sections = [
+            {"label": "Overview", "url": reverse("dashboard")},
+            {
+                "label": "Distributed Data",
+                "items": [
+                    {
+                        "label": "Publications",
+                        "url": reverse("publications-list", args=(department.id,)),
+                    },
+                    {"label": "Personnel", "url": reverse("personnel-list", args=(department.id,))},
+                    {
+                        "label": "Hydrants",
+                        "url": reverse("reference-data-hydrants", args=(department.id,)),
+                    },
+                    {
+                        "label": "Fire Plans",
+                        "url": reverse("reference-data-fire-plans", args=(department.id,)),
+                    },
+                    {
+                        "label": "KLGV Plans",
+                        "url": reverse("reference-data-klgv-plans", args=(department.id,)),
+                    },
+                    {
+                        "label": "Imports",
+                        "url": reverse("ingestion-imports", args=(department.id,)),
+                    },
+                ],
+            },
+            {
+                "label": "Infrastructure",
+                "items": [
+                    {"label": "Stations", "url": reverse("portal-stations", args=(department.id,))},
+                    {"label": "Tablets", "url": reverse("tablet-list", args=(department.id,))},
+                ],
+            },
+            {
+                "label": "Administration",
+                "items": [
+                    {
+                        "label": "Administrator Accounts",
+                        "url": reverse("portal-department-manage", args=(department.id,)),
+                    },
+                    {
+                        "label": "Retention Policy",
+                        "url": reverse("personnel-retention-policy", args=(department.id,)),
+                    },
+                    {
+                        "label": "Audit Logs",
+                        "url": reverse("portal-department-audit", args=(department.id,)),
+                    },
+                ],
+            },
+        ]
+        _mark_active(sections, path)
+        return {
+            "is_system_admin": False,
+            "nav_role": "department",
+            "nav_sections": sections,
+            "nav_department": department,
+            "nav_scope_label": department.name,
+        }
+
+    # Station Administrator (station-only). Resolve the single authorized
+    # station; an inconsistent multi-station assignment fails safely.
+    station = None
+    station_ambiguous = False
+    try:
+        station = station_admin_station(user)
+    except StationAdminContextError:
+        station_ambiguous = True
+    if station is not None or station_ambiguous:
+        sections = [{"label": "Overview", "url": reverse("dashboard")}]
+        if station is not None:
+            sections.append(
+                {
+                    "label": "Station",
+                    "items": [
+                        {
+                            "label": "Station Details",
+                            "url": reverse("portal-station-manage", args=(station.id,)),
+                        },
+                        {
+                            "label": "Personnel",
+                            "url": reverse("personnel-list", args=(station.department_id,)),
+                        },
+                        {
+                            "label": "Vehicles",
+                            "url": reverse("portal-vehicles", args=(station.id,)),
+                        },
+                    ],
+                }
+            )
+        _mark_active(sections, path)
+        return {
+            "is_system_admin": False,
+            "nav_role": "station",
+            "nav_sections": sections,
+            "nav_station": station,
+            "nav_station_ambiguous": station_ambiguous,
+            "nav_scope_label": (
+                f"{station.department.name} / {station.name}"
+                if station is not None
+                else "Station administrator (inconsistent configuration)"
+            ),
+        }
+
+    return {
+        "is_system_admin": False,
+        "nav_role": None,
+        "nav_sections": [],
+        "nav_scope_label": "",
+    }
 
 
 def _department_or_403(request: HttpRequest, department_id) -> Department:
@@ -150,11 +279,7 @@ def scoped_selector(request: HttpRequest, department_id, kind: str) -> HttpRespo
 @login_required
 @never_cache
 def dashboard(request: HttpRequest) -> HttpResponse:
-    ctx = _nav_context(request)
-    # System-only navigation intentionally has no client-operation querysets.
-    ctx["departments"] = ctx.pop("nav_departments", Department.objects.none())
-    ctx["stations"] = ctx.pop("nav_stations", Station.objects.none())
-    return render(request, "portal/dashboard.html", ctx)
+    return render(request, "portal/dashboard.html", _nav_context(request))
 
 
 @login_required

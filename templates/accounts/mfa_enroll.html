@@ -1,5 +1,11 @@
 {% extends "accounts/auth_base.html" %}
 {% block title %}Set up MFA | FireDash{% endblock %}
-{% block auth_content %}<h1 class="h4 mb-2">Set up multi-factor authentication</h1><p class="text-muted">Scan the QR code in your authenticator app, then enter the generated code.</p>
+{% block auth_content %}
+<h1 class="h4 mb-2">Set up multi-factor authentication</h1>
+<p class="text-body-secondary">Scan the QR code in your authenticator app, then enter the generated code.</p>
 {% if qr_code %}<div class="text-center mb-3"><img src="data:image/png;base64,{{ qr_code }}" alt="QR code for MFA enrollment"></div>{% endif %}
-<form method="post">{% csrf_token %}<div class="mb-3">{{ form.token.label_tag }}{{ form.token }}</div><button class="btn btn-primary w-100">Verify and enroll</button></form>{% endblock %}
+<form method="post">{% csrf_token %}
+  {% include "components/_form_field.html" with field=form.token %}
+  <button class="btn btn-primary w-100">Verify and enroll</button>
+</form>
+{% endblock %}

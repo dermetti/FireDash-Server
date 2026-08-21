@@ -4,8 +4,7 @@
 <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
 {% endblock %}
 {% block content %}
-<h1>{{ department.name }} Hydrants</h1>
-<p class="text-body-secondary">Manage department hydrants and publish changes through the normal reviewable import workflow.</p>
+{% include "components/_page_header.html" with breadcrumb=department.name title="Hydrants" description="Manage department hydrants and publish changes through the normal reviewable import workflow." %}
 <section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><div class="d-flex gap-4 flex-wrap"><span><strong>{{ total_count }}</strong> records</span><span>EPSG:4326</span><span>Publication updates are scheduled after confirmation.</span></div></div></section>
 <section class="mb-4"><h2 class="h5">Actions</h2><div class="d-flex gap-3 flex-wrap"><div><a href="{% url 'reference-data-hydrant-create' department.id %}" class="btn btn-primary">Add hydrant</a><p class="text-body-secondary mb-0 mt-2">Create a one-record preview before confirmation.</p></div><div><a href="{% url 'ingestion-imports' department.id %}?domain=hydrants&amp;import_format=geojson&amp;import_mode=merge" class="btn btn-outline-primary">Import hydrants</a><p class="text-body-secondary mb-0 mt-2">CSV, JSON, or GeoJSON. GeoJSON is preferred.</p></div></div></section>
 <section><h2 class="h5">Existing hydrants</h2>
@@ -27,6 +26,6 @@
       <tr><td colspan="5" class="text-body-secondary">No hydrants match the current filters.</td></tr>
       {% endfor %}
     </tbody></table></div>
-{% if page.has_previous or page.has_next %}<nav class="d-flex align-items-center gap-2" aria-label="Hydrant pages">{% if page.has_previous %}<a class="btn btn-sm btn-outline-primary" href="?page={{ page.previous_page_number }}{% if page_query %}&amp;{{ page_query }}{% endif %}">Previous</a>{% endif %}<span class="text-body-secondary">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a class="btn btn-sm btn-outline-primary" href="?page={{ page.next_page_number }}{% if page_query %}&amp;{{ page_query }}{% endif %}">Next</a>{% endif %}</nav>{% endif %}
+{% if page.has_other_pages %}{% include "components/_pagination.html" %}{% endif %}
 </section>
 {% endblock %}

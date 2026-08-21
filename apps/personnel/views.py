@@ -3,13 +3,20 @@ from typing import cast
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from apps.accounts.reauth import require_recent_reauthentication
-from apps.authorization.scopes import active_department_ids, active_station_ids
+from apps.audit.services import record_event
+from apps.authorization.scopes import (
+    StationAdminContextError,
+    active_department_ids,
+    active_station_ids,
+    station_admin_station,
+)
 from apps.ingestion.models import ImportBatch
 from apps.ingestion.services import ImportError, create_single_preview
 from apps.organizations.models import Department, Station
@@ -41,6 +48,29 @@ def _person_or_404(request: HttpRequest, department_id, person_id) -> Person:
     )
 
 
+def _station_admin_station_or_403(request: HttpRequest, department: Department) -> Station:
+    """Resolve the single authorized station for a station-only administrator.
+
+    A Station Administrator administers exactly one station, so no ``?station=``
+    query parameter is required to reach their own data. An inconsistent
+    multi-station assignment fails safely instead of silently picking one.
+    """
+    try:
+        station = station_admin_station(request.user)
+    except StationAdminContextError as error:
+        record_event(
+            action="authorization.station_admin_ambiguous_scope",
+            request=request,
+            actor_user=request.user,
+            department=department,
+            target_type="station_admin",
+        )
+        raise PermissionDenied(str(error)) from error
+    if station is None or station.department_id != department.id:
+        raise PermissionDenied("Station administrator scope does not include this department.")
+    return station
+
+
 @require_http_methods(["GET", "POST"])
 @login_required
 def people(request: HttpRequest, department_id) -> HttpResponse:
@@ -48,12 +78,7 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
     department_admin = department.id in active_department_ids(request.user)
     selected_station = None
     if not department_admin:
-        selected_station = get_object_or_404(
-            Station,
-            pk=request.GET.get("station"),
-            department=department,
-            id__in=active_station_ids(request.user),
-        )
+        selected_station = _station_admin_station_or_403(request, department)
     queryset = visible_to_user(user=request.user, department_id=department.id)
     if selected_station:
         queryset = queryset.filter(station_assignments__station=selected_station).distinct()

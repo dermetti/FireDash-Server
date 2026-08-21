@@ -46,3 +46,25 @@ def can_manage_department(user, department: Department) -> bool:
 
 def can_manage_station(user, station: Station) -> bool:
     return station.active and station.id in active_station_ids(user)
+
+
+class StationAdminContextError(ValueError):
+    """A station administrator has zero or multiple active station assignments."""
+
+
+def station_admin_station(user) -> Station | None:
+    """Resolve the single active station a station-only administrator manages.
+
+    Returns ``None`` when the user has no active station assignments. Raises
+    :class:`StationAdminContextError` when the user has more than one active
+    station, which the product model treats as an inconsistent configuration
+    that must fail safely rather than be silently resolved.
+    """
+    station_ids = list(active_station_ids(user))
+    if not station_ids:
+        return None
+    if len(station_ids) > 1:
+        raise StationAdminContextError(
+            "Station administrator has multiple active station assignments."
+        )
+    return Station.objects.get(pk=station_ids[0])
