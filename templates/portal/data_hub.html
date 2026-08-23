@@ -1,11 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ department.name }} Data Hub{% endblock %}
 {% block content %}
-<div class="mb-4"><h1>Data Hub</h1><p class="text-body-secondary">Choose a canonical data domain. Imports are validated and confirmed before publication is scheduled.</p></div>
-<section class="row g-3" aria-label="Data domains">
-<div class="col-md-6"><a class="card card-body text-decoration-none h-100" href="{% url 'reference-data-hydrants' department.id %}"><h2 class="h5">Hydrants</h2><p class="mb-0 text-body-secondary">Manage or import hydrants.</p></a></div>
-<div class="col-md-6"><a class="card card-body text-decoration-none h-100" href="{% url 'personnel-list' department.id %}"><h2 class="h5">Personnel</h2><p class="mb-0 text-body-secondary">Manage or import personnel.</p></a></div>
-<div class="col-md-6"><a class="card card-body text-decoration-none h-100" href="{% url 'reference-data-fire-plans' department.id %}"><h2 class="h5">Fire Plans</h2><p class="mb-0 text-body-secondary">Upload one PDF or import a package.</p></a></div>
-<div class="col-md-6"><a class="card card-body text-decoration-none h-100" href="{% url 'reference-data-klgv-plans' department.id %}"><h2 class="h5">KLGV Plans</h2><p class="mb-0 text-body-secondary">Upload one PDF or import a package.</p></a></div>
+{% include "components/_page_header.html" with breadcrumb=department.name title="Data Hub" description="Choose a canonical data domain. Imports are validated and confirmed before publication is scheduled." %}
+<section class="row row-cols-1 row-cols-md-2 g-3" aria-label="Distributed data modules">
+{% for module in modules %}<div class="col"><article class="card h-100"><div class="card-body d-flex flex-column"><div class="d-flex align-items-center gap-3 mb-3"><span class="firedash-module-icon text-primary" aria-hidden="true">{% include "components/_data_hub_icon.html" with icon=module.icon %}</span><h2 class="h5 mb-0">{{ module.name }}</h2></div><p class="text-body-secondary">{{ module.description }}</p><dl class="row small mb-4"><dt class="col-7">{{ module.count_label|capfirst }}</dt><dd class="col-5 text-end">{{ module.count }}</dd><dt class="col-7">Publication</dt><dd class="col-5 text-end text-body-secondary">Managed in module</dd></dl><a class="mt-auto" href="{{ module.url }}">Open module <span aria-hidden="true">→</span><span class="visually-hidden">{{ module.name }}</span></a></div></article></div>{% endfor %}
 </section>
 {% endblock %}

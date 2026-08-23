@@ -200,7 +200,7 @@ def test_department_audit_is_bounded_safe_and_department_scoped(client, stage4_s
     assert response.status_code == 200
     assert len(response.context["events"]) == 100
     content = response.content.decode()
-    assert "table-responsive" in content and "Page 1 of 2" in content
+    assert "table-responsive" not in content and "Page 1 of 2" in content
     assert "test.other_department_event" not in content
     assert "must not render" not in content
     assert "Safe event context recorded" in content

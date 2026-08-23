@@ -3,7 +3,7 @@
   {% if page.has_previous %}
     <a class="btn btn-sm btn-outline-primary"
        href="?page={{ page.previous_page_number }}{% if page_query %}&amp;{{ page_query }}{% endif %}"
-       {% if hx_target %}hx-get="{{ hx_base }}?page={{ page.previous_page_number }}{% if page_query %}&amp;{{ page_query }}{% endif %}" hx-target="{{ hx_target }}" hx-push-url="true"{% endif %}
+       {% if hx_target %}hx-get="{{ hx_base }}?page={{ page.previous_page_number }}{% if page_query %}&amp;{{ page_query }}{% endif %}" hx-target="{{ hx_target }}"{% if hx_swap %} hx-swap="{{ hx_swap }}"{% endif %} hx-push-url="true"{% endif %}
        aria-label="Previous page">Previous</a>
   {% else %}
     <span class="btn btn-sm btn-outline-secondary disabled" aria-hidden="true">Previous</span>
@@ -12,7 +12,7 @@
   {% if page.has_next %}
     <a class="btn btn-sm btn-outline-primary"
        href="?page={{ page.next_page_number }}{% if page_query %}&amp;{{ page_query }}{% endif %}"
-       {% if hx_target %}hx-get="{{ hx_base }}?page={{ page.next_page_number }}{% if page_query %}&amp;{{ page_query }}{% endif %}" hx-target="{{ hx_target }}" hx-push-url="true"{% endif %}
+       {% if hx_target %}hx-get="{{ hx_base }}?page={{ page.next_page_number }}{% if page_query %}&amp;{{ page_query }}{% endif %}" hx-target="{{ hx_target }}"{% if hx_swap %} hx-swap="{{ hx_swap }}"{% endif %} hx-push-url="true"{% endif %}
        aria-label="Next page">Next</a>
   {% else %}
     <span class="btn btn-sm btn-outline-secondary disabled" aria-hidden="true">Next</span>

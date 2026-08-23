@@ -11,20 +11,67 @@ class DepartmentForm(forms.Form):
 
 
 class StationForm(forms.Form):
-    name = forms.CharField(max_length=255)
-    short_code = forms.CharField(max_length=64)
-    street = forms.CharField(max_length=255, required=False)
-    house_number = forms.CharField(max_length=32, required=False)
-    postal_code = forms.CharField(max_length=32, required=False)
-    city = forms.CharField(max_length=255, required=False)
-    active = forms.BooleanField(required=False, initial=True)
+    name = forms.CharField(max_length=255, widget=forms.TextInput(attrs={"class": "form-control"}))
+    short_code = forms.CharField(
+        max_length=64, label="Short Code", widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    street = forms.CharField(
+        max_length=255, required=False, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    house_number = forms.CharField(
+        max_length=32, required=False, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    postal_code = forms.CharField(
+        max_length=32, required=False, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    city = forms.CharField(
+        max_length=255, required=False, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    active = forms.BooleanField(
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
 
 
 class VehicleForm(forms.Form):
-    display_name = forms.CharField(max_length=255)
-    call_sign = forms.CharField(max_length=128, required=False)
-    asset_identifier = forms.CharField(max_length=128, required=False)
-    active = forms.BooleanField(required=False, initial=True)
+    display_name = forms.CharField(
+        max_length=255, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    call_sign = forms.CharField(
+        max_length=128, required=False, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    asset_identifier = forms.CharField(
+        max_length=128, required=False, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    active = forms.BooleanField(
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+
+
+class StationListFilterForm(forms.Form):
+    q = forms.CharField(
+        max_length=255,
+        required=False,
+        label="Search",
+        widget=forms.SearchInput(
+            attrs={"class": "form-control", "placeholder": "Search name, Short Code, or city"}
+        ),
+    )
+    active = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "Current stations"),
+            ("active", "Active"),
+            ("inactive", "Inactive"),
+            ("all", "All statuses"),
+        ),
+        initial="",
+        label="Status",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
 
 
 class AdministratorForm(forms.Form):

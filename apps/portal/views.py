@@ -58,6 +58,7 @@ from apps.portal.forms import (
     DepartmentTabletLeaseForm,
     RevokeStationScopeForm,
     StationForm,
+    StationListFilterForm,
     StationScopeForm,
     VehicleForm,
 )
@@ -464,6 +465,21 @@ def system_audit(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
+@require_http_methods(["GET"])
+def system_audit_detail(request: HttpRequest, event_id) -> HttpResponse:
+    if not is_system_admin(request.user):
+        raise PermissionDenied("System administrator role is required.")
+    event = get_object_or_404(
+        AuditEvent.objects.select_related("actor_user", "department", "station"), pk=event_id
+    )
+    return render(
+        request,
+        "portal/audit_event_detail.html",
+        {"event": event, "back_url": reverse("portal-system-audit"), "system_scope": True},
+    )
+
+
+@login_required
 @require_http_methods(["GET", "POST"])
 def system_department_detail(request: HttpRequest, department_id) -> HttpResponse:
     if not is_system_admin(request.user):
@@ -684,7 +700,50 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
 def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     """Gateway to bounded canonical-data modules; it deliberately owns no CRUD."""
     department = _department_or_403(request, department_id)
-    return render(request, "portal/data_hub.html", {"department": department})
+    # Keep this gateway read-only: the cheap authoritative counts help an
+    # administrator choose a module without duplicating CRUD controls here.
+    from apps.personnel.models import Person
+    from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
+
+    modules = (
+        {
+            "name": "Hydrants",
+            "description": "Water supply reference points distributed to operational tablets.",
+            "count": Hydrant.objects.filter(
+                department=department, status=Hydrant.Status.ACTIVE
+            ).count(),
+            "count_label": "active records",
+            "icon": "water",
+            "url": reverse("reference-data-hydrants", args=(department.id,)),
+        },
+        {
+            "name": "Personnel",
+            "description": "Active personnel reference records and station context.",
+            "count": Person.objects.filter(
+                department=department, lifecycle_status=Person.LifecycleStatus.ACTIVE
+            ).count(),
+            "count_label": "active records",
+            "icon": "people",
+            "url": reverse("personnel-list", args=(department.id,)),
+        },
+        {
+            "name": "Fire Plans",
+            "description": "Current operational fire-plan PDFs and their canonical metadata.",
+            "count": FirePlan.objects.filter(department=department, active=True).count(),
+            "count_label": "active plans",
+            "icon": "building",
+            "url": reverse("reference-data-fire-plans", args=(department.id,)),
+        },
+        {
+            "name": "KLGV Plans",
+            "description": "Optional Kleingartenverein / allotment-garden operational plans.",
+            "count": KlgvPlan.objects.filter(department=department, active=True).count(),
+            "count_label": "active plans",
+            "icon": "garden",
+            "url": reverse("reference-data-klgv-plans", args=(department.id,)),
+        },
+    )
+    return render(request, "portal/data_hub.html", {"department": department, "modules": modules})
 
 
 @login_required
@@ -695,19 +754,44 @@ def stations(request: HttpRequest, department_id) -> HttpResponse:
     if request.method == "POST" and form.is_valid():
         create_station(actor=request.user, department=department, **form.cleaned_data)
         return redirect("portal-stations", department_id=department.id)
-    queryset = department.stations.order_by("-active", "name", "short_code", "id")
+    filter_form = StationListFilterForm(request.GET or None)
+    queryset = department.stations.all()
+    if filter_form.is_valid():
+        filters = filter_form.cleaned_data
+        if filters.get("q"):
+            query = filters["q"]
+            queryset = queryset.filter(
+                Q(name__icontains=query) | Q(short_code__icontains=query) | Q(city__icontains=query)
+            )
+        selected_status = filters.get("active")
+        if selected_status == "active":
+            queryset = queryset.filter(active=True)
+        elif selected_status == "inactive":
+            queryset = queryset.filter(active=False)
+        elif selected_status != "all":
+            queryset = queryset.filter(active=True)
+    else:
+        queryset = queryset.filter(active=True)
+    queryset = queryset.order_by("-active", "name", "short_code", "id")
     paginator = Paginator(queryset, 100)
     page = paginator.get_page(request.GET.get("page", 1))
+    page_query = request.GET.copy()
+    page_query.pop("page", None)
+    context = {
+        "department": department,
+        "stations": page.object_list,
+        "page": page,
+        "total_count": paginator.count,
+        "form": form,
+        "filter_form": filter_form,
+        "page_query": page_query.urlencode(),
+    }
+    if request.headers.get("HX-Request") == "true":
+        return render(request, "portal/_station_results.html", context)
     return render(
         request,
         "portal/stations.html",
-        {
-            "department": department,
-            "stations": page.object_list,
-            "page": page,
-            "total_count": paginator.count,
-            "form": form,
-        },
+        context,
     )
 
 
@@ -928,6 +1012,14 @@ def station_manage(request: HttpRequest, station_id) -> HttpResponse:
                 "portal/setup_link.html",
                 {"setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,)))},
             )
+    vehicle_status = request.GET.get("vehicle_status", "active")
+    vehicles = station.vehicles.all()
+    if vehicle_status == "active":
+        vehicles = vehicles.filter(active=True)
+    elif vehicle_status == "retired":
+        vehicles = vehicles.filter(active=False)
+    else:
+        vehicle_status = "all"
     return render(
         request,
         "portal/station_manage.html",
@@ -937,7 +1029,8 @@ def station_manage(request: HttpRequest, station_id) -> HttpResponse:
             "form": form,
             "admin_form": admin_form,
             "assignments": StationAdminAssignment.objects.filter(station=station, active=True),
-            "vehicles": station.vehicles.order_by("active", "display_name", "id"),
+            "vehicles": vehicles.order_by("-active", "display_name", "id"),
+            "vehicle_status": vehicle_status,
         },
     )
 
@@ -1032,5 +1125,25 @@ def department_audit(request: HttpRequest, department_id) -> HttpResponse:
             "selected_station": station_id or "__all__",
             "query": query,
             "page_query": page_query.urlencode(),
+        },
+    )
+
+
+@login_required
+@require_http_methods(["GET"])
+def department_audit_detail(request: HttpRequest, department_id, event_id) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    event = get_object_or_404(
+        AuditEvent.objects.select_related("actor_user", "station"),
+        pk=event_id,
+        department=department,
+    )
+    return render(
+        request,
+        "portal/audit_event_detail.html",
+        {
+            "event": event,
+            "department": department,
+            "back_url": reverse("portal-department-audit", args=[department.id]),
         },
     )

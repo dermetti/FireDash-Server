@@ -115,7 +115,7 @@ def test_fire_plan_ui_edit_lifecycle_delete_and_publication(client, document_sco
         assert listing.status_code == 200
         assert len(listing.context["fire_plans"]) == 100
         assert listing.context["total_count"] == 101
-        assert b"table-responsive" in listing.content and b"Page 1 of 2" in listing.content
+        assert b"table-responsive" not in listing.content and b"Page 1 of 2" in listing.content
         first_visible = listing.context["fire_plans"][0]
         assert (
             reverse("reference-data-fire-plan-detail", args=(first_visible.id,)).encode()
@@ -144,7 +144,7 @@ def test_fire_plan_ui_edit_lifecycle_delete_and_publication(client, document_sco
         edit_get = client.get(edit_url, HTTP_HX_REQUEST="true")
         assert edit_get.status_code == 200
         assert b'<div class="modal fade"' in edit_get.content
-        assert b'<div class="modal-dialog modal-lg"' in edit_get.content
+        assert b"modal-dialog modal-lg" in edit_get.content
         assert b'<div class="modal-content"' in edit_get.content
         assert b'hx-target="#fire-plan-action-modal-container"' in edit_get.content
         assert b'type="submit"' in edit_get.content
@@ -262,7 +262,7 @@ def test_klgv_ui_edit_lifecycle_delete_and_scope(client, document_scope):
         edit_get = client.get(edit_url, HTTP_HX_REQUEST="true")
         assert edit_get.status_code == 200
         assert b'<div class="modal fade"' in edit_get.content
-        assert b'<div class="modal-dialog"' in edit_get.content
+        assert b"modal-dialog" in edit_get.content
         assert b'<div class="modal-content"' in edit_get.content
         assert b'hx-target="#klgv-action-modal-container"' in edit_get.content
         assert b'type="submit"' in edit_get.content

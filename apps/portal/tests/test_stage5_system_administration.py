@@ -84,7 +84,10 @@ def test_system_departments_is_bounded_deterministic_filterable_and_system_only(
         response.context["departments"].values_list("name", flat=True)
     )
     content = response.content.decode()
-    assert "<table" in content and "View details" in content
+    assert (
+        "<table" in content
+        and reverse("portal-system-department", args=(department.id,)) in content
+    )
     filtered = client.get(reverse("portal-system-departments"), {"q": department.short_code})
     assert list(filtered.context["departments"]) == [department]
     client.force_login(department_admin)

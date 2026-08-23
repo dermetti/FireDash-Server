@@ -70,6 +70,46 @@ def _render_results(*tablets, total_count=None):
     )
 
 
+def _render_list():
+    return render_to_string(
+        "tablets/list.html",
+        {
+            "department": _department(),
+            "counts": _counts(),
+            "last_updated": datetime.now(),
+            "filters": {
+                "search": "",
+                "status": "",
+                "installation": "",
+                "station": "",
+                "vehicle": "",
+            },
+            "statuses": (
+                ("INACTIVE", "Inactive"),
+                ("ACTIVE", "Active"),
+                ("LOST", "Lost"),
+                ("RETIRED", "Retired"),
+            ),
+            "installation_options": (
+                ("current", "Current"),
+                ("stale", "Stale"),
+                ("none", "No installation"),
+            ),
+            "station_options": (),
+            "vehicle_options": (),
+            "sort": "",
+            "dir": "",
+            "tablets": [_tablet()],
+            "page": _page(),
+            "page_query": "",
+            "total_count": 1,
+            "matched_count": 1,
+            "list_url": "/departments/test/tablets/",
+            "results_base": "/departments/test/tablets/",
+        },
+    )
+
+
 def _render_adoption_status(state):
     return render_to_string(
         "tablets/_adoption_status.html",
@@ -123,12 +163,41 @@ def test_results_table_keeps_identity_state_and_actions():
     assert '<th scope="col">Asset state</th>' in html
     assert '<th scope="col">Installation</th>' in html
     assert "Actions" in html
+    assert "View details" not in html
+    assert "dropdown-toggle" in html
+    assert "Command iPad" in html
 
 
 def test_results_table_hides_secondary_columns_responsively():
     html = _render_results(_tablet())
     assert 'class="d-none d-md-table-cell">Assignment</th>' in html
     assert 'class="d-none d-md-table-cell">Last contact</th>' in html
+
+
+def test_list_uses_live_server_side_filters_with_a_one_second_search_debounce():
+    html = _render_list()
+
+    assert 'id="tablet-filter-form"' in html
+    assert 'name="search"' in html
+    assert 'placeholder="Search by name or asset number"' in html
+    assert 'hx-trigger="input changed delay:1s"' in html
+    assert 'name="status"' in html
+    assert 'name="station"' in html
+    assert 'name="vehicle"' in html
+    assert 'hx-target="#tablet-results"' in html
+    assert 'hx-include="#tablet-filter-form"' in html
+    assert ">Reset</a>" in html
+
+
+def test_list_keeps_asset_and_installation_lifecycle_filters_distinct():
+    html = _render_list()
+
+    assert 'for="tablet-status">Asset state</label>' in html
+    assert 'for="tablet-installation">Installation</label>' in html
+    assert "Active and inactive (default)" in html
+    assert "PENDING" not in html
+    assert "REVOKED" not in html
+    assert "REPLACED" not in html
 
 
 # --- adoption / reactivation status polling ----------------------------------

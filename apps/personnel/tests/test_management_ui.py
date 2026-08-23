@@ -65,7 +65,7 @@ def test_personnel_list_is_bounded_active_default_filtered_and_scoped(client, pe
     assert response.status_code == 200 and len(response.context["people"]) == 100
     assert response.context["total_count"] == 102
     body = response.content.decode()
-    assert "table-responsive" in body and "Page 1 of 2" in body
+    assert "table-responsive" not in body and "Page 1 of 2" in body
     assert reverse("personnel-detail", args=(department.id, person.id)) in body
     assert departed.display_name not in body
     departed_response = client.get(
@@ -97,7 +97,7 @@ def test_personnel_modal_edit_delete_protection_audit_and_dirtying(client, perso
     edit_get = client.get(edit_url, HTTP_HX_REQUEST="true")
     assert edit_get.status_code == 200
     assert b'<div class="modal fade"' in edit_get.content
-    assert b'<div class="modal-dialog"' in edit_get.content
+    assert b"modal-dialog" in edit_get.content
     assert b'<div class="modal-content"' in edit_get.content
     assert b'hx-target="#person-action-modal-container"' in edit_get.content
     assert b'type="submit"' in edit_get.content

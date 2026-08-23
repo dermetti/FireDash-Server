@@ -4,6 +4,20 @@ from django import forms
 
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
 
+
+def _bootstrap_fields(form: forms.BaseForm) -> None:
+    """Apply the project Bootstrap widgets without adding another form library."""
+    for field in form.fields.values():
+        widget = field.widget
+        if isinstance(widget, forms.CheckboxInput):
+            css_class = "form-check-input"
+        elif isinstance(widget, forms.Select | forms.SelectMultiple):
+            css_class = "form-select"
+        else:
+            css_class = "form-control"
+        widget.attrs["class"] = f"{widget.attrs.get('class', '')} {css_class}".strip()
+
+
 if TYPE_CHECKING:
     _FirePlanModelForm = forms.ModelForm[FirePlan]
     _KlgvPlanModelForm = forms.ModelForm[KlgvPlan]
@@ -38,6 +52,10 @@ class HydrantFilterForm(forms.Form):
     )
     diameter_mm = forms.IntegerField(min_value=1, required=False, label="Diameter (mm)")
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
+
 
 class HydrantForm(forms.Form):
     external_identifier = forms.CharField(max_length=255, required=False)
@@ -51,6 +69,10 @@ class HydrantForm(forms.Form):
         initial="ACTIVE",
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
+
 
 class HydrantEditForm(forms.Form):
     external_identifier = forms.CharField(max_length=255, required=False)
@@ -59,6 +81,10 @@ class HydrantEditForm(forms.Form):
     hydrant_type = forms.CharField(max_length=128, required=False)
     flow_information = forms.CharField(max_length=255, required=False)
     diameter_mm = forms.IntegerField(min_value=1, required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
 
 
 class FirePlanUploadForm(forms.Form):
@@ -71,7 +97,7 @@ class FirePlanUploadForm(forms.Form):
     object_name = forms.CharField(max_length=255, required=False)
     address = forms.CharField(
         required=False,
-        widget=forms.Textarea,
+        widget=forms.TextInput,
         help_text=(
             "Required when no External ID is available. When used without an External ID, "
             "the address identifies the Fire Plan."
@@ -99,12 +125,20 @@ class FirePlanUploadForm(forms.Form):
             raise forms.ValidationError("Provide both longitude and latitude, or neither.")
         return cleaned
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
+
 
 class KlgvPlanUploadForm(forms.Form):
     document = forms.FileField()
     external_id = forms.CharField(max_length=255)
     title = forms.CharField(max_length=255)
     category = forms.CharField(max_length=128, required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
 
 
 class DocumentFilterForm(forms.Form):
@@ -114,6 +148,10 @@ class DocumentFilterForm(forms.Form):
         choices=(("", "All statuses"), ("active", "Active"), ("inactive", "Inactive")),
         initial="active",
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
 
 
 class FirePlanEditForm(_FirePlanModelForm):
@@ -141,6 +179,7 @@ class FirePlanEditForm(_FirePlanModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
         if self.instance and self.instance.location:
             self.initial.setdefault("longitude", self.instance.location.x)
             self.initial.setdefault("latitude", self.instance.location.y)
@@ -161,6 +200,10 @@ class KlgvPlanEditForm(_KlgvPlanModelForm):
     class Meta:
         model = KlgvPlan
         fields = ("external_identifier", "title", "category")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
 
 
 class ActiveForm(forms.Form):

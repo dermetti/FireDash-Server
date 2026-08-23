@@ -1,5 +1,6 @@
 from datetime import timedelta
 from typing import cast
+from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -151,34 +152,41 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
                 form.add_error(None, str(error))
     else:
         form = PersonForm()
+    page_query = urlencode(
+        [(key, value) for key, values in request.GET.lists() if key != "page" for value in values]
+    )
+    context = {
+        "department": department,
+        "people": page.object_list,
+        "page": page,
+        "total_count": paginator.count,
+        "filter_form": filter_form,
+        "form": form,
+        "department_admin": department_admin,
+        "stations": station_queryset,
+        "station_options": [
+            (
+                str(station.id),
+                f"{station.name} ({station.short_code})"
+                + (f", {station.city}" if station.city else ""),
+            )
+            for station in station_queryset
+        ],
+        "station_selector_endpoint": reverse(
+            "portal-scoped-selector", args=(department.id, "stations")
+        ),
+        "selected_station": selected_station,
+        "page_query": page_query,
+        "recent_batches": ImportBatch.objects.filter(
+            department=department, domain=ImportBatch.Domain.PERSONNEL
+        ).order_by("-created_at")[:10],
+    }
     return render(
         request,
-        "personnel/list.html",
-        {
-            "department": department,
-            "people": page.object_list,
-            "page": page,
-            "total_count": paginator.count,
-            "filter_form": filter_form,
-            "form": form,
-            "department_admin": department_admin,
-            "stations": station_queryset,
-            "station_options": [
-                (
-                    str(station.id),
-                    f"{station.name} ({station.short_code})"
-                    + (f", {station.city}" if station.city else ""),
-                )
-                for station in station_queryset
-            ],
-            "station_selector_endpoint": reverse(
-                "portal-scoped-selector", args=(department.id, "stations")
-            ),
-            "selected_station": selected_station,
-            "recent_batches": ImportBatch.objects.filter(
-                department=department, domain=ImportBatch.Domain.PERSONNEL
-            ).order_by("-created_at")[:10],
-        },
+        "personnel/_person_results.html"
+        if request.headers.get("HX-Request") == "true"
+        else "personnel/list.html",
+        context,
     )
 
 

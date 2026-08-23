@@ -1,31 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ department.name }} Hydrants{% endblock %}
-{% block nav_links %}
-<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
-{% endblock %}
 {% block content %}
-{% include "components/_page_header.html" with breadcrumb=department.name title="Hydrants" description="Manage department hydrants and publish changes through the normal reviewable import workflow." %}
-<section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><div class="d-flex gap-4 flex-wrap"><span><strong>{{ total_count }}</strong> records</span><span>EPSG:4326</span><span>Publication updates are scheduled after confirmation.</span></div></div></section>
-<section class="mb-4"><h2 class="h5">Actions</h2><div class="d-flex gap-3 flex-wrap"><div><a href="{% url 'reference-data-hydrant-create' department.id %}" class="btn btn-primary">Add hydrant</a><p class="text-body-secondary mb-0 mt-2">Create a one-record preview before confirmation.</p></div><div><a href="{% url 'ingestion-imports' department.id %}?domain=hydrants&amp;import_format=geojson&amp;import_mode=merge" class="btn btn-outline-primary">Import hydrants</a><p class="text-body-secondary mb-0 mt-2">CSV, JSON, or GeoJSON. GeoJSON is preferred.</p></div></div></section>
-<section><h2 class="h5">Existing hydrants</h2>
-<form method="get" class="mb-3">
-  <div class="row g-2 align-items-end">
-    <div class="col-md-3"><label class="form-label" for="id_q">Identifier</label><input class="form-control" type="text" name="q" id="id_q" value="{{ form.q.value|default_if_none:'' }}" placeholder="Partial identifier"></div>
-    <div class="col-md-2"><label class="form-label" for="id_status">Status</label><select class="form-select" name="status" id="id_status"><option value="">All statuses</option>{% for value, label in status_choices %}<option value="{{ value }}"{% if form.status.value == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
-    <div class="col-md-3"><label class="form-label" for="id_hydrant_type">Hydrant type</label><input class="form-control" type="text" name="hydrant_type" id="id_hydrant_type" value="{{ form.hydrant_type.value|default_if_none:'' }}" placeholder="Partial type"></div>
-    <div class="col-md-2"><label class="form-label" for="id_diameter_mm">Diameter (mm)</label><input class="form-control" type="number" name="diameter_mm" id="id_diameter_mm" min="1" value="{{ form.diameter_mm.value|default_if_none:'' }}"></div>
-    <div class="col-md-2 d-flex gap-2"><button class="btn btn-primary" type="submit">Filter</button><a class="btn btn-outline-secondary" href="{% url 'reference-data-hydrants' department.id %}">Reset</a></div>
-  </div>
-</form>
-{% if form.errors %}<div class="alert alert-danger">{% for field, errors in form.errors.items %}{% for error in errors %}<p class="mb-0">{{ error }}</p>{% endfor %}{% endfor %}</div>{% endif %}
-<p class="text-body-secondary">Showing {{ page.start_index }}&ndash;{{ page.end_index }} of {{ total_count }} Hydrants.</p>
-<div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th>Identifier</th><th>Status</th><th>Type</th><th>Diameter</th><th>Actions</th></tr></thead><tbody>
-      {% for hydrant in hydrants %}
-      <tr><td><a href="{% url 'reference-data-hydrant-manage' hydrant.id %}">{{ hydrant.external_identifier|default:"Hydrant" }}</a></td><td><span class="badge bg-{% if hydrant.active %}success{% else %}secondary{% endif %}">{{ hydrant.status }}</span></td><td>{{ hydrant.hydrant_type|default:"—" }}</td><td>{% if hydrant.diameter_mm %}{{ hydrant.diameter_mm }} mm{% else %}—{% endif %}</td><td><a class="btn btn-sm btn-outline-secondary" href="{% url 'reference-data-hydrant-manage' hydrant.id %}">View details</a></td></tr>
-      {% empty %}
-      <tr><td colspan="5" class="text-body-secondary">No hydrants match the current filters.</td></tr>
-      {% endfor %}
-    </tbody></table></div>
-{% if page.has_other_pages %}{% include "components/_pagination.html" %}{% endif %}
-</section>
+{% include "components/_page_header.html" with breadcrumb=department.name title="Hydrants" description="Manage department water-supply reference data." %}
+<section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><div class="d-flex gap-4 flex-wrap"><span><strong>{{ total_count }}</strong> matching records</span><span>Coordinates use EPSG:4326</span><span>Published after confirmed canonical changes</span></div></div></section>
+<section class="mb-4"><h2 class="h5">Actions</h2><div class="d-flex gap-2 flex-wrap"><a href="{% url 'reference-data-hydrant-create' department.id %}" class="btn btn-primary">Add hydrant</a><a href="{% url 'ingestion-imports' department.id %}?domain=hydrants&amp;import_format=geojson&amp;import_mode=merge" class="btn btn-outline-primary">Import hydrants</a></div></section>
+<section aria-labelledby="existing-hydrants-heading"><h2 id="existing-hydrants-heading" class="h5">Existing hydrants</h2><form id="hydrant-filter-form" method="get" class="row g-2 align-items-end mb-3"><div class="col-md-3"><label class="form-label" for="{{ form.q.id_for_label }}">{{ form.q.label }}</label>{{ form.q }}</div><div class="col-md-2"><label class="form-label" for="{{ form.status.id_for_label }}">{{ form.status.label }}</label>{{ form.status }}</div><div class="col-md-3"><label class="form-label" for="{{ form.hydrant_type.id_for_label }}">{{ form.hydrant_type.label }}</label>{{ form.hydrant_type }}</div><div class="col-md-2"><label class="form-label" for="{{ form.diameter_mm.id_for_label }}">{{ form.diameter_mm.label }}</label>{{ form.diameter_mm }}</div><div class="col-md-2"><a class="btn btn-outline-secondary" href="{% url 'reference-data-hydrants' department.id %}">Reset</a></div></form><script>(function(){var form=document.getElementById('hydrant-filter-form');if(!form)return;form.querySelectorAll('input,select').forEach(function(field){field.setAttribute('hx-get',form.action||window.location.pathname);field.setAttribute('hx-trigger',field.type==='search'?'input changed delay:1s':'change');field.setAttribute('hx-target','#hydrant-results');field.setAttribute('hx-swap','outerHTML');field.setAttribute('hx-include','#hydrant-filter-form');field.setAttribute('hx-push-url','true');});})();</script>{% include "reference_data/_hydrant_results.html" %}</section>
 {% endblock %}

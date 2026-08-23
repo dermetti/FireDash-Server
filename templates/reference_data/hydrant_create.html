@@ -1,12 +1,7 @@
 {% extends "base.html" %}
 {% block title %}New Hydrant — {{ department.name }}{% endblock %}
-{% block nav_links %}
-<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
-<li class="nav-item"><a class="nav-link" href="{% url 'reference-data-hydrants' department.id %}">Hydrants</a></li>
-{% endblock %}
 {% block content %}
-<h1>New Hydrant — {{ department.name }}</h1>
-<div class="card"><div class="card-body">
-<form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Create</button></form>
-</div></div>
+<p class="mb-1"><a href="{% url 'reference-data-hydrants' department.id %}">Back to Hydrants</a></p>
+<h1>New Hydrant</h1><p class="text-body-secondary">Create a one-record preview before confirmation.</p>
+<section class="card"><div class="card-body"><form method="post">{% csrf_token %}{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}{% for field in form %}<div class="mb-3"><label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}{% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>{% endfor %}<button type="submit" class="btn btn-primary">Create preview</button></form></div></section>
 {% endblock %}

@@ -37,7 +37,6 @@
             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
                     data-bs-toggle="dropdown" aria-expanded="false">Actions</button>
             <ul class="dropdown-menu dropdown-menu-end">
-              <li><a class="dropdown-item" href="{% url 'tablet-detail' department.id tablet.id %}">View details</a></li>
               {% if tablet.status == "ACTIVE" %}
                 <li><a class="dropdown-item" href="{% url 'tablet-assign' department.id tablet.id %}?next={{ list_url|urlencode }}"
                        hx-get="{% url 'tablet-assign' department.id tablet.id %}?next={{ list_url|urlencode }}"

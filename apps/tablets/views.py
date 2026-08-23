@@ -59,8 +59,7 @@ _SORT_FIELDS = {
     "last_seen": "last_seen",
 }
 
-# Default asset-state ordering: ACTIVE leads, then INACTIVE and LOST (operational),
-# then RETIRED, with stable secondary keys.
+# Stable physical-asset ordering for explicit state filters, with stable secondary keys.
 _ACTIVE_FIRST_ORDER = Case(
     When(status=Tablet.Status.ACTIVE, then=Value(0)),
     When(status=Tablet.Status.INACTIVE, then=Value(1)),
@@ -132,7 +131,10 @@ def _tablet_queryset(department: Department, request: HttpRequest):
     if status:
         queryset = queryset.filter(status=status)
     else:
-        queryset = queryset.exclude(status=Tablet.Status.RETIRED)
+        # The default operational list deliberately excludes incident and historical
+        # assets. LOST and RETIRED tablets remain available through the explicit
+        # physical Asset State filter.
+        queryset = queryset.filter(status__in=(Tablet.Status.ACTIVE, Tablet.Status.INACTIVE))
     if station_id:
         queryset = queryset.filter(
             vehicle_assignments__valid_until__isnull=True,

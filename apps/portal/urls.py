@@ -18,6 +18,7 @@ urlpatterns = [
     ),
     path("system/settings/", views.system_settings, name="portal-system-settings"),
     path("system/audit/", views.system_audit, name="portal-system-audit"),
+    path("system/audit/<uuid:event_id>/", views.system_audit_detail, name="portal-system-audit-detail"),
     path(
         "system/departments/<uuid:department_id>/",
         views.system_department_detail,
@@ -68,5 +69,10 @@ urlpatterns = [
         "departments/<uuid:department_id>/audit/",
         views.department_audit,
         name="portal-department-audit",
+    ),
+    path(
+        "departments/<uuid:department_id>/audit/<uuid:event_id>/",
+        views.department_audit_detail,
+        name="portal-department-audit-detail",
     ),
 ]

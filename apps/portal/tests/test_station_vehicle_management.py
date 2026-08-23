@@ -79,7 +79,7 @@ def test_station_list_is_bounded_ordered_paginated_and_scoped(client, station_ve
     )
     assert list(response.context["stations"].values_list("id", flat=True)) == expected
     body = response.content.decode()
-    assert "table-responsive" in body
+    assert "table-responsive" not in body
     assert "102 results" in body
     assert "Page 1 of 2" in body
     assert reverse("portal-station-manage", args=(station.id,)) in body

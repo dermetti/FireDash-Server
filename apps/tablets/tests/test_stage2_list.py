@@ -57,6 +57,21 @@ def test_list_renders_single_results_table(client, list_scope):
 
 
 @pytest.mark.django_db
+def test_list_shows_count_detail_link_and_contextual_actions(client, list_scope):
+    scope = list_scope
+    tablet = _tablet(scope.department, "Command tablet", Tablet.Status.ACTIVE)
+    client.force_login(scope.admin)
+
+    response = client.get(reverse("tablet-list", args=(scope.department.id,)))
+    html = response.content.decode()
+
+    assert "Showing 1&ndash;1 of 1 tablet." in html
+    assert reverse("tablet-detail", args=(scope.department.id, tablet.id)) in html
+    assert "Actions" in html
+    assert "View details" not in html
+
+
+@pytest.mark.django_db
 def test_default_ordering_is_active_first_and_deterministic(client, list_scope):
     scope = list_scope
     _tablet(scope.department, "lost", Tablet.Status.LOST)
@@ -68,14 +83,15 @@ def test_default_ordering_is_active_first_and_deterministic(client, list_scope):
     names = _names(response)
     assert names[0] == "active-a"
     assert names[1] == "active-b"
-    assert names[2] == "inactive"
-    assert names[3] == "lost"
+    assert names == ["active-a", "active-b", "inactive"]
     again = _names(client.get(reverse("tablet-list", args=(scope.department.id,))))
     assert again == names
 
 
 @pytest.mark.django_db
-def test_default_includes_operational_and_excludes_historical(client, list_scope):
+def test_default_hides_lost_and_retired_tablets_until_an_asset_state_is_selected(
+    client, list_scope
+):
     scope = list_scope
     _tablet(scope.department, "active", Tablet.Status.ACTIVE)
     _tablet(scope.department, "inactive", Tablet.Status.INACTIVE)
@@ -83,7 +99,12 @@ def test_default_includes_operational_and_excludes_historical(client, list_scope
     _tablet(scope.department, "retired", Tablet.Status.RETIRED)
     client.force_login(scope.admin)
     names = _names(client.get(reverse("tablet-list", args=(scope.department.id,))))
-    assert set(names) == {"active", "inactive", "lost"}
+    assert set(names) == {"active", "inactive"}
+
+    lost = client.get(reverse("tablet-list", args=(scope.department.id,)), {"status": "LOST"})
+    retired = client.get(reverse("tablet-list", args=(scope.department.id,)), {"status": "RETIRED"})
+    assert _names(lost) == ["lost"]
+    assert _names(retired) == ["retired"]
 
 
 @pytest.mark.django_db
@@ -160,6 +181,73 @@ def test_station_filter_is_data_only(client, list_scope):
 
 
 @pytest.mark.django_db
+def test_vehicle_filter_matches_only_the_current_vehicle_assignment(client, list_scope):
+    scope = list_scope
+    tablet_a = _tablet(scope.department, "on-a", Tablet.Status.ACTIVE)
+    tablet_b = _tablet(scope.department, "on-b", Tablet.Status.ACTIVE)
+    TabletVehicleAssignment.objects.create(
+        tablet=tablet_a,
+        vehicle=scope.vehicle_a,
+        valid_from=timezone.now(),
+        created_by=scope.admin,
+    )
+    TabletVehicleAssignment.objects.create(
+        tablet=tablet_b,
+        vehicle=scope.vehicle_b,
+        valid_from=timezone.now(),
+        created_by=scope.admin,
+    )
+    client.force_login(scope.admin)
+
+    response = client.get(
+        reverse("tablet-list", args=(scope.department.id,)),
+        {"vehicle": str(scope.vehicle_b.id)},
+    )
+
+    assert _names(response) == ["on-b"]
+
+
+@pytest.mark.django_db
+def test_foreign_station_and_vehicle_filters_cannot_leak_other_department_data(client, list_scope):
+    scope = list_scope
+    own_tablet = _tablet(scope.department, "own", Tablet.Status.ACTIVE)
+    foreign_station = Station.objects.create(
+        department=scope.other,
+        name="Other station",
+        short_code="OTH",
+    )
+    foreign_vehicle = Vehicle.objects.create(
+        department=scope.other,
+        station=foreign_station,
+        display_name="Other vehicle",
+    )
+    foreign_tablet = _tablet(scope.other, "foreign", Tablet.Status.ACTIVE)
+    TabletVehicleAssignment.objects.create(
+        tablet=foreign_tablet,
+        vehicle=foreign_vehicle,
+        valid_from=timezone.now(),
+        created_by=scope.other_admin,
+    )
+    client.force_login(scope.admin)
+
+    by_station = client.get(
+        reverse("tablet-list", args=(scope.department.id,)),
+        {"station": str(foreign_station.id)},
+    )
+    by_vehicle = client.get(
+        reverse("tablet-list", args=(scope.department.id,)),
+        {"vehicle": str(foreign_vehicle.id)},
+    )
+    html = client.get(reverse("tablet-list", args=(scope.department.id,))).content.decode()
+
+    assert _names(by_station) == []
+    assert _names(by_vehicle) == []
+    assert own_tablet.display_name in html
+    assert foreign_station.name not in html
+    assert foreign_vehicle.display_name not in html
+
+
+@pytest.mark.django_db
 def test_bounded_pagination(client, list_scope):
     scope = list_scope
     for i in range(105):
@@ -186,6 +274,11 @@ def test_pagination_preserves_filters(client, list_scope):
     )
     assert "status=ACTIVE" in response.context["page_query"]
     assert "page" not in response.context["page_query"]
+
+    page_html = response.content.decode()
+    assert "Previous" in page_html
+    assert "Next" in page_html
+    assert "status=ACTIVE" in page_html
 
 
 @pytest.mark.django_db

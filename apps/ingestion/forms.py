@@ -11,7 +11,8 @@ class ImportUploadForm(forms.Form):
             (ImportBatch.Domain.PERSONNEL, "Personnel"),
             (ImportBatch.Domain.FIRE_PLANS, "Fire-plan ZIP package"),
             (ImportBatch.Domain.KLGV_PLANS, "KLGV ZIP package"),
-        )
+        ),
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
     import_format = forms.ChoiceField(
         choices=(
@@ -19,17 +20,22 @@ class ImportUploadForm(forms.Form):
             (ImportBatch.Format.JSON, "JSON"),
             (ImportBatch.Format.GEOJSON, "GeoJSON"),
             (ImportBatch.Format.ZIP, "PDF ZIP package"),
-        )
+        ),
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
     import_mode = forms.ChoiceField(
         choices=(
             (ImportBatch.Mode.MERGE, "Merge"),
             (ImportBatch.Mode.UPSERT, "Upsert"),
-        )
+        ),
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
-    source = forms.FileField()
+    source = forms.FileField(widget=forms.ClearableFileInput(attrs={"class": "form-control"}))
     station = forms.ModelChoiceField(
-        queryset=Station.objects.none(), required=False, help_text="Required for new personnel."
+        queryset=Station.objects.none(),
+        required=False,
+        help_text="Required for new personnel.",
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
 
     def clean(self):

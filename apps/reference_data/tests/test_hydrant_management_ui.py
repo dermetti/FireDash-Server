@@ -74,7 +74,7 @@ def test_hydrant_list_is_bounded_active_by_default_and_filterable(client, hydran
     assert len(response.context["hydrants"]) == 100
     assert response.context["total_count"] == 102
     body = response.content.decode()
-    assert "table-responsive" in body and "Page 1 of 2" in body
+    assert "table-responsive" not in body and "Page 1 of 2" in body
     assert reverse("reference-data-hydrant-manage", args=(hydrant.id,)) in body
     assert inactive.external_identifier not in body and other.external_identifier not in body
 
@@ -101,7 +101,7 @@ def test_hydrant_modal_lifecycle_delete_publication_and_scope(client, hydrant_sc
     get_edit = client.get(edit_url, HTTP_HX_REQUEST="true")
     assert get_edit.status_code == 200 and hydrant.external_identifier.encode() in get_edit.content
     assert b'<div class="modal fade"' in get_edit.content
-    assert b'<div class="modal-dialog"' in get_edit.content
+    assert b"modal-dialog" in get_edit.content
     assert b'<div class="modal-content"' in get_edit.content
     assert b'hx-target="#hydrant-action-modal-container"' in get_edit.content
     assert b'type="submit"' in get_edit.content

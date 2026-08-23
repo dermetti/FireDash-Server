@@ -95,7 +95,9 @@ def hydrants(request: HttpRequest, department_id) -> HttpResponse:
     )
     return render(
         request,
-        "reference_data/hydrants.html",
+        "reference_data/_hydrant_results.html"
+        if request.headers.get("HX-Request") == "true"
+        else "reference_data/hydrants.html",
         {
             "department": department,
             "form": form,
@@ -273,7 +275,9 @@ def fire_plans(request: HttpRequest, department_id) -> HttpResponse:
     )
     return render(
         request,
-        "reference_data/fire_plans.html",
+        "reference_data/_fire_plan_results.html"
+        if request.headers.get("HX-Request") == "true"
+        else "reference_data/fire_plans.html",
         {
             "department": department,
             "fire_plans": page.object_list,
@@ -357,7 +361,9 @@ def klgv_plans(request: HttpRequest, department_id) -> HttpResponse:
     )
     return render(
         request,
-        "reference_data/klgv_plans.html",
+        "reference_data/_klgv_plan_results.html"
+        if request.headers.get("HX-Request") == "true"
+        else "reference_data/klgv_plans.html",
         {
             "department": department,
             "plans": page.object_list,

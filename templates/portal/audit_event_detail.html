@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Audit event{% endblock %}
+{% block content %}
+<p class="mb-1"><a href="{{ back_url }}">Back to {% if system_scope %}System Events{% else %}Audit Logs{% endif %}</a></p>
+<h1>Audit event</h1><p class="text-body-secondary">Immutable administrative history. Sensitive request data and raw metadata are intentionally not displayed.</p>
+<section class="card"><div class="card-body"><dl class="row mb-0"><dt class="col-sm-3">Event</dt><dd class="col-sm-9"><code>{{ event.action }}</code></dd><dt class="col-sm-3">Timestamp</dt><dd class="col-sm-9">{{ event.timestamp|date:"Y-m-d H:i" }}</dd><dt class="col-sm-3">Actor</dt><dd class="col-sm-9">{{ event.actor_user.display_name|default:"System or device" }}</dd><dt class="col-sm-3">Department</dt><dd class="col-sm-9">{{ event.department.name|default:"System" }}</dd><dt class="col-sm-3">Station</dt><dd class="col-sm-9">{{ event.station.name|default:"—" }}</dd><dt class="col-sm-3">Target</dt><dd class="col-sm-9">{{ event.target_type }}{% if event.target_uuid %} · {{ event.target_uuid }}{% endif %}</dd><dt class="col-sm-3">Outcome / context</dt><dd class="col-sm-9">{% if event.metadata %}Safe event context was recorded.{% else %}No additional safe context was recorded.{% endif %}</dd></dl></div></section>
+{% endblock %}
