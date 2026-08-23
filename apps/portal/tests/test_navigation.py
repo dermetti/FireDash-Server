@@ -65,9 +65,22 @@ def test_department_admin_nav_is_department_wide_without_mode_selector(nav_roles
     assert context["nav_role"] == "department"
     assert context["nav_department"] == department
     labels = _all_labels(context)
-    assert "Personnel" in labels
+    assert "Data Hub" in labels
+    assert "Publications" in labels
     assert "Tablets" in labels
     assert "Stations" in labels
+    assert "Administrator Accounts" in labels
+    assert "System Settings" in labels
+    assert "Audit Logs" in labels
+    for removed_label in (
+        "Personnel",
+        "Hydrants",
+        "Fire Plans",
+        "KLGV Plans",
+        "Vehicles",
+        "Imports",
+    ):
+        assert removed_label not in labels
     # No station authorization-mode selector state.
     assert "nav_mode" not in context
     assert "nav_stations" not in context

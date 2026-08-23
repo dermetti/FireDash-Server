@@ -3,8 +3,11 @@
 {% block content %}
 {% include "components/_page_header.html" with title="Overview" description="FireDash administration overview." %}
 {% if nav_station_ambiguous %}<div class="alert alert-danger">This account has multiple active station assignments. Contact a System or Department Administrator to correct the configuration.</div>{% endif %}
-<div class="card shadow-sm">
-  <div class="card-body">
+{% if nav_role == "department" or nav_role == "station" %}
+  <section class="mb-4" aria-labelledby="attention-heading"><h2 class="h4" id="attention-heading">Requires attention</h2>
+  {% if attention %}<div class="vstack gap-2">{% for item in attention %}<a class="alert alert-{{ item.level }} mb-0 text-decoration-none" href="{{ item.url }}"><strong>{{ item.count }}</strong> — {{ item.text }} <span class="float-end">Resolve →</span></a>{% endfor %}</div>{% else %}<div class="alert alert-success mb-0">No current attention items require action.</div>{% endif %}</section>
+{% endif %}
+<div class="card shadow-sm"><div class="card-body">
     {% if nav_role == "system" %}
       <p>You are administering the FireDash server.</p>
       <div class="d-flex gap-2 flex-wrap">
@@ -12,14 +15,14 @@
         <a class="btn btn-outline-primary" href="{% url 'portal-system-api-compatibility' %}">API Compatibility</a>
       </div>
     {% elif nav_role == "department" %}
-      <p>You are administering <strong>{{ nav_department.name }}</strong>.</p>
+      <h2 class="h5">Operational state</h2><p>You are administering <strong>{{ nav_department.name }}</strong> across all of its stations.</p>
       <div class="d-flex gap-2 flex-wrap">
         <a class="btn btn-outline-primary" href="{% url 'portal-stations' nav_department.id %}">Stations</a>
         <a class="btn btn-outline-primary" href="{% url 'tablet-list' nav_department.id %}">Tablets</a>
       </div>
     {% elif nav_role == "station" %}
       {% if nav_station %}
-        <p>You are administering <strong>{{ nav_station.name }}</strong>.</p>
+        <h2 class="h5">Station state</h2><p>You are administering <strong>{{ nav_station.name }}</strong>.</p>
         <div class="d-flex gap-2 flex-wrap">
           <a class="btn btn-outline-primary" href="{% url 'portal-station-manage' nav_station.id %}">Station Details</a>
           <a class="btn btn-outline-primary" href="{% url 'personnel-list' nav_station.department_id %}">Personnel</a>

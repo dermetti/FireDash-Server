@@ -26,8 +26,12 @@ class VehicleForm(forms.Form):
 
 
 class AdministratorForm(forms.Form):
-    email = forms.EmailField(max_length=254)
-    display_name = forms.CharField(max_length=255)
+    email = forms.EmailField(
+        max_length=254, widget=forms.EmailInput(attrs={"class": "form-control"})
+    )
+    display_name = forms.CharField(
+        max_length=255, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
 
 
 class StationScopeForm(forms.Form):
@@ -48,8 +52,21 @@ class DepartmentStatusForm(forms.Form):
 
 class DepartmentTabletLeaseForm(forms.Form):
     tablet_lease_days = forms.IntegerField(
-        min_value=3, label="Maximum offline authorization lease (days)"
+        min_value=3, max_value=365, label="Maximum offline authorization lease (days)"
     )
+
+
+class DepartmentSystemSettingsForm(DepartmentTabletLeaseForm):
+    retention_days = forms.IntegerField(
+        min_value=1,
+        max_value=36500,
+        label="Personnel retention period after offboarding (days)",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs["class"] = "form-control"
 
 
 class ApiVersionCompatibilityPolicyForm(forms.Form):

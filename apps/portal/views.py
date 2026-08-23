@@ -2,6 +2,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -13,7 +14,11 @@ from apps.accounts.models import User
 from apps.accounts.reauth import require_recent_reauthentication
 from apps.assignments.services import AssignmentError
 from apps.audit.models import AuditEvent
-from apps.authorization.models import ApiVersionCompatibilityPolicy, StationAdminAssignment
+from apps.authorization.models import (
+    ApiVersionCompatibilityPolicy,
+    DepartmentMembership,
+    StationAdminAssignment,
+)
 from apps.authorization.scopes import (
     StationAdminContextError,
     active_department_ids,
@@ -27,8 +32,10 @@ from apps.authorization.services import (
     grant_station_admin,
     provision_department_admin,
     provision_station_admin,
+    revoke_department_admin,
     revoke_station_admin,
     set_api_version_compatibility_policy,
+    set_department_tablet_lease,
 )
 from apps.organizations.models import Department, Station, Vehicle
 from apps.organizations.services import (
@@ -40,17 +47,20 @@ from apps.organizations.services import (
     update_station,
     update_vehicle,
 )
+from apps.personnel.services import set_retention_policy
 from apps.portal.forms import (
     AdministratorForm,
     ApiVersionCompatibilityPolicyForm,
     DepartmentForm,
     DepartmentStatusForm,
+    DepartmentSystemSettingsForm,
     DepartmentTabletLeaseForm,
     RevokeStationScopeForm,
     StationForm,
     StationScopeForm,
     VehicleForm,
 )
+from apps.portal.overview import attention_for_request
 
 
 def _mark_active(sections: list[dict[str, object]], path: str) -> None:
@@ -110,23 +120,6 @@ def _nav_context(request):
                         "label": "Publications",
                         "url": reverse("publications-list", args=(department.id,)),
                     },
-                    {"label": "Personnel", "url": reverse("personnel-list", args=(department.id,))},
-                    {
-                        "label": "Hydrants",
-                        "url": reverse("reference-data-hydrants", args=(department.id,)),
-                    },
-                    {
-                        "label": "Fire Plans",
-                        "url": reverse("reference-data-fire-plans", args=(department.id,)),
-                    },
-                    {
-                        "label": "KLGV Plans",
-                        "url": reverse("reference-data-klgv-plans", args=(department.id,)),
-                    },
-                    {
-                        "label": "Imports",
-                        "url": reverse("ingestion-imports", args=(department.id,)),
-                    },
                 ],
             },
             {
@@ -144,8 +137,8 @@ def _nav_context(request):
                         "url": reverse("portal-department-manage", args=(department.id,)),
                     },
                     {
-                        "label": "Retention Policy",
-                        "url": reverse("personnel-retention-policy", args=(department.id,)),
+                        "label": "System Settings",
+                        "url": reverse("portal-department-settings", args=(department.id,)),
                     },
                     {
                         "label": "Audit Logs",
@@ -161,6 +154,7 @@ def _nav_context(request):
             "nav_sections": sections,
             "nav_department": department,
             "nav_scope_label": department.name,
+            "nav_attention": attention_for_request(request, department=department),
         }
 
     # Station Administrator (station-only). Resolve the single authorized
@@ -179,8 +173,8 @@ def _nav_context(request):
                     "label": "Station",
                     "children": [
                         {
-                            "label": "Station Details",
-                            "url": reverse("portal-station-manage", args=(station.id,)),
+                            "label": "Tablets",
+                            "url": reverse("tablet-list", args=(station.department_id,)),
                         },
                         {
                             "label": "Personnel",
@@ -197,10 +191,11 @@ def _nav_context(request):
             "nav_station": station,
             "nav_station_ambiguous": station_ambiguous,
             "nav_scope_label": (
-                f"{station.department.name} / {station.name}"
+                f"{station.department.name} · {station.name} · Station administration"
                 if station is not None
                 else "Station administrator (inconsistent configuration)"
             ),
+            "nav_attention": attention_for_request(request, station=station) if station else [],
         }
 
     return {
@@ -282,7 +277,14 @@ def scoped_selector(request: HttpRequest, department_id, kind: str) -> HttpRespo
 @login_required
 @never_cache
 def dashboard(request: HttpRequest) -> HttpResponse:
-    return render(request, "portal/dashboard.html", _nav_context(request))
+    context = _nav_context(request)
+    if context.get("nav_role") == "department":
+        context["attention"] = attention_for_request(request, department=context["nav_department"])
+    elif context.get("nav_role") == "station" and context.get("nav_station") is not None:
+        context["attention"] = attention_for_request(request, station=context["nav_station"])
+    else:
+        context["attention"] = []
+    return render(request, "portal/dashboard.html", context)
 
 
 @login_required
@@ -449,6 +451,8 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
     administrators = administrators.prefetch_related(
         "department_memberships", "station_admin_assignments__station"
     ).order_by("email")
+    paginator = Paginator(administrators, 100)
+    page = paginator.get_page(request.GET.get("page", 1))
     current_user_id = request.user.id
     return render(
         request,
@@ -456,12 +460,78 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
         {
             "department": department,
             "form": form,
-            "administrators": administrators,
+            "administrators": page.object_list,
+            "page": page,
+            "total_count": paginator.count,
             "stations": department.stations.filter(active=True).order_by("name"),
             "query": query,
             "station_filter": station_filter,
             "current_user_id": current_user_id,
         },
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def department_admin_revoke_modal(
+    request: HttpRequest, department_id, membership_id
+) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    membership = get_object_or_404(
+        DepartmentMembership.objects.select_related("user"),
+        pk=membership_id,
+        department=department,
+        active=True,
+    )
+    if request.method == "POST":
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-manage", args=(department.id,)),
+        )
+        revoke_department_admin(actor=request.user, membership=membership)
+        return _modal_redirect(request, reverse("portal-department-manage", args=(department.id,)))
+    return render(
+        request,
+        "portal/_revoke_department_admin_modal.html",
+        {"department": department, "membership": membership},
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def department_settings(request: HttpRequest, department_id) -> HttpResponse:
+    """Edit only existing, authoritative per-department settings."""
+    department = _department_or_403(request, department_id)
+    policy = getattr(department, "personnel_retention_policy", None)
+    initial = {
+        "tablet_lease_days": department.tablet_lease_days,
+        "retention_days": policy.retention_period.days if policy else 30,
+    }
+    form = DepartmentSystemSettingsForm(request.POST or None, initial=initial)
+    if request.method == "POST" and form.is_valid():
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-settings", args=(department.id,)),
+        )
+        with transaction.atomic():
+            set_department_tablet_lease(
+                actor=request.user,
+                department=department,
+                tablet_lease_days=form.cleaned_data["tablet_lease_days"],
+            )
+            from datetime import timedelta
+
+            set_retention_policy(
+                actor=request.user,
+                department=department,
+                retention_period=timedelta(days=form.cleaned_data["retention_days"]),
+            )
+        messages.success(request, "Department system settings were updated.")
+        return redirect("portal-department-settings", department_id=department.id)
+    return render(
+        request,
+        "portal/department_settings.html",
+        {"department": department, "form": form, "retention_policy": policy},
     )
 
 
@@ -786,19 +856,37 @@ def vehicle_manage(request: HttpRequest, vehicle_id) -> HttpResponse:
 def department_audit(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
     station_id = request.GET.get("station")
-    events = AuditEvent.objects.filter(department=department).select_related("actor_user")
+    query = request.GET.get("q", "").strip()
+    events = AuditEvent.objects.filter(department=department).select_related(
+        "actor_user", "station"
+    )
     if station_id and station_id != "__all__":
         station = get_object_or_404(Station, pk=station_id, department=department)
         events = events.filter(station=station)
-    events = events.order_by("-timestamp")[:100]
-    stations = Station.objects.filter(department=department)
+    if query:
+        events = events.filter(
+            Q(action__icontains=query)
+            | Q(target_type__icontains=query)
+            | Q(actor_user__display_name__icontains=query)
+            | Q(actor_user__email__icontains=query)
+        )
+    events = events.order_by("-timestamp", "-id")
+    paginator = Paginator(events, 100)
+    page = paginator.get_page(request.GET.get("page", 1))
+    stations = Station.objects.filter(department=department).order_by("name", "id")
+    page_query = request.GET.copy()
+    page_query.pop("page", None)
     return render(
         request,
         "portal/department_audit.html",
         {
             "department": department,
-            "events": events,
+            "events": page.object_list,
+            "page": page,
+            "total_count": paginator.count,
             "stations": stations,
             "selected_station": station_id or "__all__",
+            "query": query,
+            "page_query": page_query.urlencode(),
         },
     )

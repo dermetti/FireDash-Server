@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ department.name }} System Settings{% endblock %}
+{% block content %}
+{% include "components/_page_header.html" with breadcrumb=department.name title="System Settings" description="Supported per-department authorization and personnel-retention settings." %}
+<form method="post" class="card"><div class="card-body">{% csrf_token %}
+  <div class="mb-4"><h2 class="h5">Tablet authorization</h2><p class="text-body-secondary">Controls the maximum offline authorization lease issued to this department’s tablets. Eligible authenticated check-ins renew it using the existing server policy.</p><label class="form-label" for="{{ form.tablet_lease_days.id_for_label }}">{{ form.tablet_lease_days.label }}</label>{{ form.tablet_lease_days }}{{ form.tablet_lease_days.errors }}<div class="form-text">Between 3 and 365 days. Stale-installation sweeps remain a server maintenance operation and are not configured here.</div></div>
+  <div class="mb-4"><h2 class="h5">Personnel retention</h2><p class="text-body-secondary">Controls how long a departed person is retained before the existing explicit anonymization workflow may run.</p><label class="form-label" for="{{ form.retention_days.id_for_label }}">{{ form.retention_days.label }}</label>{{ form.retention_days }}{{ form.retention_days.errors }}</div>
+  <button type="submit" class="btn btn-primary">Save settings</button>
+</div></form>
+{% endblock %}

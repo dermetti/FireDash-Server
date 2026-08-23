@@ -21,6 +21,16 @@ urlpatterns = [
         views.department_manage,
         name="portal-department-manage",
     ),
+    path(
+        "departments/<uuid:department_id>/settings/",
+        views.department_settings,
+        name="portal-department-settings",
+    ),
+    path(
+        "departments/<uuid:department_id>/administrators/<uuid:membership_id>/revoke/",
+        views.department_admin_revoke_modal,
+        name="portal-department-admin-revoke",
+    ),
     path("departments/<uuid:department_id>/stations/", views.stations, name="portal-stations"),
     path(
         "departments/<uuid:department_id>/selectors/<str:kind>/",

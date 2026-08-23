@@ -1,35 +1,15 @@
 {% extends "base.html" %}
 {% block title %}{{ department.name }} Audit{% endblock %}
-{% block nav_links %}
-<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
-{% endblock %}
 {% block content %}
-<h1>{{ department.name }} Audit Log</h1>
-<div class="mb-3">
-  <label class="form-label">Filter by station</label>
-  <select class="form-select" style="max-width:300px" onchange="window.location=this.value">
-    <option value="?station=__all__" {% if selected_station == '__all__' %}selected{% endif %}>All stations</option>
-    {% for station in stations %}
-    <option value="?station={{ station.id }}" {% if selected_station == station.id|stringformat:'s' %}selected{% endif %}>{{ station.name }}</option>
-    {% endfor %}
-  </select>
-</div>
-<div class="table-responsive">
-<table class="table table-sm table-hover">
-<thead><tr><th>Timestamp</th><th>Action</th><th>Actor</th><th>Station</th><th>Target</th></tr></thead>
-<tbody>
-{% for event in events %}
-<tr>
-  <td class="text-nowrap small">{{ event.timestamp|date:"Y-m-d H:i" }}</td>
-  <td><code class="small">{{ event.action }}</code></td>
-  <td class="small">{{ event.actor_user.display_name|default:"—" }}</td>
-  <td class="small">{{ event.station.name|default:"—" }}</td>
-  <td class="small">{{ event.target_type }}:{{ event.target_uuid|truncatechars:8 }}</td>
-</tr>
-{% empty %}
-<tr><td colspan="5" class="text-muted">No audit events.</td></tr>
-{% endfor %}
-</tbody>
-</table>
-</div>
+{% include "components/_page_header.html" with breadcrumb=department.name title="Audit Logs" description="Immutable department-scoped administrative history." %}
+<section>
+  <h2 class="h5">Events <span class="text-body-secondary fs-6">({{ total_count }})</span></h2>
+  <form method="get" class="row g-2 mb-3">
+    <div class="col-md"><label class="visually-hidden" for="audit-search">Search audit events</label><input id="audit-search" class="form-control" type="search" name="q" value="{{ query }}" placeholder="Search event, actor, or target"></div>
+    <div class="col-md"><label class="visually-hidden" for="audit-station">Station</label><select id="audit-station" class="form-select" name="station"><option value="__all__">All stations</option>{% for station in stations %}<option value="{{ station.id }}"{% if selected_station == station.id|stringformat:'s' %} selected{% endif %}>{{ station.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-auto"><button type="submit" class="btn btn-outline-primary">Filter</button></div>
+  </form>
+  <div class="table-responsive"><table class="table table-sm table-hover align-middle"><thead><tr><th>Timestamp</th><th>Event</th><th>Actor</th><th>Station</th><th>Target</th><th>Context</th></tr></thead><tbody>{% for event in events %}<tr><td class="text-nowrap small">{{ event.timestamp|date:"Y-m-d H:i" }}</td><td><code class="small">{{ event.action }}</code></td><td class="small">{{ event.actor_user.display_name|default:"—" }}</td><td class="small">{{ event.station.name|default:"—" }}</td><td class="small">{{ event.target_type }}{% if event.target_uuid %}: {{ event.target_uuid|truncatechars:8 }}{% endif %}</td><td class="small text-body-secondary">{% if event.metadata %}Safe event context recorded{% else %}—{% endif %}</td></tr>{% empty %}<tr><td colspan="6" class="text-body-secondary">No audit events match these filters.</td></tr>{% endfor %}</tbody></table></div>
+  {% if page.paginator.num_pages > 1 %}<nav aria-label="Audit log pages"><ul class="pagination">{% if page.has_previous %}<li class="page-item"><a class="page-link" href="?{{ page_query }}{% if page_query %}&amp;{% endif %}page={{ page.previous_page_number }}">Previous</a></li>{% endif %}<li class="page-item disabled"><span class="page-link">Page {{ page.number }} of {{ page.paginator.num_pages }}</span></li>{% if page.has_next %}<li class="page-item"><a class="page-link" href="?{{ page_query }}{% if page_query %}&amp;{% endif %}page={{ page.next_page_number }}">Next</a></li>{% endif %}</ul></nav>{% endif %}
+</section>
 {% endblock %}
