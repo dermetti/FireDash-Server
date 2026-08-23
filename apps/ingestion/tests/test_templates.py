@@ -25,7 +25,8 @@ def test_pdf_manifest_templates_have_the_exact_documented_columns():
     fire = (ROOT / "fire-plans-manifest-v1.csv").read_text(encoding="utf-8")
     klgv = (ROOT / "klgv-plans-manifest-v1.csv").read_text(encoding="utf-8")
     assert fire.splitlines()[0] == (
-        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action"
+        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,"
+        "fsd_location,bmz_location,rwa_info,action"
     )
     assert klgv.splitlines()[0] == "external_id,filename,title,category,action"
     assert not any(".xlsx" in value or ".xls" in value for value in (fire, klgv))

@@ -1,30 +1,5 @@
-{% extends "base.html" %}
-{% block title %}{{ station.name }}{% endblock %}
-{% block nav_links %}
-<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
-<li class="nav-item"><a class="nav-link" href="{% url 'portal-stations' station.department_id %}">Stations</a></li>
-<li class="nav-item"><a class="nav-link" href="{% url 'portal-vehicles' station.id %}">Vehicles</a></li>
-{% endblock %}
-{% block content %}
-<div class="row">
-  <div class="col-md-6">
-    <h1>{{ station.name }} <small class="text-muted">({{ station.short_code }})</small></h1>
-    <p class="text-muted">{{ station.department.name }}</p>
-    {% if department_admin %}
-    <div class="card mb-3"><div class="card-body">
-    <h5>Edit Station</h5>
-    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="station">{{ form.as_p }}<button class="btn btn-primary">Save</button></form>
-    </div></div>
-    {% endif %}
-  </div>
-  {% if department_admin %}
-  <div class="col-md-6">
-    <div class="card mb-3"><div class="card-body">
-    <h5>Station Administrators</h5>
-    <ul class="list-group mb-3">{% for assignment in assignments %}<li class="list-group-item">{{ assignment.user.display_name }}</li>{% empty %}<li class="list-group-item text-muted">No station administrators.</li>{% endfor %}</ul>
-    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="provision">{{ admin_form.as_p }}<button class="btn btn-outline-primary">Create Administrator</button></form>
-    </div></div>
-  </div>
-  {% endif %}
-</div>
+{% extends "base.html" %}{% block title %}{{ station.name }}{% endblock %}{% block content %}
+<header class="mb-3"><p><a href="{% url 'portal-stations' station.department_id %}">Stations</a></p><h1>{{ station.name }} <small class="text-muted">{{ station.short_code }}</small></h1><p class="text-body-secondary">{{ station.street }} {{ station.house_number }} · {{ station.postal_code }} {{ station.city }}</p></header>
+{% if department_admin %}<section class="mb-4"><button class="btn btn-outline-primary" hx-get="{% url 'portal-station-edit' station.id %}" hx-target="#station-modal-content" data-bs-toggle="modal" data-bs-target="#station-modal">Edit Data</button><button class="btn btn-outline-danger" hx-get="{% url 'portal-station-delete' station.id %}" hx-target="#station-modal-content" data-bs-toggle="modal" data-bs-target="#station-modal">Delete Data</button><button class="btn btn-primary" hx-get="{% url 'portal-vehicle-create' station.id %}" hx-target="#station-modal-content" data-bs-toggle="modal" data-bs-target="#station-modal">Create Vehicle</button></section>{% endif %}
+<section><h2 class="h4">Vehicles</h2><div class="table-responsive"><table class="table"><thead><tr><th>Vehicle</th><th>Status</th><th>Actions</th></tr></thead><tbody>{% for vehicle in vehicles %}<tr><td><a href="{% url 'portal-vehicle-manage' vehicle.id %}">{{ vehicle.display_name }}</a></td><td>{% if vehicle.active %}Active{% else %}Retired{% endif %}</td><td><a class="btn btn-sm btn-outline-secondary" href="{% url 'portal-vehicle-manage' vehicle.id %}">View details</a>{% if department_admin %}<button class="btn btn-sm btn-outline-secondary" hx-get="{% url 'portal-vehicle-edit' vehicle.id %}" hx-target="#station-modal-content" data-bs-toggle="modal" data-bs-target="#station-modal">Edit Data</button>{% if vehicle.active %}<form method="post" action="{% url 'portal-vehicle-manage' vehicle.id %}" class="d-inline">{% csrf_token %}<input name="action" value="retire" type="hidden"><button class="btn btn-sm btn-outline-warning">Retire</button></form>{% endif %}<button class="btn btn-sm btn-outline-danger" hx-get="{% url 'portal-vehicle-delete' vehicle.id %}" hx-target="#station-modal-content" data-bs-toggle="modal" data-bs-target="#station-modal">Delete Data</button>{% endif %}</td></tr>{% empty %}<tr><td colspan="3">No vehicles.</td></tr>{% endfor %}</tbody></table></div></section><div class="modal fade" id="station-modal"><div id="station-modal-content"></div></div>
 {% endblock %}

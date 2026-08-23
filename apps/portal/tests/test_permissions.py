@@ -98,7 +98,9 @@ def test_station_pages_are_limited_to_assigned_station(client, portal_data):
     _, _, station_admin, outsider, _, station, vehicle = portal_data
     client.force_login(station_admin)
     assert client.get(reverse("portal-station-manage", args=(station.id,))).status_code == 200
-    assert client.get(reverse("portal-vehicles", args=(station.id,))).status_code == 200
+    legacy = client.get(reverse("portal-vehicles", args=(station.id,)))
+    assert legacy.status_code == 302
+    assert legacy.url == reverse("portal-station-manage", args=(station.id,))
     assert client.get(reverse("portal-vehicle-manage", args=(vehicle.id,))).status_code == 200
     client.force_login(outsider)
     assert client.get(reverse("portal-station-manage", args=(station.id,))).status_code == 403

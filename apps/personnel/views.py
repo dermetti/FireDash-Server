@@ -4,6 +4,8 @@ from typing import cast
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
+from django.db.models import Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -24,19 +26,24 @@ from apps.personnel.forms import (
     CommanderEligibilityForm,
     CommanderEmailForm,
     PersonForm,
+    PersonnelFilterForm,
     RetentionPolicyForm,
 )
 from apps.personnel.models import Person
 from apps.personnel.services import (
     PersonnelError,
     anonymize_person,
+    delete_person,
     offboard_person,
     set_commander_eligibility,
     set_commander_email,
     set_retention_policy,
+    update_person,
     verify_commander_email,
     visible_to_user,
 )
+
+PERSONNEL_LIST_PAGE_SIZE = 100
 
 
 def _person_or_404(request: HttpRequest, department_id, person_id) -> Person:
@@ -82,6 +89,31 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
     queryset = visible_to_user(user=request.user, department_id=department.id)
     if selected_station:
         queryset = queryset.filter(station_assignments__station=selected_station).distinct()
+    filter_form = PersonnelFilterForm(request.GET or None)
+    if filter_form.is_valid():
+        filters = filter_form.cleaned_data
+        if filters.get("q"):
+            queryset = queryset.filter(
+                Q(display_name__icontains=filters["q"])
+                | Q(personnel_number__icontains=filters["q"])
+            )
+        if filters.get("status"):
+            queryset = queryset.filter(lifecycle_status=filters["status"])
+        if filters.get("home_station"):
+            queryset = queryset.filter(
+                station_assignments__station_id=filters["home_station"],
+                station_assignments__assignment_type="HOME",
+                station_assignments__ended_at__isnull=True,
+                station_assignments__valid_until__isnull=True,
+            )
+    if "status" not in request.GET:
+        queryset = queryset.filter(lifecycle_status=Person.LifecycleStatus.ACTIVE)
+    queryset = queryset.order_by("display_name", "personnel_number", "id").distinct()
+    paginator = Paginator(queryset, PERSONNEL_LIST_PAGE_SIZE)
+    page = paginator.get_page(request.GET.get("page", 1))
+    station_queryset = department.stations.filter(active=True).order_by("name")
+    if selected_station:
+        station_queryset = station_queryset.filter(pk=selected_station.pk)
     if request.method == "POST":
         if not department_admin:
             return HttpResponse(status=403)
@@ -115,22 +147,28 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
         "personnel/list.html",
         {
             "department": department,
-            "people": queryset,
+            "people": page.object_list,
+            "page": page,
+            "total_count": paginator.count,
+            "filter_form": filter_form,
             "form": form,
             "department_admin": department_admin,
-            "stations": department.stations.filter(active=True),
+            "stations": station_queryset,
             "station_options": [
                 (
                     str(station.id),
                     f"{station.name} ({station.short_code})"
                     + (f", {station.city}" if station.city else ""),
                 )
-                for station in department.stations.filter(active=True).order_by("name")
+                for station in station_queryset
             ],
             "station_selector_endpoint": reverse(
                 "portal-scoped-selector", args=(department.id, "stations")
             ),
             "selected_station": selected_station,
+            "recent_batches": ImportBatch.objects.filter(
+                department=department, domain=ImportBatch.Domain.PERSONNEL
+            ).order_by("-created_at")[:10],
         },
     )
 
@@ -169,6 +207,49 @@ def person_detail(request: HttpRequest, department_id, person_id) -> HttpRespons
         request,
         "personnel/detail.html",
         {"person": person, "form": form, "department_admin": department_admin},
+    )
+
+
+@require_http_methods(["GET", "POST"])
+@login_required
+def person_edit_modal(request: HttpRequest, department_id, person_id) -> HttpResponse:
+    person = _person_or_404(request, department_id, person_id)
+    if person.department_id not in active_department_ids(request.user):
+        raise PermissionDenied("Department administrator scope is required.")
+    form = PersonForm(
+        request.POST or None,
+        initial={
+            "personnel_number": person.personnel_number,
+            "first_name": person.first_name,
+            "last_name": person.last_name,
+        },
+    )
+    if request.method == "POST" and form.is_valid():
+        update_person(actor=request.user, person=person, **form.cleaned_data)
+        return redirect("personnel-detail", department_id=person.department_id, person_id=person.id)
+    return render(request, "personnel/_person_form_modal.html", {"form": form})
+
+
+@require_http_methods(["GET", "POST"])
+@login_required
+def person_delete_modal(request: HttpRequest, department_id, person_id) -> HttpResponse:
+    person = _person_or_404(request, department_id, person_id)
+    if person.department_id not in active_department_ids(request.user):
+        raise PermissionDenied("Department administrator scope is required.")
+    if request.method == "POST":
+        try:
+            delete_person(actor=request.user, person=person)
+        except PersonnelError as error:
+            return render(
+                request,
+                "portal/_delete_modal.html",
+                {"object": person, "error": str(error), "action_url": request.path},
+            )
+        return redirect("personnel-list", department_id=person.department_id)
+    return render(
+        request,
+        "portal/_delete_modal.html",
+        {"object": person, "action_url": request.path},
     )
 
 

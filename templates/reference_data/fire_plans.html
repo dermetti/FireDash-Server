@@ -6,7 +6,7 @@
 {% block content %}
 <h1>{{ department.name }} Fire Plans</h1>
 <p class="text-body-secondary">Accepted PDFs are sanitized before a preview can be confirmed.</p>
-<section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><strong>{{ fire_plans|length }}</strong> canonical documents. Publication follows confirmation.</div></section>
+<section class="card mb-4"><div class="card-body"><h2 class="h5">Status</h2><strong>{{ total_count }}</strong> matching canonical documents. Publication follows confirmation.</div></section>
 <section class="mb-4"><h2 class="h5">Actions</h2><div class="d-flex gap-3 flex-wrap"><div><button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#add-fire-plan">Add Fire Plan</button><p class="text-body-secondary mb-0 mt-2">Upload one current operational PDF.</p></div><div><a href="{% url 'ingestion-imports' department.id %}?domain=fire_plans&amp;import_format=zip&amp;import_mode=upsert" class="btn btn-outline-primary">Import Fire Plans</a><p class="text-body-secondary mb-0 mt-2">One ZIP with fire-plans-manifest-v1.csv and declared PDFs.</p></div></div></section>
 <div class="collapse mb-4" id="add-fire-plan"><section class="card"><div class="card-body"><h2 class="h5">Add Fire Plan</h2><p class="text-body-secondary">Use an External ID when the department provides one. Otherwise, the address identifies the Fire Plan.</p><form method="post" enctype="multipart/form-data" class="row g-3">{% csrf_token %}
   {% if form.non_field_errors %}<div class="col-12">{{ form.non_field_errors }}</div>{% endif %}
@@ -18,13 +18,16 @@
   <div class="col-md-8">{{ form.city.label_tag }}{{ form.city }}{{ form.city.errors }}</div>
   <div class="col-md-6">{{ form.longitude.label_tag }}{{ form.longitude }}{{ form.longitude.errors }}</div>
   <div class="col-md-6">{{ form.latitude.label_tag }}{{ form.latitude }}{{ form.latitude.errors }}</div>
+  <div class="col-md-4">{{ form.fsd_location.label_tag }}{{ form.fsd_location }}{{ form.fsd_location.errors }}</div>
+  <div class="col-md-4">{{ form.bmz_location.label_tag }}{{ form.bmz_location }}{{ form.bmz_location.errors }}</div>
+  <div class="col-md-4">{{ form.rwa_info.label_tag }}{{ form.rwa_info }}{{ form.rwa_info.errors }}</div>
   <div class="col-12 d-flex gap-2"><button class="btn btn-primary">Create preview</button><button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#add-fire-plan">Cancel</button></div>
 </form></div></section></div>
-<section><h2 class="h5">Existing Fire Plans</h2><div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th>Plan</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+<section><h2 class="h5">Existing Fire Plans</h2><form method="get" class="row g-2 mb-3"><div class="col-sm-7">{{ filter_form.q }}</div><div class="col-sm-3">{{ filter_form.active }}</div><div class="col-sm-2"><button class="btn btn-outline-secondary w-100">Filter</button></div></form><div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th>Plan</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       {% for plan in fire_plans %}
-      <tr><td>{{ plan.display_label }}<div class="text-body-secondary small">{% if plan.external_identifier %}{{ plan.external_identifier }}{% else %}Address identity{% endif %}</div></td><td><span class="badge bg-{% if plan.active %}success{% else %}secondary{% endif %}">{% if plan.active %}Active{% else %}Inactive{% endif %}</span></td><td><a class="btn btn-sm btn-outline-secondary" href="{% url 'reference-data-fire-plan-detail' plan.id %}">Actions</a></td></tr>
+      <tr><td><a href="{% url 'reference-data-fire-plan-detail' plan.id %}">{{ plan.display_label }}</a><div class="text-body-secondary small">{% if plan.external_identifier %}{{ plan.external_identifier }}{% else %}Address identity{% endif %}</div></td><td><span class="badge bg-{% if plan.active %}success{% else %}secondary{% endif %}">{% if plan.active %}Active{% else %}Inactive{% endif %}</span></td><td><a class="btn btn-sm btn-outline-secondary" href="{% url 'reference-data-fire-plan-detail' plan.id %}">View details</a></td></tr>
       {% empty %}
       <tr><td colspan="3" class="text-body-secondary">No Fire Plans. Add a PDF or import a package.</td></tr>
       {% endfor %}
-    </tbody></table></div></section>
+    </tbody></table></div>{% if page.paginator.num_pages > 1 %}<nav aria-label="Fire Plan pages"><ul class="pagination">{% if page.has_previous %}<li class="page-item"><a class="page-link" href="?{{ page_query }}{% if page_query %}&amp;{% endif %}page={{ page.previous_page_number }}">Previous</a></li>{% endif %}<li class="page-item disabled"><span class="page-link">Page {{ page.number }} of {{ page.paginator.num_pages }}</span></li>{% if page.has_next %}<li class="page-item"><a class="page-link" href="?{{ page_query }}{% if page_query %}&amp;{% endif %}page={{ page.next_page_number }}">Next</a></li>{% endif %}</ul></nav>{% endif %}</section>
 {% endblock %}

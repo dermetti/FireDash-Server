@@ -22,7 +22,7 @@ from apps.publications.models import PublicationJob
 from apps.reference_data.models import FirePlan
 
 FIRE_HEADER = (
-    "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action"
+    "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action"
 )
 
 OLD_CONTENT = b"%PDF-1.4\nOLD"

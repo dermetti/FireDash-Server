@@ -32,12 +32,56 @@ def _department(request: HttpRequest, department_id) -> Department:
 @require_http_methods(["GET", "POST"])
 def imports(request: HttpRequest, department_id) -> HttpResponse:
     department = _department(request, department_id)
+    requested_domain = request.POST.get("domain") or request.GET.get("domain")
+    domain_configs = {
+        ImportBatch.Domain.HYDRANTS: {
+            "formats": (
+                (ImportBatch.Format.GEOJSON, "GeoJSON"),
+                (ImportBatch.Format.CSV, "CSV"),
+                (ImportBatch.Format.JSON, "JSON"),
+            ),
+            "mode": ImportBatch.Mode.MERGE,
+            "help": (
+                "GeoJSON is preferred. CSV and JSON are also accepted; coordinates use EPSG:4326 "
+                "longitude then latitude."
+            ),
+        },
+        ImportBatch.Domain.PERSONNEL: {
+            "formats": ((ImportBatch.Format.CSV, "CSV"), (ImportBatch.Format.JSON, "JSON")),
+            "mode": ImportBatch.Mode.UPSERT,
+            "help": (
+                "CSV and JSON add or update personnel. Absence never offboards people or ends "
+                "assignments."
+            ),
+        },
+        ImportBatch.Domain.FIRE_PLANS: {
+            "formats": ((ImportBatch.Format.ZIP, "ZIP package"),),
+            "mode": ImportBatch.Mode.UPSERT,
+            "help": (
+                "ZIP packages use fire-plans-manifest-v1.csv. An upsert creates a plan when "
+                "its External ID/address identity is new, otherwise it updates that plan."
+            ),
+        },
+        ImportBatch.Domain.KLGV_PLANS: {
+            "formats": ((ImportBatch.Format.ZIP, "ZIP package"),),
+            "mode": ImportBatch.Mode.UPSERT,
+            "help": "ZIP packages use manifest.csv and create or update KLGV plans by stable ID.",
+        },
+    }
+    target_domain = requested_domain if requested_domain in domain_configs else None
     initial = {
         key: request.GET[key]
         for key in ("domain", "import_format", "import_mode")
         if key in request.GET
     }
     form = ImportUploadForm(request.POST or None, request.FILES or None, initial=initial)
+    if target_domain:
+        config = domain_configs[target_domain]
+        form.fields["domain"].choices = ((target_domain, ImportBatch.Domain(target_domain).label),)
+        form.fields["import_format"].choices = config["formats"]
+        form.fields["import_mode"].choices = (
+            (config["mode"], ImportBatch.Mode(config["mode"]).label),
+        )
     # Django's runtime form field classes are not PEP 585 generics.  Keep the
     # precise type for static checking without evaluating a subscription.
     station_field = cast("ModelChoiceField[Station]", form.fields["station"])
@@ -65,7 +109,11 @@ def imports(request: HttpRequest, department_id) -> HttpResponse:
         {
             "department": department,
             "form": form,
-            "batches": ImportBatch.objects.filter(department=department)[:20],
+            "batches": ImportBatch.objects.filter(
+                department=department, **({"domain": target_domain} if target_domain else {})
+            )[:20],
+            "target_domain": target_domain,
+            "domain_help": domain_configs[target_domain]["help"] if target_domain else None,
         },
     )
 

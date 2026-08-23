@@ -4,6 +4,7 @@ from uuid import UUID
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Q
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
@@ -181,6 +182,41 @@ def update_person(
     )
     _mark_visible_station_scopes(person=person, actor=actor)
     return person
+
+
+@transaction.atomic
+def delete_person(*, actor, person: Person) -> None:
+    """Permanently remove only an erroneous person with no protected history."""
+    person = Person.objects.select_for_update().select_related("department").get(pk=person.pk)
+    _require_department_person_admin(actor, person)
+    affected_station_ids = _visible_station_ids(person)
+    person_id = person.id
+    department = person.department
+    metadata = {
+        "personnel_number": person.personnel_number,
+        "display_name": person.display_name,
+    }
+    try:
+        person.delete()
+    except ProtectedError as error:
+        raise PersonnelError(
+            "Personnel cannot be deleted while protected assignment or history records exist."
+        ) from error
+    record_event(
+        action="personnel.deleted",
+        actor_user=actor,
+        department=department,
+        target_type="person",
+        target_uuid=person_id,
+        metadata=metadata,
+    )
+    for station_id in affected_station_ids:
+        mark_dirty(
+            department=department,
+            station=Station.objects.get(pk=station_id),
+            dataset_type_code="station_personnel",
+            actor=actor,
+        )
 
 
 @transaction.atomic

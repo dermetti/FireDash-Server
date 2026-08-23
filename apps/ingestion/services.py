@@ -192,6 +192,9 @@ def _single_pdf_package(*, domain: str, values: dict[str, object], pdf_bytes: by
             "city",
             "longitude",
             "latitude",
+            "fsd_location",
+            "bmz_location",
+            "rwa_info",
             "action",
         )
         row = {
@@ -203,6 +206,9 @@ def _single_pdf_package(*, domain: str, values: dict[str, object], pdf_bytes: by
             "city": values.get("city", ""),
             "longitude": values.get("longitude", ""),
             "latitude": values.get("latitude", ""),
+            "fsd_location": values.get("fsd_location", ""),
+            "bmz_location": values.get("bmz_location", ""),
+            "rwa_info": values.get("rwa_info", ""),
             "action": "upsert",
         }
     else:
@@ -844,6 +850,9 @@ def _document_baseline(*, department, domain: str) -> dict[str, str]:
             "address",
             "postal_code",
             "city",
+            "fsd_location",
+            "bmz_location",
+            "rwa_info",
         )
         return {
             _document_identity_key(row, domain=domain): _fingerprint(
@@ -855,6 +864,9 @@ def _document_baseline(*, department, domain: str) -> dict[str, str]:
                     "address": row.address,
                     "postal_code": row.postal_code,
                     "city": row.city,
+                    "fsd_location": row.fsd_location,
+                    "bmz_location": row.bmz_location,
+                    "rwa_info": row.rwa_info,
                 }
             )
             for row in rows
@@ -1111,6 +1123,9 @@ def _sanitize_pdf_preview(
                 "address": entry.address,
                 "postal_code": entry.postal_code,
                 "city": entry.city,
+                "fsd_location": entry.fsd_location,
+                "bmz_location": entry.bmz_location,
+                "rwa_info": entry.rwa_info,
                 "category": entry.category,
                 "latitude": entry.latitude,
                 "longitude": entry.longitude,
@@ -1314,6 +1329,9 @@ def _create_document(*, batch, row, model, sanitized_path):
             location=_location(row),
             postal_code=row["postal_code"],
             city=row["city"],
+            fsd_location=row["fsd_location"],
+            bmz_location=row["bmz_location"],
+            rwa_info=row["rwa_info"],
             sha256=row["sanitized_pdf_sha256"],
             source_pdf_sha256=row["source_pdf_sha256"],
         )
@@ -1342,6 +1360,9 @@ def _replace_document_content(*, current, row, model, sanitized_path):
             ("address", row["address"]),
             ("postal_code", row["postal_code"]),
             ("city", row["city"]),
+            ("fsd_location", row["fsd_location"]),
+            ("bmz_location", row["bmz_location"]),
+            ("rwa_info", row["rwa_info"]),
         ):
             if value:
                 setattr(current, field, value)
@@ -1363,6 +1384,9 @@ def _merge_document_metadata(*, current, row, model) -> bool:
                 ("address", row["address"]),
                 ("postal_code", row["postal_code"]),
                 ("city", row["city"]),
+                ("fsd_location", row["fsd_location"]),
+                ("bmz_location", row["bmz_location"]),
+                ("rwa_info", row["rwa_info"]),
             ):
                 if value:
                     setattr(current, field, value)
@@ -1420,6 +1444,9 @@ def _document_changed_fields(*, current, row, model) -> list[dict[str, object]]:
             ("address", "Address", "address", row["address"]),
             ("postal_code", "Postal code", "postal_code", row["postal_code"]),
             ("city", "City", "city", row["city"]),
+            ("fsd_location", "FSD location", "fsd_location", row["fsd_location"]),
+            ("bmz_location", "BMZ location", "bmz_location", row["bmz_location"]),
+            ("rwa_info", "RWA information", "rwa_info", row["rwa_info"]),
         ):
             if proposed and getattr(current, attribute) != proposed:
                 fields.append(
@@ -1477,6 +1504,9 @@ def _document_metadata_changes(*, current, row, model) -> bool:
             ("address", row["address"]),
             ("postal_code", row["postal_code"]),
             ("city", row["city"]),
+            ("fsd_location", row["fsd_location"]),
+            ("bmz_location", row["bmz_location"]),
+            ("rwa_info", row["rwa_info"]),
         ):
             if value and getattr(current, field) != value:
                 changed = True

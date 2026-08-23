@@ -26,7 +26,7 @@ def raw_package(members: dict[str, str | bytes]) -> bytes:
 
 def fire_manifest(rows: str) -> str:
     return (
-        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action\n"
         + rows
     )
 

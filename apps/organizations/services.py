@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment, TabletVehicleAssignment
@@ -170,6 +171,62 @@ def deactivate_vehicle(*, vehicle: Vehicle) -> None:
         raise AssignmentError("End current tablet assignments before deactivating a vehicle.")
     vehicle.active = False
     vehicle.save(update_fields=("active", "updated_at"))
+
+
+@transaction.atomic
+def delete_vehicle(*, actor, vehicle: Vehicle) -> None:
+    """Permanently remove an erroneous unused vehicle; never cascade history."""
+    vehicle = (
+        Vehicle.objects.select_for_update()
+        .select_related("department", "station")
+        .get(pk=vehicle.pk)
+    )
+    require_department_admin(actor, vehicle.department)
+    vehicle_id = vehicle.id
+    vehicle_name = vehicle.display_name
+    vehicle_call_sign = vehicle.call_sign or None
+    department = vehicle.department
+    station = vehicle.station
+    try:
+        vehicle.delete()
+    except ProtectedError as error:
+        raise AssignmentError(
+            "Vehicle cannot be deleted while protected operational history exists."
+        ) from error
+    record_event(
+        action="organization.vehicle_deleted",
+        actor_user=actor,
+        department=department,
+        station=station,
+        target_type="vehicle",
+        target_uuid=vehicle_id,
+        metadata={"display_name": vehicle_name, "call_sign": vehicle_call_sign},
+    )
+
+
+@transaction.atomic
+def delete_station(*, actor, station: Station) -> None:
+    """Permanently remove an erroneous empty station; never delete dependents."""
+    station = Station.objects.select_for_update().select_related("department").get(pk=station.pk)
+    require_department_admin(actor, station.department)
+    station_id = station.id
+    station_name = station.name
+    station_short_code = station.short_code
+    department = station.department
+    try:
+        station.delete()
+    except ProtectedError as error:
+        raise AssignmentError(
+            "Station cannot be deleted while protected resources or history exist."
+        ) from error
+    record_event(
+        action="organization.station_deleted",
+        actor_user=actor,
+        department=department,
+        target_type="station",
+        target_uuid=station_id,
+        metadata={"name": station_name, "short_code": station_short_code},
+    )
 
 
 @transaction.atomic

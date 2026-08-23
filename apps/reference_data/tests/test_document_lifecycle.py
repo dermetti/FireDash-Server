@@ -10,7 +10,12 @@ from apps.organizations.models import Department
 from apps.publications.feature_services import set_department_feature
 from apps.publications.models import DatasetScopeState
 from apps.reference_data.models import FirePlan, KlgvPlan
-from apps.reference_data.services import set_fire_plan_active, set_klgv_plan_active
+from apps.reference_data.services import (
+    delete_fire_plan,
+    delete_klgv_plan,
+    set_fire_plan_active,
+    set_klgv_plan_active,
+)
 
 
 @pytest.fixture
@@ -100,3 +105,36 @@ def test_document_lifecycle_rejects_other_department_actor(documents):
     DepartmentMembership.objects.create(user=outsider, department=other, created_by=actor)
     with pytest.raises(PermissionDenied):
         set_fire_plan_active(actor=outsider, fire_plan=plan, active=False)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("factory", "deleter", "event"),
+    [
+        (_fire_plan, delete_fire_plan, "reference_data.fire_plan_deleted"),
+        (_klgv_plan, delete_klgv_plan, "reference_data.klgv_plan_deleted"),
+    ],
+)
+def test_document_delete_is_audited_and_marks_its_scope(
+    documents, factory, deleter, event, tmp_path, settings
+):
+    actor, department, _ = documents
+    settings.REFERENCE_DATA_ACCEPTED_ROOT = tmp_path
+    plan = factory(actor, department)
+    accepted = tmp_path / plan.document_key
+    accepted.write_bytes(b"accepted")
+    keyword = "fire_plan" if isinstance(plan, FirePlan) else "klgv_plan"
+    dataset = "department_fire_plans" if isinstance(plan, FirePlan) else "department_klgv_plans"
+    if dataset == "department_klgv_plans":
+        set_department_feature(
+            actor=actor, department=department, feature_code="klgv_plans", enabled=True
+        )
+
+    deleter(actor=actor, **{keyword: plan})
+
+    assert not type(plan).objects.filter(pk=plan.pk).exists()
+    assert AuditEvent.objects.filter(action=event, target_uuid=plan.pk).exists()
+    assert not accepted.exists()
+    assert DatasetScopeState.objects.filter(
+        department=department, dataset_type_code=dataset, source_revision=1
+    ).exists()

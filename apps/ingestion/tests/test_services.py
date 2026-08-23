@@ -516,7 +516,7 @@ def test_single_and_batch_fire_plan_inputs_share_identity_noop_and_dirty_once(
     assert original.source_pdf_sha256 == hashlib.sha256(source_pdf).hexdigest()
 
     manifest = (
-        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action\n"
         "FP-1,renamed.pdf,School,Main 1,12345,Town,8.2,50.1,upsert\n"
     )
     batch = create_preview(
@@ -563,7 +563,7 @@ def test_address_identity_single_and_zip_inputs_converge_without_sanitizer_churn
     apply_preview(actor=actor, batch_id=first.id)
     plan = FirePlan.objects.get(department=department, external_identifier="")
     manifest = (
-        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action\n"
         ",renamed.pdf,Bauhaus Wandsbek,Wandsbeker Zollstrasse 95,"
         "22041,Hamburg,10.123,53.456,upsert\n"
     )
@@ -840,7 +840,7 @@ def test_pdf_document_convergence_update_stale_zip_and_lifecycle_matrix(
         }
         model, code = FirePlan, "department_fire_plans"
         manifest = (
-            "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+            "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action\n"
             "M-1,same.pdf,Plan,Road,1,Town,,,upsert\n"
         )
     first = create_single_preview(
@@ -953,7 +953,7 @@ def test_pdf_zip_omission_and_lifecycle_noops_have_no_side_effects(
 
         model, code = FirePlan, "department_fire_plans"
         manifest = (
-            "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action\n"
+            "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action\n"
             "A,a.pdf,A,Road,,,,,upsert\n"
         )
     for identifier in ("A", "B"):

@@ -141,7 +141,7 @@ def test_station_admin_is_denied_department_wide_routes_and_personnel_mutations(
         ).status_code
         == 403
     )
-    assert client.post(reverse("portal-vehicles", args=(station.id,)), {}).status_code == 403
+    assert client.post(reverse("portal-vehicle-create", args=(station.id,)), {}).status_code == 403
     assert client.post(reverse("portal-vehicle-manage", args=(vehicle.id,)), {}).status_code == 403
 
     assert (
@@ -185,21 +185,20 @@ def test_vehicle_forms_persist_submitted_fields_and_active_state(client, station
     client.force_login(department_admin)
 
     response = client.post(
-        reverse("portal-vehicles", args=(station.id,)),
+        reverse("portal-vehicle-create", args=(station.id,)),
         {"display_name": " Engine 1 ", "call_sign": " E-1 ", "asset_identifier": " A-1 "},
     )
 
     assert response.status_code == 302
     vehicle = Vehicle.objects.get(station=station, display_name="Engine 1")
-    assert (vehicle.call_sign, vehicle.asset_identifier, vehicle.active) == ("E-1", "A-1", False)
+    assert (vehicle.call_sign, vehicle.asset_identifier, vehicle.active) == ("E-1", "A-1", True)
 
     response = client.post(
-        reverse("portal-vehicle-manage", args=(vehicle.id,)),
+        reverse("portal-vehicle-edit", args=(vehicle.id,)),
         {
             "display_name": "Engine Updated",
             "call_sign": "E-2",
             "asset_identifier": "A-2",
-            "active": "on",
         },
     )
 

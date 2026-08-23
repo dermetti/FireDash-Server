@@ -1,5 +1,7 @@
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -9,6 +11,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.accounts.models import User
 from apps.accounts.reauth import require_recent_reauthentication
+from apps.assignments.services import AssignmentError
 from apps.audit.models import AuditEvent
 from apps.authorization.models import ApiVersionCompatibilityPolicy, StationAdminAssignment
 from apps.authorization.scopes import (
@@ -31,6 +34,9 @@ from apps.organizations.models import Department, Station, Vehicle
 from apps.organizations.services import (
     create_station,
     create_vehicle,
+    deactivate_vehicle,
+    delete_station,
+    delete_vehicle,
     update_station,
     update_vehicle,
 )
@@ -99,6 +105,7 @@ def _nav_context(request):
             {
                 "label": "Distributed Data",
                 "children": [
+                    {"label": "Data Hub", "url": reverse("portal-data-hub", args=(department.id,))},
                     {
                         "label": "Publications",
                         "url": reverse("publications-list", args=(department.id,)),
@@ -178,10 +185,6 @@ def _nav_context(request):
                         {
                             "label": "Personnel",
                             "url": reverse("personnel-list", args=(station.department_id,)),
-                        },
-                        {
-                            "label": "Vehicles",
-                            "url": reverse("portal-vehicles", args=(station.id,)),
                         },
                     ],
                 }
@@ -463,6 +466,14 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
 
 
 @login_required
+@require_http_methods(["GET"])
+def data_hub(request: HttpRequest, department_id) -> HttpResponse:
+    """Gateway to bounded canonical-data modules; it deliberately owns no CRUD."""
+    department = _department_or_403(request, department_id)
+    return render(request, "portal/data_hub.html", {"department": department})
+
+
+@login_required
 @require_http_methods(["GET", "POST"])
 def stations(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
@@ -470,10 +481,138 @@ def stations(request: HttpRequest, department_id) -> HttpResponse:
     if request.method == "POST" and form.is_valid():
         create_station(actor=request.user, department=department, **form.cleaned_data)
         return redirect("portal-stations", department_id=department.id)
+    queryset = department.stations.order_by("-active", "name", "short_code", "id")
+    paginator = Paginator(queryset, 100)
+    page = paginator.get_page(request.GET.get("page", 1))
     return render(
         request,
         "portal/stations.html",
-        {"department": department, "stations": department.stations.all(), "form": form},
+        {
+            "department": department,
+            "stations": page.object_list,
+            "page": page,
+            "total_count": paginator.count,
+            "form": form,
+        },
+    )
+
+
+def _modal(request, template, context=None, **extra_context):
+    """Render a modal fragment with either a context mapping or keyword values."""
+    return render(request, template, (context or {}) | extra_context)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def station_edit_modal(request: HttpRequest, station_id) -> HttpResponse:
+    station = _station_or_403(request, station_id)
+    if station.department_id not in active_department_ids(request.user):
+        raise PermissionDenied("Department administrator role is required.")
+    form = StationForm(
+        request.POST or None,
+        initial={
+            "name": station.name,
+            "short_code": station.short_code,
+            "street": station.street,
+            "house_number": station.house_number,
+            "postal_code": station.postal_code,
+            "city": station.city,
+            "active": station.active,
+        },
+    )
+    if request.method == "POST" and form.is_valid():
+        data = form.cleaned_data
+        data["active"] = station.active
+        update_station(actor=request.user, station=station, **data)
+        return redirect("portal-station-manage", station_id=station.id)
+    return _modal(request, "portal/_station_form_modal.html", {"form": form, "station": station})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def vehicle_create_modal(request: HttpRequest, station_id) -> HttpResponse:
+    station = _station_or_403(request, station_id)
+    if station.department_id not in active_department_ids(request.user):
+        raise PermissionDenied("Department administrator role is required.")
+    form = VehicleForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        data = form.cleaned_data
+        data["active"] = True
+        create_vehicle(actor=request.user, department=station.department, station=station, **data)
+        return redirect("portal-station-manage", station_id=station.id)
+    return _modal(
+        request,
+        "portal/_vehicle_form_modal.html",
+        {"form": form, "station": station, "vehicle": None},
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def vehicle_edit_modal(request: HttpRequest, vehicle_id) -> HttpResponse:
+    vehicle = get_object_or_404(Vehicle, pk=vehicle_id)
+    if vehicle.department_id not in active_department_ids(request.user):
+        raise PermissionDenied("Department administrator role is required.")
+    form = VehicleForm(
+        request.POST or None,
+        initial={
+            "display_name": vehicle.display_name,
+            "call_sign": vehicle.call_sign,
+            "asset_identifier": vehicle.asset_identifier,
+            "active": vehicle.active,
+        },
+    )
+    if request.method == "POST" and form.is_valid():
+        data = form.cleaned_data
+        data["active"] = vehicle.active
+        update_vehicle(actor=request.user, vehicle=vehicle, **data)
+        return redirect("portal-vehicle-manage", vehicle_id=vehicle.id)
+    return _modal(
+        request,
+        "portal/_vehicle_form_modal.html",
+        {"form": form, "station": vehicle.station, "vehicle": vehicle},
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def station_delete_modal(request: HttpRequest, station_id) -> HttpResponse:
+    station = _station_or_403(request, station_id)
+    if station.department_id not in active_department_ids(request.user):
+        raise PermissionDenied("Department administrator role is required.")
+    if request.method == "POST":
+        try:
+            delete_station(actor=request.user, station=station)
+        except AssignmentError as error:
+            return _modal(
+                request,
+                "portal/_delete_modal.html",
+                {"object": station, "error": str(error), "action_url": request.path},
+            )
+        return redirect("portal-stations", department_id=station.department_id)
+    return _modal(
+        request, "portal/_delete_modal.html", {"object": station, "action_url": request.path}
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def vehicle_delete_modal(request: HttpRequest, vehicle_id) -> HttpResponse:
+    vehicle = get_object_or_404(Vehicle, pk=vehicle_id)
+    if vehicle.department_id not in active_department_ids(request.user):
+        raise PermissionDenied("Department administrator role is required.")
+    if request.method == "POST":
+        try:
+            delete_vehicle(actor=request.user, vehicle=vehicle)
+        except AssignmentError as error:
+            return _modal(
+                request,
+                "portal/_delete_modal.html",
+                {"object": vehicle, "error": str(error), "action_url": request.path},
+            )
+        return redirect("portal-station-manage", station_id=vehicle.station_id)
+    return _modal(
+        request, "portal/_delete_modal.html", {"object": vehicle, "action_url": request.path}
     )
 
 
@@ -500,6 +639,17 @@ def station_manage(request: HttpRequest, station_id) -> HttpResponse:
     if request.method == "POST" and request.POST.get("action") == "station" and form.is_valid():
         update_station(actor=request.user, station=station, **form.cleaned_data)
         return redirect("portal-station-manage", station_id=station.id)
+    if request.method == "POST" and request.POST.get("action") == "delete":
+        if request.POST.get("confirm") != "DELETE":
+            messages.error(request, "Type DELETE to permanently remove this erroneous station.")
+        else:
+            try:
+                delete_station(actor=request.user, station=station)
+            except AssignmentError as error:
+                messages.error(request, str(error))
+            else:
+                messages.success(request, "Station data permanently deleted.")
+                return redirect("portal-stations", department_id=station.department_id)
     if request.method == "POST" and request.POST.get("action") == "provision":
         require_recent_reauthentication(
             request,
@@ -524,6 +674,7 @@ def station_manage(request: HttpRequest, station_id) -> HttpResponse:
             "form": form,
             "admin_form": admin_form,
             "assignments": StationAdminAssignment.objects.filter(station=station, active=True),
+            "vehicles": station.vehicles.order_by("active", "display_name", "id"),
         },
     )
 
@@ -532,28 +683,7 @@ def station_manage(request: HttpRequest, station_id) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def vehicles(request: HttpRequest, station_id) -> HttpResponse:
     station = _station_or_403(request, station_id)
-    department_admin = station.department_id in active_department_ids(request.user)
-    form = VehicleForm(request.POST or None)
-    if request.method == "POST":
-        if not department_admin:
-            raise PermissionDenied("Department administrator role is required.")
-        if form.is_valid():
-            create_vehicle(
-                actor=request.user,
-                department=station.department,
-                station=station,
-                **form.cleaned_data,
-            )
-            return redirect("portal-vehicles", station_id=station.id)
-    return render(
-        request,
-        "portal/vehicles.html",
-        {
-            "station": station,
-            "vehicles": station.vehicles.all(),
-            "form": form if department_admin else None,
-        },
-    )
+    return redirect("portal-station-manage", station_id=station.id)
 
 
 @login_required
@@ -580,6 +710,25 @@ def vehicle_manage(request: HttpRequest, vehicle_id) -> HttpResponse:
     if request.method == "POST" and form.is_valid():
         update_vehicle(actor=request.user, vehicle=vehicle, **form.cleaned_data)
         return redirect("portal-vehicle-manage", vehicle_id=vehicle.id)
+    if request.method == "POST" and request.POST.get("action") == "retire":
+        try:
+            deactivate_vehicle(vehicle=vehicle)
+        except AssignmentError as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(request, "Vehicle retired.")
+        return redirect("portal-vehicle-manage", vehicle_id=vehicle.id)
+    if request.method == "POST" and request.POST.get("action") == "delete":
+        if request.POST.get("confirm") != "DELETE":
+            messages.error(request, "Type DELETE to permanently remove this erroneous vehicle.")
+        else:
+            try:
+                delete_vehicle(actor=request.user, vehicle=vehicle)
+            except AssignmentError as error:
+                messages.error(request, str(error))
+            else:
+                messages.success(request, "Vehicle data permanently deleted.")
+                return redirect("portal-station-manage", station_id=vehicle.station_id)
     return render(request, "portal/vehicle_manage.html", {"vehicle": vehicle, "form": form})
 
 

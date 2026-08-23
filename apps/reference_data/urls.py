@@ -13,6 +13,21 @@ urlpatterns = [
     ),
     path("hydrants/<uuid:hydrant_id>/", views.hydrant_manage, name="reference-data-hydrant-manage"),
     path(
+        "hydrants/<uuid:hydrant_id>/edit/",
+        views.hydrant_edit_modal,
+        name="reference-data-hydrant-edit",
+    ),
+    path(
+        "hydrants/<uuid:hydrant_id>/lifecycle/",
+        views.hydrant_lifecycle,
+        name="reference-data-hydrant-lifecycle",
+    ),
+    path(
+        "hydrants/<uuid:hydrant_id>/delete/",
+        views.hydrant_delete_modal,
+        name="reference-data-hydrant-delete",
+    ),
+    path(
         "departments/<uuid:department_id>/fire-plans/",
         views.fire_plans,
         name="reference-data-fire-plans",
@@ -28,8 +43,38 @@ urlpatterns = [
         name="reference-data-fire-plan-detail",
     ),
     path(
+        "fire-plans/<uuid:fire_plan_id>/edit/",
+        views.fire_plan_edit_modal,
+        name="reference-data-fire-plan-edit",
+    ),
+    path(
+        "fire-plans/<uuid:fire_plan_id>/lifecycle/",
+        views.fire_plan_lifecycle,
+        name="reference-data-fire-plan-lifecycle",
+    ),
+    path(
+        "fire-plans/<uuid:fire_plan_id>/delete/",
+        views.fire_plan_delete_modal,
+        name="reference-data-fire-plan-delete",
+    ),
+    path(
         "klgv-plans/<uuid:klgv_plan_id>/",
         views.klgv_plan_detail,
         name="reference-data-klgv-plan-detail",
+    ),
+    path(
+        "klgv-plans/<uuid:klgv_plan_id>/edit/",
+        views.klgv_plan_edit_modal,
+        name="reference-data-klgv-plan-edit",
+    ),
+    path(
+        "klgv-plans/<uuid:klgv_plan_id>/lifecycle/",
+        views.klgv_plan_lifecycle,
+        name="reference-data-klgv-plan-lifecycle",
+    ),
+    path(
+        "klgv-plans/<uuid:klgv_plan_id>/delete/",
+        views.klgv_plan_delete_modal,
+        name="reference-data-klgv-plan-delete",
     ),
 ]

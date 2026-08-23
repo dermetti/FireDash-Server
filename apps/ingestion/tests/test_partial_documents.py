@@ -19,7 +19,7 @@ from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitiz
 from apps.reference_data.pdf_validation import PdfValidationError
 
 FIRE_HEADER = (
-    "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action"
+    "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action"
 )
 
 

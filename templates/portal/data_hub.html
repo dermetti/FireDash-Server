@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ department.name }} Data Hub{% endblock %}
+{% block content %}
+<div class="mb-4"><h1>Data Hub</h1><p class="text-body-secondary">Choose a canonical data domain. Imports are validated and confirmed before publication is scheduled.</p></div>
+<section class="row g-3" aria-label="Data domains">
+<div class="col-md-6"><a class="card card-body text-decoration-none h-100" href="{% url 'reference-data-hydrants' department.id %}"><h2 class="h5">Hydrants</h2><p class="mb-0 text-body-secondary">Manage or import hydrants.</p></a></div>
+<div class="col-md-6"><a class="card card-body text-decoration-none h-100" href="{% url 'personnel-list' department.id %}"><h2 class="h5">Personnel</h2><p class="mb-0 text-body-secondary">Manage or import personnel.</p></a></div>
+<div class="col-md-6"><a class="card card-body text-decoration-none h-100" href="{% url 'reference-data-fire-plans' department.id %}"><h2 class="h5">Fire Plans</h2><p class="mb-0 text-body-secondary">Upload one PDF or import a package.</p></a></div>
+<div class="col-md-6"><a class="card card-body text-decoration-none h-100" href="{% url 'reference-data-klgv-plans' department.id %}"><h2 class="h5">KLGV Plans</h2><p class="mb-0 text-body-secondary">Upload one PDF or import a package.</p></a></div>
+</section>
+{% endblock %}

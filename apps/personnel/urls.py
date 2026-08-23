@@ -10,6 +10,16 @@ urlpatterns = [
         name="personnel-detail",
     ),
     path(
+        "departments/<uuid:department_id>/people/<uuid:person_id>/edit/",
+        views.person_edit_modal,
+        name="personnel-edit",
+    ),
+    path(
+        "departments/<uuid:department_id>/people/<uuid:person_id>/delete/",
+        views.person_delete_modal,
+        name="personnel-delete",
+    ),
+    path(
         "departments/<uuid:department_id>/people/<uuid:person_id>/eligibility/",
         views.commander_eligibility,
         name="personnel-eligibility",

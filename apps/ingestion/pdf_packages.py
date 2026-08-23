@@ -24,6 +24,9 @@ class PdfPackageEntry:
     address: str
     postal_code: str
     city: str
+    fsd_location: str
+    bmz_location: str
+    rwa_info: str
     category: str
     latitude: float | None
     longitude: float | None
@@ -41,6 +44,9 @@ FIRE_PLAN_COLUMNS = frozenset(
         "city",
         "longitude",
         "latitude",
+        "fsd_location",
+        "bmz_location",
+        "rwa_info",
         "action",
     }
 )
@@ -136,6 +142,9 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
                         address=address if action == "upsert" else address,
                         postal_code=row["postal_code"],
                         city=row["city"],
+                        fsd_location=row["fsd_location"],
+                        bmz_location=row["bmz_location"],
+                        rwa_info=row["rwa_info"],
                         category="",
                         latitude=latitude,
                         longitude=longitude,
@@ -152,6 +161,9 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
                         address="",
                         postal_code="",
                         city="",
+                        fsd_location="",
+                        bmz_location="",
+                        rwa_info="",
                         category=row["category"],
                         latitude=None,
                         longitude=None,

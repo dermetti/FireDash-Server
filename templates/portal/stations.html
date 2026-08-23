@@ -1,22 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ department.name }} Stations{% endblock %}
-{% block nav_links %}
-<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>
-<li class="nav-item"><a class="nav-link" href="{% url 'portal-department-manage' department.id %}">Department</a></li>
-{% endblock %}
 {% block content %}
-<h1>{{ department.name }} Stations</h1>
-<div class="list-group mb-4">
-  {% for station in stations %}
-  <a href="{% url 'portal-station-manage' station.id %}" class="list-group-item list-group-item-action d-flex justify-content-between">
-    {{ station.name }} <span class="badge bg-{% if station.active %}success{% else %}secondary{% endif %}">{{ station.short_code }}</span>
-  </a>
-  {% empty %}
-  <div class="list-group-item text-muted">No stations.</div>
-  {% endfor %}
-</div>
-<div class="card"><div class="card-body">
-<h5>Create Station</h5>
-<form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Create</button></form>
-</div></div>
+<header class="mb-4"><h1>Stations</h1><p class="text-body-secondary">Manage department stations and vehicle resources.</p></header>
+<section class="card mb-4"><div class="card-body"><h2 class="h5">Create Station</h2><form method="post" class="row g-2">{% csrf_token %}{% for field in form %}<div class="col-md-4"><label class="form-label">{{ field.label }}</label>{{ field }}{{ field.errors }}</div>{% endfor %}<div class="col-12"><button class="btn btn-primary">Create Station</button></div></form></div></section>
+<section><div class="d-flex justify-content-between"><h2 class="h5">Existing Stations</h2><span class="text-body-secondary">{{ total_count }} results</span></div><div class="table-responsive"><table class="table table-hover"><thead><tr><th scope="col">Station</th><th scope="col">Code</th><th scope="col">Status</th></tr></thead><tbody>{% for station in stations %}<tr><td><a href="{% url 'portal-station-manage' station.id %}">{{ station.name }}</a></td><td>{{ station.short_code }}</td><td>{% if station.active %}Active{% else %}Inactive{% endif %}</td></tr>{% empty %}<tr><td colspan="3">No stations.</td></tr>{% endfor %}</tbody></table></div>{% include "components/_pagination.html" with page=page %}</section>
 {% endblock %}

@@ -25,6 +25,9 @@ FULL_PLAN_FIELDS = {
     "address": "Am Stadtrand 56 und 56 a",
     "postal_code": "22047",
     "city": "Hamburg",
+    "fsd_location": "FSD left of entrance",
+    "bmz_location": "First floor",
+    "rwa_info": "Manual trigger",
     "location": Point(10.09873774, 53.59229519, srid=4326),
 }
 
@@ -92,6 +95,9 @@ def test_fire_plan_manifest_publishes_exact_schema(manifest_context):
         "address",
         "postal_code",
         "city",
+        "fsd_location",
+        "bmz_location",
+        "rwa_info",
         "longitude",
         "latitude",
         "sha256",
@@ -105,6 +111,9 @@ def test_fire_plan_manifest_publishes_exact_schema(manifest_context):
         "address": "Am Stadtrand 56 und 56 a",
         "postal_code": "22047",
         "city": "Hamburg",
+        "fsd_location": "FSD left of entrance",
+        "bmz_location": "First floor",
+        "rwa_info": "Manual trigger",
         "longitude": 10.09873774,
         "latitude": 53.59229519,
         "sha256": PDF_SHA256,
@@ -151,6 +160,25 @@ def test_fire_plan_without_coordinates_publishes_null(manifest_context):
 
     assert entry["longitude"] is None
     assert entry["latitude"] is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fire_plan_without_operational_locations_publishes_null(manifest_context):
+    admin, department, accepted_root = manifest_context
+    _create_plan(
+        admin,
+        department,
+        accepted_root,
+        fsd_location="",
+        bmz_location="",
+        rwa_info="",
+    )
+
+    entry = _build_manifest(department, accepted_root)["fire_plans"][0]
+
+    assert entry["fsd_location"] is None
+    assert entry["bmz_location"] is None
+    assert entry["rwa_info"] is None
 
 
 @pytest.mark.django_db(transaction=True)

@@ -217,20 +217,18 @@ def test_hydrant_forms_create_and_confirm_import_batches(
     )
 
     response = client.post(
-        reverse("reference-data-hydrant-manage", args=(hydrant.id,)),
+        reverse("reference-data-hydrant-edit", args=(hydrant.id,)),
         {
             "external_identifier": "H-42",
             "longitude": "-73.9",
             "latitude": "40.7",
             "hydrant_type": "Dry barrel",
+            "flow_information": "",
             "diameter_mm": "100",
-            "status": "ACTIVE",
         },
     )
 
     assert response.status_code == 302
-    batch = ImportBatch.objects.exclude(pk=batch.id).get(department=department)
-    apply_preview(actor=department_admin, batch_id=batch.id)
     hydrant.refresh_from_db()
     assert (
         hydrant.external_identifier,
@@ -241,5 +239,11 @@ def test_hydrant_forms_create_and_confirm_import_batches(
         "H-42",
         pytest.approx(-73.9),
         pytest.approx(40.7),
-        True,
+        False,
     )
+    response = client.post(
+        reverse("reference-data-hydrant-lifecycle", args=(hydrant.id,)), {"status": "ACTIVE"}
+    )
+    assert response.status_code == 302
+    hydrant.refresh_from_db()
+    assert hydrant.active is True

@@ -590,6 +590,9 @@ The ZIP contains `manifest.json` and one sanitized PDF per plan at exactly
       "address": "Am Stadtrand 56 und 56 a",
       "postal_code": "22047",
       "city": "Hamburg",
+      "fsd_location": "Lage: FSD befindet sich links vom Eingang Haus 56 (Säule)",
+      "bmz_location": "Brandmeldezentrale Haus 56, 1. Obergeschoss",
+      "rwa_info": "Auslösung der RWA-Anlage durch Handtaster",
       "longitude": 10.09873774,
       "latitude": 53.59229519,
       "sha256": "<64 lowercase hex>",
@@ -611,6 +614,9 @@ display, search, and place a plan without inspecting its PDF:
 - `object_name` is optional/nullable; it reflects the canonical `object_name`.
 - `address`, `postal_code`, and `city` reflect the canonical Fire Plan metadata
   and are `null` when the canonical value is blank.
+- `fsd_location`, `bmz_location`, and `rwa_info` are optional operational text
+  from the canonical Fire Plan and are `null` when absent. They are bundle-entry
+  metadata, not properties of the top-level signed dataset manifest.
 - `longitude` and `latitude` are nullable numeric WGS84 (EPSG:4326) coordinates;
   `longitude` (Point.x) comes before `latitude` (Point.y) in the schema, and
   missing coordinates are represented as JSON `null` (never `0`, `0.0`, `""`,

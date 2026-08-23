@@ -13,7 +13,7 @@ confirmation.
 
 For many documents upload one ZIP containing exactly `fire-plans-manifest-v1.csv`
 and the declared PDFs. The CSV columns are exactly
-`external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action`;
+`external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action`;
 `action` is `upsert` or explicit `deactivate`. For either action, provide the
 External ID or the fallback address. `filename` names only the ZIP member and
 is never identity. Missing rows do nothing. PDF packages are limited to 256 MiB
@@ -21,3 +21,5 @@ compressed, 512 MiB expanded, and 250 documents. Each PDF inside a package must
 still obey the individual PDF size limit (100 MiB).
 
 Every new/replaced PDF passes FireDash quarantine, validation and sanitizer before canonical acceptance. ZIP traversal, absolute paths, symlinks, duplicate/undeclared members and missing declarations are rejected. `source_pdf_sha256` is the original upload hash; the accepted sanitized PDF hash is separate; publication ciphertext SHA-256 is a third, unrelated value. Same bytes under a new filename deduplicate; changed bytes with the same chosen identity replace that logical plan. Explicit deactivation retains the canonical row and excludes it only from future publications.
+
+`fsd_location`, `bmz_location`, and `rwa_info` are optional UTF-8 operational text.  As with other optional Fire Plan metadata, a blank upsert cell preserves an existing curated value; a nonblank cell updates it.  These values are published inside the decrypted Fire Plan bundle, never as top-level tablet-manifest fields.

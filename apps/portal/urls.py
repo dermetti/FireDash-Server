@@ -4,6 +4,7 @@ from apps.portal import views
 
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
+    path("departments/<uuid:department_id>/data/", views.data_hub, name="portal-data-hub"),
     path("system/departments/", views.system_departments, name="portal-system-departments"),
     path(
         "system/api-compatibility/",
@@ -27,8 +28,25 @@ urlpatterns = [
         name="portal-scoped-selector",
     ),
     path("stations/<uuid:station_id>/", views.station_manage, name="portal-station-manage"),
+    path("stations/<uuid:station_id>/edit/", views.station_edit_modal, name="portal-station-edit"),
+    path(
+        "stations/<uuid:station_id>/delete/",
+        views.station_delete_modal,
+        name="portal-station-delete",
+    ),
+    path(
+        "stations/<uuid:station_id>/vehicles/create/",
+        views.vehicle_create_modal,
+        name="portal-vehicle-create",
+    ),
     path("stations/<uuid:station_id>/vehicles/", views.vehicles, name="portal-vehicles"),
     path("vehicles/<uuid:vehicle_id>/", views.vehicle_manage, name="portal-vehicle-manage"),
+    path("vehicles/<uuid:vehicle_id>/edit/", views.vehicle_edit_modal, name="portal-vehicle-edit"),
+    path(
+        "vehicles/<uuid:vehicle_id>/delete/",
+        views.vehicle_delete_modal,
+        name="portal-vehicle-delete",
+    ),
     path(
         "departments/<uuid:department_id>/audit/",
         views.department_audit,

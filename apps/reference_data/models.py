@@ -48,6 +48,11 @@ class FirePlan(models.Model):
     address = models.TextField(blank=True)
     postal_code = models.CharField(max_length=32, blank=True)
     city = models.CharField(max_length=255, blank=True)
+    # Optional descriptive operational metadata. Missing values remain blank
+    # canonically and are emitted as JSON null in the publication bundle.
+    fsd_location = models.TextField(blank=True)
+    bmz_location = models.TextField(blank=True)
+    rwa_info = models.TextField(blank=True)
     location = models.PointField(srid=4326, null=True, blank=True)
     document_key = models.CharField(max_length=255, unique=True)
     original_filename = models.CharField(max_length=255)
