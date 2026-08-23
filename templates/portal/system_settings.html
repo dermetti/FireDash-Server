@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}System Settings{% endblock %}
+{% block content %}
+<h1 class="h2">System Settings</h1><p class="text-body-secondary">Only existing server-wide policy is presented here. Infrastructure health, backups, storage, and deployment settings are intentionally managed outside this administrative UI.</p><section class="card"><div class="card-body"><h2 class="h5">Supported policy areas</h2><ul class="mb-0"><li><a href="{% url 'portal-system-api-compatibility' %}">API Compatibility</a> controls the configured minimum supported app version for each API generation.</li><li>Department-specific tablet authorization leases are managed from the relevant <a href="{% url 'portal-system-departments' %}">Department detail</a>.</li></ul></div></section>
+{% endblock %}

@@ -4,8 +4,10 @@ from apps.tablets.versions import AppVersionError, parse_app_version
 
 
 class DepartmentForm(forms.Form):
-    name = forms.CharField(max_length=255)
-    short_code = forms.CharField(max_length=64)
+    name = forms.CharField(max_length=255, widget=forms.TextInput(attrs={"class": "form-control"}))
+    short_code = forms.CharField(
+        max_length=64, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
 
 
 class StationForm(forms.Form):
@@ -47,12 +49,16 @@ class DepartmentStatusForm(forms.Form):
     status = forms.ChoiceField(
         choices=(("ACTIVE", "Active"), ("SUSPENDED", "Suspended"), ("DEACTIVATED", "Deactivated")),
         required=True,
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
 
 
 class DepartmentTabletLeaseForm(forms.Form):
     tablet_lease_days = forms.IntegerField(
-        min_value=3, max_value=365, label="Maximum offline authorization lease (days)"
+        min_value=3,
+        max_value=365,
+        label="Maximum offline authorization lease (days)",
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
     )
 
 
@@ -75,6 +81,7 @@ class ApiVersionCompatibilityPolicyForm(forms.Form):
         required=False,
         label="Minimum supported FireDash app version",
         help_text="Leave blank to allow all app versions using this API generation.",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
     )
 
     def clean_minimum_app_version(self):

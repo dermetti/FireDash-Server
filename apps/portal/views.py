@@ -3,7 +3,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -36,6 +36,7 @@ from apps.authorization.services import (
     revoke_station_admin,
     set_api_version_compatibility_policy,
     set_department_tablet_lease,
+    set_system_department_tablet_lease,
 )
 from apps.organizations.models import Department, Station, Vehicle
 from apps.organizations.services import (
@@ -96,6 +97,8 @@ def _nav_context(request):
                         "label": "API Compatibility",
                         "url": reverse("portal-system-api-compatibility"),
                     },
+                    {"label": "System Settings", "url": reverse("portal-system-settings")},
+                    {"label": "Audit / System Events", "url": reverse("portal-system-audit")},
                 ],
             },
         ]
@@ -297,10 +300,36 @@ def system_departments(request: HttpRequest) -> HttpResponse:
         require_recent_reauthentication(request, return_url=reverse("portal-system-departments"))
         create_department(actor=request.user, **form.cleaned_data)
         return redirect("portal-system-departments")
+    query = request.GET.get("q", "").strip()
+    status = request.GET.get("status", "")
+    departments = Department.objects.all().prefetch_related(
+        Prefetch(
+            "memberships",
+            queryset=DepartmentMembership.objects.filter(active=True).select_related("user"),
+        )
+    )
+    if query:
+        departments = departments.filter(Q(name__icontains=query) | Q(short_code__icontains=query))
+    if status in Department.Status.values:
+        departments = departments.filter(status=status)
+    departments = departments.order_by("name", "short_code", "id")
+    paginator = Paginator(departments, 100)
+    page = paginator.get_page(request.GET.get("page", 1))
+    page_query = request.GET.copy()
+    page_query.pop("page", None)
     return render(
         request,
         "portal/system_departments.html",
-        {"departments": Department.objects.all(), "form": form},
+        {
+            "departments": page.object_list,
+            "form": form,
+            "page": page,
+            "total_count": paginator.count,
+            "query": query,
+            "selected_status": status,
+            "page_query": page_query.urlencode(),
+            "department_statuses": Department.Status.choices,
+        },
     )
 
 
@@ -324,7 +353,114 @@ def system_api_compatibility(request: HttpRequest) -> HttpResponse:
             minimum_app_version=form.cleaned_data["minimum_app_version"],
         )
         return redirect("portal-system-api-compatibility")
-    return render(request, "portal/system_api_compatibility.html", {"form": form, "policy": policy})
+    policies = list(
+        ApiVersionCompatibilityPolicy.objects.select_related("updated_by").order_by("api_major")
+    )
+    by_major = {policy.api_major: policy for policy in policies}
+    v1_policy = by_major.get(1)
+    rows = [
+        {
+            "api_major": 1,
+            "policy": v1_policy,
+            "minimum": v1_policy.minimum_app_version if v1_policy else None,
+        }
+    ]
+    rows.extend(
+        {"api_major": item.api_major, "policy": item, "minimum": item.minimum_app_version}
+        for item in policies
+        if item.api_major != 1
+    )
+    return render(
+        request,
+        "portal/system_api_compatibility.html",
+        {"form": form, "policy": policy, "rows": rows},
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def system_api_compatibility_edit_modal(request: HttpRequest, api_major: int) -> HttpResponse:
+    if not is_system_admin(request.user):
+        raise PermissionDenied("System administrator role is required.")
+    policy = ApiVersionCompatibilityPolicy.objects.filter(api_major=api_major).first()
+    form = ApiVersionCompatibilityPolicyForm(
+        request.POST or None,
+        initial={"minimum_app_version": policy.minimum_app_version if policy else None},
+    )
+    if request.method == "POST" and form.is_valid():
+        require_recent_reauthentication(
+            request, return_url=reverse("portal-system-api-compatibility")
+        )
+        set_api_version_compatibility_policy(
+            actor=request.user,
+            api_major=api_major,
+            minimum_app_version=form.cleaned_data["minimum_app_version"],
+        )
+        if request.headers.get("HX-Request") != "true":
+            return redirect("portal-system-api-compatibility")
+        response = HttpResponse()
+        response["HX-Redirect"] = reverse("portal-system-api-compatibility")
+        return response
+    return render(
+        request,
+        "portal/_api_compatibility_modal.html",
+        {"form": form, "api_major": api_major},
+    )
+
+
+@login_required
+@require_http_methods(["GET"])
+def system_settings(request: HttpRequest) -> HttpResponse:
+    if not is_system_admin(request.user):
+        raise PermissionDenied("System administrator role is required.")
+    return render(request, "portal/system_settings.html")
+
+
+@login_required
+@require_http_methods(["GET"])
+def system_audit(request: HttpRequest) -> HttpResponse:
+    if not is_system_admin(request.user):
+        raise PermissionDenied("System administrator role is required.")
+    query = request.GET.get("q", "").strip()
+    department_id = request.GET.get("department", "")
+    action = request.GET.get("action", "")
+    events = AuditEvent.objects.select_related("actor_user", "department", "station")
+    if department_id and department_id != "__all__":
+        department = get_object_or_404(Department, pk=department_id)
+        events = events.filter(department=department)
+    if action:
+        events = events.filter(action=action)
+    if query:
+        events = events.filter(
+            Q(action__icontains=query)
+            | Q(target_type__icontains=query)
+            | Q(actor_user__display_name__icontains=query)
+            | Q(actor_user__email__icontains=query)
+            | Q(department__name__icontains=query)
+        )
+    events = events.order_by("-timestamp", "-id")
+    paginator = Paginator(events, 100)
+    page = paginator.get_page(request.GET.get("page", 1))
+    page_query = request.GET.copy()
+    page_query.pop("page", None)
+    actions = (
+        AuditEvent.objects.order_by("action").values_list("action", flat=True).distinct()[:100]
+    )
+    return render(
+        request,
+        "portal/system_audit.html",
+        {
+            "events": page.object_list,
+            "page": page,
+            "total_count": paginator.count,
+            "departments": Department.objects.order_by("name", "id"),
+            "actions": actions,
+            "query": query,
+            "selected_department": department_id or "__all__",
+            "selected_action": action,
+            "page_query": page_query.urlencode(),
+        },
+    )
 
 
 @login_required
@@ -368,14 +504,22 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
                 request,
                 return_url=reverse("portal-system-department", args=(department.id,)),
             )
-            department.tablet_lease_days = lease_form.cleaned_data["tablet_lease_days"]
-            department.save(update_fields=("tablet_lease_days",))
-            return redirect("portal-system-department", department_id=department.id)
-            return render(
-                request,
-                "portal/setup_link.html",
-                {"setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,)))},
+            set_system_department_tablet_lease(
+                actor=request.user,
+                department=department,
+                tablet_lease_days=lease_form.cleaned_data["tablet_lease_days"],
             )
+            return redirect("portal-system-department", department_id=department.id)
+    if (
+        request.method == "POST"
+        and request.POST.get("action") == "provision"
+        and admin_form.is_valid()
+    ):
+        return render(
+            request,
+            "portal/setup_link.html",
+            {"setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,)))},
+        )
     return render(
         request,
         "portal/system_department_detail.html",

@@ -112,6 +112,31 @@ def set_department_tablet_lease(
 
 
 @transaction.atomic
+def set_system_department_tablet_lease(
+    *, actor, department: Department, tablet_lease_days: int
+) -> Department:
+    """Set an existing department lease from the System Administrator context."""
+    require_system_admin(actor)
+    if tablet_lease_days < 3 or tablet_lease_days > 365:
+        raise ValueError("Tablet lease duration must be between 3 and 365 days.")
+    department = Department.objects.select_for_update().get(pk=department.pk)
+    old_value = department.tablet_lease_days
+    if old_value == tablet_lease_days:
+        return department
+    department.tablet_lease_days = tablet_lease_days
+    department.save(update_fields=("tablet_lease_days",))
+    record_event(
+        action="authorization.department_tablet_lease_changed",
+        actor_user=actor,
+        department=department,
+        target_type="department",
+        target_uuid=department.id,
+        metadata={"old_days": old_value, "new_days": tablet_lease_days},
+    )
+    return department
+
+
+@transaction.atomic
 def create_department(*, actor, name: str, short_code: str) -> Department:
     require_system_admin(actor)
     department = Department.objects.create(

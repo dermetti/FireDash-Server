@@ -12,6 +12,13 @@ urlpatterns = [
         name="portal-system-api-compatibility",
     ),
     path(
+        "system/api-compatibility/<int:api_major>/edit/",
+        views.system_api_compatibility_edit_modal,
+        name="portal-system-api-compatibility-edit",
+    ),
+    path("system/settings/", views.system_settings, name="portal-system-settings"),
+    path("system/audit/", views.system_audit, name="portal-system-audit"),
+    path(
         "system/departments/<uuid:department_id>/",
         views.system_department_detail,
         name="portal-system-department",

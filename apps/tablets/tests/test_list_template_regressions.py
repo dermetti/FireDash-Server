@@ -110,9 +110,11 @@ def test_status_summary_has_no_sub_second_polling():
 # --- results table layout ----------------------------------------------------
 
 
-def test_results_table_uses_responsive_wrapper():
+def test_results_table_participates_in_page_flow_without_scroll_wrapper():
     html = _render_results(_tablet())
-    assert "table-responsive" in html
+    assert "table-responsive" not in html
+    assert "overflow-auto" not in html
+    assert "overflow-x-auto" not in html
 
 
 def test_results_table_keeps_identity_state_and_actions():

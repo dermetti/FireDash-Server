@@ -1,10 +1,7 @@
 {% extends "base.html" %}
 {% block title %}API Compatibility{% endblock %}
-{% block nav_links %}<li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}">Dashboard</a></li>{% endblock %}
 {% block content %}
-<h1>API compatibility</h1>
-<div class="card"><div class="card-body">
-  <p>FireDash API v1. A minimum version causes older installed apps to receive Upgrade Required. Leave the value blank to allow all app versions.</p>
-  <form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-danger">Save compatibility policy</button></form>
-</div></div>
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4"><div><h1 class="h2 mb-1">API Compatibility</h1><p class="text-body-secondary mb-0">Version policy for supported FireDash API generations.</p></div></div>
+<section aria-labelledby="api-policy-heading"><h2 id="api-policy-heading" class="h5">Compatibility policies</h2><table class="table table-hover align-middle"><thead><tr><th scope="col">API generation</th><th scope="col">Minimum app version</th><th scope="col">Compatibility state</th><th scope="col">Last updated</th><th scope="col" class="text-end">Actions</th></tr></thead><tbody>{% for row in rows %}<tr><td>API v{{ row.api_major }}</td><td>{% if row.minimum %}<code>{{ row.minimum }}</code>{% else %}<span class="text-body-secondary">No minimum configured</span>{% endif %}</td><td>{% if row.minimum %}<span class="badge text-bg-warning">Older apps require upgrade</span>{% else %}<span class="badge text-bg-success">All compatible versions allowed</span>{% endif %}</td><td class="small">{% if row.policy %}{{ row.policy.updated_at|date:"Y-m-d H:i" }} by {{ row.policy.updated_by.display_name }}{% else %}Not configured{% endif %}</td><td class="text-end"><button type="button" class="btn btn-sm btn-outline-primary" hx-get="{% url 'portal-system-api-compatibility-edit' row.api_major %}" hx-target="#system-api-modal-container">Edit</button></td></tr>{% endfor %}</tbody></table></section>
+{% include "components/_htmx_action_modal.html" with modal_container_id="system-api-modal-container" %}
 {% endblock %}
