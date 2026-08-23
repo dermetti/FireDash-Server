@@ -13,10 +13,10 @@
 </dl>
 {% if form %}
 <section class="mb-4">
-  <button class="btn btn-outline-primary" hx-get="{% url 'portal-vehicle-edit' vehicle.id %}" hx-target="#vehicle-modal-content" data-bs-toggle="modal" data-bs-target="#vehicle-modal">Edit Data</button>
-  {% if vehicle.active %}<form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="retire"><button class="btn btn-outline-warning">Retire</button></form>{% endif %}
-  <button class="btn btn-outline-danger" hx-get="{% url 'portal-vehicle-delete' vehicle.id %}" hx-target="#vehicle-modal-content" data-bs-toggle="modal" data-bs-target="#vehicle-modal">Delete Data</button>
+  <button type="button" class="btn btn-outline-primary" hx-get="{% url 'portal-vehicle-edit' vehicle.id %}" hx-target="#portal-action-modal-container">Edit Data</button>
+  {% if vehicle.active %}<form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="retire"><button type="submit" class="btn btn-outline-warning">Retire</button></form>{% endif %}
+  <button type="button" class="btn btn-outline-danger" hx-get="{% url 'portal-vehicle-delete' vehicle.id %}" hx-target="#portal-action-modal-container">Delete Data</button>
 </section>
 {% endif %}
-<div class="modal fade" id="vehicle-modal"><div id="vehicle-modal-content"></div></div>
+{% include "components/_htmx_action_modal.html" with modal_container_id="portal-action-modal-container" %}
 {% endblock %}

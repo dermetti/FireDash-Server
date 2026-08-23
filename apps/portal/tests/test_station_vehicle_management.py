@@ -95,7 +95,11 @@ def test_station_edit_modal_validation_success_audit_and_department_boundary(
 
     get_response = client.get(edit_url, HTTP_HX_REQUEST="true")
     assert get_response.status_code == 200
+    assert b"modal fade" in get_response.content
     assert b"modal-dialog" in get_response.content
+    assert b"modal-content" in get_response.content
+    assert b'hx-target="#portal-action-modal-container"' in get_response.content
+    assert b'type="submit"' in get_response.content
     assert station.name.encode() in get_response.content
 
     invalid = client.post(
@@ -114,6 +118,10 @@ def test_station_edit_modal_validation_success_audit_and_department_boundary(
     assert AuditEvent.objects.filter(
         action="organization.station_updated", target_uuid=station.id
     ).exists()
+
+    htmx_success = client.post(edit_url, _station_data(), HTTP_HX_REQUEST="true")
+    assert htmx_success.status_code == 204
+    assert htmx_success["HX-Redirect"] == reverse("portal-station-manage", args=(station.id,))
 
     forbidden = client.get(
         reverse("portal-station-edit", args=(station_vehicle_scope["other_station"].id,))
@@ -145,6 +153,7 @@ def test_station_delete_confirmation_success_and_protected_rollback(client, stat
     protected = client.post(reverse("portal-station-delete", args=(protected_station.id,)))
     assert protected.status_code == 200
     assert b"cannot be deleted" in protected.content
+    assert b'hx-target="#portal-action-modal-container"' in protected.content
     assert Station.objects.filter(pk=protected_station.id).exists()
     assert not AuditEvent.objects.filter(
         action="organization.station_deleted", target_uuid=protected_station.id
@@ -161,6 +170,7 @@ def test_vehicle_create_modal_validation_success_audit_and_department_boundary(
     get_response = client.get(create_url, HTTP_HX_REQUEST="true")
     assert get_response.status_code == 200
     assert b"Create Vehicle" in get_response.content and b"modal-dialog" in get_response.content
+    assert b'hx-target="#portal-action-modal-container"' in get_response.content
 
     invalid = client.post(create_url, _vehicle_data(display_name="", call_sign="Entered"))
     assert invalid.status_code == 200
@@ -191,6 +201,7 @@ def test_vehicle_edit_modal_validation_success_audit_and_department_boundary(
     get_response = client.get(edit_url, HTTP_HX_REQUEST="true")
     assert get_response.status_code == 200
     assert b"modal-dialog" in get_response.content
+    assert b'hx-target="#portal-action-modal-container"' in get_response.content
     assert vehicle.display_name.encode() in get_response.content
 
     invalid = client.post(edit_url, _vehicle_data(display_name="", call_sign="Changed call sign"))
@@ -211,6 +222,12 @@ def test_vehicle_edit_modal_validation_success_audit_and_department_boundary(
     assert AuditEvent.objects.filter(
         action="organization.vehicle_updated", target_uuid=vehicle.id
     ).exists()
+
+    htmx_success = client.post(
+        edit_url, _vehicle_data(display_name="Updated HLF"), HTTP_HX_REQUEST="true"
+    )
+    assert htmx_success.status_code == 204
+    assert htmx_success["HX-Redirect"] == reverse("portal-vehicle-manage", args=(vehicle.id,))
 
     forbidden = client.get(
         reverse("portal-vehicle-edit", args=(station_vehicle_scope["other_vehicle"].id,))
@@ -250,6 +267,7 @@ def test_vehicle_retirement_and_delete_audit_rollback(client, station_vehicle_sc
     protected = client.post(reverse("portal-vehicle-delete", args=(vehicle.id,)))
     assert protected.status_code == 200
     assert b"cannot be deleted" in protected.content
+    assert b'hx-target="#portal-action-modal-container"' in protected.content
     assert Vehicle.objects.filter(pk=vehicle.id).exists()
     assert not AuditEvent.objects.filter(
         action="organization.vehicle_deleted", target_uuid=vehicle.id
@@ -268,7 +286,9 @@ def test_station_detail_vehicle_actions_legacy_redirect_and_navigation(
     assert vehicle.display_name in body
     assert station_vehicle_scope["other_vehicle"].display_name not in body
     assert all(label in body for label in ("Edit Data", "Delete Data", "Create Vehicle", "Retire"))
-    assert "station-modal" in body
+    assert "portal-action-modal-container" in body
+    assert 'data-bs-toggle="modal"' not in body
+    assert "htmx:afterSwap" in body
     assert reverse("portal-vehicle-manage", args=(vehicle.id,)) in body
     assert f'href="{reverse("portal-vehicles", args=(station.id,))}"' not in body
 
@@ -281,6 +301,8 @@ def test_station_detail_vehicle_actions_legacy_redirect_and_navigation(
     vehicle_body = vehicle_detail.content.decode()
     assert reverse("portal-station-manage", args=(station.id,)) in vehicle_body
     assert all(label in vehicle_body for label in ("Edit Data", "Retire", "Delete Data"))
+    assert "portal-action-modal-container" in vehicle_body
+    assert 'data-bs-toggle="modal"' not in vehicle_body
     assert reverse("portal-vehicles", args=(station.id,)) not in vehicle_body
 
 

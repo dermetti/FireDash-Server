@@ -11,24 +11,24 @@
    {% if department_admin %}<div class="col-md-6">
     <div class="card mb-3"><div class="card-body">
     <h5>Data</h5>
-    <button class="btn btn-outline-primary" hx-get="{% url 'personnel-edit' person.department_id person.id %}" hx-target="#person-modal-content" data-bs-toggle="modal" data-bs-target="#person-modal">Edit Data</button>
-    <button class="btn btn-outline-danger" hx-get="{% url 'personnel-delete' person.department_id person.id %}" hx-target="#person-modal-content" data-bs-toggle="modal" data-bs-target="#person-modal">Delete Data</button>
+    <button type="button" class="btn btn-outline-primary" hx-get="{% url 'personnel-edit' person.department_id person.id %}" hx-target="#person-action-modal-container">Edit Data</button>
+    <button type="button" class="btn btn-outline-danger" hx-get="{% url 'personnel-delete' person.department_id person.id %}" hx-target="#person-action-modal-container">Delete Data</button>
     </div></div>
    </div>{% endif %}
   <div class="col-md-6">
     <div class="card mb-3"><div class="card-body">
     <h5>Commander</h5>
-    <form method="post" action="{% url 'personnel-eligibility' person.department_id person.id %}">{% csrf_token %}{% if nav_station %}<input type="hidden" name="station_id" value="{{ nav_station.id }}">{% endif %}<div class="form-check"><input type="checkbox" name="eligible" class="form-check-input" {% if person.incident_commander_eligible %}checked{% endif %}><label class="form-check-label">Commander eligible</label></div><button class="btn btn-sm btn-outline-primary mt-2">Update</button></form>
+    <form method="post" action="{% url 'personnel-eligibility' person.department_id person.id %}">{% csrf_token %}{% if nav_station %}<input type="hidden" name="station_id" value="{{ nav_station.id }}">{% endif %}<div class="form-check"><input type="checkbox" name="eligible" class="form-check-input" {% if person.incident_commander_eligible %}checked{% endif %}><label class="form-check-label">Commander eligible</label></div><button type="submit" class="btn btn-sm btn-outline-primary mt-2">Update</button></form>
     {% if department_admin and person.incident_commander_eligible %}
-    <form method="post" action="{% url 'personnel-email' person.department_id person.id %}" class="mt-3">{% csrf_token %}<label class="form-label">Commander email</label><input type="email" name="email" class="form-control" value="{{ person.incident_commander_email|default:'' }}"><button class="btn btn-sm btn-outline-primary mt-2">Set email</button></form>
-    <form method="post" action="{% url 'personnel-verify-email' person.department_id person.id %}" class="mt-2">{% csrf_token %}<button class="btn btn-sm btn-outline-success">Verify email</button></form>
+    <form method="post" action="{% url 'personnel-email' person.department_id person.id %}" class="mt-3">{% csrf_token %}<label class="form-label">Commander email</label><input type="email" name="email" class="form-control" value="{{ person.incident_commander_email|default:'' }}"><button type="submit" class="btn btn-sm btn-outline-primary mt-2">Set email</button></form>
+    <form method="post" action="{% url 'personnel-verify-email' person.department_id person.id %}" class="mt-2">{% csrf_token %}<button type="submit" class="btn btn-sm btn-outline-success">Verify email</button></form>
     {% endif %}</div></div>
     <div class="card"><div class="card-body">
     <h5>Lifecycle</h5>
-    <form method="post" action="{% url 'personnel-offboard' person.department_id person.id %}">{% csrf_token %}<button class="btn btn-warning btn-sm">Offboard</button></form>
-    <form method="post" action="{% url 'personnel-anonymize' person.department_id person.id %}" class="mt-2">{% csrf_token %}<button class="btn btn-danger btn-sm">Anonymize</button></form>
+    <form method="post" action="{% url 'personnel-offboard' person.department_id person.id %}">{% csrf_token %}<button type="submit" class="btn btn-warning btn-sm">Offboard</button></form>
+    <form method="post" action="{% url 'personnel-anonymize' person.department_id person.id %}" class="mt-2">{% csrf_token %}<button type="submit" class="btn btn-danger btn-sm">Anonymize</button></form>
     </div></div>
   </div>
 </div>
-<div class="modal fade" id="person-modal"><div id="person-modal-content"></div></div>
+{% include "components/_htmx_action_modal.html" with modal_container_id="person-action-modal-container" %}
 {% endblock %}

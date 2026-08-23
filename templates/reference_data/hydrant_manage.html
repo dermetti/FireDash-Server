@@ -14,13 +14,13 @@
   <dt class="col-sm-3">Diameter</dt><dd class="col-sm-9">{{ hydrant.diameter_mm|default:"—" }}</dd>
 </dl>
 <section class="mb-4">
-  <button class="btn btn-outline-primary" hx-get="{% url 'reference-data-hydrant-edit' hydrant.id %}" hx-target="#hydrant-modal-content" data-bs-toggle="modal" data-bs-target="#hydrant-modal">Edit Data</button>
+  <button type="button" class="btn btn-outline-primary" hx-get="{% url 'reference-data-hydrant-edit' hydrant.id %}" hx-target="#hydrant-action-modal-container">Edit Data</button>
   {% if hydrant.active %}
-  <form method="post" action="{% url 'reference-data-hydrant-lifecycle' hydrant.id %}" class="d-inline">{% csrf_token %}<input type="hidden" name="status" value="INACTIVE"><button class="btn btn-outline-warning">Mark inactive</button></form>
+  <form method="post" action="{% url 'reference-data-hydrant-lifecycle' hydrant.id %}" class="d-inline">{% csrf_token %}<input type="hidden" name="status" value="INACTIVE"><button type="submit" class="btn btn-outline-warning">Mark inactive</button></form>
   {% else %}
-  <form method="post" action="{% url 'reference-data-hydrant-lifecycle' hydrant.id %}" class="d-inline">{% csrf_token %}<input type="hidden" name="status" value="ACTIVE"><button class="btn btn-outline-success">Mark active</button></form>
+  <form method="post" action="{% url 'reference-data-hydrant-lifecycle' hydrant.id %}" class="d-inline">{% csrf_token %}<input type="hidden" name="status" value="ACTIVE"><button type="submit" class="btn btn-outline-success">Mark active</button></form>
   {% endif %}
-  <button class="btn btn-outline-danger" hx-get="{% url 'reference-data-hydrant-delete' hydrant.id %}" hx-target="#hydrant-modal-content" data-bs-toggle="modal" data-bs-target="#hydrant-modal">Delete Data</button>
+  <button type="button" class="btn btn-outline-danger" hx-get="{% url 'reference-data-hydrant-delete' hydrant.id %}" hx-target="#hydrant-action-modal-container">Delete Data</button>
 </section>
-<div class="modal fade" id="hydrant-modal"><div id="hydrant-modal-content"></div></div>
+{% include "components/_htmx_action_modal.html" with modal_container_id="hydrant-action-modal-container" %}
 {% endblock %}

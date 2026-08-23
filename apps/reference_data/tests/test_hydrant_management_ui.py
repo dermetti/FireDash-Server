@@ -92,10 +92,19 @@ def test_hydrant_modal_lifecycle_delete_publication_and_scope(client, hydrant_sc
     assert detail.status_code == 200
     expected_actions = ("Edit Data", "Delete Data", "Mark inactive")
     assert all(label in detail.content.decode() for label in expected_actions)
+    detail_body = detail.content.decode()
+    assert "hydrant-action-modal-container" in detail_body
+    assert 'data-bs-toggle="modal"' not in detail_body
+    assert "htmx:afterSwap" in detail_body
 
     edit_url = reverse("reference-data-hydrant-edit", args=(hydrant.id,))
     get_edit = client.get(edit_url, HTTP_HX_REQUEST="true")
     assert get_edit.status_code == 200 and hydrant.external_identifier.encode() in get_edit.content
+    assert b'<div class="modal fade"' in get_edit.content
+    assert b'<div class="modal-dialog"' in get_edit.content
+    assert b'<div class="modal-content"' in get_edit.content
+    assert b'hx-target="#hydrant-action-modal-container"' in get_edit.content
+    assert b'type="submit"' in get_edit.content
     invalid = client.post(edit_url, _payload(longitude="999", hydrant_type="Entered"))
     assert invalid.status_code == 200 and b"Entered" in invalid.content
     hydrant.refresh_from_db()
@@ -115,6 +124,10 @@ def test_hydrant_modal_lifecycle_delete_publication_and_scope(client, hydrant_sc
     assert PublicationJob.objects.filter(
         department=department, dataset_type_code="department_hydrants"
     ).exists()
+
+    htmx_success = client.post(edit_url, _payload(), HTTP_HX_REQUEST="true")
+    assert htmx_success.status_code == 204
+    assert htmx_success["HX-Redirect"] == detail_url
 
     assert client.get(reverse("reference-data-hydrant-edit", args=(other.id,))).status_code == 404
     lifecycle = client.post(

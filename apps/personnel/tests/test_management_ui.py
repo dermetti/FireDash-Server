@@ -88,9 +88,19 @@ def test_personnel_modal_edit_delete_protection_audit_and_dirtying(client, perso
     detail = client.get(detail_url)
     assert detail.status_code == 200
     assert all(label in detail.content.decode() for label in ("Edit Data", "Delete Data"))
+    detail_body = detail.content.decode()
+    assert "person-action-modal-container" in detail_body
+    assert 'data-bs-toggle="modal"' not in detail_body
+    assert "htmx:afterSwap" in detail_body
 
     edit_url = reverse("personnel-edit", args=(department.id, person.id))
-    assert client.get(edit_url, HTTP_HX_REQUEST="true").status_code == 200
+    edit_get = client.get(edit_url, HTTP_HX_REQUEST="true")
+    assert edit_get.status_code == 200
+    assert b'<div class="modal fade"' in edit_get.content
+    assert b'<div class="modal-dialog"' in edit_get.content
+    assert b'<div class="modal-content"' in edit_get.content
+    assert b'hx-target="#person-action-modal-container"' in edit_get.content
+    assert b'type="submit"' in edit_get.content
     invalid = client.post(edit_url, _payload(first_name="", last_name="Entered"))
     assert invalid.status_code == 200 and b"Entered" in invalid.content
     person.refresh_from_db()
@@ -101,9 +111,14 @@ def test_personnel_modal_edit_delete_protection_audit_and_dirtying(client, perso
     assert AuditEvent.objects.filter(action="personnel.updated", target_uuid=person.id).exists()
     assert PublicationJob.objects.filter(department=department, station=station).exists()
 
+    htmx_success = client.post(edit_url, _payload(), HTTP_HX_REQUEST="true")
+    assert htmx_success.status_code == 204
+    assert htmx_success["HX-Redirect"] == detail_url
+
     protected = client.post(reverse("personnel-delete", args=(department.id, person.id)))
     assert protected.status_code == 200
     assert Person.objects.filter(pk=person.id).exists()
+    assert b'hx-target="#person-action-modal-container"' in protected.content
     assert not AuditEvent.objects.filter(action="personnel.deleted", target_uuid=person.id).exists()
 
     safe = Person.objects.create(

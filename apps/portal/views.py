@@ -497,9 +497,22 @@ def stations(request: HttpRequest, department_id) -> HttpResponse:
     )
 
 
-def _modal(request, template, context=None, **extra_context):
+def _modal(
+    request: HttpRequest,
+    template: str,
+    context: dict[str, object] | None = None,
+    **extra_context: object,
+) -> HttpResponse:
     """Render a modal fragment with either a context mapping or keyword values."""
     return render(request, template, (context or {}) | extra_context)
+
+
+def _modal_redirect(request: HttpRequest, url: str) -> HttpResponse:
+    if request.headers.get("HX-Request") == "true":
+        response = HttpResponse(status=204)
+        response["HX-Redirect"] = url
+        return response
+    return redirect(url)
 
 
 @login_required
@@ -524,8 +537,12 @@ def station_edit_modal(request: HttpRequest, station_id) -> HttpResponse:
         data = form.cleaned_data
         data["active"] = station.active
         update_station(actor=request.user, station=station, **data)
-        return redirect("portal-station-manage", station_id=station.id)
-    return _modal(request, "portal/_station_form_modal.html", {"form": form, "station": station})
+        return _modal_redirect(request, reverse("portal-station-manage", args=[station.id]))
+    return _modal(
+        request,
+        "portal/_station_form_modal.html",
+        {"form": form, "station": station, "modal_container_id": "portal-action-modal-container"},
+    )
 
 
 @login_required
@@ -539,11 +556,16 @@ def vehicle_create_modal(request: HttpRequest, station_id) -> HttpResponse:
         data = form.cleaned_data
         data["active"] = True
         create_vehicle(actor=request.user, department=station.department, station=station, **data)
-        return redirect("portal-station-manage", station_id=station.id)
+        return _modal_redirect(request, reverse("portal-station-manage", args=[station.id]))
     return _modal(
         request,
         "portal/_vehicle_form_modal.html",
-        {"form": form, "station": station, "vehicle": None},
+        {
+            "form": form,
+            "station": station,
+            "vehicle": None,
+            "modal_container_id": "portal-action-modal-container",
+        },
     )
 
 
@@ -566,11 +588,16 @@ def vehicle_edit_modal(request: HttpRequest, vehicle_id) -> HttpResponse:
         data = form.cleaned_data
         data["active"] = vehicle.active
         update_vehicle(actor=request.user, vehicle=vehicle, **data)
-        return redirect("portal-vehicle-manage", vehicle_id=vehicle.id)
+        return _modal_redirect(request, reverse("portal-vehicle-manage", args=[vehicle.id]))
     return _modal(
         request,
         "portal/_vehicle_form_modal.html",
-        {"form": form, "station": vehicle.station, "vehicle": vehicle},
+        {
+            "form": form,
+            "station": vehicle.station,
+            "vehicle": vehicle,
+            "modal_container_id": "portal-action-modal-container",
+        },
     )
 
 
@@ -587,11 +614,22 @@ def station_delete_modal(request: HttpRequest, station_id) -> HttpResponse:
             return _modal(
                 request,
                 "portal/_delete_modal.html",
-                {"object": station, "error": str(error), "action_url": request.path},
+                {
+                    "object": station,
+                    "error": str(error),
+                    "action_url": request.path,
+                    "modal_container_id": "portal-action-modal-container",
+                },
             )
-        return redirect("portal-stations", department_id=station.department_id)
+        return _modal_redirect(request, reverse("portal-stations", args=[station.department_id]))
     return _modal(
-        request, "portal/_delete_modal.html", {"object": station, "action_url": request.path}
+        request,
+        "portal/_delete_modal.html",
+        {
+            "object": station,
+            "action_url": request.path,
+            "modal_container_id": "portal-action-modal-container",
+        },
     )
 
 
@@ -608,11 +646,22 @@ def vehicle_delete_modal(request: HttpRequest, vehicle_id) -> HttpResponse:
             return _modal(
                 request,
                 "portal/_delete_modal.html",
-                {"object": vehicle, "error": str(error), "action_url": request.path},
+                {
+                    "object": vehicle,
+                    "error": str(error),
+                    "action_url": request.path,
+                    "modal_container_id": "portal-action-modal-container",
+                },
             )
-        return redirect("portal-station-manage", station_id=vehicle.station_id)
+        return _modal_redirect(request, reverse("portal-station-manage", args=[vehicle.station_id]))
     return _modal(
-        request, "portal/_delete_modal.html", {"object": vehicle, "action_url": request.path}
+        request,
+        "portal/_delete_modal.html",
+        {
+            "object": vehicle,
+            "action_url": request.path,
+            "modal_container_id": "portal-action-modal-container",
+        },
     )
 
 

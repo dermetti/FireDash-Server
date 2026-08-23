@@ -43,6 +43,15 @@ from apps.personnel.services import (
     visible_to_user,
 )
 
+
+def _modal_redirect(request: HttpRequest, url: str) -> HttpResponse:
+    if request.headers.get("HX-Request") == "true":
+        response = HttpResponse(status=204)
+        response["HX-Redirect"] = url
+        return response
+    return redirect(url)
+
+
 PERSONNEL_LIST_PAGE_SIZE = 100
 
 
@@ -226,7 +235,10 @@ def person_edit_modal(request: HttpRequest, department_id, person_id) -> HttpRes
     )
     if request.method == "POST" and form.is_valid():
         update_person(actor=request.user, person=person, **form.cleaned_data)
-        return redirect("personnel-detail", department_id=person.department_id, person_id=person.id)
+        return _modal_redirect(
+            request,
+            reverse("personnel-detail", args=[person.department_id, person.id]),
+        )
     return render(request, "personnel/_person_form_modal.html", {"form": form})
 
 
@@ -243,13 +255,22 @@ def person_delete_modal(request: HttpRequest, department_id, person_id) -> HttpR
             return render(
                 request,
                 "portal/_delete_modal.html",
-                {"object": person, "error": str(error), "action_url": request.path},
+                {
+                    "object": person,
+                    "error": str(error),
+                    "action_url": request.path,
+                    "modal_container_id": "person-action-modal-container",
+                },
             )
-        return redirect("personnel-list", department_id=person.department_id)
+        return _modal_redirect(request, reverse("personnel-list", args=[person.department_id]))
     return render(
         request,
         "portal/_delete_modal.html",
-        {"object": person, "action_url": request.path},
+        {
+            "object": person,
+            "action_url": request.path,
+            "modal_container_id": "person-action-modal-container",
+        },
     )
 
 

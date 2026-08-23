@@ -136,8 +136,18 @@ def test_fire_plan_ui_edit_lifecycle_delete_and_publication(client, document_sco
             label in detail.content.decode()
             for label in ("Edit Data", "Delete Data", "Mark inactive")
         )
+        detail_body = detail.content.decode()
+        assert "fire-plan-action-modal-container" in detail_body
+        assert 'data-bs-toggle="modal"' not in detail_body
+        assert "htmx:afterSwap" in detail_body
         edit_url = reverse("reference-data-fire-plan-edit", args=(plan.id,))
-        assert client.get(edit_url, HTTP_HX_REQUEST="true").status_code == 200
+        edit_get = client.get(edit_url, HTTP_HX_REQUEST="true")
+        assert edit_get.status_code == 200
+        assert b'<div class="modal fade"' in edit_get.content
+        assert b'<div class="modal-dialog modal-lg"' in edit_get.content
+        assert b'<div class="modal-content"' in edit_get.content
+        assert b'hx-target="#fire-plan-action-modal-container"' in edit_get.content
+        assert b'type="submit"' in edit_get.content
         invalid = client.post(
             edit_url, _fire_payload(longitude="999", fsd_location="Entered value")
         )
@@ -157,6 +167,11 @@ def test_fire_plan_ui_edit_lifecycle_delete_and_publication(client, document_sco
         assert PublicationJob.objects.filter(
             department=department, dataset_type_code="department_fire_plans"
         ).exists()
+        htmx_success = client.post(edit_url, _fire_payload(), HTTP_HX_REQUEST="true")
+        assert htmx_success.status_code == 204
+        assert htmx_success["HX-Redirect"] == reverse(
+            "reference-data-fire-plan-detail", args=(plan.id,)
+        )
         assert (
             client.get(reverse("reference-data-fire-plan-detail", args=(uuid.uuid4(),))).status_code
             == 404
@@ -239,8 +254,18 @@ def test_klgv_ui_edit_lifecycle_delete_and_scope(client, document_scope):
             and b"Edit Data" in detail.content
             and b"Delete Data" in detail.content
         )
+        detail_body = detail.content.decode()
+        assert "klgv-action-modal-container" in detail_body
+        assert 'data-bs-toggle="modal"' not in detail_body
+        assert "htmx:afterSwap" in detail_body
         edit_url = reverse("reference-data-klgv-plan-edit", args=(plan.id,))
-        assert client.get(edit_url, HTTP_HX_REQUEST="true").status_code == 200
+        edit_get = client.get(edit_url, HTTP_HX_REQUEST="true")
+        assert edit_get.status_code == 200
+        assert b'<div class="modal fade"' in edit_get.content
+        assert b'<div class="modal-dialog"' in edit_get.content
+        assert b'<div class="modal-content"' in edit_get.content
+        assert b'hx-target="#klgv-action-modal-container"' in edit_get.content
+        assert b'type="submit"' in edit_get.content
         invalid = client.post(
             edit_url, {"external_identifier": "", "title": "Entered", "category": ""}
         )
@@ -260,6 +285,15 @@ def test_klgv_ui_edit_lifecycle_delete_and_scope(client, document_scope):
         assert PublicationJob.objects.filter(
             department=department, dataset_type_code="department_klgv_plans"
         ).exists()
+        htmx_success = client.post(
+            edit_url,
+            {"external_identifier": "KLGV-001", "title": "Updated", "category": "Operational"},
+            HTTP_HX_REQUEST="true",
+        )
+        assert htmx_success.status_code == 204
+        assert htmx_success["HX-Redirect"] == reverse(
+            "reference-data-klgv-plan-detail", args=(plan.id,)
+        )
         assert (
             client.post(
                 reverse("reference-data-klgv-plan-lifecycle", args=(plan.id,)), {"active": "false"}

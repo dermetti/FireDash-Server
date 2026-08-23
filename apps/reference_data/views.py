@@ -7,6 +7,7 @@ from django.core.paginator import Paginator
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from apps.audit.services import record_event
@@ -43,6 +44,14 @@ DOCUMENT_LIST_PAGE_SIZE = 100
 
 def _modal(request: HttpRequest, template: str, context: dict[str, object]) -> HttpResponse:
     return render(request, template, context)
+
+
+def _modal_redirect(request: HttpRequest, url: str) -> HttpResponse:
+    if request.headers.get("HX-Request") == "true":
+        response = HttpResponse(status=204)
+        response["HX-Redirect"] = url
+        return response
+    return redirect(url)
 
 
 def _department_or_403(request: HttpRequest, department_id) -> Department:
@@ -155,7 +164,7 @@ def hydrant_edit_modal(request: HttpRequest, hydrant_id) -> HttpResponse:
     )
     if request.method == "POST" and form.is_valid():
         update_hydrant(actor=request.user, hydrant=hydrant, **form.cleaned_data)
-        return cast(HttpResponse, redirect("reference-data-hydrant-manage", hydrant_id=hydrant.id))
+        return _modal_redirect(request, reverse("reference-data-hydrant-manage", args=[hydrant.id]))
     return _modal(request, "reference_data/_hydrant_form_modal.html", {"form": form})
 
 
@@ -187,13 +196,24 @@ def hydrant_delete_modal(request: HttpRequest, hydrant_id) -> HttpResponse:
             return _modal(
                 request,
                 "portal/_delete_modal.html",
-                {"object": hydrant, "error": str(error), "action_url": request.path},
+                {
+                    "object": hydrant,
+                    "error": str(error),
+                    "action_url": request.path,
+                    "modal_container_id": "hydrant-action-modal-container",
+                },
             )
-        return cast(
-            HttpResponse, redirect("reference-data-hydrants", department_id=hydrant.department_id)
+        return _modal_redirect(
+            request, reverse("reference-data-hydrants", args=[hydrant.department_id])
         )
     return _modal(
-        request, "portal/_delete_modal.html", {"object": hydrant, "action_url": request.path}
+        request,
+        "portal/_delete_modal.html",
+        {
+            "object": hydrant,
+            "action_url": request.path,
+            "modal_container_id": "hydrant-action-modal-container",
+        },
     )
 
 
@@ -363,8 +383,8 @@ def fire_plan_edit_modal(request: HttpRequest, fire_plan_id) -> HttpResponse:
     form = FirePlanEditForm(request.POST or None, instance=fire_plan)
     if request.method == "POST" and form.is_valid():
         update_fire_plan(actor=request.user, fire_plan=fire_plan, **form.cleaned_data)
-        return cast(
-            HttpResponse, redirect("reference-data-fire-plan-detail", fire_plan_id=fire_plan.id)
+        return _modal_redirect(
+            request, reverse("reference-data-fire-plan-detail", args=[fire_plan.id])
         )
     return _modal(request, "reference_data/_fire_plan_form_modal.html", {"form": form})
 
@@ -399,14 +419,24 @@ def fire_plan_delete_modal(request: HttpRequest, fire_plan_id) -> HttpResponse:
             return _modal(
                 request,
                 "portal/_delete_modal.html",
-                {"object": fire_plan, "error": str(error), "action_url": request.path},
+                {
+                    "object": fire_plan,
+                    "error": str(error),
+                    "action_url": request.path,
+                    "modal_container_id": "fire-plan-action-modal-container",
+                },
             )
-        return cast(
-            HttpResponse,
-            redirect("reference-data-fire-plans", department_id=fire_plan.department_id),
+        return _modal_redirect(
+            request, reverse("reference-data-fire-plans", args=[fire_plan.department_id])
         )
     return _modal(
-        request, "portal/_delete_modal.html", {"object": fire_plan, "action_url": request.path}
+        request,
+        "portal/_delete_modal.html",
+        {
+            "object": fire_plan,
+            "action_url": request.path,
+            "modal_container_id": "fire-plan-action-modal-container",
+        },
     )
 
 
@@ -420,7 +450,7 @@ def klgv_plan_edit_modal(request: HttpRequest, klgv_plan_id) -> HttpResponse:
     form = KlgvPlanEditForm(request.POST or None, instance=plan)
     if request.method == "POST" and form.is_valid():
         update_klgv_plan(actor=request.user, klgv_plan=plan, **form.cleaned_data)
-        return cast(HttpResponse, redirect("reference-data-klgv-plan-detail", klgv_plan_id=plan.id))
+        return _modal_redirect(request, reverse("reference-data-klgv-plan-detail", args=[plan.id]))
     return _modal(request, "reference_data/_klgv_plan_form_modal.html", {"form": form})
 
 
@@ -452,11 +482,22 @@ def klgv_plan_delete_modal(request: HttpRequest, klgv_plan_id) -> HttpResponse:
             return _modal(
                 request,
                 "portal/_delete_modal.html",
-                {"object": plan, "error": str(error), "action_url": request.path},
+                {
+                    "object": plan,
+                    "error": str(error),
+                    "action_url": request.path,
+                    "modal_container_id": "klgv-action-modal-container",
+                },
             )
-        return cast(
-            HttpResponse, redirect("reference-data-klgv-plans", department_id=plan.department_id)
+        return _modal_redirect(
+            request, reverse("reference-data-klgv-plans", args=[plan.department_id])
         )
     return _modal(
-        request, "portal/_delete_modal.html", {"object": plan, "action_url": request.path}
+        request,
+        "portal/_delete_modal.html",
+        {
+            "object": plan,
+            "action_url": request.path,
+            "modal_container_id": "klgv-action-modal-container",
+        },
     )
