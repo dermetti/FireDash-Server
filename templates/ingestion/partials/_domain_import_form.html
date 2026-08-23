@@ -1,0 +1,12 @@
+<section class="mb-4">
+  <h2 class="h5">Upload</h2>
+  <form method="post" enctype="multipart/form-data" class="card card-body">
+    {% csrf_token %}<input type="hidden" name="domain" value="{{ target_domain }}">
+    <p class="text-body-secondary">{{ domain_help }}</p>
+    {% if show_format_select %}<div class="mb-3"><label class="form-label" for="{{ form.import_format.id_for_label }}">Format</label>{{ form.import_format }}</div>{% else %}<p><strong>Format</strong><br>{{ fixed_format }}</p><input type="hidden" name="import_format" value="{{ form.import_format.value }}">{% endif %}
+    {% if show_mode_select %}<div class="mb-3"><label class="form-label" for="{{ form.import_mode.id_for_label }}">Import mode</label>{{ form.import_mode }}</div>{% else %}<p><strong>Import mode</strong><br>{{ fixed_mode }}</p><input type="hidden" name="import_mode" value="{{ form.import_mode.value }}">{% endif %}
+    <div class="mb-3"><label class="form-label" for="{{ form.source.id_for_label }}">Source file</label>{{ form.source }}{% for error in form.source.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+    {% if target_domain == 'personnel' %}<div class="mb-3"><label class="form-label" for="{{ form.station.id_for_label }}">Home station for new personnel</label>{{ form.station }}</div>{% endif %}
+    <button type="submit" class="btn btn-primary">Import and review</button>
+  </form>
+</section>

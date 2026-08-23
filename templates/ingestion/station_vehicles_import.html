@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Import Stations and Vehicles{% endblock %}
+{% block content %}
+<p><a href="{% url 'portal-stations' department.id %}">Back to Stations</a></p>
+<h1>Import Stations and Vehicles</h1>
+<p class="text-body-secondary">Upload one CSV containing Station and Vehicle rows. Review unresolved Vehicle Station references before final Apply.</p>
+<p><a href="{% static 'ingestion/templates/station-vehicles-v1.csv' %}" download>Download Station and Vehicle CSV template</a></p>
+{% include "ingestion/partials/_domain_import_form.html" with show_format_select=False fixed_format="CSV" show_mode_select=False fixed_mode="Upsert" %}
+{% include "ingestion/partials/_recent_batches.html" %}
+{% endblock %}

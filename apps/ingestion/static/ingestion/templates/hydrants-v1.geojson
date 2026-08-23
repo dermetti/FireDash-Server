@@ -1,1 +1,1 @@
-{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[8.682127,50.110924]},"properties":{"external_identifier":"HYD-DEMO-001","hydrant_type":"underground","diameter_mm":100,"status":"ACTIVE"}}]}
+{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[8.682127,50.110924]},"properties":{"external_identifier":"HYD-DEMO-001","street":"Example Street","house_number":"1","hydrant_type":"underground","diameter_mm":100,"status":"ACTIVE"}}]}

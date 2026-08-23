@@ -11,6 +11,7 @@ class ImportUploadForm(forms.Form):
             (ImportBatch.Domain.PERSONNEL, "Personnel"),
             (ImportBatch.Domain.FIRE_PLANS, "Fire-plan ZIP package"),
             (ImportBatch.Domain.KLGV_PLANS, "KLGV ZIP package"),
+            (ImportBatch.Domain.STATION_VEHICLES, "Stations and vehicles"),
         ),
         widget=forms.Select(attrs={"class": "form-select"}),
     )
@@ -64,8 +65,120 @@ class ImportUploadForm(forms.Form):
                 "formats": {ImportBatch.Format.ZIP},
                 "modes": {ImportBatch.Mode.UPSERT},
             },
+            ImportBatch.Domain.STATION_VEHICLES: {
+                "formats": {ImportBatch.Format.CSV},
+                "modes": {ImportBatch.Mode.UPSERT},
+            },
         }
         rule = allowed.get(domain) if isinstance(domain, str) else None
         if rule is None or import_format not in rule["formats"] or mode not in rule["modes"]:
             raise forms.ValidationError("Selected domain, format, and mode are not compatible.")
+        return cleaned
+
+
+class FirePlanCoordinateReviewForm(forms.Form):
+    """Validate optional Fire Plan coordinate completion in staged review data."""
+
+    longitude = forms.FloatField(
+        required=False,
+        min_value=-180,
+        max_value=180,
+        widget=forms.NumberInput(
+            attrs={"class": "form-control", "step": "any", "inputmode": "decimal"}
+        ),
+    )
+    latitude = forms.FloatField(
+        required=False,
+        min_value=-90,
+        max_value=90,
+        widget=forms.NumberInput(
+            attrs={"class": "form-control", "step": "any", "inputmode": "decimal"}
+        ),
+    )
+
+    def __init__(self, *args, longitude: object, latitude: object, **kwargs) -> None:
+        super().__init__(
+            *args,
+            initial={"longitude": longitude, "latitude": latitude},
+            **kwargs,
+        )
+        self._existing_coordinates = {"longitude": longitude, "latitude": latitude}
+
+    def clean(self):
+        cleaned = super().clean()
+        for field in ("longitude", "latitude"):
+            if field in self.errors:
+                continue
+            if cleaned.get(field) is None:
+                existing = self._existing_coordinates[field]
+                if existing is None:
+                    self.add_error(
+                        field, "This coordinate is required to complete the staged record."
+                    )
+                else:
+                    cleaned[field] = existing
+        return cleaned
+
+
+class StationVehicleResolutionForm(forms.Form):
+    """Stage an import-only Station resolution without creating canonical data."""
+
+    station_id = forms.ModelChoiceField(
+        queryset=Station.objects.none(),
+        required=False,
+        label="Resolve to existing Station",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    short_code = forms.CharField(
+        max_length=64,
+        required=False,
+        label="Short Code",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    name = forms.CharField(
+        max_length=255,
+        required=False,
+        label="Station name",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    street = forms.CharField(
+        max_length=255,
+        required=False,
+        label="Street",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    house_number = forms.CharField(
+        max_length=32,
+        required=False,
+        label="House number",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    postal_code = forms.CharField(
+        max_length=32,
+        required=False,
+        label="Postal code",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    city = forms.CharField(
+        max_length=255,
+        required=False,
+        label="City",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+
+    def __init__(self, *args, department, resolution_kind: str, initial=None, **kwargs):
+        super().__init__(*args, initial=initial, **kwargs)
+        self.resolution_kind = resolution_kind
+        self.fields["station_id"].queryset = Station.objects.filter(
+            department=department, active=True
+        ).order_by("name", "short_code", "id")
+        if resolution_kind == "ambiguous":
+            self.fields["station_id"].required = True
+
+    def clean(self):
+        cleaned = super().clean()
+        if self.resolution_kind == "missing":
+            for field in ("short_code", "name"):
+                if not cleaned.get(field, "").strip():
+                    self.add_error(field, "This field is required to stage the missing Station.")
         return cleaned

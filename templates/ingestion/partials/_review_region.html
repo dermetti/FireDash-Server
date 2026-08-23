@@ -1,0 +1,68 @@
+<div id="import-review-region">
+  {% if review.current %}
+    <section class="card mb-3">
+      <div class="card-body">
+        <h2 class="h5">Review {{ review.index|add:"1" }} of {{ review.summary.total }}</h2>
+        {% if station_resolution_form %}
+          <p class="text-body-secondary mb-3">Vehicle <strong>{{ review.current.vehicle_name }}</strong> references {{ review.current.reference_kind|lower }} <strong>{{ review.current.reference }}</strong>.</p>
+          {% if review.current.kind == "missing" %}
+            <p class="alert alert-warning">Missing Station. Confirm the details to stage a new Station for final Apply.</p>
+          {% else %}
+            <p class="alert alert-warning">Multiple matching Stations were found. Select the intended Department Station.</p>
+          {% endif %}
+          <div class="d-flex gap-2 mb-3">
+            <button type="submit" form="station-resolution-{{ review.current.key }}" class="btn btn-success">Resolve and accept</button>
+            <form method="post" action="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+              {% csrf_token %}<button type="submit" class="btn btn-outline-secondary">Skip changes</button>
+            </form>
+          </div>
+          <form id="station-resolution-{{ review.current.key }}" method="post" action="{% url 'ingestion-review-station-resolution' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-station-resolution' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+            {% csrf_token %}
+            {% if review.current.kind == "ambiguous" %}
+              <div class="mb-3"><label class="form-label" for="{{ station_resolution_form.station_id.id_for_label }}">{{ station_resolution_form.station_id.label }}</label>{{ station_resolution_form.station_id }}{% for error in station_resolution_form.station_id.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+            {% else %}
+              {% for field in station_resolution_form %}{% if field.name != "station_id" %}<div class="mb-3"><label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>{% endif %}{% endfor %}
+            {% endif %}
+          </form>
+        {% elif coordinate_item and coordinate_item.review_key == review.current.key %}
+          <div class="d-flex gap-2 mb-3">
+            <button type="submit" form="coordinate-approve-{{ review.current.key }}" class="btn btn-success">Accept changes</button>
+            <form method="post" action="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+              {% csrf_token %}<button type="submit" class="btn btn-outline-secondary">Skip changes</button>
+            </form>
+          </div>
+          <form id="coordinate-approve-{{ review.current.key }}" method="post" action="{% url 'ingestion-review-approve' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-approve' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+            {% csrf_token %}
+            {% include "ingestion/partials/_fire_plan_coordinate_fields.html" %}
+          </form>
+        {% else %}
+          <div class="d-flex gap-2 mb-3">
+            <form method="post" action="{% url 'ingestion-review-approve' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-approve' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+              {% csrf_token %}<button type="submit" class="btn btn-success">Accept changes</button>
+            </form>
+            <form method="post" action="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+              {% csrf_token %}<button type="submit" class="btn btn-outline-secondary">Skip changes</button>
+            </form>
+          </div>
+        {% endif %}
+        <p class="text-body-secondary">{{ review.current.incoming_filename }} &rarr; {{ review.current.matched_value }}</p>
+      </div>
+    </section>
+  {% elif coordinate_item %}
+    <section class="card mb-3">
+      <div class="card-body">
+        <h2 class="h5">Complete staged location data</h2>
+        <form method="post" action="{% url 'ingestion-review-coordinates' department.id batch.id coordinate_item.index %}" hx-post="{% url 'ingestion-review-coordinates' department.id batch.id coordinate_item.index %}" hx-target="#import-review-region" hx-swap="outerHTML">
+          {% csrf_token %}
+          {% include "ingestion/partials/_fire_plan_coordinate_fields.html" %}
+          <button type="submit" class="btn btn-primary">Save staged coordinates</button>
+        </form>
+      </div>
+    </section>
+  {% else %}
+    <section class="alert alert-success">
+      <h2 class="h5">Review complete</h2>
+      <p class="mb-0">{{ review.summary.approved }} accepted &middot; {{ review.summary.skipped }} skipped. Apply accepted changes when ready.</p>
+    </section>
+  {% endif %}
+</div>

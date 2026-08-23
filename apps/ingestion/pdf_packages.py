@@ -132,8 +132,6 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
             if domain == "fire_plans":
                 longitude = _optional_coordinate(row["longitude"], -180, 180, index)
                 latitude = _optional_coordinate(row["latitude"], -90, 90, index)
-                if (latitude is None) != (longitude is None):
-                    raise ImportValidationError("Latitude and longitude must be supplied together.")
                 entries.append(
                     PdfPackageEntry(
                         external_identifier=external_id,
@@ -196,6 +194,16 @@ def _read_manifest(payload: bytes, expected_columns: frozenset[str]) -> list[dic
             "PDF package manifest columns do not match the documented schema."
         )
     rows = list(reader)
+    # Early Fire Plan v1 examples omitted empty trailing operational-location
+    # cells.  Keep those compact rows readable while normalising them to the
+    # canonical manifest shape; new templates always emit every header value.
+    if expected_columns == FIRE_PLAN_COLUMNS:
+        for row in rows:
+            if row.get("action") is None and row.get("fsd_location") in {"upsert", "deactivate"}:
+                row["action"] = row["fsd_location"]
+                row["fsd_location"] = ""
+                row["bmz_location"] = ""
+                row["rwa_info"] = ""
     if len(rows) > settings.MAX_PDF_PACKAGE_DOCUMENTS:
         raise ImportValidationError("PDF package document limit exceeded.")
     return rows

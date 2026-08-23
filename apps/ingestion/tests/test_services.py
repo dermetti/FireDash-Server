@@ -517,7 +517,7 @@ def test_single_and_batch_fire_plan_inputs_share_identity_noop_and_dirty_once(
 
     manifest = (
         "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action\n"
-        "FP-1,renamed.pdf,School,Main 1,12345,Town,8.2,50.1,upsert\n"
+        "FP-1,renamed.pdf,School,Main 1,12345,Town,8.2,50.1,,,,upsert\n"
     )
     batch = create_preview(
         actor=actor,
@@ -565,7 +565,7 @@ def test_address_identity_single_and_zip_inputs_converge_without_sanitizer_churn
     manifest = (
         "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action\n"
         ",renamed.pdf,Bauhaus Wandsbek,Wandsbeker Zollstrasse 95,"
-        "22041,Hamburg,10.123,53.456,upsert\n"
+        "22041,Hamburg,10.123,53.456,,,,upsert\n"
     )
     repeat = create_preview(
         actor=actor,

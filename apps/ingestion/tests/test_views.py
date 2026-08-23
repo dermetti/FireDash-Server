@@ -3,6 +3,7 @@ from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership
+from apps.ingestion.models import ImportBatch
 from apps.organizations.models import Department, Station
 
 
@@ -47,3 +48,75 @@ def test_import_page_denies_another_department_administrator(client, import_page
     DepartmentMembership.objects.create(user=outsider, department=other, created_by=outsider)
     client.force_login(outsider)
     assert client.get(reverse("ingestion-imports", args=(department.id,))).status_code == 403
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("route", "title", "fixed_format"),
+    (
+        ("ingestion-import-hydrants", "Import Hydrants", None),
+        ("ingestion-import-personnel", "Import Personnel", "CSV"),
+        ("ingestion-import-fire-plans", "Import Fire Plans", "PDF + CSV ZIP package"),
+        ("ingestion-import-klgv-plans", "Import KLGV Plans", "PDF + CSV ZIP package"),
+    ),
+)
+def test_domain_import_pages_have_explicit_human_presentation(
+    client, import_page_context, route, title, fixed_format
+):
+    actor, department, *_ = import_page_context
+    client.force_login(actor)
+    response = client.get(reverse(route, args=(department.id,)))
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert title in content
+    assert "Import and review" in content
+    assert "Create preview" not in content
+    assert "Fire_Plans" not in content
+    if fixed_format:
+        assert fixed_format in content
+        assert 'name="import_format"' not in content or 'type="hidden"' in content
+
+
+@pytest.mark.django_db
+def test_hydrant_import_page_offers_only_csv_and_geojson_and_scopes_recent_batches(
+    client, import_page_context
+):
+    actor, department, _, other, _ = import_page_context
+    ImportBatch.objects.create(
+        department=department,
+        actor=actor,
+        domain=ImportBatch.Domain.HYDRANTS,
+        import_format=ImportBatch.Format.CSV,
+        import_mode=ImportBatch.Mode.MERGE,
+        original_filename="hydrants.csv",
+        upload_sha256="a" * 64,
+        staging_key="test/hydrants",
+    )
+    ImportBatch.objects.create(
+        department=department,
+        actor=actor,
+        domain=ImportBatch.Domain.PERSONNEL,
+        import_format=ImportBatch.Format.CSV,
+        import_mode=ImportBatch.Mode.UPSERT,
+        original_filename="personnel.csv",
+        upload_sha256="b" * 64,
+        staging_key="test/personnel",
+    )
+    ImportBatch.objects.create(
+        department=other,
+        actor=actor,
+        domain=ImportBatch.Domain.HYDRANTS,
+        import_format=ImportBatch.Format.CSV,
+        import_mode=ImportBatch.Mode.MERGE,
+        original_filename="other.csv",
+        upload_sha256="c" * 64,
+        staging_key="test/other",
+    )
+    client.force_login(actor)
+    response = client.get(reverse("ingestion-import-hydrants", args=(department.id,)))
+    content = response.content.decode()
+    assert "hydrants.csv" in content
+    assert "personnel.csv" not in content
+    assert "other.csv" not in content
+    assert "GeoJSON" in content and "CSV" in content
+    assert ">JSON<" not in content

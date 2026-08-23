@@ -23,6 +23,8 @@ def create_hydrant(
     longitude: float,
     latitude: float,
     external_identifier: str = "",
+    street: str = "",
+    house_number: str = "",
     hydrant_type: str = "",
     diameter_mm: int | None = None,
     status: str = "ACTIVE",
@@ -32,6 +34,8 @@ def create_hydrant(
         department=department,
         location=Point(longitude, latitude, srid=4326),
         external_identifier=external_identifier.strip(),
+        street=street.strip(),
+        house_number=house_number.strip(),
         hydrant_type=hydrant_type.strip(),
         diameter_mm=diameter_mm,
         status=status,
@@ -115,7 +119,7 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
     hydrant = Hydrant.objects.select_for_update().select_related("department").get(pk=hydrant.pk)
     require_department_admin(actor, hydrant.department)
     previous_active = hydrant.active
-    for field in ("external_identifier", "hydrant_type", "status"):
+    for field in ("external_identifier", "street", "house_number", "hydrant_type", "status"):
         if field in values:
             setattr(hydrant, field, str(values[field]).strip())
     if "flow_information" in values:

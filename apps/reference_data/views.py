@@ -19,6 +19,7 @@ from apps.organizations.models import Department
 from apps.reference_data.forms import (
     DocumentFilterForm,
     FirePlanEditForm,
+    FirePlanFilterForm,
     FirePlanUploadForm,
     HydrantEditForm,
     HydrantFilterForm,
@@ -84,6 +85,10 @@ def hydrants(request: HttpRequest, department_id) -> HttpResponse:
             queryset = queryset.filter(status=data["status"])
         if data.get("hydrant_type"):
             queryset = queryset.filter(hydrant_type__icontains=data["hydrant_type"])
+        if data.get("street"):
+            queryset = queryset.filter(
+                Q(street__icontains=data["street"]) | Q(house_number__icontains=data["street"])
+            )
         if data.get("diameter_mm"):
             queryset = queryset.filter(diameter_mm=data["diameter_mm"])
     if "status" not in request.GET:
@@ -159,6 +164,8 @@ def hydrant_edit_modal(request: HttpRequest, hydrant_id) -> HttpResponse:
             "external_identifier": hydrant.external_identifier,
             "longitude": hydrant.location.x,
             "latitude": hydrant.location.y,
+            "street": hydrant.street,
+            "house_number": hydrant.house_number,
             "hydrant_type": hydrant.hydrant_type,
             "flow_information": hydrant.flow_information,
             "diameter_mm": hydrant.diameter_mm,
@@ -251,7 +258,7 @@ def fire_plans(request: HttpRequest, department_id) -> HttpResponse:
             form.add_error("document", "Fire plan was rejected.")
         else:
             return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
-    filters = DocumentFilterForm(request.GET or None)
+    filters = FirePlanFilterForm(request.GET or None)
     queryset = FirePlan.objects.filter(department=department)
     if filters.is_valid():
         if filters.cleaned_data["q"]:
@@ -264,6 +271,10 @@ def fire_plans(request: HttpRequest, department_id) -> HttpResponse:
             )
         if filters.cleaned_data["active"]:
             queryset = queryset.filter(active=filters.cleaned_data["active"] == "active")
+        if filters.cleaned_data["location_data"] == "complete":
+            queryset = queryset.filter(location__isnull=False)
+        elif filters.cleaned_data["location_data"] == "missing":
+            queryset = queryset.filter(location__isnull=True)
     if "active" not in request.GET:
         queryset = queryset.filter(active=True)
     paginator = Paginator(

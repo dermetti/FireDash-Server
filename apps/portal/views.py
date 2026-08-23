@@ -703,45 +703,67 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     # Keep this gateway read-only: the cheap authoritative counts help an
     # administrator choose a module without duplicating CRUD controls here.
     from apps.personnel.models import Person
+    from apps.publications.state import scope_operational_states
     from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
 
+    publication_states = {
+        row["dataset_type_code"]: row for row in scope_operational_states(department)
+    }
+
+    def module(*, dataset_type_code: str, **values):
+        state = publication_states.get(dataset_type_code)
+        # Gateway cards show only the currently distributed version. Candidate
+        # work is secondary context and never becomes the displayed version
+        # until the publication lifecycle activates it.
+        if state is None or state["distributed_version"] is None:
+            values["publication_version"] = None
+            values["publication_state"] = "Not published"
+        else:
+            values["publication_version"] = state["distributed_version"]
+            values["publication_state"] = state["current_update_label"] or state["state_label"]
+        return values
+
     modules = (
-        {
-            "name": "Hydrants",
-            "description": "Water supply reference points distributed to operational tablets.",
-            "count": Hydrant.objects.filter(
+        module(
+            dataset_type_code="department_hydrants",
+            name="Hydrants",
+            description="Water supply reference points distributed to operational tablets.",
+            count=Hydrant.objects.filter(
                 department=department, status=Hydrant.Status.ACTIVE
             ).count(),
-            "count_label": "active records",
-            "icon": "water",
-            "url": reverse("reference-data-hydrants", args=(department.id,)),
-        },
-        {
-            "name": "Personnel",
-            "description": "Active personnel reference records and station context.",
-            "count": Person.objects.filter(
+            count_label="active records",
+            icon="water",
+            url=reverse("reference-data-hydrants", args=(department.id,)),
+        ),
+        module(
+            dataset_type_code="station_personnel",
+            name="Personnel",
+            description="Active personnel reference records and station context.",
+            count=Person.objects.filter(
                 department=department, lifecycle_status=Person.LifecycleStatus.ACTIVE
             ).count(),
-            "count_label": "active records",
-            "icon": "people",
-            "url": reverse("personnel-list", args=(department.id,)),
-        },
-        {
-            "name": "Fire Plans",
-            "description": "Current operational fire-plan PDFs and their canonical metadata.",
-            "count": FirePlan.objects.filter(department=department, active=True).count(),
-            "count_label": "active plans",
-            "icon": "building",
-            "url": reverse("reference-data-fire-plans", args=(department.id,)),
-        },
-        {
-            "name": "KLGV Plans",
-            "description": "Optional Kleingartenverein / allotment-garden operational plans.",
-            "count": KlgvPlan.objects.filter(department=department, active=True).count(),
-            "count_label": "active plans",
-            "icon": "garden",
-            "url": reverse("reference-data-klgv-plans", args=(department.id,)),
-        },
+            count_label="active records",
+            icon="people",
+            url=reverse("personnel-list", args=(department.id,)),
+        ),
+        module(
+            dataset_type_code="department_fire_plans",
+            name="Fire Plans",
+            description="Current operational fire-plan PDFs and their canonical metadata.",
+            count=FirePlan.objects.filter(department=department, active=True).count(),
+            count_label="active plans",
+            icon="building",
+            url=reverse("reference-data-fire-plans", args=(department.id,)),
+        ),
+        module(
+            dataset_type_code="department_klgv_plans",
+            name="KLGV Plans",
+            description="Optional Kleingartenverein / allotment-garden operational plans.",
+            count=KlgvPlan.objects.filter(department=department, active=True).count(),
+            count_label="active plans",
+            icon="garden",
+            url=reverse("reference-data-klgv-plans", args=(department.id,)),
+        ),
     )
     return render(request, "portal/data_hub.html", {"department": department, "modules": modules})
 

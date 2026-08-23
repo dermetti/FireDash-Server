@@ -12,6 +12,7 @@ class ImportBatch(models.Model):
         PERSONNEL = "personnel", "Personnel"
         FIRE_PLANS = "fire_plans", "Fire plans"
         KLGV_PLANS = "klgv_plans", "KLGV plans"
+        STATION_VEHICLES = "station_vehicles", "Stations and vehicles"
 
     class Format(models.TextChoices):
         CSV = "csv", "CSV"

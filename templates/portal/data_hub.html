@@ -3,6 +3,25 @@
 {% block content %}
 {% include "components/_page_header.html" with breadcrumb=department.name title="Data Hub" description="Choose a canonical data domain. Imports are validated and confirmed before publication is scheduled." %}
 <section class="row row-cols-1 row-cols-md-2 g-3" aria-label="Distributed data modules">
-{% for module in modules %}<div class="col"><article class="card h-100"><div class="card-body d-flex flex-column"><div class="d-flex align-items-center gap-3 mb-3"><span class="firedash-module-icon text-primary" aria-hidden="true">{% include "components/_data_hub_icon.html" with icon=module.icon %}</span><h2 class="h5 mb-0">{{ module.name }}</h2></div><p class="text-body-secondary">{{ module.description }}</p><dl class="row small mb-4"><dt class="col-7">{{ module.count_label|capfirst }}</dt><dd class="col-5 text-end">{{ module.count }}</dd><dt class="col-7">Publication</dt><dd class="col-5 text-end text-body-secondary">Managed in module</dd></dl><a class="mt-auto" href="{{ module.url }}">Open module <span aria-hidden="true">→</span><span class="visually-hidden">{{ module.name }}</span></a></div></article></div>{% endfor %}
+  {% for module in modules %}
+    <div class="col">
+      <a class="card h-100 d-block text-decoration-none text-reset shadow-sm" href="{{ module.url }}">
+        <div class="card-body d-flex flex-column">
+          <div class="d-flex align-items-center gap-3 mb-3">
+            <span class="firedash-module-icon text-primary" aria-hidden="true">{% include "components/_data_hub_icon.html" with icon=module.icon %}</span>
+            <h2 class="h5 mb-0">{{ module.name }}</h2>
+          </div>
+          <p class="text-body-secondary">{{ module.description }}</p>
+          <dl class="row small mb-0">
+            <dt class="col-7">{{ module.count_label|capfirst }}</dt>
+            <dd class="col-5 text-end">{{ module.count }}</dd>
+            <dt class="col-7">Publication</dt>
+            <dd class="col-5 text-end text-body-secondary">{% if module.publication_version %}v{{ module.publication_version }} &middot; {{ module.publication_state }}{% else %}{{ module.publication_state }}{% endif %}</dd>
+          </dl>
+          <span class="visually-hidden">Open {{ module.name }}</span>
+        </div>
+      </a>
+    </div>
+  {% endfor %}
 </section>
 {% endblock %}

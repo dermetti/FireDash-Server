@@ -27,10 +27,16 @@ from apps.assignments.services import ensure_current_home
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
 from apps.ingestion.models import ImportBatch
-from apps.ingestion.parsers import ImportValidationError, parse_hydrants, parse_personnel
+from apps.ingestion.parsers import (
+    ImportValidationError,
+    parse_hydrants,
+    parse_personnel,
+    parse_station_vehicles,
+)
 from apps.ingestion.pdf_packages import manifest_member_name, parse_pdf_package
 from apps.ingestion.storage import ImportStorageError, read_staged, remove_staged, stage_upload
-from apps.organizations.models import Station
+from apps.organizations.models import Station, Vehicle
+from apps.organizations.services import create_station, create_vehicle
 from apps.personnel.models import Person
 from apps.publications.services import mark_dirty
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
@@ -116,6 +122,8 @@ def create_single_preview(
                 "external_identifier",
                 "longitude",
                 "latitude",
+                "street",
+                "house_number",
                 "hydrant_type",
                 "diameter_mm",
                 "status",
@@ -270,6 +278,8 @@ def _hydrant_baseline(*, department, identifiers) -> dict[str, str]:
             "updated_at",
             "status",
             "location",
+            "street",
+            "house_number",
             "hydrant_type",
             "diameter_mm",
         )
@@ -282,13 +292,23 @@ def _hydrant_business_values(hydrant_or_row) -> dict[str, object]:
         return {
             "longitude": hydrant_or_row.location.x,
             "latitude": hydrant_or_row.location.y,
+            "street": hydrant_or_row.street,
+            "house_number": hydrant_or_row.house_number,
             "hydrant_type": hydrant_or_row.hydrant_type,
             "diameter_mm": hydrant_or_row.diameter_mm,
             "status": hydrant_or_row.status,
         }
     return {
         field: hydrant_or_row[field]
-        for field in ("longitude", "latitude", "hydrant_type", "diameter_mm", "status")
+        for field in (
+            "longitude",
+            "latitude",
+            "street",
+            "house_number",
+            "hydrant_type",
+            "diameter_mm",
+            "status",
+        )
     }
 
 
@@ -308,6 +328,154 @@ def _personnel_baseline(*, department) -> dict[str, str]:
         ).only("personnel_number", "updated_at", "active")
         for number in [person.personnel_number or ""]
     }
+
+
+def _station_reference_key(value: object) -> str:
+    """Normalize an imported Station reference without changing its display value."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _station_vehicle_baseline(*, department) -> dict[str, str]:
+    """Fingerprint the canonical rows which Station/Vehicle import may observe."""
+    stations = Station.objects.filter(department=department).only("id", "updated_at", "active")
+    vehicles = Vehicle.objects.filter(department=department).only("id", "updated_at", "active")
+    return {
+        **{
+            f"station:{station.id}": _fingerprint(
+                {"updated_at": station.updated_at.isoformat(), "active": station.active}
+            )
+            for station in stations
+        },
+        **{
+            f"vehicle:{vehicle.id}": _fingerprint(
+                {"updated_at": vehicle.updated_at.isoformat(), "active": vehicle.active}
+            )
+            for vehicle in vehicles
+        },
+    }
+
+
+def _station_matches(*, department, short_code: str, name: str) -> list[Station]:
+    """Return same-department stations matching the preferred code or full name."""
+    stations = list(
+        Station.objects.filter(department=department, active=True).only(
+            "id", "short_code", "name", "street", "house_number", "postal_code", "city", "active"
+        )
+    )
+    code_key = _station_reference_key(short_code)
+    name_key = _station_reference_key(name)
+    if code_key:
+        code_matches = [
+            station
+            for station in stations
+            if _station_reference_key(station.short_code) == code_key
+        ]
+        if code_matches:
+            return code_matches
+    return [station for station in stations if _station_reference_key(station.name) == name_key]
+
+
+def _station_vehicle_intent(
+    *, rows, department
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Prepare staged Station/Vehicle rows and only review unresolved relationships.
+
+    This deliberately does not create a Station.  It records enough immutable
+    input and reviewer-owned resolution state for the final atomic apply.
+    """
+    intent: list[dict[str, object]] = []
+    staged_by_code: dict[str, str] = {}
+    staged_by_name: dict[str, str] = {}
+    review_items: list[dict[str, object]] = []
+    for index, source in enumerate(rows):
+        row = dict(source)
+        key = f"{row['row_type']}:{index}"
+        row["key"] = key
+        if row["row_type"] == "station":
+            matches = _station_matches(
+                department=department,
+                short_code=str(row["station_short_code"]),
+                name=str(row["station_name"]),
+            )
+            if len(matches) > 1:
+                raise ImportValidationError("Station import matches multiple canonical Stations.")
+            row["action"] = "existing" if matches else "new"
+            if matches:
+                row["station_id"] = str(matches[0].id)
+            staged_by_code[_station_reference_key(row["station_short_code"])] = key
+            staged_by_name[_station_reference_key(row["station_name"])] = key
+        else:
+            code_key = _station_reference_key(row["station_short_code"])
+            name_key = _station_reference_key(row["station_name"])
+            staged_key = staged_by_code.get(code_key) if code_key else staged_by_name.get(name_key)
+            if staged_key:
+                row["station_resolution"] = {"state": "staged", "station_key": staged_key}
+            else:
+                matches = _station_matches(
+                    department=department,
+                    short_code=str(row["station_short_code"]),
+                    name=str(row["station_name"]),
+                )
+                if len(matches) == 1:
+                    row["station_resolution"] = {
+                        "state": "existing",
+                        "station_id": str(matches[0].id),
+                    }
+                elif len(matches) > 1:
+                    row["station_resolution"] = {"state": "ambiguous"}
+                    review_items.append(
+                        {
+                            "key": key,
+                            "kind": "ambiguous",
+                            "vehicle_name": row["vehicle_name"],
+                            "reference": row["station_short_code"] or row["station_name"],
+                            "reference_kind": "Short Code"
+                            if row["station_short_code"]
+                            else "Station name",
+                            "candidate_ids": [str(station.id) for station in matches],
+                        }
+                    )
+                else:
+                    row["station_resolution"] = {"state": "missing"}
+                    review_items.append(
+                        {
+                            "key": key,
+                            "kind": "missing",
+                            "vehicle_name": row["vehicle_name"],
+                            "reference": row["station_short_code"] or row["station_name"],
+                            "reference_kind": "Short Code"
+                            if row["station_short_code"]
+                            else "Station name",
+                        }
+                    )
+        intent.append(row)
+    return intent, review_items
+
+
+def _preview_station_vehicles(
+    *, intent
+) -> tuple[tuple[int, int, int, int], list[dict[str, object]]]:
+    """Summarize staged creates; imports never retire resources by omission."""
+    add = unchanged = 0
+    updates: list[dict[str, object]] = []
+    for row in intent:
+        if row["row_type"] == "station":
+            if row.get("action") == "new":
+                add += 1
+            else:
+                unchanged += 1
+        else:
+            # Existing equivalent vehicles are rechecked while holding locks at
+            # Apply; preview is deliberately conservative and staged-only.
+            add += 1
+        updates.append(
+            {
+                "key": row["key"],
+                "row_type": row["row_type"],
+                "label": row.get("station_name") or row.get("vehicle_name"),
+            }
+        )
+    return (add, 0, 0, unchanged), updates
 
 
 def create_preview(
@@ -363,6 +531,14 @@ def create_preview(
             counts, updates, updates_truncated = _preview_personnel(
                 intent=intent, department=department
             )
+        elif domain == ImportBatch.Domain.STATION_VEHICLES:
+            if import_format != ImportBatch.Format.CSV or import_mode != ImportBatch.Mode.UPSERT:
+                raise ImportError("Station and Vehicle imports require CSV upsert mode.")
+            parsed_rows = parse_station_vehicles(payload=payload, import_format=import_format)
+            intent, review_items = _station_vehicle_intent(rows=parsed_rows, department=department)
+            baseline = _station_vehicle_baseline(department=department)
+            counts, updates = _preview_station_vehicles(intent=intent)
+            updates_truncated = False
         elif domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
             if import_format != ImportBatch.Format.ZIP or import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("PDF package imports require ZIP upsert mode.")
@@ -417,10 +593,15 @@ def create_preview(
         ImportBatch.Domain.PERSONNEL,
         ImportBatch.Domain.FIRE_PLANS,
         ImportBatch.Domain.KLGV_PLANS,
+        ImportBatch.Domain.STATION_VEHICLES,
     }:
         batch.validation_summary["updates"] = updates
     batch.validation_summary["updates_truncated"] = updates_truncated
     if domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
+        batch.validation_summary["review_items"] = review_items
+        batch.validation_summary["review_decisions"] = {}
+        batch.validation_summary["skipped_update_count"] = 0
+    if domain == ImportBatch.Domain.STATION_VEHICLES:
         batch.validation_summary["review_items"] = review_items
         batch.validation_summary["review_decisions"] = {}
         batch.validation_summary["skipped_update_count"] = 0
@@ -577,6 +758,14 @@ def apply_preview(*, actor, batch_id) -> ImportBatch:
             if _personnel_baseline(department=batch.department) != batch.baseline:
                 raise ImportError("Canonical personnel changed; re-preview is required.")
             scopes, counts = _apply_personnel(batch=batch, rows=rows)
+        elif batch.domain == ImportBatch.Domain.STATION_VEHICLES:
+            # Re-parse the staged source to prove it is still a valid instance
+            # of the documented CSV contract. Reviewer resolutions live in the
+            # separately hash-bound normalized intent.
+            parse_station_vehicles(payload=payload, import_format=batch.import_format)
+            if _station_vehicle_baseline(department=batch.department) != batch.baseline:
+                raise ImportError("Canonical Stations or Vehicles changed; re-preview is required.")
+            scopes, counts = _apply_station_vehicles(batch=batch, actor=actor)
         elif batch.domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
             # Reconstructing package structure proves that stored preview bytes
             # still match the staged source; accepted PDF outputs are separately
@@ -701,6 +890,8 @@ def _apply_hydrants(*, batch, rows):
         identifier = row["external_identifier"]
         values = {
             "location": Point(row["longitude"], row["latitude"], srid=4326),
+            "street": row["street"],
+            "house_number": row["house_number"],
             "hydrant_type": row["hydrant_type"],
             "diameter_mm": row["diameter_mm"],
             "status": row["status"],
@@ -731,7 +922,15 @@ def _apply_hydrants(*, batch, rows):
     if to_update:
         Hydrant.objects.bulk_update(
             to_update,
-            fields=("location", "hydrant_type", "diameter_mm", "status", "updated_at"),
+            fields=(
+                "location",
+                "street",
+                "house_number",
+                "hydrant_type",
+                "diameter_mm",
+                "status",
+                "updated_at",
+            ),
             batch_size=_INGESTION_BULK_BATCH_SIZE,
         )
     # Hydrant lifecycle deactivation is explicit only: absence from an import
@@ -793,6 +992,156 @@ def _apply_personnel(*, batch, rows):
         for station in Station.objects.filter(id__in=station_ids).order_by("id")
     ]
     return scopes, (add, update, 0, unchanged)
+
+
+def _staged_station_values(row: dict[str, object]) -> dict[str, str]:
+    return {
+        field: str(row.get(field, "") or "").strip()
+        for field in ("short_code", "name", "street", "house_number", "postal_code", "city")
+    }
+
+
+def _apply_station_vehicles(*, batch, actor):
+    """Create accepted Station/Vehicle rows atomically through canonical services."""
+    rows = [dict(row) for row in batch.normalized_intent.get("rows", []) if isinstance(row, dict)]
+    decisions = _review_decisions(batch)
+    pending = _review_summary(batch)["pending"]
+    if pending:
+        raise ImportError("Resolve each Station relationship before applying this import.")
+
+    # Serialize same-department import applies before checking non-database
+    # normalized identifiers. The canonical models intentionally do not impose
+    # a case-insensitive Short Code/name constraint.
+    department = type(batch.department).objects.select_for_update().get(pk=batch.department_id)
+    stations = list(Station.objects.select_for_update().filter(department=department))
+    station_by_key: dict[str, Station] = {}
+    existing_code_keys = {_station_reference_key(station.short_code) for station in stations}
+    existing_name_keys = {_station_reference_key(station.name) for station in stations}
+    add = unchanged = 0
+
+    for row in rows:
+        if row.get("row_type") != "station":
+            continue
+        key = str(row["key"])
+        if row.get("action") == "existing":
+            station = next(
+                (station for station in stations if str(station.id) == str(row.get("station_id"))),
+                None,
+            )
+            if station is None:
+                raise ImportError("A referenced Station changed; re-preview is required.")
+            station_by_key[key] = station
+            continue
+        values = {
+            "short_code": str(row["station_short_code"]),
+            "name": str(row["station_name"]),
+            "street": str(row.get("street", "")),
+            "house_number": str(row.get("house_number", "")),
+            "postal_code": str(row.get("postal_code", "")),
+            "city": str(row.get("city", "")),
+        }
+        code_key, name_key = (
+            _station_reference_key(values["short_code"]),
+            _station_reference_key(values["name"]),
+        )
+        if code_key in existing_code_keys or name_key in existing_name_keys:
+            raise ImportError(
+                "A Station already uses this Short Code or name; re-preview is required."
+            )
+        station = create_station(actor=actor, department=department, **values)
+        stations.append(station)
+        station_by_key[key] = station
+        existing_code_keys.add(code_key)
+        existing_name_keys.add(name_key)
+        add += 1
+
+    # Missing-Stations approved in review are created after CSV Station rows,
+    # but before their dependent Vehicles, in this same outer transaction.
+    for row in rows:
+        if row.get("row_type") != "vehicle":
+            continue
+        resolution = dict(row.get("station_resolution", {}))
+        if resolution.get("state") != "staged" or not str(
+            resolution.get("station_key", "")
+        ).startswith("resolution:"):
+            continue
+        resolution_key = str(resolution["station_key"])
+        if resolution_key in station_by_key:
+            continue
+        staged = next(
+            (
+                candidate
+                for candidate in batch.normalized_intent.get("staged_stations", [])
+                if isinstance(candidate, dict) and candidate.get("key") == resolution_key
+            ),
+            None,
+        )
+        if staged is None:
+            raise ImportError("The staged missing Station resolution is unavailable.")
+        values = _staged_station_values(staged)
+        code_key, name_key = (
+            _station_reference_key(values["short_code"]),
+            _station_reference_key(values["name"]),
+        )
+        if not values["short_code"] or not values["name"]:
+            raise ImportError("The staged missing Station is incomplete.")
+        if code_key in existing_code_keys or name_key in existing_name_keys:
+            raise ImportError(
+                "A Station already uses this Short Code or name; re-preview is required."
+            )
+        station = create_station(actor=actor, department=department, **values)
+        stations.append(station)
+        station_by_key[resolution_key] = station
+        existing_code_keys.add(code_key)
+        existing_name_keys.add(name_key)
+        add += 1
+
+    existing_vehicles = {
+        (vehicle.station_id, _station_reference_key(vehicle.display_name)): vehicle
+        for vehicle in Vehicle.objects.select_for_update().filter(department=department)
+    }
+    for row in rows:
+        if row.get("row_type") != "vehicle":
+            continue
+        key = str(row["key"])
+        if decisions.get(key) == "skipped":
+            unchanged += 1
+            continue
+        resolution = dict(row.get("station_resolution", {}))
+        state = resolution.get("state")
+        if state == "existing":
+            station = next(
+                (
+                    candidate
+                    for candidate in stations
+                    if str(candidate.id) == str(resolution.get("station_id"))
+                ),
+                None,
+            )
+        elif state == "staged":
+            station = station_by_key.get(str(resolution.get("station_key")))
+        else:
+            station = None
+        if station is None or station.department_id != department.id:
+            raise ImportError("A Vehicle Station is unresolved; re-preview is required.")
+        vehicle_key = (station.id, _station_reference_key(row.get("vehicle_name")))
+        if vehicle_key in existing_vehicles:
+            unchanged += 1
+            continue
+        vehicle = create_vehicle(
+            actor=actor,
+            department=department,
+            station=station,
+            display_name=str(row["vehicle_name"]),
+            call_sign=str(row.get("vehicle_call_sign", "")),
+            asset_identifier=str(row.get("vehicle_asset_identifier", "")),
+        )
+        existing_vehicles[vehicle_key] = vehicle
+        add += 1
+    # Stations and Vehicles do not themselves create or dirty a distributed
+    # dataset. Existing downstream side effects remain exclusively in the
+    # canonical services invoked above.
+    return [], (add, 0, 0, unchanged)
 
 
 def _document_identity_key(document_or_row, *, domain: str) -> str:
@@ -988,12 +1337,30 @@ def set_review_decision(*, actor, batch_id, key: str, decision: str) -> ImportBa
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Only a ready preview can be reviewed.")
-    if batch.domain not in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
-        raise ImportError("Update review is only available for document imports.")
+    if batch.domain not in {
+        ImportBatch.Domain.FIRE_PLANS,
+        ImportBatch.Domain.KLGV_PLANS,
+        ImportBatch.Domain.STATION_VEHICLES,
+    }:
+        raise ImportError("Update review is not available for this import domain.")
     if decision not in _REVIEW_DECISIONS:
         raise ImportError("Invalid review decision.")
     if key not in _review_keys(batch):
         raise ImportError("Review target is not a proposed update.")
+    if batch.domain == ImportBatch.Domain.STATION_VEHICLES and decision == "approved":
+        row = next(
+            (
+                row
+                for row in batch.normalized_intent.get("rows", [])
+                if isinstance(row, dict) and str(row.get("key")) == key
+            ),
+            None,
+        )
+        if not isinstance(row, dict) or row.get("station_resolution", {}).get("state") not in {
+            "existing",
+            "staged",
+        }:
+            raise ImportError("Resolve the Vehicle Station before accepting this change.")
     decisions = dict(batch.validation_summary.get("review_decisions", {}))
     decisions[key] = {
         "decision": decision,
@@ -1011,6 +1378,76 @@ def set_review_decision(*, actor, batch_id, key: str, decision: str) -> ImportBa
         metadata={"domain": batch.domain, "review_key": key},
     )
     return batch
+
+
+@transaction.atomic
+def set_station_vehicle_resolution(
+    *, actor, batch_id, key: str, resolution_kind: str, values: dict[str, object]
+) -> ImportBatch:
+    """Persist a reviewer-selected Station relationship as staged batch state.
+
+    The operation is intentionally not a canonical Station mutation.  It only
+    makes the accepted Vehicle eligible for the later atomic Apply operation.
+    """
+    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    require_department_admin(actor, batch.department)
+    if batch.status != ImportBatch.Status.PREVIEW_READY:
+        raise ImportError("Only a ready preview can be reviewed.")
+    if batch.domain != ImportBatch.Domain.STATION_VEHICLES:
+        raise ImportError("Station resolution is only available for Station and Vehicle imports.")
+    item = next(
+        (
+            item
+            for item in batch.validation_summary.get("review_items", [])
+            if isinstance(item, dict) and str(item.get("key")) == key
+        ),
+        None,
+    )
+    if item is None or item.get("kind") != resolution_kind:
+        raise ImportError("Station review target is unavailable.")
+    rows = [dict(row) for row in batch.normalized_intent.get("rows", []) if isinstance(row, dict)]
+    row = next((candidate for candidate in rows if str(candidate.get("key")) == key), None)
+    if row is None:
+        raise ImportError("Station review data is unavailable.")
+    if resolution_kind == "ambiguous":
+        station = values.get("station_id")
+        if (
+            not isinstance(station, Station)
+            or station.department_id != batch.department_id
+            or not station.active
+        ):
+            raise ImportError("Choose an active Station in this Department.")
+        candidate_ids = {str(value) for value in item.get("candidate_ids", [])}
+        if str(station.id) not in candidate_ids:
+            raise ImportError("Choose one of the matching Department Stations.")
+        row["station_resolution"] = {"state": "existing", "station_id": str(station.id)}
+    else:
+        resolution_key = f"resolution:{key}"
+        staged = {
+            "key": resolution_key,
+            "short_code": str(values.get("short_code", "")).strip(),
+            "name": str(values.get("name", "")).strip(),
+            "street": str(values.get("street", "")).strip(),
+            "house_number": str(values.get("house_number", "")).strip(),
+            "postal_code": str(values.get("postal_code", "")).strip(),
+            "city": str(values.get("city", "")).strip(),
+        }
+        if not staged["short_code"] or not staged["name"]:
+            raise ImportError("Short Code and Station name are required.")
+        staged_stations = [
+            dict(candidate)
+            for candidate in batch.normalized_intent.get("staged_stations", [])
+            if isinstance(candidate, dict) and candidate.get("key") != resolution_key
+        ]
+        staged_stations.append(staged)
+        batch.normalized_intent["staged_stations"] = staged_stations
+        row["station_resolution"] = {"state": "staged", "station_key": resolution_key}
+    batch.normalized_intent["rows"] = rows
+    batch.save(update_fields=("normalized_intent",))
+    # This records the decision, audit event, and review timestamp under the
+    # same row lock.  The nested atomic block is safe and keeps both writes
+    # transactional.
+    return set_review_decision(actor=actor, batch_id=batch.id, key=key, decision="approved")
 
 
 @transaction.atomic
@@ -1040,21 +1477,45 @@ def approve_all_review_decisions(*, actor, batch_id) -> ImportBatch:
     return batch
 
 
-def review_context(batch: ImportBatch, index: int = 0) -> dict[str, object]:
+def review_context(batch: ImportBatch, index: int | None = None) -> dict[str, object]:
     """Build the wizard view context for one document-import preview."""
     items = [
         item for item in batch.validation_summary.get("review_items", []) if isinstance(item, dict)
     ]
     decisions = _review_decisions(batch)
     total = len(items)
-    index = max(0, min(index, total - 1)) if total else 0
+    if total:
+        if index is None:
+            next_pending = next(
+                (
+                    position
+                    for position, item in enumerate(items)
+                    if decisions.get(str(item["key"])) not in _REVIEW_DECISIONS
+                ),
+                None,
+            )
+            if next_pending is None:
+                return {
+                    "items": items,
+                    "summary": _review_summary(batch),
+                    "index": 0,
+                    "current": None,
+                    "previous_index": None,
+                    "next_index": None,
+                    "domain": batch.domain,
+                    "coordinate_items": _coordinate_review_items(batch),
+                }
+            index = next_pending
+        index = max(0, min(index, total - 1))
+    else:
+        index = 0
     current: dict[str, object] | None = None
     if total:
         item = dict(items[index])
         key = str(item["key"])
         item["decision"] = decisions.get(key, "pending")
         detail_fields = {
-            str(detail["key"]): detail["fields"]
+            str(detail["key"]): detail.get("fields", [])
             for detail in batch.validation_summary.get("updates", [])
             if isinstance(detail, dict) and detail.get("key")
         }
@@ -1068,7 +1529,105 @@ def review_context(batch: ImportBatch, index: int = 0) -> dict[str, object]:
         "previous_index": index - 1 if total and index > 0 else None,
         "next_index": index + 1 if total and index < total - 1 else None,
         "domain": batch.domain,
+        "coordinate_items": _coordinate_review_items(batch),
     }
+
+
+def _coordinate_review_items(batch: ImportBatch) -> list[dict[str, object]]:
+    existing_keys = {
+        _document_identity_key(plan, domain=ImportBatch.Domain.FIRE_PLANS): str(plan.id)
+        for plan in FirePlan.objects.filter(department=batch.department).only(
+            "id", "external_identifier", "address"
+        )
+    }
+    return [
+        {
+            "index": row_index,
+            "identity": identity,
+            "review_key": existing_keys.get(identity),
+            "external_identifier": row.get("external_identifier", ""),
+            "address": row.get("address", ""),
+            "longitude": row.get("longitude"),
+            "latitude": row.get("latitude"),
+        }
+        for row_index, row in enumerate(batch.normalized_intent.get("rows", []))
+        if batch.domain == ImportBatch.Domain.FIRE_PLANS
+        and isinstance(row, dict)
+        and row.get("action") == "upsert"
+        and (row.get("longitude") is None or row.get("latitude") is None)
+        for identity in (_document_identity_key(row, domain=batch.domain),)
+    ]
+
+
+@transaction.atomic
+def set_review_coordinates(
+    *, actor, batch_id, row_index: int, longitude: object, latitude: object
+) -> ImportBatch:
+    """Store reviewer-supplied Fire Plan coordinates in the staged intent only.
+
+    No canonical row changes until the normal confirmation path applies the
+    re-diffed, hash-bound preview.  This keeps manual data-quality completion
+    inside the existing ImportBatch transaction/state machine.
+    """
+    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    require_department_admin(actor, batch.department)
+    if batch.status != ImportBatch.Status.PREVIEW_READY:
+        raise ImportError("Only a ready preview can be corrected.")
+    if batch.domain != ImportBatch.Domain.FIRE_PLANS:
+        raise ImportError("Coordinate completion is only available for Fire Plan imports.")
+    rows = list(batch.normalized_intent.get("rows", []))
+    if row_index < 0 or row_index >= len(rows) or not isinstance(rows[row_index], dict):
+        raise ImportError("Coordinate review target is unavailable.")
+    try:
+        parsed_longitude = float(longitude)
+        parsed_latitude = float(latitude)
+    except (TypeError, ValueError) as error:
+        raise ImportError("Longitude and latitude must be numeric.") from error
+    if not -180 <= parsed_longitude <= 180:
+        raise ImportError("Longitude must be between -180 and 180.")
+    if not -90 <= parsed_latitude <= 90:
+        raise ImportError("Latitude must be between -90 and 90.")
+    row = dict(rows[row_index])
+    row["longitude"] = parsed_longitude
+    row["latitude"] = parsed_latitude
+    rows[row_index] = row
+    counts, updates, updates_truncated, review_items = _preview_documents(
+        intent=rows,
+        department=batch.department,
+        domain=batch.domain,
+    )
+    batch.normalized_intent = {"rows": rows}
+    batch.add_count, batch.update_count, batch.deactivate_count, batch.unchanged_count = counts
+    batch.validation_summary["updates"] = updates
+    batch.validation_summary["updates_truncated"] = updates_truncated
+    batch.validation_summary["review_items"] = review_items
+    # A changed diff invalidates any prior decision made against the earlier
+    # field set; retain decisions only for still-proposed update identities.
+    valid_keys = {str(item["key"]) for item in review_items}
+    batch.validation_summary["review_decisions"] = {
+        key: value
+        for key, value in batch.validation_summary.get("review_decisions", {}).items()
+        if key in valid_keys
+    }
+    batch.save(
+        update_fields=(
+            "normalized_intent",
+            "add_count",
+            "update_count",
+            "deactivate_count",
+            "unchanged_count",
+            "validation_summary",
+        )
+    )
+    record_event(
+        action="ingestion.review_coordinates_completed",
+        actor_user=actor,
+        department=batch.department,
+        target_type="import_batch",
+        target_uuid=batch.id,
+        metadata={"domain": batch.domain, "row_index": row_index},
+    )
+    return batch
 
 
 def _coordinate_conflicts(*, department, intent) -> list[dict[str, object]]:
@@ -1457,18 +2016,23 @@ def _document_changed_fields(*, current, row, model) -> list[dict[str, object]]:
                         "proposed": proposed,
                     }
                 )
-        incoming_location = _location(row)
-        if incoming_location is not None and current.location != incoming_location:
-            fields.append(
-                {
+            incoming_location = _location(row)
+            if incoming_location is not None and current.location != incoming_location:
+                field: dict[str, object] = {
                     "name": "location",
                     "label": "Location",
-                    "current": {"longitude": current.location.x, "latitude": current.location.y},
+                    "current": (
+                        {"longitude": current.location.x, "latitude": current.location.y}
+                        if current.location is not None
+                        else None
+                    ),
                     "proposed": {
                         "longitude": incoming_location.x,
                         "latitude": incoming_location.y,
                     },
-                    "distance_km": round(
+                }
+                if current.location is not None:
+                    field["distance_km"] = round(
                         _haversine_km(
                             current.location.y,
                             current.location.x,
@@ -1476,9 +2040,8 @@ def _document_changed_fields(*, current, row, model) -> list[dict[str, object]]:
                             incoming_location.x,
                         ),
                         3,
-                    ),
-                }
-            )
+                    )
+                fields.append(field)
     else:
         for name, label, proposed in (
             ("title", "Title", row["title"]),

@@ -237,6 +237,8 @@ def _artifact_hydrants(*, department, station, source_revision: int) -> bytes:
                 },
                 "properties": {
                     "external_identifier": hydrant.external_identifier,
+                    "street": hydrant.street or None,
+                    "house_number": hydrant.house_number or None,
                     "hydrant_type": hydrant.hydrant_type,
                     "diameter_mm": hydrant.diameter_mm,
                     "status": hydrant.status,

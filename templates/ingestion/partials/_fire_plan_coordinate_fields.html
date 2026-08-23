@@ -1,0 +1,25 @@
+<fieldset class="mb-3">
+  <legend class="h6">Location data</legend>
+  <p class="form-text">Complete any missing WGS84 coordinates in the staged preview. These values do not change canonical data until final Apply.</p>
+  {% if coordinate_item.longitude is None %}
+    <div class="mb-3">
+      <label class="form-label" for="{{ coordinate_form.longitude.id_for_label }}">Longitude</label>
+      {{ coordinate_form.longitude }}
+      {% for error in coordinate_form.longitude.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+    </div>
+  {% else %}
+    {{ coordinate_form.longitude.as_hidden }}
+    <p class="mb-3"><span class="fw-semibold">Longitude:</span> {{ coordinate_item.longitude }}</p>
+  {% endif %}
+  {% if coordinate_item.latitude is None %}
+    <div class="mb-3">
+      <label class="form-label" for="{{ coordinate_form.latitude.id_for_label }}">Latitude</label>
+      {{ coordinate_form.latitude }}
+      {% for error in coordinate_form.latitude.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+    </div>
+  {% else %}
+    {{ coordinate_form.latitude.as_hidden }}
+    <p class="mb-3"><span class="fw-semibold">Latitude:</span> {{ coordinate_item.latitude }}</p>
+  {% endif %}
+  <a href="https://epsg.io/map#srs=4326&amp;x=10.000992&amp;y=53.551323&amp;z=11&amp;layer=streets" target="_blank" rel="noopener noreferrer">Find coordinates on EPSG.io map &nearr;</a>
+</fieldset>

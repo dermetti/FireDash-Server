@@ -17,6 +17,8 @@ class Hydrant(models.Model):
     department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="hydrants")
     external_identifier = models.CharField(max_length=255, blank=True)
     location = models.PointField(srid=4326)
+    street = models.CharField(max_length=255, blank=True)
+    house_number = models.CharField(max_length=32, blank=True)
     hydrant_type = models.CharField(max_length=128, blank=True)
     flow_information = models.CharField(max_length=255, blank=True)
     diameter_mm = models.PositiveIntegerField(null=True, blank=True)

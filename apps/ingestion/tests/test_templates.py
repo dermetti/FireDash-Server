@@ -21,6 +21,28 @@ def test_structured_templates_are_utf8_and_parse_with_the_real_importers():
     assert parse_personnel(payload=personnel_json, import_format="json")
 
 
+def test_hydrant_address_columns_are_normalized_and_legacy_rows_remain_readable():
+    current = parse_hydrants(
+        payload=(
+            b"external_identifier,longitude,latitude,street,house_number,hydrant_type,diameter_mm,status\n"
+            b"H-1,10.1,53.5,Strasse,7,underground,100,ACTIVE\n"
+        ),
+        import_format="csv",
+    )
+    legacy = parse_hydrants(
+        payload=(
+            b"external_identifier,longitude,latitude,hydrant_type,diameter_mm,status\n"
+            b"H-2,10.2,53.6,underground,100,ACTIVE\n"
+        ),
+        import_format="csv",
+    )
+
+    assert current[0]["street"] == "Strasse"
+    assert current[0]["house_number"] == "7"
+    assert legacy[0]["street"] == ""
+    assert legacy[0]["house_number"] == ""
+
+
 def test_pdf_manifest_templates_have_the_exact_documented_columns():
     fire = (ROOT / "fire-plans-manifest-v1.csv").read_text(encoding="utf-8")
     klgv = (ROOT / "klgv-plans-manifest-v1.csv").read_text(encoding="utf-8")

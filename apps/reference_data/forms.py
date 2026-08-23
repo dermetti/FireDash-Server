@@ -50,6 +50,12 @@ class HydrantFilterForm(forms.Form):
         label="Hydrant type",
         help_text="Partial type match.",
     )
+    street = forms.CharField(
+        max_length=255,
+        required=False,
+        label="Street",
+        help_text="Partial street or house-number match.",
+    )
     diameter_mm = forms.IntegerField(min_value=1, required=False, label="Diameter (mm)")
 
     def __init__(self, *args, **kwargs):
@@ -61,6 +67,8 @@ class HydrantForm(forms.Form):
     external_identifier = forms.CharField(max_length=255, required=False)
     longitude = forms.FloatField(min_value=-180, max_value=180)
     latitude = forms.FloatField(min_value=-90, max_value=90)
+    street = forms.CharField(max_length=255, required=False)
+    house_number = forms.CharField(max_length=32, required=False)
     hydrant_type = forms.CharField(max_length=128, required=False)
     diameter_mm = forms.IntegerField(min_value=1, required=False)
     status = forms.ChoiceField(
@@ -78,6 +86,8 @@ class HydrantEditForm(forms.Form):
     external_identifier = forms.CharField(max_length=255, required=False)
     longitude = forms.FloatField(min_value=-180, max_value=180)
     latitude = forms.FloatField(min_value=-90, max_value=90)
+    street = forms.CharField(max_length=255, required=False)
+    house_number = forms.CharField(max_length=32, required=False)
     hydrant_type = forms.CharField(max_length=128, required=False)
     flow_information = forms.CharField(max_length=255, required=False)
     diameter_mm = forms.IntegerField(min_value=1, required=False)
@@ -147,6 +157,22 @@ class DocumentFilterForm(forms.Form):
         required=False,
         choices=(("", "All statuses"), ("active", "Active"), ("inactive", "Inactive")),
         initial="active",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrap_fields(self)
+
+
+class FirePlanFilterForm(DocumentFilterForm):
+    location_data = forms.ChoiceField(
+        required=False,
+        label="Location data",
+        choices=(
+            ("", "All"),
+            ("complete", "Coordinates complete"),
+            ("missing", "Missing coordinates"),
+        ),
     )
 
     def __init__(self, *args, **kwargs):

@@ -228,10 +228,10 @@ Each Data Hub card should follow the same structure:
 Short one- or two-line description.
 
 Active records     428
-Publication        Current
+Publication        v17 · Current
 Last changed       Today · 14:42
 
-Open module →
+The whole card is the module link.
 ```
 
 Suggested HTML structure:
@@ -255,10 +255,10 @@ Suggested HTML structure:
       <dd class="col-6 text-end">428</dd>
 
       <dt class="col-6">Publication</dt>
-      <dd class="col-6 text-end">Current</dd>
+      <dd class="col-6 text-end">v17 · Current</dd>
     </dl>
 
-    <a class="mt-auto" href="...">Open module →</a>
+    <!-- use the enclosing card as one semantic accessible link -->
   </div>
 </div>
 ```
@@ -271,9 +271,10 @@ Cards may show:
 - icon;
 - short description;
 - active record count;
-- current publication state;
+- authoritative active publication version plus secondary update state;
 - last changed time;
-- `Open module →`.
+- a whole-card, keyboard-accessible navigation link; do not add a separate
+  `Open module →` link or nested controls.
 
 Cards should **not** contain:
 
@@ -285,6 +286,16 @@ Cards should **not** contain:
 - complex filter controls.
 
 Those belong inside the module.
+
+The displayed publication version is always the active/distributed version.
+Queued, building, or failed candidate versions are secondary state only and
+must never be presented as current. Use readable states such as:
+
+- `v17 · Current`;
+- `v17 · Update scheduled`;
+- `v17 · Building update`;
+- `v17 · Update failed`;
+- `Not published` when there is no active publication.
 
 ## 7.3 Data Hub icons
 
@@ -680,10 +691,12 @@ Do not crowd detail pages with every possible related record. Keep histories bou
 
 # 16. Import pages
 
-Imports are domain-specific.
+Imports are domain-specific and each scope owns an explicit user-facing
+template/page while sharing the ingestion wizard services and partials.
 
 A Hydrant import page imports Hydrants.
 A Personnel import page imports Personnel.
+A Station and Vehicle import page imports the paired Station/Vehicle CSV.
 
 Do not use a cross-domain selector.
 
@@ -701,7 +714,11 @@ Preview/review
 Recent batches for this domain
 ```
 
-Import mode belongs in the form, not in CSV rows.
+Import mode belongs in the form, not in CSV rows. Do not render a select when
+there is only one supported format or mode. The staging action is labelled
+`Import and review`, and recent imports are domain-scoped, bounded, timestamped,
+and newest first. Use explicit human-readable page titles; do not expose enum
+identifiers. Hydrant import offers CSV and GeoJSON only.
 
 Explain modes in plain language.
 
@@ -716,7 +733,12 @@ Update provided values while retaining approved existing values where the
 incoming field is intentionally blank.
 ```
 
-Complex import review remains a dedicated page, not a modal.
+Complex import review remains a dedicated page, not a modal. Its initial render
+and HTMX replacements use the same shared review region. Keep Accept and Skip
+at the top; both record staged decisions and advance to the next unresolved
+item. The final item renders the review summary. Invalid corrective input stays
+on the current item with its bound submitted values and field errors visible.
+Canonical records change only through explicit final Apply.
 
 ---
 

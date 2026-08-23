@@ -24,4 +24,5 @@ Format references:
 - [Personnel v1](formats/personnel-v1.md)
 - [Fire Plans v1](formats/fire-plans-v1.md)
 - [KLGV Plans v1](formats/klgv-plans-v1.md)
+- [Stations and Vehicles v1](formats/station-vehicles-v1.md)
 - [PDF bundle v1](formats/pdf-bundle-v1.md)
