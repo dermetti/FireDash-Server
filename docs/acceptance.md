@@ -14,7 +14,7 @@ production-ready. A source implementation is not itself acceptance evidence.
 | Manual publication | Build & publish now and bulk expedite wake the socket after commit without web systemd privilege. |
 | Delivery latency | Request a changed manifest and confirm delivery service handles `202`/ready transition inside client retry expectations. |
 | Maintenance | Verify manifest retention and stale artifact cleanup without private publication credentials. |
-| Tablet lifecycle | Exercise adoption, ordinary lease threshold behavior, Refresh tablet, stale transition, reactivation, revoke/remove. |
+| Tablet lifecycle | Exercise adoption, ordinary lease threshold behavior, inactive empty-manifest sync, stale auto-recovery, revoke/lost/retire. |
 | Manifest/download | Verify ETag/304, protected range transfer, cryptographic ETag preservation, signature, HPKE unwrap, and AES-GCM verification. |
 | Authorisation isolation | Confirm cross-department/station access is denied for portal and tablet paths. |
 | Backup/restore | Verify a backup and complete an isolated restore drill. |
@@ -61,10 +61,6 @@ human-created invitations/state changes; the client does not manufacture them:
 ```powershell
 $RecoveryToken = "<human-created-adoption-token>"
 python .\tools\fake_ipad.py adopt --server $Server --token $RecoveryToken --state-dir ".firedash-fake-ipad-lost-adoption" --app-version 1.2.0 --app-build 25 --simulate-lost-completion-response
-
-# Human makes this installation STALE and supplies a reactivation invitation.
-$ReactivationToken = "<human-created-reactivation-token>"
-python .\tools\fake_ipad.py reactivate --state-dir $State --token $ReactivationToken --simulate-lost-completion-response
 
 # Human replaces or revokes this installation first; status must be allowed and all probes denied.
 python .\tools\fake_ipad.py terminal-matrix --state-dir $State

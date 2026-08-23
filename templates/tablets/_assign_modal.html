@@ -3,8 +3,9 @@
     <div class="modal-content">
       <form method="post" hx-post="{% url 'tablet-assign' department.id tablet.id %}" hx-target="#tablet-action-modal-container" hx-swap="innerHTML">
         {% csrf_token %}
+        {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
         <div class="modal-header">
-          <h5 class="modal-title" id="tabletActionModalLabel">Assign vehicle</h5>
+          <h5 class="modal-title" id="tabletActionModalLabel">{% if vehicle %}Transfer tablet{% else %}Assign vehicle{% endif %}</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
@@ -14,7 +15,7 @@
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="submit" class="btn btn-primary">Assign vehicle</button>
+          <button type="submit" class="btn btn-primary">{% if vehicle %}Transfer tablet{% else %}Assign vehicle{% endif %}</button>
         </div>
       </form>
     </div>

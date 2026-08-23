@@ -20,6 +20,11 @@ urlpatterns = [
         name="tablet-detail",
     ),
     path(
+        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/activity/",
+        views.tablet_api_activity,
+        name="tablet-api-activity",
+    ),
+    path(
         "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/assign/",
         views.tablet_assign,
         name="tablet-assign",
@@ -30,23 +35,43 @@ urlpatterns = [
         name="tablet-adopt",
     ),
     path(
+        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/replace/",
+        views.tablet_replace,
+        name="tablet-replace",
+    ),
+    path(
         "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/adopt-status/<uuid:invitation_id>/",
         views.tablet_adoption_status,
         name="tablet-adoption-status",
     ),
     path(
-        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/reactivate/",
-        views.tablet_reactivate,
-        name="tablet-reactivate",
+        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/activate/",
+        views.tablet_activate,
+        name="tablet-activate",
     ),
     path(
-        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/reactivate-status/<uuid:invitation_id>/",
-        views.tablet_reactivation_status,
-        name="tablet-reactivation-status",
+        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/deactivate/",
+        views.tablet_deactivate,
+        name="tablet-deactivate",
     ),
     path(
-        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/remove/",
-        views.tablet_remove,
-        name="tablet-remove",
+        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/mark-lost/",
+        views.tablet_mark_lost,
+        name="tablet-mark-lost",
+    ),
+    path(
+        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/recover/",
+        views.tablet_recover,
+        name="tablet-recover",
+    ),
+    path(
+        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/retire/",
+        views.tablet_retire,
+        name="tablet-retire",
+    ),
+    path(
+        "departments/<uuid:department_id>/tablets/<uuid:tablet_id>/revoke-installation/",
+        views.tablet_revoke_installation,
+        name="tablet-revoke-installation",
     ),
 ]

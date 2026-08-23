@@ -15,6 +15,7 @@ from apps.publications.manifests import (
     ManifestError,
     authorized_publications,
     canonical_manifest_payload,
+    manifest_publications,
     manifest_state_hash,
     request_dataset_key_grant,
 )
@@ -213,8 +214,8 @@ def _manifest_payload(*, installation, vehicle, publications, grants, generation
             "installation_id": str(installation.id),
             "tablet_id": str(installation.tablet_id),
             "department_id": str(installation.tablet.department_id),
-            "station_id": str(vehicle.station_id),
-            "vehicle_id": str(vehicle.id),
+            "station_id": str(vehicle.station_id) if vehicle is not None else None,
+            "vehicle_id": str(vehicle.id) if vehicle is not None else None,
         },
         "datasets": datasets,
     }
@@ -238,7 +239,7 @@ def build_claimed_signed_manifest(*, manifest_id) -> SignedManifest:
         return manifest
     now = timezone.now()
     try:
-        installation, vehicle, publications = authorized_publications(
+        installation, vehicle, publications = manifest_publications(
             installation=manifest.app_installation, now=now
         )
         grants = [

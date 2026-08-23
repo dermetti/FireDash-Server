@@ -35,7 +35,9 @@ def operational_tablet(db, department_user):
     vehicle = Vehicle.objects.create(
         department=department, station=station, display_name="Engine 1"
     )
-    tablet = Tablet.objects.create(department=department, display_name="Test Tablet")
+    tablet = Tablet.objects.create(
+        department=department, display_name="Test Tablet", status=Tablet.Status.ACTIVE
+    )
     TabletVehicleAssignment.objects.create(
         tablet=tablet, vehicle=vehicle, valid_from=timezone.now(), created_by=user
     )

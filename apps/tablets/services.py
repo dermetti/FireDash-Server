@@ -11,7 +11,7 @@ from uuid import UUID
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 
 from apps.audit.services import record_event
@@ -27,7 +27,6 @@ from apps.tablets.models import (
     AdoptionInvitation,
     AdoptionRequest,
     AppInstallation,
-    ReactivationInvitation,
     Tablet,
 )
 from apps.tablets.versions import AppVersionError, parse_app_build, parse_app_version
@@ -39,6 +38,18 @@ MAX_FAILED_ATTEMPTS = 5
 ADOPTION_PROTOCOL = "tablet-adoption-v1"
 COMPLETION_REPLAY_DURATION = timedelta(minutes=10)
 
+# Authoritative physical asset lifecycle. Each intent-driven service enforces
+# these transitions server-side; the UI only surfaces what is valid.
+#   INACTIVE → ACTIVE, LOST, RETIRED
+#   ACTIVE   → INACTIVE, LOST, RETIRED
+#   LOST     → INACTIVE
+#   RETIRED  → (terminal)
+ASSET_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    Tablet.Status.INACTIVE: (Tablet.Status.ACTIVE, Tablet.Status.LOST, Tablet.Status.RETIRED),
+    Tablet.Status.ACTIVE: (Tablet.Status.INACTIVE, Tablet.Status.LOST, Tablet.Status.RETIRED),
+    Tablet.Status.LOST: (Tablet.Status.INACTIVE,),
+}
+
 
 class TabletError(ValueError):
     def __init__(self, message: str, *, code: str = "invalid_request") -> None:
@@ -49,7 +60,7 @@ class TabletError(ValueError):
 def canonical_protocol_datetime(value: datetime) -> str:
     """Serialize an aware datetime in the canonical protocol UTC form.
 
-    Adoption/reactivation ``expires_at`` is bound into the HPKE ``info`` and
+    Adoption ``expires_at`` is bound into the HPKE ``info`` and
     returned on the wire, so both must use the exact same string. DRF already
     renders UTC datetimes with a ``Z`` suffix, so the canonical form is UTC with
     ``Z`` (never ``+00:00``).
@@ -108,19 +119,57 @@ def verify_credential(*, installation: AppInstallation, credential: str) -> bool
     return hmac.compare_digest(installation.credential_hash, _secret_digest(credential))
 
 
-def _require_operational_tablet(tablet: Tablet) -> None:
+def _has_current_operational_assignment(*, tablet: Tablet, now: datetime) -> bool:
+    return (
+        tablet.vehicle_assignments.filter(
+            valid_from__lte=now,
+            ended_at__isnull=True,
+            vehicle__active=True,
+            vehicle__station__active=True,
+        )
+        .filter(
+            models.Q(valid_until__isnull=True) | models.Q(valid_until__gt=now),
+            vehicle__department_id=tablet.department_id,
+        )
+        .exists()
+    )
+
+
+def _require_operational_tablet(tablet: Tablet, *, now: datetime | None = None) -> None:
+    """Require prerequisites for adoption, which is allowed while the asset is inactive."""
+    now = now or timezone.now()
     if tablet.department.status != tablet.department.Status.ACTIVE or not tablet.active:
         raise TabletError("Tablet department must be active.", code="installation_inactive")
-    if tablet.status in (Tablet.Status.REMOVED, Tablet.Status.LOST, Tablet.Status.RETIRED):
-        raise TabletError("Tablet cannot be adopted or reactivated.", code="installation_inactive")
-    if not tablet.vehicle_assignments.filter(
-        ended_at__isnull=True,
-        valid_until__isnull=True,
-        vehicle__active=True,
-        vehicle__station__active=True,
-    ).exists():
+    if tablet.status not in (Tablet.Status.INACTIVE, Tablet.Status.ACTIVE):
+        raise TabletError("Tablet cannot be adopted.", code="installation_inactive")
+    if not _has_current_operational_assignment(tablet=tablet, now=now):
         raise TabletError(
             "Tablet requires a current active vehicle assignment.", code="installation_inactive"
+        )
+
+
+def _require_active_operational_tablet(*, tablet: Tablet, now: datetime) -> None:
+    """Require the asset state and scope needed for operational authorization."""
+    if tablet.department.status != tablet.department.Status.ACTIVE or not tablet.active:
+        raise TabletError("Tablet department must be active.", code="installation_inactive")
+    if tablet.status != Tablet.Status.ACTIVE:
+        raise TabletError(
+            "Tablet is not active for operational service.", code="installation_inactive"
+        )
+    if not _has_current_operational_assignment(tablet=tablet, now=now):
+        raise TabletError(
+            "Tablet requires a current active vehicle assignment.", code="installation_inactive"
+        )
+
+
+def _require_inactive_control_tablet(*, tablet: Tablet) -> None:
+    """Allow a commissioned-but-inactive asset to synchronize control state only."""
+    if tablet.department.status != tablet.department.Status.ACTIVE or not tablet.active:
+        raise TabletError("Tablet department must be active.", code="installation_inactive")
+    if tablet.status != Tablet.Status.INACTIVE:
+        raise TabletError(
+            "Tablet is not available for control-plane synchronization.",
+            code="installation_inactive",
         )
 
 
@@ -172,17 +221,70 @@ def _renew_lease_if_due(*, installation: AppInstallation, now) -> bool:
     return True
 
 
+def _is_current_installation(*, installation: AppInstallation) -> bool:
+    return (
+        not AppInstallation.objects.filter(
+            tablet_id=installation.tablet_id,
+            status__in=(AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE),
+        )
+        .exclude(pk=installation.pk)
+        .exists()
+    )
+
+
+def _recover_stale_installation(*, installation: AppInstallation, now: datetime) -> None:
+    """Restore a still-current stale installation after durable-credential proof.
+
+    A stale lease is an availability condition, not credential revocation. This
+    deliberately leaves REVOKED and REPLACED credentials outside the recovery
+    path, and requires the physical asset to be actively commissioned again.
+    """
+    if installation.status != AppInstallation.Status.STALE or not _is_current_installation(
+        installation=installation
+    ):
+        raise TabletError("Installation is not active.", code="installation_inactive")
+    _require_active_operational_tablet(tablet=installation.tablet, now=now)
+    installation.status = AppInstallation.Status.ACTIVE
+    installation.authorization_valid_until = lease_target(
+        department=installation.tablet.department, now=now
+    )
+    installation.last_successful_check_in_at = now
+    installation.save(
+        update_fields=("status", "authorization_valid_until", "last_successful_check_in_at")
+    )
+    record_event(
+        action="tablet.stale_auto_recovered",
+        department=installation.tablet.department,
+        target_type="app_installation",
+        target_uuid=installation.id,
+    )
+
+
 @transaction.atomic
 def create_tablet(*, actor, department, display_name: str, asset_number: str = "") -> Tablet:
     require_department_admin(actor, department)
     if not display_name.strip():
         raise TabletError("Tablet display name is required.")
-    tablet = Tablet.objects.create(
-        department=department,
-        display_name=display_name.strip(),
-        asset_number=asset_number.strip(),
-        created_by=actor,
-    )
+    display_name = display_name.strip()
+    asset_number = asset_number.strip()
+    if Tablet.objects.filter(department=department, display_name=display_name).exists():
+        raise TabletError("A tablet with this display name already exists in the department.")
+    if (
+        asset_number
+        and Tablet.objects.filter(department=department, asset_number=asset_number).exists()
+    ):
+        raise TabletError("A tablet with this asset number already exists in the department.")
+    try:
+        tablet = Tablet.objects.create(
+            department=department,
+            display_name=display_name,
+            asset_number=asset_number,
+            created_by=actor,
+        )
+    except IntegrityError as error:
+        raise TabletError(
+            "A tablet with this display name or asset number already exists in the department."
+        ) from error
     record_event(
         action="tablet.created",
         actor_user=actor,
@@ -222,42 +324,35 @@ def create_adoption_invitation(
 
 
 @transaction.atomic
-def create_reactivation_invitation(
-    *, actor, installation: AppInstallation, expires_at=None
-) -> tuple[ReactivationInvitation, str]:
-    installation = (
-        AppInstallation.objects.select_for_update()
-        .select_related("tablet__department")
-        .get(pk=installation.pk)
-    )
-    require_department_admin(actor, installation.tablet.department)
-    _require_operational_tablet(installation.tablet)
-    if installation.status != AppInstallation.Status.STALE:
-        raise TabletError("Only stale installations can be reactivated.")
-    token = _new_token()
-    invitation = ReactivationInvitation.objects.create(
-        app_installation=installation,
-        token_hash=_secret_digest(token),
-        expires_at=expires_at or timezone.now() + INVITATION_DURATION,
-        created_by=actor,
+def initiate_installation_replacement(
+    *, actor, tablet: Tablet, expires_at=None
+) -> tuple[AdoptionInvitation, str]:
+    """Start the administrative Re-provision FireDash workflow.
+
+    This is a thin wrapper over the existing hardened adoption lifecycle. It
+    issues a fresh adoption invitation while the current installation remains
+    authoritative; only a successful new adoption transitions the previous
+    installation to ``REPLACED`` (with grant revocation and purge semantics) in
+    ``_complete_successful_adoption``.
+    """
+    invitation, token = create_adoption_invitation(
+        actor=actor, tablet=tablet, expires_at=expires_at
     )
     record_event(
-        action="tablet.reactivation_invitation_created",
+        action="tablet.installation_replacement_initiated",
         actor_user=actor,
-        department=installation.tablet.department,
-        target_type="reactivation_invitation",
-        target_uuid=invitation.id,
+        department=tablet.department,
+        target_type="tablet",
+        target_uuid=tablet.id,
+        metadata={"adoption_invitation_id": str(invitation.id)},
     )
     return invitation, token
 
 
-def _invitation_for_token(*, token: str, reactivation: bool):
-    model = ReactivationInvitation if reactivation else AdoptionInvitation
+def _invitation_for_token(*, token: str) -> AdoptionInvitation:
     invitation = (
-        model.objects.select_for_update()
-        .select_related(
-            "app_installation__tablet__department" if reactivation else "tablet__department"
-        )
+        AdoptionInvitation.objects.select_for_update()
+        .select_related("tablet__department")
         .filter(token_hash=_secret_digest(token))
         .first()
     )
@@ -280,7 +375,6 @@ def create_adoption_request(
     app_build: int | None = None,
     hpke_public_key: bytes,
     hpke_ciphersuite: str,
-    reactivation: bool = False,
 ) -> ProvisioningChallenge:
     try:
         app_version = str(parse_app_version(app_version))
@@ -290,19 +384,9 @@ def create_adoption_request(
         raise TabletError(str(error), code="invalid_request") from error
     if hpke_ciphersuite != HPKE_CIPHERSUITE:
         raise TabletError("Unsupported HPKE cipher suite.")
-    invitation = _invitation_for_token(token=token, reactivation=reactivation)
-    tablet = invitation.app_installation.tablet if reactivation else invitation.tablet
+    invitation = _invitation_for_token(token=token)
+    tablet = invitation.tablet
     _require_operational_tablet(tablet)
-    if reactivation:
-        installation = invitation.app_installation
-        if (
-            installation_uuid != installation.installation_uuid
-            or hpke_ciphersuite != installation.hpke_ciphersuite
-            or not hmac.compare_digest(bytes(installation.hpke_public_key), hpke_public_key)
-        ):
-            raise TabletError(
-                "Installation identity or HPKE key does not match reactivation invitation."
-            )
     try:
         public_key = parse_p256_public_key(hpke_public_key)
     except HPKEError as error:
@@ -310,8 +394,7 @@ def create_adoption_request(
     fingerprint = public_key_fingerprint(public_key)
     expires_at = timezone.now() + CHALLENGE_DURATION
     request = AdoptionRequest.objects.create(
-        invitation=None if reactivation else invitation,
-        reactivation_invitation=invitation if reactivation else None,
+        invitation=invitation,
         installation_uuid=installation_uuid,
         app_version=app_version[:64],
         app_build=app_build,
@@ -329,7 +412,7 @@ def create_adoption_request(
         tablet.id,
         fingerprint,
         expires_at,
-        "reactivation" if reactivation else "adoption",
+        "adoption",
     )
     nonce = secrets.token_bytes(32)
     expected = hmac.digest(nonce, context.info(), "sha256")
@@ -355,7 +438,7 @@ def _record_failed_attempt(*, request_id: UUID) -> None:
     now = timezone.now()
     request = (
         AdoptionRequest.objects.select_for_update(of=("self",))
-        .select_related("invitation", "reactivation_invitation")
+        .select_related("invitation")
         .get(pk=request_id)
     )
     if request.completed_at:
@@ -366,15 +449,14 @@ def _record_failed_attempt(*, request_id: UUID) -> None:
         failed_attempt_count=models.F("failed_attempt_count") + 1
     )
     request.refresh_from_db(fields=("failed_attempt_count",))
-    invitation = request.reactivation_invitation or request.invitation
+    invitation = request.invitation
     if invitation is not None:
-        inv_model = type(invitation)
-        inv_model.objects.filter(pk=invitation.pk).update(
+        AdoptionInvitation.objects.filter(pk=invitation.pk).update(
             failed_attempt_count=models.F("failed_attempt_count") + 1
         )
         invitation.refresh_from_db(fields=("failed_attempt_count",))
         if invitation.failed_attempt_count >= MAX_FAILED_ATTEMPTS:
-            inv_model.objects.filter(pk=invitation.pk).update(revoked_at=now)
+            AdoptionInvitation.objects.filter(pk=invitation.pk).update(revoked_at=now)
     record_event(
         action="tablet.adoption_proof_failed",
         target_type="adoption_request",
@@ -390,16 +472,14 @@ def _record_failed_attempt(*, request_id: UUID) -> None:
 def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation, str]:
     request = (
         AdoptionRequest.objects.select_for_update(of=("self",))
-        .select_related(
-            "invitation__tablet__department",
-            "reactivation_invitation__app_installation__tablet__department",
-        )
+        .select_related("invitation__tablet__department")
         .get(pk=request_id)
     )
-    invitation = request.reactivation_invitation or request.invitation
+    invitation = request.invitation
     if invitation is not None:
-        lock_model = type(invitation)
-        invitation = lock_model.objects.select_for_update(of=("self",)).get(pk=invitation.pk)
+        invitation = AdoptionInvitation.objects.select_for_update(of=("self",)).get(
+            pk=invitation.pk
+        )
     now = timezone.now()
     if request.completed_at:
         raise TabletError(
@@ -418,80 +498,45 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
         raise TabletError("Invitation has already been used.", code="invitation_invalid")
     if invitation.revoked_at:
         raise TabletError("Invitation has been revoked.", code="invitation_invalid")
-    installation = (
-        request.reactivation_invitation.app_installation
-        if request.reactivation_invitation
-        else None
-    )
-    if installation is not None:
-        tablet = installation.tablet
-    else:
-        adoption_invitation = request.invitation
-        if adoption_invitation is None:
-            raise TabletError("Adoption request has no invitation.")
-        tablet = adoption_invitation.tablet
+    tablet = invitation.tablet
     _require_operational_tablet(tablet)
     credential = generate_credential()
-    if installation is None:
-        AppInstallation.objects.filter(
-            tablet=tablet, status__in=(AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE)
-        ).update(status=AppInstallation.Status.REPLACED)
-        installation = AppInstallation.objects.create(
-            tablet=tablet,
-            installation_uuid=request.installation_uuid,
-            credential_hash=_secret_digest(credential),
-            status=AppInstallation.Status.ACTIVE,
-            app_version=request.app_version,
-            adopted_app_version=request.app_version,
-            app_build=request.app_build,
-            app_version_seen_at=now,
-            hpke_public_key=request.hpke_public_key,
-            hpke_ciphersuite=request.hpke_ciphersuite,
-            hpke_key_fingerprint=request.hpke_public_key_fingerprint,
-            hpke_key_verified_at=now,
-            adopted_at=now,
-            adopted_by=invitation.created_by,
-            authorization_valid_until=lease_target(department=tablet.department, now=now),
-        )
-        from apps.publications.manifests import revoke_dataset_key_grants
+    AppInstallation.objects.filter(
+        tablet=tablet, status__in=(AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE)
+    ).update(status=AppInstallation.Status.REPLACED)
+    installation = AppInstallation.objects.create(
+        tablet=tablet,
+        installation_uuid=request.installation_uuid,
+        credential_hash=_secret_digest(credential),
+        status=AppInstallation.Status.ACTIVE,
+        app_version=request.app_version,
+        adopted_app_version=request.app_version,
+        app_build=request.app_build,
+        app_version_seen_at=now,
+        hpke_public_key=request.hpke_public_key,
+        hpke_ciphersuite=request.hpke_ciphersuite,
+        hpke_key_fingerprint=request.hpke_public_key_fingerprint,
+        hpke_key_verified_at=now,
+        adopted_at=now,
+        adopted_by=invitation.created_by,
+        authorization_valid_until=lease_target(department=tablet.department, now=now),
+    )
+    from apps.publications.manifests import revoke_dataset_key_grants
 
-        for replaced_installation in AppInstallation.objects.filter(
-            tablet=tablet, status=AppInstallation.Status.REPLACED
-        ):
-            revoke_dataset_key_grants(installation=replaced_installation)
-        action = "tablet.adopted"
-    else:
-        if installation.status != AppInstallation.Status.STALE:
-            raise TabletError("Only stale installations can be reactivated.")
-        installation.credential_hash = _secret_digest(credential)
-        installation.status = AppInstallation.Status.ACTIVE
-        installation.app_version = request.app_version
-        installation.app_build = request.app_build
-        installation.app_version_seen_at = now
-        installation.authorization_valid_until = lease_target(department=tablet.department, now=now)
-        installation.reactivated_at = now
-        installation.reactivated_by = invitation.created_by
-        installation.save(
-            update_fields=(
-                "credential_hash",
-                "status",
-                "app_version",
-                "app_build",
-                "app_version_seen_at",
-                "authorization_valid_until",
-                "reactivated_at",
-                "reactivated_by",
-            )
-        )
-        action = "tablet.reactivated"
+    for replaced_installation in AppInstallation.objects.filter(
+        tablet=tablet, status=AppInstallation.Status.REPLACED
+    ):
+        revoke_dataset_key_grants(installation=replaced_installation)
+    action = "tablet.adopted"
     request.completed_at = now
     request.completion_replay_valid_until = now + COMPLETION_REPLAY_DURATION
     request.save(update_fields=("completed_at", "completion_replay_valid_until"))
     invitation.used_at = now
     invitation.save(update_fields=("used_at",))
-    tablet.status = Tablet.Status.ACTIVE
-    tablet.active = True
-    tablet.save(update_fields=("status", "active"))
+    # Adoption establishes a durable installation. It does not silently
+    # commission an INACTIVE physical asset; activation remains an explicit
+    # administrator lifecycle action. Re-provisioning an already ACTIVE asset
+    # therefore preserves its state without changing assignment semantics.
     record_event(
         action=action,
         actor_user=invitation.created_by,
@@ -505,38 +550,18 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
 
 @transaction.atomic
 def _replay_successful_completion(
-    *, request_id: UUID, challenge_response: bytes, reactivation: bool
+    *, request_id: UUID, challenge_response: bytes
 ) -> tuple[AppInstallation, str]:
     request = AdoptionRequest.objects.select_for_update(of=("self",)).get(pk=request_id)
     now = timezone.now()
-    if (request.reactivation_invitation_id is not None) != reactivation:
-        raise TabletError(
-            "Adoption request mode does not match the completion endpoint.", code="invalid_request"
-        )
-    invitation: AdoptionInvitation | ReactivationInvitation
-    installation: AppInstallation
-    if request.reactivation_invitation_id is not None:
-        invitation = ReactivationInvitation.objects.select_for_update(of=("self",)).get(
-            pk=request.reactivation_invitation_id
-        )
-        installation = (
-            AppInstallation.objects.select_for_update(of=("self",))
-            .select_related("tablet__department")
-            .get(pk=invitation.app_installation_id)
-        )
-    elif request.invitation_id is not None:
-        invitation = AdoptionInvitation.objects.select_for_update(of=("self",)).get(
-            pk=request.invitation_id
-        )
-        installation = (
-            AppInstallation.objects.select_for_update(of=("self",))
-            .select_related("tablet__department")
-            .get(installation_uuid=request.installation_uuid)
-        )
-    else:
-        raise TabletError(
-            "Completion recovery is not available.", code="adoption_request_completed"
-        )
+    invitation = AdoptionInvitation.objects.select_for_update(of=("self",)).get(
+        pk=request.invitation_id
+    )
+    installation = (
+        AppInstallation.objects.select_for_update(of=("self",))
+        .select_related("tablet__department")
+        .get(installation_uuid=request.installation_uuid)
+    )
     if (
         request.completed_at is None
         or request.completion_replay_valid_until is None
@@ -559,31 +584,24 @@ def _replay_successful_completion(
         department=installation.tablet.department,
         target_type="app_installation",
         target_uuid=installation.id,
-        metadata={"mode": "reactivation" if reactivation else "adoption"},
+        metadata={"mode": "adoption"},
     )
     return installation, credential
 
 
 def complete_adoption(
-    *, request_id: UUID, challenge_response: bytes, confirmed: bool, reactivation: bool = False
+    *, request_id: UUID, challenge_response: bytes, confirmed: bool
 ) -> tuple[AppInstallation, str]:
     if not confirmed:
         raise TabletError("Adoption was not confirmed.", code="invalid_request")
-    request = AdoptionRequest.objects.select_related(
-        "invitation__tablet__department",
-        "reactivation_invitation__app_installation__tablet__department",
-    ).get(pk=request_id)
-    invitation = request.reactivation_invitation or request.invitation
-    if (request.reactivation_invitation is not None) != reactivation:
-        raise TabletError(
-            "Adoption request mode does not match the completion endpoint.", code="invalid_request"
-        )
-    if invitation is None:
-        raise TabletError("Adoption request has no invitation.", code="invalid_request")
+    request = AdoptionRequest.objects.select_related("invitation__tablet__department").get(
+        pk=request_id
+    )
+    invitation = request.invitation
     now = timezone.now()
     if request.completed_at:
         return _replay_successful_completion(
-            request_id=request_id, challenge_response=challenge_response, reactivation=reactivation
+            request_id=request_id, challenge_response=challenge_response
         )
     if request.expires_at <= now:
         raise TabletError("Adoption request is expired.", code="adoption_request_expired")
@@ -623,15 +641,36 @@ def check_in(
     now = timezone.now()
     if not verify_credential(installation=installation, credential=credential):
         raise PermissionDenied("Installation credential is invalid.")
-    if (
-        installation.status != AppInstallation.Status.ACTIVE
-        or installation.authorization_valid_until <= now
-    ):
-        if installation.status == AppInstallation.Status.ACTIVE:
-            _mark_stale(installation, now)
+    if installation.status not in (AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE):
         raise TabletError("Installation is not active.", code="installation_inactive")
-    _require_operational_tablet(installation.tablet)
-    installation.last_successful_check_in_at = now
+    if installation.tablet.status == Tablet.Status.INACTIVE:
+        # Deactivation does not revoke the durable identity.  It permits a
+        # heartbeat/control-plane check-in but never renews operational lease
+        # authorization or transitions a stale installation back to ACTIVE.
+        _require_inactive_control_tablet(tablet=installation.tablet)
+        telemetry_updated = update_app_telemetry(
+            installation=installation,
+            app_version=app_version,
+            app_build=app_build,
+            build_supplied=build_supplied,
+            now=now,
+        )
+        installation.last_successful_check_in_at = now
+        inactive_fields = ["last_successful_check_in_at"]
+        if telemetry_updated:
+            inactive_fields.extend(("app_version", "app_build", "app_version_seen_at"))
+        installation.save(update_fields=inactive_fields)
+        if (
+            minimum_app_version is not None
+            and parse_app_version(installation.app_version) < minimum_app_version
+        ):
+            installation.compatibility_blocked = True
+        return installation
+    if (
+        installation.status == AppInstallation.Status.ACTIVE
+        and installation.authorization_valid_until <= now
+    ):
+        _mark_stale(installation, now)
     telemetry_updated = update_app_telemetry(
         installation=installation,
         app_version=app_version,
@@ -643,13 +682,18 @@ def check_in(
         minimum_app_version is not None
         and parse_app_version(installation.app_version) < minimum_app_version
     ):
-        fields: list[str] = []
+        compatibility_fields: list[str] = []
         if telemetry_updated:
-            fields.extend(("app_version", "app_build", "app_version_seen_at"))
-        if fields:
-            installation.save(update_fields=fields)
+            compatibility_fields.extend(("app_version", "app_build", "app_version_seen_at"))
+        if compatibility_fields:
+            installation.save(update_fields=compatibility_fields)
         installation.compatibility_blocked = True
         return installation
+    if installation.status == AppInstallation.Status.STALE:
+        _recover_stale_installation(installation=installation, now=now)
+    else:
+        _require_active_operational_tablet(tablet=installation.tablet, now=now)
+        installation.last_successful_check_in_at = now
     if _renew_lease_if_due(installation=installation, now=now):
         fields = ["last_successful_check_in_at", "authorization_valid_until"]
     else:
@@ -729,12 +773,11 @@ def refresh_installation_lease(
 
 
 def _mark_stale(installation: AppInstallation, now) -> None:
+    # Installation health only. The physical Tablet asset state is unchanged:
+    # a Tablet can remain ACTIVE while its current installation is STALE.
     installation.status = AppInstallation.Status.STALE
     installation.stale_at = now
     installation.save(update_fields=("status", "stale_at"))
-    Tablet.objects.filter(pk=installation.tablet_id, status=Tablet.Status.ACTIVE).update(
-        status=Tablet.Status.STALE
-    )
     record_event(
         action="tablet.became_stale",
         department=installation.tablet.department,
@@ -756,44 +799,193 @@ def mark_stale_installations(*, now=None) -> int:
     return len(installations)
 
 
-@transaction.atomic
-def remove_tablet(*, actor, tablet: Tablet, status: str, reason: str) -> Tablet:
-    tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
-    require_department_admin(actor, tablet.department)
-    if status not in (Tablet.Status.REMOVED, Tablet.Status.LOST, Tablet.Status.RETIRED):
-        raise TabletError("Tablet removal status is invalid.")
-    now = timezone.now()
-    tablet.status, tablet.active, tablet.removed_at, tablet.removed_by = status, False, now, actor
-    tablet.save(update_fields=("status", "active", "removed_at", "removed_by"))
+def _require_asset_transition(tablet: Tablet, new_status: str) -> None:
+    if new_status not in ASSET_TRANSITIONS.get(tablet.status, ()):
+        raise TabletError("This lifecycle transition is not available for the tablet.")
+
+
+def _revoke_tablet_installations(*, tablet: Tablet, reason: str, now) -> None:
+    """Revoke current installations and their data access for a withdrawn tablet.
+
+    Revocation cuts operational authorization and dataset-key grants while the
+    ``purge_provisioned_data`` directive remains reachable through the existing
+    narrow post-revocation ``/api/v1/tablet/status`` path.
+    """
     AppInstallation.objects.filter(
         tablet=tablet, status__in=(AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE)
     ).update(status=AppInstallation.Status.REVOKED, revoked_at=now, revocation_reason=reason[:512])
     AdoptionRequest.objects.filter(
-        models.Q(invitation__tablet=tablet)
-        | models.Q(reactivation_invitation__app_installation__tablet=tablet),
+        invitation__tablet=tablet,
         completed_at__isnull=False,
         completion_replay_valid_until__gt=now,
         completion_replay_invalidated_at__isnull=True,
     ).update(completion_replay_invalidated_at=now)
     from apps.publications.manifests import revoke_dataset_key_grants
 
-    revoked_installations = AppInstallation.objects.filter(
+    for installation in AppInstallation.objects.filter(
         tablet=tablet, status=AppInstallation.Status.REVOKED
-    )
-    for installation in revoked_installations:
+    ):
         revoke_dataset_key_grants(installation=installation)
     AdoptionInvitation.objects.filter(
         tablet=tablet, used_at__isnull=True, revoked_at__isnull=True
     ).update(revoked_at=now)
-    ReactivationInvitation.objects.filter(
-        app_installation__tablet=tablet, used_at__isnull=True, revoked_at__isnull=True
-    ).update(revoked_at=now)
+
+
+@transaction.atomic
+def activate_tablet(*, actor, tablet: Tablet) -> Tablet:
+    """INACTIVE → ACTIVE: commission a known asset back into operational service."""
+    tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
+    require_department_admin(actor, tablet.department)
+    _require_asset_transition(tablet, Tablet.Status.ACTIVE)
+    now = timezone.now()
+    if tablet.department.status != tablet.department.Status.ACTIVE or not tablet.active:
+        raise TabletError("Tablet department must be active before activation.")
+    installation = (
+        AppInstallation.objects.select_for_update()
+        .filter(
+            tablet=tablet,
+            status__in=(AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE),
+        )
+        .first()
+    )
+    if installation is None:
+        raise TabletError("Tablet requires a current installation before it can be activated.")
+    if not _has_current_operational_assignment(tablet=tablet, now=now):
+        raise TabletError("Tablet requires a current active vehicle assignment before activation.")
+    tablet.status = Tablet.Status.ACTIVE
+    tablet.active = True
+    tablet.save(update_fields=("status", "active"))
     record_event(
-        action="tablet.removed",
+        action="tablet.activated",
         actor_user=actor,
         department=tablet.department,
         target_type="tablet",
         target_uuid=tablet.id,
-        metadata={"status": status},
     )
     return tablet
+
+
+@transaction.atomic
+def deactivate_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
+    """ACTIVE → INACTIVE: withdraw operational access without revoking identity."""
+    tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
+    require_department_admin(actor, tablet.department)
+    _require_asset_transition(tablet, Tablet.Status.INACTIVE)
+    from apps.publications.manifests import revoke_dataset_key_grants
+
+    for installation in AppInstallation.objects.filter(
+        tablet=tablet, status__in=(AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE)
+    ):
+        revoke_dataset_key_grants(installation=installation)
+        # A formerly operational signed manifest must not be reused after the
+        # asset is recommissioned: its grants were intentionally invalidated.
+        from apps.publications.models import SignedManifest
+
+        SignedManifest.objects.filter(app_installation=installation).update(
+            status=SignedManifest.Status.OBSOLETE,
+            completed_at=timezone.now(),
+            error_message="Tablet asset was deactivated.",
+        )
+    tablet.status = Tablet.Status.INACTIVE
+    tablet.active = True
+    tablet.save(update_fields=("status", "active"))
+    record_event(
+        action="tablet.deactivated",
+        actor_user=actor,
+        department=tablet.department,
+        target_type="tablet",
+        target_uuid=tablet.id,
+    )
+    return tablet
+
+
+@transaction.atomic
+def mark_tablet_lost(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
+    """ACTIVE/INACTIVE → LOST: hardware unaccounted for; revoke installation access."""
+    tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
+    require_department_admin(actor, tablet.department)
+    _require_asset_transition(tablet, Tablet.Status.LOST)
+    now = timezone.now()
+    _revoke_tablet_installations(tablet=tablet, reason=reason, now=now)
+    tablet.status = Tablet.Status.LOST
+    tablet.active = False
+    tablet.save(update_fields=("status", "active"))
+    record_event(
+        action="tablet.lost",
+        actor_user=actor,
+        department=tablet.department,
+        target_type="tablet",
+        target_uuid=tablet.id,
+    )
+    return tablet
+
+
+@transaction.atomic
+def recover_tablet(*, actor, tablet: Tablet) -> Tablet:
+    """LOST → INACTIVE: a found tablet returns to stock/inspection, never directly ACTIVE."""
+    tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
+    require_department_admin(actor, tablet.department)
+    _require_asset_transition(tablet, Tablet.Status.INACTIVE)
+    tablet.status = Tablet.Status.INACTIVE
+    tablet.active = True
+    tablet.save(update_fields=("status", "active"))
+    record_event(
+        action="tablet.recovered",
+        actor_user=actor,
+        department=tablet.department,
+        target_type="tablet",
+        target_uuid=tablet.id,
+    )
+    return tablet
+
+
+@transaction.atomic
+def retire_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
+    """ACTIVE/INACTIVE → RETIRED: permanent withdrawal; revoke installation access."""
+    tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
+    require_department_admin(actor, tablet.department)
+    _require_asset_transition(tablet, Tablet.Status.RETIRED)
+    now = timezone.now()
+    _revoke_tablet_installations(tablet=tablet, reason=reason, now=now)
+    tablet.status = Tablet.Status.RETIRED
+    tablet.active = False
+    tablet.save(update_fields=("status", "active"))
+    record_event(
+        action="tablet.retired",
+        actor_user=actor,
+        department=tablet.department,
+        target_type="tablet",
+        target_uuid=tablet.id,
+    )
+    return tablet
+
+
+@transaction.atomic
+def revoke_installation(
+    *, actor, installation: AppInstallation, reason: str = ""
+) -> AppInstallation:
+    """Revoke one current installation's authorization without changing the Tablet asset."""
+    installation = (
+        AppInstallation.objects.select_for_update()
+        .select_related("tablet__department")
+        .get(pk=installation.pk)
+    )
+    require_department_admin(actor, installation.tablet.department)
+    if installation.status not in (AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE):
+        raise TabletError("Only a current installation can be revoked.")
+    now = timezone.now()
+    installation.status = AppInstallation.Status.REVOKED
+    installation.revoked_at = now
+    installation.revocation_reason = reason[:512]
+    installation.save(update_fields=("status", "revoked_at", "revocation_reason"))
+    from apps.publications.manifests import revoke_dataset_key_grants
+
+    revoke_dataset_key_grants(installation=installation)
+    record_event(
+        action="tablet.installation_revoked",
+        actor_user=actor,
+        department=installation.tablet.department,
+        target_type="app_installation",
+        target_uuid=installation.id,
+    )
+    return installation

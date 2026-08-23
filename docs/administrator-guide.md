@@ -107,22 +107,86 @@ recovery action to a known-good historical publication.
 
 ## Tablets
 
-Create a tablet and issue an adoption invitation. The iPad completes the
-adoption protocol and receives an installation credential; do not record that
-credential in tickets or audit notes. Departments set the maximum offline
-lease (default seven days, minimum three days).
+A Tablet is the physical organisational asset (for example `FD-014`). It is
+identified by its display name and optional asset number, and its **asset
+state** is one of **Active**, **Inactive**, **Lost**, or **Retired**:
+
+- **Inactive** — a known asset not currently in service (newly registered,
+  stock/spare, temporarily withdrawn, or a recovered Lost tablet awaiting
+  inspection). A valid current installation may remain attached and can sync a
+  normal signed **empty** manifest so the app removes reference-data scope, but
+  it cannot access operational datasets until the asset is activated again.
+- **Active** — intentionally in operational service.
+- **Lost** — the hardware cannot currently be accounted for. Recovery returns a
+  Lost tablet to **Inactive**, never directly to Active.
+- **Retired** — permanently withdrawn from service. Retired is normally terminal.
+
+The Tablet asset is separate from its **installation** (the FireDash app
+provisioned onto the device) and from installation **health** (Healthy or
+Stale). A Tablet can be Active while its current installation is Stale. Assign
+the tablet to an operational vehicle and issue an adoption invitation; the iPad
+completes the adoption protocol and receives an installation credential. Do not
+record that credential in tickets or audit notes. Then explicitly activate the
+Tablet when it is ready for service. Departments set the maximum offline lease
+(default seven days, minimum three days).
 
 An ordinary successful check-in always records activity but renews the lease
-only when 48 hours or less remain. The iPad's **Refresh tablet** action calls
+only when 48 hours or less remain. A current Stale installation automatically
+returns to Active when it reconnects with its durable credential and the Tablet
+is Active with a valid assignment. The iPad's **Refresh tablet** action calls
 the authenticated refresh endpoint to top up an active, authorised tablet to
 the department maximum, then performs its existing configuration, manifest,
 and conditional-download synchronisation. Refresh cannot reactivate stale,
-expired, replaced, revoked, removed, or inactive installations.
+expired, replaced, revoked, or inactive installations.
 
-Use the existing reactivation workflow for stale tablets. Revoke or remove a
-lost tablet promptly; this prevents future use of its credential and data
-delivery. Review the audit trail for these actions. For protocol details, see
-[tablet-api.md](tablet-api.md).
+## Transfer a tablet
+
+Use **Transfer** when the physical Tablet stays the same but its station or
+vehicle assignment changes. A transfer changes assignment and therefore the
+server-derived data scope, but it does **not** create a new installation:
+
+    same Tablet
+    same AppInstallation
+    new assignment
+    new server-derived data scope
+
+Use **Assign** when there is currently no assignment. Department administrators
+can transfer a tablet anywhere within the department; station administrators can
+only transfer between vehicles in their own station.
+
+## Re-provision FireDash
+
+Use **Re-provision FireDash** when the **same physical tablet** needs a fresh
+FireDash installation — for example after a factory reset, an app reinstall, or
+lost/corrupted installation credentials. It does **not** change assignment and
+must not be used to swap one physical iPad for another:
+
+    same Tablet
+    same assignment
+    new AppInstallation
+
+The re-provisioning workflow reuses the hardened adoption lifecycle:
+
+1. An administrator chooses **Re-provision FireDash** and reauthenticates.
+2. A fresh, one-time adoption invitation is created for the logical tablet.
+3. The currently active installation **stays active and operational** while the
+   invitation remains unused.
+4. The new installation completes adoption with the invitation.
+5. A successful adoption activates the new installation and marks the previous
+   installation **REPLACED**. It preserves the physical Tablet asset state.
+6. The previous installation's grants are revoked, and it receives
+   `purge_provisioned_data=true` on its next status request.
+
+There is never more than one active installation for a logical tablet. If the
+invitation expires before adoption completes, the working tablet is unaffected;
+generate a new invitation if needed.
+
+## Physical replacement
+
+A different physical iPad is a different Tablet asset. Retire the old Tablet and
+create a new Tablet asset for the new device, then assign/transfer and provision
+it as appropriate. Do **not** use **Re-provision FireDash** to overwrite a
+physical asset's identity.
 
 System administrators can set the minimum supported FireDash application
 version for API v1 from **API Compatibility** on the system dashboard. Leave

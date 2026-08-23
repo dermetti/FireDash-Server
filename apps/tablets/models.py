@@ -10,20 +10,21 @@ from apps.tablets.versions import validate_app_version
 
 class Tablet(models.Model):
     class Status(models.TextChoices):
-        PENDING = "PENDING", "Pending"
+        INACTIVE = "INACTIVE", "Inactive"
         ACTIVE = "ACTIVE", "Active"
-        STALE = "STALE", "Stale"
-        REMOVED = "REMOVED", "Removed"
         LOST = "LOST", "Lost"
         RETIRED = "RETIRED", "Retired"
+
+    # Physical asset states that participate in the normal operational lifecycle.
+    OPERATIONAL_STATES = (Status.INACTIVE, Status.ACTIVE, Status.LOST)
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     department = models.ForeignKey(
         Department, on_delete=models.PROTECT, related_name="tablet_identities"
     )
     asset_number = models.CharField(max_length=128, blank=True)
-    display_name = models.CharField(max_length=255, default="")
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    display_name = models.CharField(max_length=255)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.INACTIVE)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
@@ -33,14 +34,23 @@ class Tablet(models.Model):
         on_delete=models.PROTECT,
         related_name="created_tablets",
     )
-    removed_at = models.DateTimeField(null=True, blank=True)
-    removed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="removed_tablets",
-    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(status__in=("INACTIVE", "ACTIVE", "LOST", "RETIRED")),
+                name="tablet_status_is_current_asset_state",
+            ),
+            models.UniqueConstraint(
+                fields=("department", "display_name"),
+                name="tablet_display_name_unique_per_department",
+            ),
+            models.UniqueConstraint(
+                fields=("department", "asset_number"),
+                condition=~Q(asset_number=""),
+                name="tablet_asset_number_unique_per_department",
+            ),
+        ]
 
 
 class AppInstallation(models.Model):
@@ -77,14 +87,6 @@ class AppInstallation(models.Model):
     last_successful_check_in_at = models.DateTimeField(null=True, blank=True)
     authorization_valid_until = models.DateTimeField()
     stale_at = models.DateTimeField(null=True, blank=True)
-    reactivated_at = models.DateTimeField(null=True, blank=True)
-    reactivated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="reactivated_app_installations",
-    )
     revoked_at = models.DateTimeField(null=True, blank=True)
     revocation_reason = models.CharField(max_length=512, blank=True)
 
@@ -116,35 +118,10 @@ class AdoptionInvitation(models.Model):
     failed_attempt_count = models.PositiveSmallIntegerField(default=0)
 
 
-class ReactivationInvitation(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    app_installation = models.ForeignKey(
-        AppInstallation, on_delete=models.PROTECT, related_name="reactivation_invitations"
-    )
-    token_hash = models.CharField(max_length=64, unique=True)
-    expires_at = models.DateTimeField()
-    created_at = models.DateTimeField(auto_now_add=True)
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="created_reactivation_invitations",
-    )
-    used_at = models.DateTimeField(null=True, blank=True)
-    revoked_at = models.DateTimeField(null=True, blank=True)
-    failed_attempt_count = models.PositiveSmallIntegerField(default=0)
-
-
 class AdoptionRequest(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     invitation = models.ForeignKey(
-        AdoptionInvitation, null=True, blank=True, on_delete=models.PROTECT, related_name="requests"
-    )
-    reactivation_invitation = models.ForeignKey(
-        ReactivationInvitation,
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="requests",
+        AdoptionInvitation, on_delete=models.PROTECT, related_name="requests"
     )
     installation_uuid = models.UUIDField()
     app_version = models.CharField(max_length=64, validators=[validate_app_version])
@@ -162,13 +139,29 @@ class AdoptionRequest(models.Model):
     completion_replay_invalidated_at = models.DateTimeField(null=True, blank=True)
     failed_attempt_count = models.PositiveSmallIntegerField(default=0)
 
+
+class TabletApiActivity(models.Model):
+    """Bounded, append-only diagnostic record of authenticated Tablet API requests.
+
+    One row per resolved, authenticated installation request. Stores only safe
+    metadata; never query strings, tokens, headers, bodies, or crypto material.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    app_installation = models.ForeignKey(
+        AppInstallation, on_delete=models.CASCADE, related_name="api_activity"
+    )
+    occurred_at = models.DateTimeField(db_index=True)
+    method = models.CharField(max_length=8)
+    path = models.CharField(max_length=256)
+    status_code = models.PositiveSmallIntegerField()
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+
     class Meta:
-        constraints = [
-            models.CheckConstraint(
-                condition=(
-                    Q(invitation__isnull=False, reactivation_invitation__isnull=True)
-                    | Q(invitation__isnull=True, reactivation_invitation__isnull=False)
-                ),
-                name="adoption_request_has_one_invitation",
+        ordering = ("-occurred_at",)
+        indexes = [
+            models.Index(
+                fields=("app_installation", "-occurred_at"),
+                name="tablet_api_act_install_idx",
             )
         ]

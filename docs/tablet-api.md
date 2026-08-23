@@ -20,7 +20,7 @@ whitespace, malformed padding, PEM, DER, and JWK wrappers. The opaque
 installation credential is URL-safe and must be used verbatim.
 
 Timestamps are ISO 8601/RFC 3339 strings. In normal API data, both `Z` and
-`+00:00` represent UTC. Adoption/reactivation `expires_at` is specifically
+`+00:00` represent UTC. Adoption `expires_at` is specifically
 canonical UTC with `Z`, is byte-bound into HPKE `info`, and must be preserved
 as the exact returned string. Manifest timestamp strings are signed and must
 not be normalized before verification.
@@ -51,14 +51,12 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 | --- | --- | --- | --- | --- | --- |
 | `POST /api/v1/adoption/preview` | None | preview JSON | 201 challenge | 400, 403 | Valid unused adoption invitation; operational tablet |
 | `POST /api/v1/adoption/complete` | None | completion JSON | 201 credential | 400, 403 | Matching unexpired challenge/invitation |
-| `POST /api/v1/tablet/reactivation/preview` | None | preview JSON | 201 challenge | 400, 403 | Valid invitation for STALE installation |
-| `POST /api/v1/tablet/reactivation/complete` | Existing Bearer on first completion; exact proof-only recovery replay for 10 minutes | completion JSON | 201 rotated credential | 400, 403 | Same STALE installation/request |
-| `POST /api/v1/tablet/check-in` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
+| `POST /api/v1/tablet/check-in` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE operational; eligible current STALE recovers automatically; INACTIVE records control-plane contact without operational renewal |
 | `POST /api/v1/tablet/refresh` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
 | `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
-| `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403 | ACTIVE, unexpired, authorised |
-| `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | Current authorised installation; exact configured public key version |
-| `GET /api/v1/tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403 | ACTIVE, unexpired, authorised |
+| `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403 | ACTIVE or INACTIVE current installation with a valid assignment |
+| `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | ACTIVE or INACTIVE current installation; exact configured public key version |
+| `GET /api/v1/tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403 | ACTIVE returns assigned publications; INACTIVE returns a signed empty dataset list |
 | `GET /api/v1/tablet/datasets/{publication_id}/download` | Bearer | No body; `If-None-Match` optional | 200 encrypted bytes | 304, 403, 404 | ACTIVE, unexpired, authorised and manifest-listed |
 
 304 has no body. A 202 manifest is a problem object with `Retry-After: 5`.
@@ -71,7 +69,7 @@ verification requires the complete body.
 
 FireDash app versions are exactly numeric `MAJOR.MINOR.PATCH`; compare the
 three components numerically. `app_build` is a positive binary diagnostic
-number and is never a compatibility axis. Adoption and reactivation preview
+number and is never a compatibility axis. Adoption preview
 require `app_version` and accept optional `app_build`. Check-in and Refresh
 may send:
 
@@ -116,21 +114,25 @@ adoption. Completion returns `credential` exactly once. Store it in Keychain
 with device-only access appropriate to the application; never log, display,
 back up, or place it in a URL.
 
-New adoption replaces prior ACTIVE/STALE installations for the tablet.
-Reactivation retains the installation but rotates its credential; atomically
-replace the old Keychain value. A REPLACED credential is accepted only by the
+New adoption replaces prior ACTIVE/STALE installations for the tablet. A STALE
+installation normally retains its durable credential and recovers through an
+eligible check-in; it does not need an administrator invitation. A REPLACED
+credential is accepted only by the
 terminal status probe and no operational endpoint.
 
-| State | Bearer authenticates | Status | Check-in / Refresh | Config / signing keys / manifest / download | Reactivation | Purge |
-| --- | --- | --- | --- | --- | --- | --- |
-| ACTIVE and unexpired | Yes | 200 | 200 | Allowed when tablet, vehicle, department, features are authorised | No | No |
-| ACTIVE but expired | Yes until stale transition | 200 with deadline | 403; check-in marks stale | 403 | Requires stale invitation | Offline lease expired |
-| STALE | Yes | 200 | 403 | 403 | Preview with invitation; completion with same Bearer | No new data |
-| REVOKED | Yes | 200, `purge_provisioned_data: true` | 403 | 403 | No | Purge all provisioned material |
-| REPLACED | Status only | 200, `purge_provisioned_data: true` | 403 | 403 | No | Purge all provisioned material |
+| State | Bearer authenticates | Status | Check-in / Refresh | Config / signing keys / manifest / download | Purge |
+| --- | --- | --- | --- | --- | --- |
+| ACTIVE and unexpired | Yes | 200 | 200 | Allowed when tablet, vehicle, department, features are authorised | No |
+| ACTIVE but expired | Yes until stale transition | 200 with deadline | Check-in may mark stale then recover atomically if eligible; Refresh is 403 | 403 until recovery | Offline lease expired |
+| STALE | Yes | 200 | Eligible check-in restores ACTIVE and lease; Refresh is 403 | 403 until recovery | No new data |
+| INACTIVE | Yes | 200 | Check-in records control-plane contact only; Refresh is 403 | Configuration/signing key/normal signed empty manifest allowed; dataset download is 403 | No new purge directive |
+| REVOKED | Yes | 200, `purge_provisioned_data: true` | 403 | 403 | Purge all provisioned material |
+| REPLACED | Status only | 200, `purge_provisioned_data: true` | 403 | 403 | Purge all provisioned material |
 
-Removed, lost, retired, inactive, or otherwise unauthorised tablets cannot
-adopt, reactivate, check in, refresh, configure, obtain a manifest, or download.
+Lost, retired, or otherwise unauthorised tablets cannot check in, refresh,
+configure, obtain a manifest, or download. An inactive tablet may be adopted
+or re-provisioned while it has a valid assignment, but its asset state remains
+inactive until an administrator explicitly activates it.
 
 `GET /api/v1/tablet/status` is the safe state probe for any recognized
 credential, including a terminal REPLACED credential:
@@ -159,9 +161,8 @@ PEM, DER/SPKI, JWK, another curve, scalar bytes, and any other length are
 rejected. Its fingerprint is lower-case hexadecimal
 `SHA-256(uncompressed-point-bytes)`.
 
-Retain the private P-256 key for the installation lifetime. Reactivation
-requires exactly the existing installation UUID, suite, and public key, which
-requires the corresponding private key to open the challenge and later grants.
+Retain the private P-256 key for the installation lifetime. The corresponding
+private key is required to open adoption challenges and later grants.
 The protocol does not establish Secure Enclave compatibility; use a key-storage
 mechanism only if it can provide this exact P-256/HPKE representation.
 
@@ -225,33 +226,17 @@ for new provisioning, but that consumption does not prevent the exact bounded
 lost-response recovery replay. Administrative replay invalidation, invitation
 revocation, and tablet removal also block recovery.
 
-## Reactivation: byte-exact flow
-
-An administrator creates an invitation only for a STALE installation.
-`POST /api/v1/tablet/reactivation/preview` is unauthenticated but requires that token.
-Its request is the adoption preview request with the existing installation UUID,
-exact stored public key, and same suite. Its response has
-`"mode":"reactivation"` and `"protocol":"tablet-adoption-v1"`.
-
-Construct/decrypt the challenge exactly as above, changing only `mode` in
-canonical HPKE info to `reactivation`. Complete with the same completion JSON
-at `POST /api/v1/tablet/reactivation/complete` and the existing STALE installation
-Bearer credential. The server binds the request to that credential's
-installation. Success is the same 201 object as adoption completion, with a
-rotated one-time credential and a fresh department lease. ACTIVE, REVOKED,
-REPLACED, removed, lost, retired, and inactive tablets cannot use reactivation
-as a shortcut. The confirmation, expiry, invalid-proof counter, five-failure
-revocation, used/revoked invitation, and replay rules above apply equally to
-reactivation requests.
-
 ## Lease, check-in, Refresh tablet
 
 Department lease policy is server-owned: default seven days, minimum three.
 
 `POST /api/v1/tablet/check-in` has no body. It always records activity. With more
 than 48 hours remaining it leaves `authorization_valid_until` unchanged. With
-48 hours or less it sets the deadline to `server_time + department lease`.
-It cannot revive an expired/stale installation.
+48 hours or less it sets the deadline to `server_time + department lease`. A
+current STALE installation with a valid durable credential automatically becomes
+ACTIVE and receives a fresh department lease when the physical Tablet is ACTIVE,
+its department and assignment are valid, and no terminal installation state
+applies. It never recovers REVOKED or REPLACED credentials.
 
 `POST /api/v1/tablet/refresh` is the firefighter's explicit user action and has no
 body. For an ACTIVE, unexpired, operational installation it records activity
@@ -423,7 +408,7 @@ usable, but prompt complete purge is the required client behavior.
 | Manifest pending | Server returned 202 | Retain cache; wait at least `Retry-After` and never retry earlier, then retry only manifest. |
 | Manifest ready | Verified 200 or trusted 304 | Use only fully verified data until deadline. |
 | Offline-valid | Network unavailable before deadline | Use prior verified data and elapsed server-time anchor. |
-| Stale / reactivation required | Deadline expired or server says STALE | Do not attempt check-in/refresh recovery; use stale invitation flow. |
+| Stale / automatic recovery | Deadline expired or server says STALE | Stop offline use; retry normal check-in when connected. On success, resume only after normal configuration/manifest verification. |
 | Revoked / replaced | Server denies use or asks purge | Purge local provisioned material; do not retry as active. |
 
 For offline authorization, anchor the last verified server time to a monotonic
@@ -444,7 +429,7 @@ infer a lease renewal.
 | 202 manifest | Retain cache; wait at least the supplied `Retry-After` duration and never retry earlier before manifest retry. This remains correct when iOS resumes later from suspension/backgrounding. |
 | 304 | No body: retain the corresponding verified cache and ETag. |
 | 400 | Treat as client/protocol error; do not blind-retry malformed canonical crypto input. |
-| 401 or 403 | The API does not promise a stable authentication/authorisation distinction. If status can be fetched, use it to choose stale reactivation versus revoked/replaced purge; otherwise enter credential recovery and do not assume cached authority remains valid. |
+| 401 or 403 | The API does not promise a stable authentication/authorisation distinction. If status can be fetched, use it to distinguish terminal revoked/replaced purge from an eligible stale check-in retry; otherwise enter credential recovery and do not assume cached authority remains valid. |
 | 404 | Treat unknown signing key/resource/publication as a safe protocol/state error; do not substitute another key or dataset. |
 | 409 / 429 | Not currently a tablet API contract; if received, do not infer special semantics unless a future server contract defines them. |
 | Invalid Base64, point, JSON canonicalization, or UUID/scope | Reject the candidate without cache replacement. |
@@ -461,7 +446,7 @@ malformed payload, or a cryptographic verification failure.
 - Put credentials and the private-key reference in Keychain with the least
   exportable/accessibility setting compatible with operational requirements.
 - Use P-256 public bytes in uncompressed X9.62 form. Validate the 65-byte
-  shape before Base64 encoding and retain the same key for reactivation.
+  shape before Base64 encoding and retain the private key for the installation lifetime.
 - Standard Base64, timestamp bytes, field names, sorted keys, separators, and
   ASCII/UTF-8 encodings are protocol data. Generic JSON reserialization that
   changes any of them will break verification.
@@ -700,7 +685,7 @@ Use these deterministic materials when building Swift interoperability tests:
 
 | Protocol area | Implementation source | Tests / fixture |
 | --- | --- | --- |
-| Adoption/reactivation canonical info and proof | `apps/tablets/services.py`, `apps/publications/hpke.py` | `apps/tablets/tests/test_provisioning_crypto.py`, especially `test_adoption_context_has_a_frozen_mode_bound_canonical_encoding` |
+| Adoption canonical info and proof | `apps/tablets/services.py`, `apps/publications/hpke.py` | `apps/tablets/tests/test_provisioning_crypto.py`, especially `test_adoption_context_has_a_frozen_mode_bound_canonical_encoding` |
 | HPKE grant info and RFC 9180 vector | `apps/publications/hpke.py` | `apps/publications/tests/fixtures/hpke_contract.json`, `apps/publications/tests/test_hpke.py` |
 | Complete manifest signed bytes, signature, and ETag | `apps/publications/manifests.py`, `apps/publications/worker_grants.py` | `apps/publications/tests/fixtures/complete_manifest_contract.json`, `apps/publications/tests/test_manifest_contract.py` |
 | Artifact signature and AES-GCM metadata | `apps/publications/artifacts.py` | `apps/publications/tests/fixtures/artifact_signature_contract.json`, `apps/publications/tests/test_artifacts.py` |

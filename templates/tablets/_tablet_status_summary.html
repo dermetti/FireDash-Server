@@ -4,36 +4,32 @@
      hx-swap="outerHTML">
   <div class="card shadow-sm mb-4">
     <div class="card-body">
-      <h2 class="h6 text-body-secondary mb-3">Tablet status
+      <h2 class="h6 text-body-secondary mb-3">Tablet assets
         <button type="button" class="btn btn-link btn-sm p-0 align-baseline text-decoration-none"
-                aria-label="About tablet status"
-                data-bs-toggle="popover" data-bs-trigger="focus" title="Tablet status"
-                data-bs-content="Counts of registered tablets by their current lifecycle state.">?</button>
+                aria-label="About tablet assets"
+                data-bs-toggle="popover" data-bs-trigger="focus" title="Tablet assets"
+                data-bs-content="Counts of registered physical tablets by their current asset state.">?</button>
       </h2>
-      <div class="row g-3 text-center">
-        <div class="col-6 col-sm-3">
-          <div class="fs-3 fw-semibold">{{ counts.total }}</div>
-          <div class="text-body-secondary small">Total tablets</div>
+      <div class="d-flex gap-4 flex-wrap">
+        <div>
+          <div class="fs-5 fw-semibold">{{ counts.operational }}</div>
+          <div class="text-body-secondary small">Current tablets</div>
         </div>
-        <div class="col-6 col-sm-3">
-          <div class="fs-3 fw-semibold text-success">{{ counts.active }}</div>
+        <div>
+          <div class="fs-5 fw-semibold text-success">{{ counts.active }}</div>
           <div class="text-body-secondary small">Active</div>
         </div>
-        <div class="col-6 col-sm-3">
-          <div class="fs-3 fw-semibold text-warning">{{ counts.pending }}</div>
-          <div class="text-body-secondary small">Pending adoption</div>
+        <div>
+          <div class="fs-5 fw-semibold text-secondary">{{ counts.inactive }}</div>
+          <div class="text-body-secondary small">Inactive</div>
         </div>
-        <div class="col-6 col-sm-3">
-          <div class="fs-3 fw-semibold text-danger">{{ counts.stale }}</div>
-          <div class="text-body-secondary small">Stale
-            <button type="button" class="btn btn-link btn-sm p-0 align-baseline text-decoration-none"
-                    aria-label="About stale tablets"
-                    data-bs-toggle="popover" data-bs-trigger="focus" title="Stale tablet"
-                    data-bs-content="A tablet becomes stale when its active installation fails to renew its server authorization before the lease expires.">?</button>
-          </div>
+        <div>
+          <div class="fs-5 fw-semibold text-danger">{{ counts.lost }}</div>
+          <div class="text-body-secondary small">Lost</div>
         </div>
       </div>
       <div class="text-body-secondary small mt-3">
+        {{ counts.retired }} retired &middot;
         Last updated {{ last_updated|date:"H:i:s" }} &middot; Updates automatically
       </div>
     </div>

@@ -11,8 +11,15 @@ def _department():
     return SimpleNamespace(id=uuid.uuid4())
 
 
-def _counts(total=1, active=0, pending=1, stale=0):
-    return SimpleNamespace(total=total, active=active, pending=pending, stale=stale)
+def _counts(total=1, operational=1, active=0, inactive=1, lost=0, retired=0):
+    return SimpleNamespace(
+        total=total,
+        operational=operational,
+        active=active,
+        inactive=inactive,
+        lost=lost,
+        retired=retired,
+    )
 
 
 def _render_status_summary():
@@ -28,10 +35,22 @@ def _tablet(status="ACTIVE"):
         display_name="Command iPad",
         asset_number="TAB-0042",
         status=status,
+        installation_status=None,
         current_assignment=[],
+        current_installations=[],
         last_seen=None,
         active=True,
         has_open_vehicle=False,
+    )
+
+
+def _page():
+    return SimpleNamespace(
+        start_index=1,
+        end_index=1,
+        has_other_pages=False,
+        number=1,
+        paginator=SimpleNamespace(num_pages=1),
     )
 
 
@@ -42,6 +61,11 @@ def _render_results(*tablets, total_count=None):
             "department": _department(),
             "tablets": list(tablets),
             "total_count": total_count if total_count is not None else len(tablets),
+            "matched_count": len(tablets),
+            "page": _page(),
+            "page_query": "",
+            "list_url": "/departments/test/tablets/",
+            "results_base": "/departments/test/tablets/",
         },
     )
 
@@ -86,23 +110,23 @@ def test_status_summary_has_no_sub_second_polling():
 # --- results table layout ----------------------------------------------------
 
 
-def test_results_table_has_no_overflow_wrapper():
+def test_results_table_uses_responsive_wrapper():
     html = _render_results(_tablet())
-    assert "table-responsive" not in html
+    assert "table-responsive" in html
 
 
-def test_results_table_keeps_identity_status_and_actions():
+def test_results_table_keeps_identity_state_and_actions():
     html = _render_results(_tablet())
     assert '<th scope="col">Tablet</th>' in html
-    assert '<th scope="col">Status</th>' in html
+    assert '<th scope="col">Asset state</th>' in html
+    assert '<th scope="col">Installation</th>' in html
     assert "Actions" in html
 
 
 def test_results_table_hides_secondary_columns_responsively():
     html = _render_results(_tablet())
-    assert 'class="d-none d-md-table-cell">Vehicle</th>' in html
-    assert 'class="d-none d-lg-table-cell">Station</th>' in html
-    assert 'class="d-none d-md-table-cell">Last seen</th>' in html
+    assert 'class="d-none d-md-table-cell">Assignment</th>' in html
+    assert 'class="d-none d-md-table-cell">Last contact</th>' in html
 
 
 # --- adoption / reactivation status polling ----------------------------------

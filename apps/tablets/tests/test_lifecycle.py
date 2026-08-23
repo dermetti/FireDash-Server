@@ -23,10 +23,9 @@ from apps.tablets.services import (
     complete_adoption,
     create_adoption_invitation,
     create_adoption_request,
-    create_reactivation_invitation,
     create_tablet,
     mark_stale_installations,
-    remove_tablet,
+    retire_tablet,
     verify_credential,
 )
 
@@ -227,7 +226,7 @@ def test_version_only_telemetry_preserves_build_when_version_is_unchanged(operat
     assert installation.app_build is None
 
 
-def test_check_in_renews_only_near_expiry_and_fails_when_stale(operational_tablet):
+def test_check_in_renews_only_near_expiry_and_recovers_when_stale(operational_tablet):
     installation, credential = _adopt(*operational_tablet)
     original_expiry = installation.authorization_valid_until
     first_manifest = request_manifest(installation=installation)
@@ -248,8 +247,9 @@ def test_check_in_renews_only_near_expiry_and_fails_when_stale(operational_table
 
     installation.authorization_valid_until = timezone.now() - timedelta(seconds=1)
     installation.save(update_fields=("authorization_valid_until",))
-    with pytest.raises(TabletError, match="not active"):
-        check_in(installation=installation, credential=credential)
+    recovered = check_in(installation=installation, credential=credential)
+    assert recovered.status == AppInstallation.Status.ACTIVE
+    assert recovered.authorization_valid_until > timezone.now()
 
 
 def test_mark_stale_installations_transitions_expired_leases(operational_tablet):
@@ -261,64 +261,6 @@ def test_mark_stale_installations_transitions_expired_leases(operational_tablet)
     installation.refresh_from_db()
     assert installation.status == AppInstallation.Status.STALE
     assert installation.stale_at is not None
-
-
-def test_reactivation_requires_valid_token_and_restores_lease(operational_tablet):
-    user, tablet = operational_tablet
-    installation_uuid = uuid.uuid4()
-    installation, first_credential = _adopt(user, tablet, installation_uuid)
-    installation.authorization_valid_until = timezone.now() - timedelta(seconds=1)
-    installation.status = AppInstallation.Status.STALE
-    installation.stale_at = timezone.now()
-    installation.save(update_fields=("authorization_valid_until", "status", "stale_at"))
-
-    invite, reactivation_token = create_reactivation_invitation(
-        actor=user, installation=installation
-    )
-    key = bytes(installation.hpke_public_key)
-    reactivation_challenge = create_adoption_request(
-        token=reactivation_token,
-        installation_uuid=installation_uuid,
-        app_version=installation.app_version,
-        hpke_public_key=key,
-        hpke_ciphersuite=installation.hpke_ciphersuite,
-        reactivation=True,
-    )
-    with pytest.raises(TabletError, match="mode"):
-        complete_adoption(
-            request_id=reactivation_challenge.request.id,
-            challenge_response=reactivation_challenge.request.expected_hmac_digest,
-            confirmed=True,
-        )
-    reactivated, new_credential = complete_adoption(
-        request_id=reactivation_challenge.request.id,
-        challenge_response=reactivation_challenge.request.expected_hmac_digest,
-        confirmed=True,
-        reactivation=True,
-    )
-    assert reactivated.status == AppInstallation.Status.ACTIVE
-    assert reactivated.reactivated_at is not None
-    assert reactivated.authorization_valid_until > timezone.now()
-    assert new_credential != first_credential
-    assert verify_credential(installation=reactivated, credential=new_credential)
-    assert not verify_credential(installation=reactivated, credential=first_credential)
-
-    reactivation_request = AdoptionRequest.objects.get(pk=reactivation_challenge.request.id)
-    replay_valid_until = reactivation_request.completion_replay_valid_until
-    assert replay_valid_until is not None
-    replayed, recovered_credential = complete_adoption(
-        request_id=reactivation_challenge.request.id,
-        challenge_response=reactivation_challenge.request.expected_hmac_digest,
-        confirmed=True,
-        reactivation=True,
-    )
-    reactivated.refresh_from_db()
-    reactivation_request.refresh_from_db()
-    assert replayed.id == reactivated.id
-    assert recovered_credential != new_credential
-    assert not verify_credential(installation=reactivated, credential=new_credential)
-    assert verify_credential(installation=reactivated, credential=recovered_credential)
-    assert reactivation_request.completion_replay_valid_until == replay_valid_until
 
 
 @pytest.mark.django_db(transaction=True)
@@ -404,14 +346,12 @@ def test_postgresql_replay_lock_avoids_nullable_outer_join(operational_tablet):
     assert any("FOR UPDATE OF" in sql for sql in locking_sql)
 
 
-def test_remove_tablet_revokes_installations_and_grants(operational_tablet):
+def test_retire_tablet_revokes_installations_and_grants(operational_tablet):
     user, tablet = operational_tablet
     installation, credential = _adopt(user, tablet)
-    removed = remove_tablet(
-        actor=user, tablet=tablet, status=Tablet.Status.REMOVED, reason="End of life"
-    )
-    assert removed.status == Tablet.Status.REMOVED
-    assert not removed.active
+    retired = retire_tablet(actor=user, tablet=tablet, reason="End of life")
+    assert retired.status == Tablet.Status.RETIRED
+    assert not retired.active
     installation.refresh_from_db()
     assert installation.status == AppInstallation.Status.REVOKED
     assert installation.revoked_at is not None

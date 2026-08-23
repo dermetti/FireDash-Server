@@ -90,36 +90,6 @@ def test_adoption_context_changes_cannot_open_challenge():
         raise AssertionError("A challenge must be bound to the tablet identity.")
 
 
-def test_adoption_context_mode_change_cannot_open_challenge():
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    context = AdoptionChallengeContext(
-        uuid.uuid4(),
-        uuid.uuid4(),
-        uuid.uuid4(),
-        "b" * 64,
-        timezone.now() + timedelta(minutes=5),
-        "adoption",
-    )
-    encapsulated_key, ciphertext = hpke_seal(
-        plaintext=b"n" * 32, recipient_public_key=private_key.public_key(), context=context
-    )
-
-    with pytest.raises(ValueError):
-        hpke_open(
-            encapsulated_key=encapsulated_key,
-            ciphertext=ciphertext,
-            recipient_private_key=private_key,
-            context=AdoptionChallengeContext(
-                context.adoption_request_id,
-                context.installation_uuid,
-                context.tablet_id,
-                context.public_key_fingerprint,
-                context.expires_at,
-                "reactivation",
-            ),
-        )
-
-
 def test_adoption_context_reconstructed_from_preview_values_opens_challenge():
     private_key = ec.generate_private_key(ec.SECP256R1())
     context = AdoptionChallengeContext(
@@ -172,7 +142,7 @@ def test_adoption_context_has_a_frozen_mode_bound_canonical_encoding():
         tablet_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
         public_key_fingerprint="a" * 64,
         expires_at=datetime(2026, 8, 9, 12, 39, 56, 789012, tzinfo=UTC),
-        mode="reactivation",
+        mode="adoption",
     )
 
     assert context.info() == (
@@ -181,7 +151,7 @@ def test_adoption_context_has_a_frozen_mode_bound_canonical_encoding():
         b'"hpke_ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM",'
         b'"hpke_public_key_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         b'"installation_uuid":"22222222-2222-2222-2222-222222222222",'
-        b'"mode":"reactivation","protocol":"tablet-adoption-v1",'
+        b'"mode":"adoption","protocol":"tablet-adoption-v1",'
         b'"tablet_id":"33333333-3333-3333-3333-333333333333"}'
     )
 

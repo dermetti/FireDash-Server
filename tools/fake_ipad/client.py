@@ -1,4 +1,4 @@
-"""Fake iPad protocol client: adoption, reactivation, and authenticated ops.
+"""Fake iPad protocol client: adoption and authenticated operations.
 
 This class sequences the real FireDash tablet protocol against the HTTPS API.
 It owns no HTTP (see ``transport.ApiClient``), no key material of its own (see
@@ -46,8 +46,6 @@ from tools.fake_ipad.validation import (
 
 ADOPTION_PREVIEW_PATH = "/api/v1/adoption/preview"
 ADOPTION_COMPLETE_PATH = "/api/v1/adoption/complete"
-REACTIVATION_PREVIEW_PATH = "/api/v1/tablet/reactivation/preview"
-REACTIVATION_COMPLETE_PATH = "/api/v1/tablet/reactivation/complete"
 CHECK_IN_PATH = "/api/v1/tablet/check-in"
 REFRESH_PATH = "/api/v1/tablet/refresh"
 STATUS_PATH = "/api/v1/tablet/status"
@@ -153,7 +151,7 @@ class FakeIPadClient:
         public_bytes = crypto.public_bytes()
         fingerprint = crypto.fingerprint()
 
-        path = ADOPTION_PREVIEW_PATH if mode == "adoption" else REACTIVATION_PREVIEW_PATH
+        path = ADOPTION_PREVIEW_PATH
         body: dict[str, Any] = {
             "token": token,
             "installation_uuid": self.state.installation_uuid,
@@ -205,7 +203,7 @@ class FakeIPadClient:
         mode: str,
         bearer: str | None = None,
     ) -> dict[str, Any]:
-        path = ADOPTION_COMPLETE_PATH if mode == "adoption" else REACTIVATION_COMPLETE_PATH
+        path = ADOPTION_COMPLETE_PATH
         body = {
             "adoption_request_id": preview["adoption_request_id"],
             "challenge_response": proof,
@@ -224,7 +222,7 @@ class FakeIPadClient:
         )
         return completed
 
-    # --- adoption / reactivation ------------------------------------------
+    # --- adoption ----------------------------------------------------------
 
     def adopt(
         self, token: str, *, verify: bool = True, simulate_lost_completion_response: bool = False
@@ -286,71 +284,6 @@ class FakeIPadClient:
         return {
             "installation_id": installation_id,
             "tablet_id": preview["tablet_id"],
-            "authorization_valid_until": completed["authorization_valid_until"],
-        }
-
-    def reactivate(
-        self, token: str, *, verify: bool = True, simulate_lost_completion_response: bool = False
-    ) -> dict[str, Any]:
-        self.out.banner("FIREDASH FAKE IPAD — REACTIVATION")
-
-        before = self.get_status()
-        if before["status"] != "stale":
-            fail(
-                f"Reactivation requires server installation state 'stale', got {before['status']!r}"
-            )
-
-        crypto = self.state.load_private_key()
-        old_credential = self.state.credential
-        preview, proof = self._preview_and_proof(token=token, mode="reactivation", crypto=crypto)
-        completed = self._complete(
-            preview=preview, proof=proof, mode="reactivation", bearer=old_credential
-        )
-        if simulate_lost_completion_response:
-            first_credential = completed.get("credential")
-            self.out.line(
-                "  Simulating lost completion response: rotated credential deliberately discarded."
-            )
-            completed = self._complete(preview=preview, proof=proof, mode="reactivation")
-            if not isinstance(first_credential, str) or hmac.compare_digest(
-                first_credential, completed.get("credential", "")
-            ):
-                fail("Reactivation completion recovery did not rotate a fresh credential")
-            self.out.line("  Exact completion recovery replay: PASS (fresh credential received)")
-
-        if completed["installation_id"] != self.state.installation_id:
-            fail("Reactivation returned a different installation_id")
-
-        new_credential = completed["credential"]
-        if not isinstance(new_credential, str) or not new_credential:
-            fail("Reactivation did not return replacement credential")
-        if hmac.compare_digest(new_credential, old_credential):
-            fail("Reactivation credential was not rotated")
-
-        old_status_response = self.api.call("GET", STATUS_PATH, bearer=old_credential)
-        if old_status_response.status < 400:
-            fail("Old credential still authenticated after successful reactivation")
-        self.out.line(
-            f"\n[OLD CREDENTIAL]\n  rejected after rotation: PASS "
-            f"(HTTP {old_status_response.status})"
-        )
-
-        self.state.rotate_credential(
-            credential=new_credential,
-            authorization_valid_until=completed["authorization_valid_until"],
-            server_time=self._require_server_time(completed, label="reactivation completion"),
-        )
-
-        after = self.get_status()
-        if after["status"] != "active":
-            fail("Reactivated installation did not return to active state")
-
-        if verify:
-            self.full_active_verification(use_previous_etag=False, compare_previous=False)
-
-        self.out.banner("REACTIVATION RESULT: PASS")
-        return {
-            "installation_id": self.state.installation_id,
             "authorization_valid_until": completed["authorization_valid_until"],
         }
 
@@ -511,10 +444,7 @@ class FakeIPadClient:
         """Probe operations a REPLACED/REVOKED credential must not regain.
 
         The command deliberately makes only ordinary tablet requests. It never
-        creates a replacement, revocation, invitation, or reactivation request.
-        A reactivation completion cannot be meaningfully probed without a
-        human-issued invitation and exact HPKE proof, so that operation is
-        intentionally reported as invitation-gated rather than fabricated.
+        creates a replacement, revocation, or invitation request.
         """
         status = self.get_status()
         if status["status"] not in {"replaced", "revoked"}:
@@ -565,7 +495,6 @@ class FakeIPadClient:
                 self.out.line(f"  dataset: denied as required (HTTP {response.status})")
         else:
             summaries["dataset"] = "not probed: no previously verified publication in local state"
-        summaries["reactivation"] = "not probed: requires human-issued invitation and exact proof"
         return summaries
 
     @staticmethod

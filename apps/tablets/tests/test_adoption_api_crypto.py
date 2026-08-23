@@ -1,4 +1,4 @@
-"""API-boundary regression tests for adoption/reactivation HPKE canonical timestamps.
+"""API-boundary regression tests for adoption HPKE canonical timestamps.
 
 These prove the exact production failure path: the DRF wire value for
 ``expires_at`` must byte-match the timestamp bound into the server's HPKE
@@ -24,10 +24,9 @@ from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE, hpke_open, serialize_p256_public_key
 from apps.tablets.models import AdoptionRequest, AppInstallation, Tablet
-from apps.tablets.services import create_adoption_invitation, create_reactivation_invitation
+from apps.tablets.services import create_adoption_invitation
 
 ADOPTION_PREVIEW = "/api/v1/adoption/preview"
-REACTIVATION_PREVIEW = "/api/v1/tablet/reactivation/preview"
 
 
 class _ClientContext:
@@ -139,41 +138,6 @@ def test_adoption_preview_wire_timestamp_matches_hpke_context(crypto_api_context
 
     info = _client_context_bytes(preview, str(installation_uuid))
     plaintext = _open_challenge(preview["encrypted_challenge"], private_key, info)
-    assert len(plaintext) == 32
-
-    request = AdoptionRequest.objects.get(pk=preview["adoption_request_id"])
-    assert hashlib.sha256(info).hexdigest() == request.canonical_context_hash
-
-
-@pytest.mark.django_db(transaction=True)
-def test_reactivation_preview_wire_timestamp_matches_hpke_context(crypto_api_context):
-    ctx = crypto_api_context
-    client = Client()
-    _, token = create_reactivation_invitation(actor=ctx.user, installation=ctx.installation)
-    public_key = bytes(ctx.installation.hpke_public_key)
-
-    response = client.post(
-        REACTIVATION_PREVIEW,
-        data=json.dumps(
-            {
-                "token": token,
-                "installation_uuid": str(ctx.installation_uuid),
-                "app_version": ctx.installation.app_version,
-                "hpke_public_key": base64.b64encode(public_key).decode("ascii"),
-                "hpke_ciphersuite": ctx.installation.hpke_ciphersuite,
-            }
-        ),
-        content_type="application/json",
-    )
-
-    assert response.status_code == 201
-    preview = response.json()
-    assert preview["mode"] == "reactivation"
-    assert preview["expires_at"].endswith("Z")
-    assert "+00:00" not in preview["expires_at"]
-
-    info = _client_context_bytes(preview, str(ctx.installation_uuid))
-    plaintext = _open_challenge(preview["encrypted_challenge"], ctx.private_key, info)
     assert len(plaintext) == 32
 
     request = AdoptionRequest.objects.get(pk=preview["adoption_request_id"])

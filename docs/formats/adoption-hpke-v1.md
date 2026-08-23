@@ -1,7 +1,7 @@
-# Adoption / reactivation HPKE v1
+# Adoption HPKE v1
 
 This is the byte-for-byte interoperability contract for the FireDash adoption
-and reactivation challenge. The server implementation is `apps/tablets/services.py`
+challenge. The server implementation is `apps/tablets/services.py`
 (`AdoptionChallengeContext`, `canonical_protocol_datetime`) and
 `apps/publications/hpke.py`.
 
@@ -51,7 +51,7 @@ The ciphersuite string is exactly:
 and compact separators (`sort_keys=True`, `separators=(",", ":")`):
 
 ```json
-{"adoption_request_id":"<uuid>","expires_at":"<canonical>","hpke_ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM","hpke_public_key_fingerprint":"<64 hex>","installation_uuid":"<uuid>","mode":"<adoption|reactivation>","protocol":"tablet-adoption-v1","tablet_id":"<uuid>"}
+{"adoption_request_id":"<uuid>","expires_at":"<canonical>","hpke_ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM","hpke_public_key_fingerprint":"<64 hex>","installation_uuid":"<uuid>","mode":"adoption","protocol":"tablet-adoption-v1","tablet_id":"<uuid>"}
 ```
 
 Context keys and their exact rules:
@@ -63,7 +63,7 @@ Context keys and their exact rules:
 | `hpke_ciphersuite` | the exact suite string above |
 | `hpke_public_key_fingerprint` | 64 lowercase hex characters |
 | `installation_uuid` | lowercase UUID string |
-| `mode` | `"adoption"` or `"reactivation"` |
+| `mode` | exactly `"adoption"` |
 | `protocol` | `"tablet-adoption-v1"` |
 | `tablet_id` | lowercase UUID string |
 

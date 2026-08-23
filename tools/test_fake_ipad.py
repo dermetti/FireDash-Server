@@ -1,7 +1,7 @@
 """Unit tests for the FireDash fake iPad client (no network, no Django, no DB).
 
 These tests exercise protocol boundaries: canonical crypto, local state,
-adoption/reactivation sequencing against a stubbed transport, authentication
+adoption sequencing against a stubbed transport, authentication
 header placement, secret redaction, and CLI exit codes.
 """
 
@@ -355,84 +355,6 @@ def test_adoption_rejects_malformed_json_response(tmp_path: Path):
         client.adopt("token", verify=False)
 
 
-# --- reactivation ------------------------------------------------------------
-
-
-def test_reactivation_rotates_credential_and_old_is_rejected(tmp_path: Path):
-    state = DeviceState(tmp_path / "state")
-    crypto = state.ensure_identity(server_url="https://test.example", app_version="1.0.0")
-    old_credential = "old-credential"
-    new_credential = "new-credential"
-    state.store_installation(
-        installation_id=str(uuid.uuid4()),
-        tablet_id=str(uuid.uuid4()),
-        credential=old_credential,
-        authorization_valid_until="2026-08-16T00:00:00+00:00",
-    )
-    preview, expected_proof = _build_challenge(
-        crypto, installation_uuid=state.installation_uuid, mode="reactivation"
-    )
-
-    api = StubApi()
-    rotated = {"value": False}
-
-    def status_handler(body, bearer):
-        if bearer == old_credential and not rotated["value"]:
-            return (
-                200,
-                {
-                    "status": "stale",
-                    "authorization_valid_until": "x",
-                    "purge_provisioned_data": False,
-                    "server_time": "2026-08-09T00:00:00+00:00",
-                },
-                {},
-            )
-        if bearer == old_credential:
-            return 403, {"detail": "replaced"}, {}
-        if bearer == new_credential:
-            return (
-                200,
-                {
-                    "status": "active",
-                    "authorization_valid_until": "y",
-                    "purge_provisioned_data": False,
-                    "server_time": "2026-08-09T00:00:00+00:00",
-                },
-                {},
-            )
-        return 401, {"detail": "invalid"}, {}
-
-    def preview_handler(body, bearer):
-        assert body["token"] == "reactivation-token"
-        assert body["installation_uuid"] == state.installation_uuid
-        return 201, preview, {}
-
-    def complete_handler(body, bearer):
-        assert bearer == old_credential
-        rotated["value"] = True
-        return (
-            201,
-            {
-                "installation_id": state.installation_id,
-                "credential": new_credential,
-                "authorization_valid_until": "2026-08-16T00:00:00+00:00",
-                "server_time": "2026-08-09T00:00:00+00:00",
-            },
-            {},
-        )
-
-    api.handlers["/api/v1/tablet/status"] = status_handler
-    api.handlers["/api/v1/tablet/reactivation/preview"] = preview_handler
-    api.handlers["/api/v1/tablet/reactivation/complete"] = complete_handler
-
-    client = _client(state, api)
-    client.reactivate("reactivation-token", verify=False)
-
-    assert state.credential == new_credential
-    assert rotated["value"] is True
-
-
 # --- authentication ----------------------------------------------------------
 
 
@@ -590,80 +512,6 @@ def test_adoption_lost_response_replays_exact_completion_without_persisting_firs
     _client(state, api).adopt("token", verify=False, simulate_lost_completion_response=True)
 
     assert complete_bodies[0] == complete_bodies[1]
-    assert state.credential == recovered_credential
-    assert first_credential not in state.state_path.read_text("utf-8")
-
-
-def test_reactivation_lost_response_replays_without_the_rotated_credential(tmp_path: Path):
-    state = DeviceState(tmp_path / "state")
-    crypto = state.ensure_identity(
-        server_url="https://test.example", app_version="1.2.0", app_build=25
-    )
-    old_credential, first_credential, recovered_credential = "old", "first", "recovered"
-    state.store_installation(
-        installation_id=str(uuid.uuid4()),
-        tablet_id=str(uuid.uuid4()),
-        credential=old_credential,
-        authorization_valid_until="2026-08-16T00:00:00Z",
-    )
-    preview, _ = _build_challenge(
-        crypto, installation_uuid=state.installation_uuid, mode="reactivation"
-    )
-    api = StubApi()
-    status_calls = 0
-
-    def status(body, bearer):
-        nonlocal status_calls
-        status_calls += 1
-        if status_calls == 1:
-            return (
-                200,
-                {
-                    "status": "stale",
-                    "authorization_valid_until": "2026-08-16T00:00:00Z",
-                    "purge_provisioned_data": False,
-                    "server_time": "2026-08-09T00:00:00Z",
-                },
-                {},
-            )
-        if status_calls == 2:
-            assert bearer == old_credential
-            return 403, {"code": "invalid_credential"}, {}
-        assert bearer == recovered_credential
-        return (
-            200,
-            {
-                "status": "active",
-                "authorization_valid_until": "2026-08-16T00:00:00Z",
-                "purge_provisioned_data": False,
-                "server_time": "2026-08-09T00:00:00Z",
-            },
-            {},
-        )
-
-    completion_bearers: list[str | None] = []
-
-    def completion(body, bearer):
-        completion_bearers.append(bearer)
-        return (
-            201,
-            {
-                "installation_id": state.installation_id,
-                "credential": first_credential
-                if len(completion_bearers) == 1
-                else recovered_credential,
-                "authorization_valid_until": "2026-08-16T00:00:00Z",
-                "server_time": "2026-08-09T00:00:00Z",
-            },
-            {},
-        )
-
-    api.handlers["/api/v1/tablet/status"] = status
-    api.handlers["/api/v1/tablet/reactivation/preview"] = lambda b, r: (201, preview, {})
-    api.handlers["/api/v1/tablet/reactivation/complete"] = completion
-    _client(state, api).reactivate("token", verify=False, simulate_lost_completion_response=True)
-
-    assert completion_bearers == [old_credential, None]
     assert state.credential == recovered_credential
     assert first_credential not in state.state_path.read_text("utf-8")
 

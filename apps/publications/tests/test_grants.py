@@ -44,7 +44,9 @@ def pub_fixture(db):
     vehicle = Vehicle.objects.create(
         department=department, station=station, display_name="Engine 1"
     )
-    tablet = Tablet.objects.create(department=department, display_name="Tablet")
+    tablet = Tablet.objects.create(
+        department=department, display_name="Tablet", status=Tablet.Status.ACTIVE
+    )
     private_key = ec.generate_private_key(ec.SECP256R1())
     installation = AppInstallation.objects.create(
         tablet=tablet,

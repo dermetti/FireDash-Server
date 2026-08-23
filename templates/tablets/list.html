@@ -30,12 +30,21 @@
              hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
     </div>
     <div class="col-6 col-md-2">
-      <label class="form-label" for="tablet-status">Status</label>
+      <label class="form-label" for="tablet-status">Asset state</label>
       <select id="tablet-status" class="form-select" name="status"
               hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
               hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
-        <option value="">All statuses</option>
+        <option value="">Current (default)</option>
         {% for value, label in statuses %}<option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label" for="tablet-installation">Installation</label>
+      <select id="tablet-installation" class="form-select" name="installation"
+              hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
+              hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+        <option value="">All</option>
+        {% for value, label in installation_options %}<option value="{{ value }}" {% if filters.installation == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
     </div>
     <div class="col-6 col-md-2">
@@ -61,8 +70,9 @@
       <select id="tablet-sort" class="form-select" name="sort"
               hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
               hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+        <option value="" {% if not sort %}selected{% endif %}>Active first (default)</option>
         <option value="name" {% if sort == "name" %}selected{% endif %}>Name</option>
-        <option value="status" {% if sort == "status" %}selected{% endif %}>Status</option>
+        <option value="status" {% if sort == "status" %}selected{% endif %}>Asset state</option>
         <option value="asset" {% if sort == "asset" %}selected{% endif %}>Asset number</option>
         <option value="created" {% if sort == "created" %}selected{% endif %}>Registered</option>
         <option value="last_seen" {% if sort == "last_seen" %}selected{% endif %}>Last seen</option>

@@ -16,16 +16,6 @@ urlpatterns = [
         name="api-tablet-signing-key",
     ),
     path(
-        "tablet/reactivation/preview",
-        api.ReactivationPreviewView.as_view(),
-        name="api-reactivation-preview",
-    ),
-    path(
-        "tablet/reactivation/complete",
-        api.ReactivationCompleteView.as_view(),
-        name="api-reactivation-complete",
-    ),
-    path(
         "tablet/datasets/<uuid:publication_id>/download",
         api.DownloadView.as_view(),
         name="api-dataset-download",

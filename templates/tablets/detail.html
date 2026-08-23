@@ -11,43 +11,52 @@
       {% if tablet.asset_number %}<span class="text-body-secondary small">{{ tablet.asset_number }}</span>{% endif %}
     </div>
   </div>
-  {% if tablet.status != "REMOVED" and tablet.status != "LOST" and tablet.status != "RETIRED" %}
-  <a class="btn btn-outline-danger" href="{% url 'tablet-remove' department.id tablet.id %}"
-     hx-get="{% url 'tablet-remove' department.id tablet.id %}" hx-target="#tablet-action-modal-container">
-    Remove tablet
-  </a>
-  {% endif %}
 </div>
 
 <div class="row">
   <div class="col-lg-7">
     <div class="card shadow-sm mb-4">
-      <div class="card-header">Identity</div>
+      <div class="card-header">Tablet</div>
       <div class="card-body">
-        <dl class="row mb-0">
-          <dt class="col-sm-4">Display name</dt><dd class="col-sm-8">{{ tablet.display_name|default:"—" }}</dd>
+        <dl class="row mb-3">
           <dt class="col-sm-4">Asset number</dt><dd class="col-sm-8">{{ tablet.asset_number|default:"—" }}</dd>
-          <dt class="col-sm-4">Status</dt><dd class="col-sm-8">{% include "tablets/_tablet_status_badge.html" with status=tablet.status %}</dd>
+          <dt class="col-sm-4">Asset state</dt><dd class="col-sm-8">{% include "tablets/_tablet_status_badge.html" with status=tablet.status %}</dd>
+          <dt class="col-sm-4">Assigned</dt>
+          <dd class="col-sm-8">{% if vehicle %}{{ vehicle.display_name }} &middot; {{ vehicle.station.name }}{% else %}—{% endif %}</dd>
           <dt class="col-sm-4">Created</dt><dd class="col-sm-8">{{ tablet.created_at|date:"Y-m-d H:i" }}</dd>
-          <dt class="col-sm-4">Created by</dt><dd class="col-sm-8">{{ tablet.created_by.display_name|default:"—" }}</dd>
         </dl>
       </div>
     </div>
 
     <div class="card shadow-sm mb-4">
-      <div class="card-header">Placement</div>
+      <div class="card-header">Tablet actions</div>
       <div class="card-body">
-        {% if vehicle %}
-          <p class="mb-2">Vehicle: <strong>{{ vehicle.display_name }}</strong></p>
-          <p class="mb-3">Station: <strong>{{ vehicle.station.name }}</strong></p>
-        {% else %}
-          <p class="text-body-secondary mb-3">This tablet is not assigned to a vehicle.</p>
-        {% endif %}
-        {% if tablet.status != "REMOVED" and tablet.status != "LOST" and tablet.status != "RETIRED" %}
-        <a class="btn btn-outline-primary" href="{% url 'tablet-assign' department.id tablet.id %}"
-           hx-get="{% url 'tablet-assign' department.id tablet.id %}" hx-target="#tablet-action-modal-container">
-          {% if vehicle %}Change assignment{% else %}Assign vehicle{% endif %}
-        </a>
+        <div class="d-flex gap-2 flex-wrap">
+          {% if tablet.status == "ACTIVE" %}
+            <a class="btn btn-outline-primary btn-sm" href="{% url 'tablet-assign' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-assign' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Transfer</a>
+            <a class="btn btn-outline-secondary btn-sm" href="{% url 'tablet-deactivate' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-deactivate' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Deactivate</a>
+            <a class="btn btn-outline-danger btn-sm" href="{% url 'tablet-mark-lost' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-mark-lost' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Mark lost</a>
+            <a class="btn btn-outline-danger btn-sm" href="{% url 'tablet-retire' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-retire' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Retire</a>
+          {% elif tablet.status == "INACTIVE" %}
+            <a class="btn btn-outline-primary btn-sm" href="{% url 'tablet-assign' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-assign' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">{% if vehicle %}Transfer{% else %}Assign{% endif %}</a>
+            <a class="btn btn-primary btn-sm" href="{% url 'tablet-activate' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-activate' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Activate</a>
+            <a class="btn btn-outline-danger btn-sm" href="{% url 'tablet-mark-lost' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-mark-lost' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Mark lost</a>
+            <a class="btn btn-outline-danger btn-sm" href="{% url 'tablet-retire' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-retire' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Retire</a>
+          {% elif tablet.status == "LOST" %}
+            <a class="btn btn-primary btn-sm" href="{% url 'tablet-recover' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-recover' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Mark recovered</a>
+          {% endif %}
+        </div>
+        {% if tablet.status == "RETIRED" %}
+          <p class="text-body-secondary small mt-2 mb-0">This tablet has been withdrawn from service.</p>
         {% endif %}
       </div>
     </div>
@@ -55,64 +64,67 @@
 
   <div class="col-lg-5">
     <div class="card shadow-sm mb-4">
-      <div class="card-header">Adoption</div>
+      <div class="card-header">Current installation</div>
       <div class="card-body">
-        {% if tablet.status == "PENDING" %}
-          <p class="text-body-secondary">Adoption has not completed. No server authorization has been issued yet.</p>
-          {% if adoption_ready %}
-            <a class="btn btn-primary" href="{% url 'tablet-adopt' department.id tablet.id %}"
-               hx-get="{% url 'tablet-adopt' department.id tablet.id %}" hx-target="#tablet-action-modal-container">
-              Start adoption
-            </a>
-          {% else %}
-            <div class="alert alert-info py-2 mb-2">Adoption unavailable</div>
-            <p class="text-body-secondary small">Assign this tablet to an operational vehicle before creating an adoption invitation.</p>
-            <a class="btn btn-outline-primary btn-sm" href="{% url 'tablet-assign' department.id tablet.id %}"
-               hx-get="{% url 'tablet-assign' department.id tablet.id %}" hx-target="#tablet-action-modal-container">
-              Assign vehicle
-            </a>
-          {% endif %}
-        {% elif tablet.status == "STALE" %}
-          <p class="text-body-secondary">This tablet's installation failed to renew its server authorization before the lease expired.</p>
-          <a class="btn btn-primary" href="{% url 'tablet-reactivate' department.id tablet.id %}"
-             hx-get="{% url 'tablet-reactivate' department.id tablet.id %}" hx-target="#tablet-action-modal-container">
-            Reactivate
-          </a>
-        {% elif current_installation %}
-          <dl class="row mb-0">
-            <dt class="col-sm-6">App version</dt><dd class="col-sm-6">{{ current_installation.app_version }}</dd>
-            <dt class="col-sm-6">HPKE key fingerprint</dt><dd class="col-sm-6"><code class="small">{{ current_installation.hpke_key_fingerprint }}</code></dd>
-            <dt class="col-sm-6">Adopted</dt><dd class="col-sm-6">{{ current_installation.adopted_at|date:"Y-m-d H:i" }}</dd>
-            <dt class="col-sm-6">Last check-in</dt><dd class="col-sm-6">{{ current_installation.last_successful_check_in_at|date:"Y-m-d H:i"|default:"Never" }}</dd>
-            <dt class="col-sm-6">Authorization valid until</dt><dd class="col-sm-6">{{ current_installation.authorization_valid_until|date:"Y-m-d H:i" }}</dd>
+        {% if current_installation %}
+          <dl class="row mb-3">
+            <dt class="col-sm-5">Status</dt>
+            <dd class="col-sm-7">{% if current_installation.status == "ACTIVE" %}<span class="badge text-bg-success">Active</span>{% else %}<span class="badge text-bg-warning">Stale</span>{% endif %}</dd>
+            <dt class="col-sm-5">Health</dt>
+            <dd class="col-sm-7">{% if current_installation_stale %}<span class="badge text-bg-warning">Stale</span>{% else %}<span class="badge text-bg-success">Healthy</span>{% endif %}</dd>
+            <dt class="col-sm-5">Last contact</dt>
+            <dd class="col-sm-7">{{ current_installation.last_successful_check_in_at|date:"Y-m-d H:i"|default:"Never" }}</dd>
+            <dt class="col-sm-5">Adopted</dt>
+            <dd class="col-sm-7">{{ current_installation.adopted_at|date:"Y-m-d H:i" }}</dd>
+            <dt class="col-sm-5">Authorization valid until</dt>
+            <dd class="col-sm-7">{{ current_installation.authorization_valid_until|date:"Y-m-d H:i" }}</dd>
+            <dt class="col-sm-5">App version</dt>
+            <dd class="col-sm-7">{{ current_installation.app_version }}</dd>
           </dl>
+          <div class="d-flex gap-2 flex-wrap">
+            <a class="btn btn-outline-primary btn-sm" href="{% url 'tablet-replace' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-replace' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Re-provision FireDash</a>
+            <a class="btn btn-outline-danger btn-sm" href="{% url 'tablet-revoke-installation' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-revoke-installation' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Revoke installation</a>
+          </div>
+          {% if current_installation_stale %}
+          <p class="text-body-secondary small mt-2 mb-0">This installation will recover automatically after it reconnects and successfully revalidates with FireDash.</p>
+          {% endif %}
         {% else %}
-          <p class="text-body-secondary">No active installation.</p>
+          <p class="text-body-secondary mb-3">No installation.{% if tablet.status == "INACTIVE" %} Setup pending.{% endif %}</p>
+          {% if adoption_ready and tablet.status != "RETIRED" and tablet.status != "LOST" %}
+            <a class="btn btn-primary btn-sm" href="{% url 'tablet-adopt' department.id tablet.id %}?next={{ detail_url|urlencode }}"
+               hx-get="{% url 'tablet-adopt' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Start adoption</a>
+          {% elif tablet.status == "INACTIVE" %}
+            <p class="text-body-secondary small mb-0">Assign this tablet to an operational vehicle, then start adoption to provision FireDash.</p>
+          {% endif %}
         {% endif %}
       </div>
     </div>
-
-    {% if installations %}
-    <div class="card shadow-sm">
-      <div class="card-header">App installations</div>
-      <div class="card-body">
-        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
-          <thead><tr><th>Status</th><th>Version</th><th>Adopted</th></tr></thead>
-          <tbody>
-            {% for installation in installations %}
-            <tr>
-              <td>{% if installation.status == "ACTIVE" %}<span class="badge text-bg-success">Active</span>{% elif installation.status == "STALE" %}<span class="badge text-bg-danger">Stale</span>{% elif installation.status == "REVOKED" %}<span class="badge text-bg-secondary">Revoked</span>{% else %}<span class="badge text-bg-secondary">{{ installation.status }}</span>{% endif %}</td>
-              <td>{{ installation.app_version }}</td>
-              <td>{{ installation.adopted_at|date:"Y-m-d H:i" }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table></div>
-      </div>
-    </div>
-    {% endif %}
   </div>
 </div>
+
+{% if installations %}
+<div class="card shadow-sm mb-4">
+  <div class="card-header">Installation history</div>
+  <div class="card-body">
+    <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Status</th><th>Version</th><th>Adopted</th></tr></thead>
+      <tbody>
+        {% for installation in installations %}
+        <tr>
+          <td>{% if installation.status == "ACTIVE" %}<span class="badge text-bg-success">Active</span>{% elif installation.status == "STALE" %}<span class="badge text-bg-warning">Stale</span>{% elif installation.status == "REVOKED" %}<span class="badge text-bg-secondary">Revoked</span>{% elif installation.status == "REPLACED" %}<span class="badge text-bg-secondary">Replaced</span>{% else %}<span class="badge text-bg-secondary">{{ installation.status }}</span>{% endif %}</td>
+          <td>{{ installation.app_version }}</td>
+          <td>{{ installation.adopted_at|date:"Y-m-d H:i" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+</div>
+{% endif %}
+
+{% include "tablets/_tablet_api_activity.html" %}
 
 {% include "tablets/_action_modal.html" %}
 {% endblock %}

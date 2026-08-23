@@ -168,20 +168,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Discard the first successful completion response and exercise exact-proof recovery.",
     )
 
-    reactivate = sub.add_parser(
-        "reactivate", help="Run stale-installation reactivation and verify credential rotation"
-    )
-    add_common_arguments(reactivate)
-    add_token_arguments(reactivate, alias="--reactivation-token")
-    reactivate.add_argument(
-        "--no-verify", action="store_true", help="Skip post-reactivation full verification"
-    )
-    reactivate.add_argument(
-        "--simulate-lost-completion-response",
-        action="store_true",
-        help="Discard the first rotated credential and exercise exact-proof recovery.",
-    )
-
     checkin = sub.add_parser("check-in", help="Perform a real check-in and renew the lease")
     add_common_arguments(checkin)
     checkin.add_argument(
@@ -391,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
             out.emit(result)
             return 0
 
-        if args.command in ("adopt", "provision", "reactivate"):
+        if args.command in ("adopt", "provision"):
             apply_provisioning_payload(args)
         state, client = build_client(args, out)
 
@@ -403,15 +389,6 @@ def main(argv: list[str] | None = None) -> int:
                 simulate_lost_completion_response=args.simulate_lost_completion_response,
             )
             result = {"ok": True, "command": "adopt", **data}
-
-        elif args.command == "reactivate":
-            token = get_token(args, prompt="Reactivation token (hidden): ")
-            data = _require_client(client).reactivate(
-                token,
-                verify=not args.no_verify,
-                simulate_lost_completion_response=args.simulate_lost_completion_response,
-            )
-            result = {"ok": True, "command": "reactivate", **data}
 
         elif args.command == "check-in":
             data = _require_client(client).check_in(telemetry=args.telemetry)

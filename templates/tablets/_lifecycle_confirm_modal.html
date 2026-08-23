@@ -1,24 +1,31 @@
 <div class="modal fade" id="tabletActionModal" tabindex="-1" aria-labelledby="tabletActionModalLabel" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form method="post" action="{% url 'tablet-remove' department.id tablet.id %}">
+      <form method="post" action="{{ action_url }}">
         {% csrf_token %}
+        {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
         <div class="modal-header">
-          <h5 class="modal-title" id="tabletActionModalLabel">Remove tablet</h5>
+          <h5 class="modal-title" id="tabletActionModalLabel">{{ title }}</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
           <p class="mb-2">Tablet: <strong>{{ tablet.display_name|default:"Unnamed tablet" }}</strong>
             {% if tablet.asset_number %}<span class="text-body-secondary">({{ tablet.asset_number }})</span>{% endif %}</p>
           {% if vehicle %}<p class="mb-3">Vehicle: <strong>{{ vehicle.display_name }}</strong></p>{% endif %}
-          <div class="alert alert-warning py-2">
-            This will revoke the active installation and revoke its data access.
-          </div>
-          {% include "tablets/_remove_fields.html" %}
+          <p class="mb-3">{{ description }}</p>
+          {% if form %}
+            {% for error in form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+            <div class="mb-3">
+              <label class="form-label" for="{{ form.reason.id_for_label }}">Reason</label>
+              {{ form.reason }}
+              <div class="form-text">Optional note recorded for the audit log.</div>
+              {% for error in form.reason.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+          {% endif %}
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="submit" class="btn btn-danger">Remove tablet</button>
+          <button type="submit" class="btn {% if danger %}btn-danger{% else %}btn-primary{% endif %}">{{ submit_label }}</button>
         </div>
       </form>
     </div>

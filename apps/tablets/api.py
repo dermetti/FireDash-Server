@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import hmac
+import time
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -29,11 +30,13 @@ from apps.authorization.services import minimum_supported_app_version
 from apps.publications.manifests import (
     ManifestError,
     authorized_publications,
+    control_plane_context,
     manifest_response_etag,
     publication_signing_public_key_for_requested_version,
     request_manifest,
 )
-from apps.tablets.models import AdoptionRequest, AppInstallation
+from apps.tablets.activity import record_tablet_api_activity
+from apps.tablets.models import AppInstallation
 from apps.tablets.services import (
     TabletError,
     canonical_protocol_datetime,
@@ -182,8 +185,8 @@ class ConfigurationResponseSerializer(serializers.Serializer[dict[str, object]])
     installation_id = serializers.UUIDField()
     tablet_id = serializers.UUIDField()
     department_id = serializers.UUIDField()
-    station_id = serializers.UUIDField()
-    vehicle_id = serializers.UUIDField()
+    station_id = serializers.UUIDField(allow_null=True)
+    vehicle_id = serializers.UUIDField(allow_null=True)
 
 
 class ManifestPendingResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -252,9 +255,14 @@ def _telemetry_from_headers(request) -> tuple[str | None, int | None, bool]:
 class TabletProtocolAPIView(APIView):
     """Apply private/no-store semantics to every tablet protocol response."""
 
+    def initial(self, request, *args, **kwargs):
+        request._api_activity_started_at = time.perf_counter()
+        super().initial(request, *args, **kwargs)
+
     def finalize_response(self, request, response, *args, **kwargs):
         response = super().finalize_response(request, response, *args, **kwargs)
         response.setdefault("Cache-Control", "no-store, private")
+        record_tablet_api_activity(request, response)
         return response
 
 
@@ -301,44 +309,6 @@ class AdoptionPreviewView(TabletProtocolAPIView):
 
 
 @extend_schema(
-    request=AdoptionPreviewSerializer,
-    responses={
-        201: AdoptionPreviewResponseSerializer,
-        (400, "application/problem+json"): ProblemResponseSerializer,
-        (403, "application/problem+json"): ProblemResponseSerializer,
-        (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
-    },
-)
-class ReactivationPreviewView(AdoptionPreviewView):
-    def post(self, request):
-        serializer = AdoptionPreviewSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        _raise_if_incompatible(serializer.validated_data["app_version"])
-        try:
-            challenge = create_adoption_request(**serializer.validated_data, reactivation=True)
-        except TabletError as error:
-            raise _problem_from_service(error) from error
-        invitation = challenge.request.reactivation_invitation
-        if invitation is None:
-            raise exceptions.APIException("Reactivation request is missing its invitation.")
-        return Response(
-            {
-                "adoption_request_id": str(challenge.request.id),
-                "encrypted_challenge": base64.b64encode(challenge.encrypted_challenge).decode(
-                    "ascii"
-                ),
-                "expires_at": canonical_protocol_datetime(challenge.request.expires_at),
-                "tablet_id": str(invitation.app_installation.tablet_id),
-                "hpke_ciphersuite": challenge.request.hpke_ciphersuite,
-                "hpke_public_key_fingerprint": challenge.request.hpke_public_key_fingerprint,
-                "mode": "reactivation",
-                "protocol": "tablet-adoption-v1",
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-
-@extend_schema(
     request=AdoptionCompleteSerializer,
     responses={
         201: AdoptionCompleteResponseSerializer,
@@ -350,7 +320,6 @@ class AdoptionCompleteView(TabletProtocolAPIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
     parser_classes = [parsers.JSONParser]
-    reactivation = False
 
     def post(self, request):
         serializer = AdoptionCompleteSerializer(data=request.data)
@@ -360,60 +329,6 @@ class AdoptionCompleteView(TabletProtocolAPIView):
                 request_id=serializer.validated_data["adoption_request_id"],
                 challenge_response=serializer.validated_data["challenge_response"],
                 confirmed=serializer.validated_data["confirmed"],
-                reactivation=self.reactivation,
-            )
-        except (TabletError, AppInstallation.DoesNotExist) as error:
-            raise _problem_from_service(error) from error
-        return Response(
-            {
-                "installation_id": str(installation.id),
-                "credential": credential,
-                "authorization_valid_until": installation.authorization_valid_until,
-                "server_time": timezone.now(),
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-
-@extend_schema(
-    request=AdoptionCompleteSerializer,
-    responses={
-        201: AdoptionCompleteResponseSerializer,
-        (400, "application/problem+json"): ProblemResponseSerializer,
-        (403, "application/problem+json"): ProblemResponseSerializer,
-    },
-)
-class ReactivationCompleteView(AdoptionCompleteView):
-    authentication_classes = []
-    permission_classes = [permissions.AllowAny]
-    reactivation = True
-
-    def post(self, request):
-        serializer = AdoptionCompleteSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        provisioning_request = AdoptionRequest.objects.filter(
-            pk=serializer.validated_data["adoption_request_id"],
-            reactivation_invitation__isnull=False,
-        ).first()
-        if provisioning_request is None:
-            raise exceptions.PermissionDenied("Reactivation request is not for this installation.")
-        if provisioning_request.completed_at is None:
-            invitation = provisioning_request.reactivation_invitation
-            if invitation is None:
-                raise exceptions.PermissionDenied(
-                    "Reactivation request is not for this installation."
-                )
-            principal = InstallationBearerAuthentication().authenticate(request)
-            if principal is None or principal[0].installation.id != invitation.app_installation_id:
-                raise exceptions.PermissionDenied(
-                    "Reactivation request is not for this installation."
-                )
-        try:
-            installation, credential = complete_adoption(
-                request_id=serializer.validated_data["adoption_request_id"],
-                challenge_response=serializer.validated_data["challenge_response"],
-                confirmed=serializer.validated_data["confirmed"],
-                reactivation=True,
             )
         except (TabletError, AppInstallation.DoesNotExist) as error:
             raise _problem_from_service(error) from error
@@ -572,14 +487,14 @@ class StatusView(InstallationAPIView):
         )
 
 
-def _configuration(installation: AppInstallation) -> dict[str, str]:
-    _, vehicle, _ = authorized_publications(installation=installation)
+def _configuration(installation: AppInstallation) -> dict[str, str | None]:
+    _, vehicle = control_plane_context(installation=installation, now=timezone.now())
     return {
         "installation_id": str(installation.id),
         "tablet_id": str(installation.tablet_id),
         "department_id": str(installation.tablet.department_id),
-        "station_id": str(vehicle.station_id),
-        "vehicle_id": str(vehicle.id),
+        "station_id": str(vehicle.station_id) if vehicle is not None else None,
+        "vehicle_id": str(vehicle.id) if vehicle is not None else None,
     }
 
 
@@ -614,7 +529,7 @@ class SigningKeyView(InstallationAPIView):
             # lifecycle/assignment authorization identical to configuration,
             # manifest, and download; status is the sole REPLACED/REVOKED
             # recovery probe.
-            authorized_publications(installation=self.installation)
+            control_plane_context(installation=self.installation, now=timezone.now())
             public_key = publication_signing_public_key_for_requested_version(version)
         except KeyError as error:
             raise exceptions.NotFound("Signing key version is not available.") from error
@@ -710,7 +625,10 @@ class DownloadView(InstallationAPIView):
             raise _problem_from_service(error) from error
         if manifest.unavailable or manifest.payload is None:
             raise exceptions.PermissionDenied("Publication is not available for this installation.")
-        _, _, publications = authorized_publications(installation=self.installation)
+        try:
+            _, _, publications = authorized_publications(installation=self.installation)
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
         datasets = manifest.payload.get("datasets")
         if not isinstance(datasets, list):
             raise exceptions.PermissionDenied("Manifest datasets are invalid.")

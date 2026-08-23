@@ -20,10 +20,19 @@ from rest_framework.test import APIRequestFactory
 
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
-from apps.authorization.models import ApiVersionCompatibilityPolicy, SystemRole
+from apps.authorization.models import (
+    ApiVersionCompatibilityPolicy,
+    DepartmentMembership,
+    SystemRole,
+)
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE, serialize_p256_public_key
-from apps.publications.manifests import request_manifest
+from apps.publications.manifests import (
+    ManifestError,
+    canonical_manifest_payload,
+    request_dataset_key_grant,
+    request_manifest,
+)
 from apps.publications.models import (
     DatasetKeyGrant,
     DatasetPublication,
@@ -33,7 +42,12 @@ from apps.publications.models import (
 from apps.publications.worker_grants import process_next_signed_manifest
 from apps.tablets.api import DownloadView
 from apps.tablets.models import AppInstallation, Tablet
-from apps.tablets.services import generate_credential, verify_credential
+from apps.tablets.services import (
+    activate_tablet,
+    deactivate_tablet,
+    generate_credential,
+    verify_credential,
+)
 
 
 @pytest.fixture
@@ -41,6 +55,7 @@ def api_context(db):
     now = timezone.now()
     user = User.objects.create_user("api@example.test", "API User", "safe-password")
     department = Department.objects.create(name="API", short_code="API", created_by=user)
+    DepartmentMembership.objects.create(user=user, department=department, created_by=user)
     station = Station.objects.create(department=department, name="Station", short_code="STA")
     vehicle = Vehicle.objects.create(
         department=department, station=station, display_name="Engine 1"
@@ -134,55 +149,127 @@ def test_configuration_and_manifest_use_bearer_installation_scope(api_context, t
     ).decode("ascii")
     assert manifest["ETag"]
 
-    signing_public_path = tmp_path / "signing-public"
-    signing_public_path.write_bytes(
-        Ed25519PrivateKey.from_private_bytes(b"s" * 32)
-        .public_key()
-        .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    )
-    historical_public_key = (
-        Ed25519PrivateKey.from_private_bytes(b"h" * 32)
-        .public_key()
-        .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    )
-    signing_ring_path = tmp_path / "signing-public-ring.json"
-    signing_ring_path.write_text(
-        json.dumps(
-            {
-                "keys": {
-                    "0": base64.b64encode(historical_public_key).decode("ascii"),
-                    "1": base64.b64encode(signing_public_path.read_bytes()).decode("ascii"),
-                }
-            }
-        ),
-        encoding="ascii",
-    )
-    with override_settings(PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH=signing_ring_path):
-        signing_key = client.get("/api/v1/tablet/signing-keys/1", **_authorization(credential))
-        historical_key = client.get("/api/v1/tablet/signing-keys/0", **_authorization(credential))
-        unknown_key = client.get(
-            "/api/v1/tablet/signing-keys/unknown", **_authorization(credential)
-        )
-    assert signing_key.status_code == 200
-    assert signing_key.json() == {
-        "algorithm": "Ed25519",
-        "version": "1",
-        "public_key": base64.b64encode(signing_public_path.read_bytes()).decode("ascii"),
-    }
-    assert historical_key.status_code == 200
-    assert historical_key.json() == {
-        "algorithm": "Ed25519",
-        "version": "0",
-        "public_key": base64.b64encode(historical_public_key).decode("ascii"),
-    }
-    assert unknown_key.status_code == 404
 
-    not_modified = client.get(
-        "/api/v1/tablet/manifest",
-        HTTP_IF_NONE_MATCH=manifest["ETag"],
-        **_authorization(credential),
+def test_inactive_tablet_syncs_signed_empty_manifest_and_reactivates_same_installation(
+    api_context, tmp_path
+):
+    """A decommissioned asset keeps control identity but has no dataset scope."""
+    client, installation, credential, publication = api_context
+    actor = installation.tablet.department.created_by
+    signing_path = tmp_path / "signing"
+    signing_path.write_bytes(b"s" * 32)
+
+    # Establish the normal assigned manifest before deactivation.
+    request_manifest(installation=installation)
+    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+        assert process_next_signed_manifest() is not None
+    normal = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+    assert normal.status_code == 200
+    assert [entry["publication_id"] for entry in normal.json()["datasets"]] == [str(publication.id)]
+
+    grant = DatasetKeyGrant.objects.get(publication=publication, app_installation=installation)
+    original_grant_id = grant.id
+    original_expiry = installation.authorization_valid_until
+    tablet_id = installation.tablet_id
+    installation_id = installation.id
+
+    deactivate_tablet(actor=actor, tablet=installation.tablet, reason="Workshop")
+    TabletVehicleAssignment.objects.filter(tablet=installation.tablet).delete()
+    installation.refresh_from_db()
+    grant.refresh_from_db()
+    assert installation.id == installation_id
+    assert installation.tablet_id == tablet_id
+    assert installation.status == AppInstallation.Status.ACTIVE
+    assert grant.status == DatasetKeyGrant.Status.REVOKED
+
+    # Inactive check-in is a contact/control operation, not an operational renewal.
+    check_in = client.post("/api/v1/tablet/check-in", **_authorization(credential))
+    assert check_in.status_code == 200
+    installation.refresh_from_db()
+    assert installation.authorization_valid_until == original_expiry
+    assert installation.last_successful_check_in_at is not None
+    configuration = client.get("/api/v1/tablet/configuration", **_authorization(credential))
+    assert configuration.status_code == 200
+    assert configuration.json()["station_id"] is None
+    assert configuration.json()["vehicle_id"] is None
+
+    pending = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+    assert pending.status_code == 202
+    # No new grant can be requested while the scope is inactive.
+    grant.refresh_from_db()
+    assert grant.id == original_grant_id
+    assert grant.status == DatasetKeyGrant.Status.REVOKED
+    with pytest.raises(ManifestError):
+        request_dataset_key_grant(publication=publication, installation=installation)
+
+    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+        assert process_next_signed_manifest() is not None
+    empty = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+    assert empty.status_code == 200
+    assert empty.json()["datasets"] == []
+    public_key = Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key()
+    unsigned = {key: value for key, value in empty.json().items() if key != "signature"}
+    public_key.verify(
+        base64.b64decode(empty.json()["signature"]), canonical_manifest_payload(unsigned)
     )
-    assert not_modified.status_code == 304
+    assert (
+        client.get(
+            "/api/v1/tablet/manifest",
+            HTTP_IF_NONE_MATCH=empty["ETag"],
+            **_authorization(credential),
+        ).status_code
+        == 304
+    )
+    assert (
+        client.get(
+            f"/api/v1/tablet/datasets/{publication.id}/download", **_authorization(credential)
+        ).status_code
+        == 403
+    )
+
+    # A newly assigned operational scope can be activated without adoption.
+    restored_station = Station.objects.create(
+        department=installation.tablet.department, name="Restored station", short_code="RST"
+    )
+    restored_vehicle = Vehicle.objects.create(
+        department=installation.tablet.department,
+        station=restored_station,
+        display_name="HLF 2",
+    )
+    TabletVehicleAssignment.objects.create(
+        tablet=installation.tablet,
+        vehicle=restored_vehicle,
+        valid_from=timezone.now(),
+        created_by=actor,
+    )
+    activated = activate_tablet(actor=actor, tablet=installation.tablet)
+    assert activated.id == tablet_id
+    restored_pending = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+    assert restored_pending.status_code == 202
+    grant.refresh_from_db()
+    assert grant.id == original_grant_id
+    assert grant.status == DatasetKeyGrant.Status.PENDING
+    grant.status = DatasetKeyGrant.Status.READY
+    grant.hpke_ciphersuite = HPKE_CIPHERSUITE
+    grant.hpke_encapsulated_key = b"e"
+    grant.hpke_wrapped_content_key = b"w"
+    grant.save(
+        update_fields=(
+            "status",
+            "hpke_ciphersuite",
+            "hpke_encapsulated_key",
+            "hpke_wrapped_content_key",
+        )
+    )
+    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+        assert process_next_signed_manifest() is not None
+    restored = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+    assert restored.status_code == 200
+    assert [entry["publication_id"] for entry in restored.json()["datasets"]] == [
+        str(publication.id)
+    ]
+    assert restored.json()["configuration"]["vehicle_id"] == str(restored_vehicle.id)
+    assert AppInstallation.objects.get(pk=installation_id).tablet_id == tablet_id
 
 
 def test_manifest_pending_is_an_rfc9457_problem(api_context):
@@ -463,11 +550,39 @@ def test_refresh_rejects_expired_or_non_operational_installations(api_context):
     inactive = client.post("/api/v1/tablet/refresh", **_authorization(credential))
     assert inactive.status_code == 403
 
-    installation.tablet.active = True
-    installation.tablet.status = Tablet.Status.REMOVED
+    installation.tablet.active = False
+    installation.tablet.status = Tablet.Status.LOST
     installation.tablet.save(update_fields=("active", "status"))
-    removed = client.post("/api/v1/tablet/refresh", **_authorization(credential))
-    assert removed.status_code == 403
+    lost = client.post("/api/v1/tablet/refresh", **_authorization(credential))
+    assert lost.status_code == 403
+
+
+def test_deactivated_tablet_keeps_identity_but_loses_operational_endpoint_access(api_context):
+    client, installation, credential, publication = api_context
+    department = installation.tablet.department
+    user = department.created_by
+
+    deactivated = deactivate_tablet(actor=user, tablet=installation.tablet, reason="Workshop")
+    installation.refresh_from_db()
+
+    assert deactivated.status == Tablet.Status.INACTIVE
+    assert installation.status == AppInstallation.Status.ACTIVE
+    assert client.get("/api/v1/tablet/status", **_authorization(credential)).status_code == 200
+    status_payload = client.get("/api/v1/tablet/status", **_authorization(credential)).json()
+    assert status_payload["purge_provisioned_data"] is False
+
+    assert client.post("/api/v1/tablet/check-in", **_authorization(credential)).status_code == 200
+    assert client.post("/api/v1/tablet/refresh", **_authorization(credential)).status_code == 403
+    assert (
+        client.get("/api/v1/tablet/configuration", **_authorization(credential)).status_code == 200
+    )
+    assert client.get("/api/v1/tablet/manifest", **_authorization(credential)).status_code == 202
+    assert (
+        client.get(
+            f"/api/v1/tablet/datasets/{publication.id}/download", **_authorization(credential)
+        ).status_code
+        == 403
+    )
 
 
 @pytest.mark.parametrize(
@@ -510,7 +625,7 @@ def test_signing_key_requires_current_authorized_installation(
         (AppInstallation.Status.REVOKED, "/api/v1/tablet/status", 200),
         (AppInstallation.Status.REPLACED, "/api/v1/tablet/status", 200),
         (AppInstallation.Status.ACTIVE, "/api/v1/tablet/check-in", 200),
-        (AppInstallation.Status.STALE, "/api/v1/tablet/check-in", 403),
+        (AppInstallation.Status.STALE, "/api/v1/tablet/check-in", 200),
         (AppInstallation.Status.REVOKED, "/api/v1/tablet/check-in", 403),
         (AppInstallation.Status.REPLACED, "/api/v1/tablet/check-in", 403),
         (AppInstallation.Status.ACTIVE, "/api/v1/tablet/refresh", 200),
@@ -543,6 +658,37 @@ def test_installation_state_access_matrix(api_context, installation_status, path
         assert response.json()["purge_provisioned_data"] == (
             installation_status in (AppInstallation.Status.REVOKED, AppInstallation.Status.REPLACED)
         )
+
+
+@pytest.mark.parametrize(
+    "installation_status",
+    [AppInstallation.Status.REVOKED, AppInstallation.Status.REPLACED],
+)
+def test_terminal_installations_only_retain_narrow_status_access(api_context, installation_status):
+    client, installation, credential, publication = api_context
+    installation.status = installation_status
+    installation.save(update_fields=("status",))
+
+    status_response = client.get("/api/v1/tablet/status", **_authorization(credential))
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == installation_status.lower()
+    assert status_response.json()["purge_provisioned_data"] is True
+
+    assert client.post("/api/v1/tablet/check-in", **_authorization(credential)).status_code == 403
+    assert client.post("/api/v1/tablet/refresh", **_authorization(credential)).status_code == 403
+    assert (
+        client.get("/api/v1/tablet/configuration", **_authorization(credential)).status_code == 403
+    )
+    assert client.get("/api/v1/tablet/manifest", **_authorization(credential)).status_code == 403
+    assert (
+        client.get("/api/v1/tablet/signing-keys/1", **_authorization(credential)).status_code == 403
+    )
+    assert (
+        client.get(
+            f"/api/v1/tablet/datasets/{publication.id}/download", **_authorization(credential)
+        ).status_code
+        == 403
+    )
 
 
 def test_openapi_schema_is_available():

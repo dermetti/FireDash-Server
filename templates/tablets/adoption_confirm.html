@@ -1,16 +1,21 @@
 {% extends "base.html" %}
-{% block title %}{% if mode == 'adoption' %}Start adoption{% else %}Reactivate{% endif %} — {{ tablet.display_name|default:"Tablet" }}{% endblock %}
+{% block title %}{% if mode == 'adoption' %}Start adoption{% else %}Re-provision FireDash{% endif %} — {{ tablet.display_name|default:"Tablet" }}{% endblock %}
 {% block content %}
 <div class="row justify-content-center"><div class="col-md-6">
-  <h1>{% if mode == 'adoption' %}Start tablet adoption{% else %}Reactivate tablet{% endif %}</h1>
+  <h1>{% if mode == 'adoption' %}Start tablet adoption{% else %}Re-provision FireDash{% endif %}</h1>
   <p class="text-body-secondary mb-2">Tablet: <strong>{{ tablet.display_name|default:"Unnamed tablet" }}</strong>
     {% if tablet.asset_number %}<span class="text-body-secondary">({{ tablet.asset_number }})</span>{% endif %}</p>
   {% if vehicle %}<p class="text-body-secondary mb-2">Vehicle: <strong>{{ vehicle.display_name }}</strong></p>
   <p class="text-body-secondary mb-3">Station: <strong>{{ vehicle.station.name }}</strong></p>{% endif %}
   <div class="card"><div class="card-body">
-    <p class="text-body-secondary">A one-time invitation will be generated. It expires after 15 minutes.</p>
-    <form method="post" action="{% if mode == 'adoption' %}{% url 'tablet-adopt' department.id tablet.id %}{% else %}{% url 'tablet-reactivate' department.id tablet.id %}{% endif %}">
+    {% if mode == 'replacement' %}
+      <div class="alert alert-info">The current installation stays active until the new installation completes adoption. A successful adoption activates the new installation and marks the previous one replaced. The tablet's identity and assignment stay unchanged.</div>
+    {% else %}
+      <p class="text-body-secondary">A one-time invitation will be generated. It expires after 15 minutes.</p>
+    {% endif %}
+    <form method="post" action="{% if mode == 'adoption' %}{% url 'tablet-adopt' department.id tablet.id %}{% else %}{% url 'tablet-replace' department.id tablet.id %}{% endif %}">
       {% csrf_token %}
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
       <a href="{% url 'tablet-detail' department.id tablet.id %}" class="btn btn-outline-secondary">Cancel</a>
       <button type="submit" class="btn btn-primary">Generate invitation</button>
     </form>

@@ -87,14 +87,17 @@ def manifest_state_hash(
     """Hash the authorization and publication state that coalesces manifest work."""
     state = {
         "generation": generation,
+        # Not a wire field: prevent an inactive empty scope from coalescing
+        # with an active empty scope for the same installation/configuration.
+        "tablet_asset_state": installation.tablet.status,
         "signing_key_version": settings.PUBLICATION_SIGNING_KEY_VERSION,
         "authorization_valid_until": installation.authorization_valid_until.isoformat(),
         "configuration": {
             "installation_id": str(installation.id),
             "tablet_id": str(installation.tablet_id),
             "department_id": str(installation.tablet.department_id),
-            "station_id": str(vehicle.station_id),
-            "vehicle_id": str(vehicle.id),
+            "station_id": str(vehicle.station_id) if vehicle is not None else None,
+            "vehicle_id": str(vehicle.id) if vehicle is not None else None,
         },
         "datasets": [_publication_manifest_entry(publication) for publication in publications],
     }
@@ -125,7 +128,13 @@ def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, ob
     }
 
 
-def _authorization_context(*, installation: AppInstallation, now):
+def control_plane_context(*, installation: AppInstallation, now):
+    """Resolve authenticated identity/configuration without granting datasets.
+
+    An INACTIVE physical asset remains a known installation so it can obtain the
+    signed empty manifest that removes reference-data scope.  Dataset access is
+    deliberately handled by the stricter ``_authorization_context`` below.
+    """
     installation = AppInstallation.objects.select_related("tablet__department").get(
         pk=installation.pk
     )
@@ -135,7 +144,12 @@ def _authorization_context(*, installation: AppInstallation, now):
         or not installation.tablet.active
         or installation.tablet.department.status != installation.tablet.department.Status.ACTIVE
     ):
-        raise ManifestError("Installation is not authorized for a manifest.")
+        raise ManifestError("Installation is not authorized for control-plane synchronization.")
+    if installation.tablet.status == installation.tablet.Status.INACTIVE:
+        # An inactive asset intentionally has no operational scope.  It can
+        # therefore synchronize an empty manifest even after its assignment
+        # has been removed; ACTIVE scope is validated below.
+        return installation, None
     assignment = (
         TabletVehicleAssignment.objects.select_related("vehicle__station")
         .filter(
@@ -152,11 +166,59 @@ def _authorization_context(*, installation: AppInstallation, now):
     return installation, assignment.vehicle
 
 
+def _authorization_context(*, installation: AppInstallation, now):
+    """Resolve the active operational dataset scope only."""
+    installation, vehicle = control_plane_context(installation=installation, now=now)
+    if installation.tablet.status != installation.tablet.Status.ACTIVE:
+        raise ManifestError("Installation is not authorized for operational datasets.")
+    if vehicle is None:
+        raise ManifestError("Installation has no current authorized vehicle assignment.")
+    return installation, vehicle
+
+
 def authorized_publications(*, installation: AppInstallation, now=None):
     """Resolve only registered, enabled publications in the derived tablet scope."""
     installation, vehicle = _authorization_context(
         installation=installation, now=now or timezone.now()
     )
+    publications = (
+        DatasetPublication.objects.filter(
+            department_id=installation.tablet.department_id,
+            status=DatasetPublication.Status.PUBLISHED,
+            artifact_status=DatasetPublication.ArtifactStatus.READY,
+        )
+        .filter(Q(station__isnull=True) | Q(station=vehicle.station))
+        .order_by("dataset_type_code")
+    )
+    return (
+        installation,
+        vehicle,
+        [
+            publication
+            for publication in publications
+            if is_feature_enabled(
+                department=installation.tablet.department,
+                feature_code=get_dataset_definition(publication.dataset_type_code).feature_code,
+            )
+        ],
+    )
+
+
+def manifest_publications(*, installation: AppInstallation, now=None):
+    """Resolve the signed-manifest dataset list for active or inactive assets.
+
+    The signed wire manifest includes installation/tablet/assignment IDs and
+    authorization expiry, so an empty result cannot be shared across tablets.
+    It is nevertheless coalesced by the existing per-installation state hash
+    and does not create a DatasetPublication build or DatasetKeyGrant.
+    """
+    installation, vehicle = control_plane_context(
+        installation=installation, now=now or timezone.now()
+    )
+    if installation.tablet.status == installation.tablet.Status.INACTIVE:
+        return installation, vehicle, []
+    if installation.tablet.status != installation.tablet.Status.ACTIVE:
+        raise ManifestError("Installation is not authorized for a manifest.")
     publications = (
         DatasetPublication.objects.filter(
             department_id=installation.tablet.department_id,
@@ -195,6 +257,30 @@ def request_dataset_key_grant(
         publication=publication, app_installation=installation
     ).first()
     if grant is not None:
+        if grant.status == DatasetKeyGrant.Status.REVOKED:
+            # Deactivation/revocation invalidates the prior HPKE wrapping.
+            # A later ACTIVE authorization may safely request a fresh wrapping
+            # in the same unique grant row; inactive assets cannot reach this
+            # branch because ``authorized_publications`` remains strict.
+            grant.status = DatasetKeyGrant.Status.PENDING
+            grant.hpke_ciphersuite = ""
+            grant.hpke_encapsulated_key = None
+            grant.hpke_wrapped_content_key = None
+            grant.completed_at = None
+            grant.error_message = ""
+            grant.revoked_at = None
+            grant.save(
+                update_fields=(
+                    "status",
+                    "hpke_ciphersuite",
+                    "hpke_encapsulated_key",
+                    "hpke_wrapped_content_key",
+                    "completed_at",
+                    "error_message",
+                    "revoked_at",
+                )
+            )
+            return grant
         if retry_failed and grant.status == DatasetKeyGrant.Status.FAILED:
             grant.status = DatasetKeyGrant.Status.PENDING
             grant.completed_at = None
@@ -210,7 +296,7 @@ def request_dataset_key_grant(
 
 
 def revoke_dataset_key_grants(*, installation: AppInstallation) -> int:
-    """Make grants unusable after an installation is replaced or revoked."""
+    """Make prior HPKE grant material unusable after access is withdrawn."""
     return DatasetKeyGrant.objects.filter(
         app_installation=installation,
         status__in=(
@@ -232,7 +318,7 @@ def request_manifest(
     """
     now = now or timezone.now()
     with transaction.atomic():
-        installation, vehicle, publications = authorized_publications(
+        installation, vehicle, publications = manifest_publications(
             installation=installation, now=now
         )
         for publication in publications:
@@ -255,7 +341,7 @@ def request_manifest(
             manifest = SignedManifest.objects.get(
                 app_installation=installation, state_hash=state_hash
             )
-        if manifest.status == SignedManifest.Status.FAILED:
+        if manifest.status in (SignedManifest.Status.FAILED, SignedManifest.Status.OBSOLETE):
             # A new tablet manifest request is an explicit, safe retry signal.
             # It can recover a credential outage without a database repair, but
             # the delivery worker never reclaims terminal failures by itself.

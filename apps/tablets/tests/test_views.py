@@ -96,7 +96,7 @@ def test_tablet_list_filters_by_query_and_status(client, tablet_admin_data):
         department=department,
         display_name="Reserve Tablet",
         asset_number="RSV-02",
-        status=Tablet.Status.STALE,
+        status=Tablet.Status.INACTIVE,
     )
     client.force_login(department_admin)
 

@@ -12,17 +12,20 @@ from apps.tablets.models import AppInstallation, Tablet
 
 
 def tablet_status_counts(department: Department) -> dict[str, int]:
-    """Return status counts for a department's tablets, keyed for the status summary."""
+    """Return asset-state counts for a department's tablets, keyed for the status summary."""
     rows = Tablet.objects.filter(department=department).values("status").annotate(total=Count("id"))
     counts = {row["status"]: row["total"] for row in rows}
+    active = counts.get(Tablet.Status.ACTIVE, 0)
+    inactive = counts.get(Tablet.Status.INACTIVE, 0)
+    lost = counts.get(Tablet.Status.LOST, 0)
+    retired = counts.get(Tablet.Status.RETIRED, 0)
     return {
         "total": sum(counts.values()),
-        "active": counts.get(Tablet.Status.ACTIVE, 0),
-        "pending": counts.get(Tablet.Status.PENDING, 0),
-        "stale": counts.get(Tablet.Status.STALE, 0),
-        "removed": counts.get(Tablet.Status.REMOVED, 0),
-        "lost": counts.get(Tablet.Status.LOST, 0),
-        "retired": counts.get(Tablet.Status.RETIRED, 0),
+        "operational": active + inactive + lost,
+        "active": active,
+        "inactive": inactive,
+        "lost": lost,
+        "retired": retired,
     }
 
 
@@ -46,13 +49,14 @@ def tablet_adoption_ready(tablet: Tablet) -> bool:
     """
     if tablet.department.status != Department.Status.ACTIVE or not tablet.active:
         return False
-    if tablet.status in (Tablet.Status.REMOVED, Tablet.Status.LOST, Tablet.Status.RETIRED):
+    if tablet.status not in (Tablet.Status.INACTIVE, Tablet.Status.ACTIVE):
         return False
     return tablet.vehicle_assignments.filter(
         ended_at__isnull=True,
         valid_until__isnull=True,
         vehicle__active=True,
         vehicle__station__active=True,
+        vehicle__department_id=tablet.department_id,
     ).exists()
 
 

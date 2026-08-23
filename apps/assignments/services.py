@@ -1,11 +1,13 @@
 from datetime import datetime
 
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment, TabletVehicleAssignment
 from apps.audit.services import record_event
+from apps.authorization.scopes import active_department_ids, active_station_ids
 from apps.authorization.services import require_department_admin
 from apps.organizations.models import Department, Station, Vehicle
 from apps.personnel.models import Person
@@ -198,12 +200,40 @@ def end_temporary_assignment(*, assignment: PersonnelStationAssignment, actor=No
     )
 
 
+def _authorize_tablet_vehicle_assignment(actor, tablet: Tablet, vehicle: Vehicle) -> None:
+    """Authorize a tablet reassignment for department or station administrators.
+
+    Department administrators may move a tablet anywhere within the department.
+    Station administrators may only move a tablet between vehicles in their own
+    fixed station: the target vehicle must be in their station, and the tablet's
+    current open assignment (if any) must also be in that station. This is a
+    server-side authorization boundary, not a UI-only filter.
+    """
+    if tablet.department_id in active_department_ids(actor):
+        require_department_admin(actor, tablet.department)
+        return
+    station_ids = list(active_station_ids(actor))
+    if not station_ids:
+        raise PermissionDenied("Department administrator scope is required.")
+    if vehicle.station_id not in station_ids:
+        raise PermissionDenied("Station administrator scope is required.")
+    current = (
+        TabletVehicleAssignment.objects.filter(
+            tablet=tablet, valid_until__isnull=True, ended_at__isnull=True
+        )
+        .select_related("vehicle")
+        .first()
+    )
+    if current is not None and current.vehicle.station_id not in station_ids:
+        raise PermissionDenied("Station administrator scope is required.")
+
+
 @transaction.atomic
 def assign_tablet_vehicle(
     *, tablet: Tablet, vehicle: Vehicle, actor, effective_at: datetime | None = None
 ) -> TabletVehicleAssignment:
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
-    require_department_admin(actor, tablet.department)
+    _authorize_tablet_vehicle_assignment(actor, tablet, vehicle)
     _validate_tablet_vehicle(tablet, vehicle)
     current = (
         TabletVehicleAssignment.objects.select_for_update()

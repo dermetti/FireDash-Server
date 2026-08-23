@@ -7,7 +7,7 @@ This package is intentionally an *external* API client:
 * no server-side service/model imports.
 
 It exercises the same HTTPS + cryptographic contract the physical iPad uses,
-so it can drive live adoption/reactivation/check-in/manifest/dataset testing
+so it can drive live adoption/check-in/manifest/dataset testing
 against a real FireDash deployment.
 
 Run with either::

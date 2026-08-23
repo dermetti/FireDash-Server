@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}{% if mode == 'adoption' %}Tablet adoption invitation{% else %}Tablet reactivation invitation{% endif %}{% endblock %}
+{% block title %}{% if mode == 'adoption' %}Tablet adoption invitation{% elif mode == 'replacement' %}Re-provision FireDash invitation{% else %}Installation recovery invitation{% endif %}{% endblock %}
 {% block content %}
 <div class="row justify-content-center"><div class="col-md-6 col-lg-5">
-  <h1 class="h3 mb-1">{% if mode == 'adoption' %}Tablet adoption invitation{% else %}Tablet reactivation invitation{% endif %}</h1>
+  <h1 class="h3 mb-1">{% if mode == 'adoption' %}Tablet adoption invitation{% elif mode == 'replacement' %}Re-provision FireDash invitation{% else %}Installation recovery invitation{% endif %}</h1>
   <div class="alert alert-warning py-2">This invitation is shown only once and expires at {{ expires_at|date:"H:i" }}.</div>
   <div class="card shadow-sm"><div class="card-body">
     <p class="mb-1">Tablet: <strong>{{ tablet.display_name|default:"Unnamed tablet" }}</strong>
@@ -10,7 +10,7 @@
     {% if vehicle %}<p class="mb-3">Vehicle: <strong>{{ vehicle.display_name }}</strong></p>{% endif %}
 
     <div class="text-center mb-3">
-      <img src="data:image/png;base64,{{ qr_code }}" alt="QR code for tablet {% if mode == 'adoption' %}adoption{% else %}reactivation{% endif %}" class="img-fluid" style="max-width: 240px;">
+      <img src="data:image/png;base64,{{ qr_code }}" alt="QR code for tablet {% if mode == 'adoption' %}adoption{% elif mode == 'replacement' %}re-provisioning{% else %}recovery{% endif %}" class="img-fluid" style="max-width: 240px;">
       <div class="text-body-secondary small mt-1">Scan this code with the FireDash iPad.</div>
     </div>
 

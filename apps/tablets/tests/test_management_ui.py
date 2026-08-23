@@ -80,20 +80,19 @@ def _assign(tablet, vehicle, actor):
 @pytest.mark.django_db
 def test_tablet_status_counts_are_department_scoped(tablet_ui_scope):
     scope = tablet_ui_scope
-    _pending_tablet(scope.department, status=Tablet.Status.PENDING)
-    _pending_tablet(scope.department, status=Tablet.Status.ACTIVE)
-    _pending_tablet(scope.department, status=Tablet.Status.STALE)
-    _pending_tablet(scope.department, status=Tablet.Status.RETIRED)
+    _pending_tablet(scope.department, status=Tablet.Status.INACTIVE, display_name="One")
+    _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Two")
+    _pending_tablet(scope.department, status=Tablet.Status.LOST, display_name="Three")
+    _pending_tablet(scope.department, status=Tablet.Status.RETIRED, display_name="Four")
     _pending_tablet(scope.other_department, status=Tablet.Status.ACTIVE)
 
     counts = tablet_status_counts(scope.department)
     assert counts == {
         "total": 4,
+        "operational": 3,
         "active": 1,
-        "pending": 1,
-        "stale": 1,
-        "removed": 0,
-        "lost": 0,
+        "inactive": 1,
+        "lost": 1,
         "retired": 1,
     }
 
@@ -253,7 +252,7 @@ def test_assign_vehicle_audits_event(client, tablet_ui_scope):
 def test_tablet_list_filters(client, tablet_ui_scope):
     scope = tablet_ui_scope
     active = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, asset_number="CMD-01")
-    _pending_tablet(scope.department, status=Tablet.Status.STALE, display_name="Reserve")
+    _pending_tablet(scope.department, status=Tablet.Status.INACTIVE, display_name="Reserve")
     client.force_login(scope.admin)
 
     response = client.get(
@@ -273,17 +272,17 @@ def test_tablet_list_htx_returns_partial_and_direct_reload_renders_full_page(
     # HTMX filter/sort requests hit the canonical URL and receive only the results partial.
     partial = client.get(
         reverse("tablet-list", args=(scope.department.id,)),
-        {"status": "PENDING"},
+        {"status": "INACTIVE"},
         HTTP_HX_REQUEST="true",
     )
     assert partial.status_code == 200
     partial_html = partial.content.decode()
-    assert "Showing 1 of 1 tablet." in partial_html
+    assert "Showing 1&ndash;1 of 1 tablet." in partial_html
     assert "<html" not in partial_html
 
     # The same URL without the HX header must render the complete management page so a
     # direct reload of a pushed history URL never lands on a bare partial.
-    full = client.get(reverse("tablet-list", args=(scope.department.id,)), {"status": "PENDING"})
+    full = client.get(reverse("tablet-list", args=(scope.department.id,)), {"status": "INACTIVE"})
     assert full.status_code == 200
     full_html = full.content.decode()
     assert "<html" in full_html
@@ -468,37 +467,41 @@ def test_adoption_status_polling_states(client, tablet_ui_scope):
     assert "adopted successfully" in completed.content.decode()
 
 
-# --- reactivation -----------------------------------------------------------
+# --- stale installation guidance --------------------------------------------
 
 
 @pytest.mark.django_db
-def test_reactivation_for_stale_tablet(client, tablet_ui_scope):
+def test_stale_installation_explains_automatic_recovery(client, tablet_ui_scope):
     scope = tablet_ui_scope
-    tablet = _pending_tablet(scope.department, status=Tablet.Status.STALE)
+    tablet = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE)
     _assign(tablet, scope.vehicle, scope.admin)
     installation = _adopted_installation(tablet)
     installation.status = AppInstallation.Status.STALE
     installation.stale_at = timezone.now()
     installation.save(update_fields=("status", "stale_at"))
-    _login_with_reauth(client, scope.admin)
-
-    response = client.post(reverse("tablet-reactivate", args=(scope.department.id, tablet.id)))
+    client.force_login(scope.admin)
+    response = client.get(reverse("tablet-detail", args=(scope.department.id, tablet.id)))
     assert response.status_code == 200
-    assert "reactivation" in response.content.decode()
+    html = response.content.decode()
+    assert "recover automatically" in html
+    assert "Recover installation" not in html
+    # The physical Tablet asset state is unchanged by installation health.
+    tablet.refresh_from_db()
+    assert tablet.status == Tablet.Status.ACTIVE
 
 
-# --- removal ----------------------------------------------------------------
+# --- asset lifecycle ---------------------------------------------------------
 
 
 @pytest.mark.django_db
-def test_remove_tablet_marks_lost(client, tablet_ui_scope):
+def test_mark_lost_action(client, tablet_ui_scope):
     scope = tablet_ui_scope
     tablet = _pending_tablet(scope.department)
     _login_with_reauth(client, scope.admin)
 
     response = client.post(
-        reverse("tablet-remove", args=(scope.department.id, tablet.id)),
-        {"status": Tablet.Status.LOST, "reason": "Lost on scene"},
+        reverse("tablet-mark-lost", args=(scope.department.id, tablet.id)),
+        {"reason": "Lost on scene"},
     )
     assert response.status_code == 302
     tablet.refresh_from_db()
@@ -507,16 +510,16 @@ def test_remove_tablet_marks_lost(client, tablet_ui_scope):
 
 
 @pytest.mark.django_db
-def test_remove_tablet_requires_reauth(client, tablet_ui_scope):
+def test_mark_lost_requires_reauth(client, tablet_ui_scope):
     scope = tablet_ui_scope
     tablet = _pending_tablet(scope.department)
     client.force_login(scope.admin)
 
     response = client.post(
-        reverse("tablet-remove", args=(scope.department.id, tablet.id)),
-        {"status": Tablet.Status.LOST, "reason": ""},
+        reverse("tablet-mark-lost", args=(scope.department.id, tablet.id)),
+        {"reason": ""},
     )
     assert response.status_code == 302
     assert "reauthenticate" in response.url
     tablet.refresh_from_db()
-    assert tablet.status == Tablet.Status.PENDING
+    assert tablet.status == Tablet.Status.INACTIVE
