@@ -48,8 +48,11 @@ def context(db, settings, tmp_path):
 
 
 def hydrant_csv(*rows):
-    header = "external_identifier,longitude,latitude,hydrant_type,diameter_mm,status\n"
-    return (header + "\n".join(rows)).encode()
+    current_header = (
+        "external_identifier,longitude,latitude,street,house_number,"
+        "hydrant_type,diameter_mm,status\n"
+    )
+    return (current_header + "\n".join(rows)).encode()
 
 
 def hydrant_geojson(*identifiers):
@@ -160,7 +163,7 @@ def test_preview_is_side_effect_free_and_apply_dirties_one_scope(context):
 @pytest.mark.django_db(transaction=True)
 def test_noop_and_double_confirm_do_not_dirty_twice(context):
     actor, department = context
-    payload = hydrant_csv("H-1,8.1,50.2,wet,150,ACTIVE")
+    payload = hydrant_csv("H-1,8.1,50.2,,,wet,150,ACTIVE")
     first = create_preview(
         actor=actor,
         department=department,

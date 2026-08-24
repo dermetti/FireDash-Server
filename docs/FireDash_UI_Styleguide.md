@@ -745,6 +745,14 @@ item. The final item renders the review summary. Invalid corrective input stays
 on the current item with its bound submitted values and field errors visible.
 Canonical records change only through explicit final Apply.
 
+For long-running synchronous administrator actions, give immediate, truthful
+processing feedback. The submit control must disable while the request is in
+flight to prevent duplicate submits, show a spinner and operation-specific
+wording, and expose an accessible live status. Final import Apply uses
+`Applying changes…` with `Processing this import. Large datasets may take a
+minute.` Do not call synchronous processing a background job or invent progress
+percentages; normal page flow remains preferred.
+
 ---
 
 # 17. Settings pages

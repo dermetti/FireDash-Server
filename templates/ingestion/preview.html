@@ -5,5 +5,16 @@
 <section class="mb-4"><h2 class="h5">Proposed canonical changes</h2><p>{{ batch.add_count }} add · {{ batch.update_count }} update · {{ batch.deactivate_count }} deactivate · {{ batch.unchanged_count }} unchanged</p></section>
 {% if batch.validation_errors %}<section class="alert alert-danger"><h2 class="h5">Validation requires attention</h2>{{ batch.validation_errors }}</section>{% endif %}
 {% if review %}{% include "ingestion/partials/_review_region.html" %}{% endif %}
-<section><h2 class="h5">Apply</h2>{% if batch.status == "PREVIEW_READY" and review and review.summary.pending > 0 %}<div class="alert alert-warning">Resolve each review item before applying this import.</div>{% elif batch.status == "PREVIEW_READY" %}<form method="post">{% csrf_token %}<button type="submit" class="btn btn-primary">Apply accepted changes</button></form>{% endif %}<form method="post" action="{% url 'ingestion-cancel' department.id batch.id %}" class="mt-2">{% csrf_token %}<button type="submit" class="btn btn-outline-secondary">Cancel review</button></form></section>
+<section>
+  <h2 class="h5">Apply</h2>
+  {% if batch.status == "PREVIEW_READY" and review and review.summary.pending > 0 %}
+    <div class="alert alert-warning">Resolve each review item before applying this import.</div>
+  {% elif batch.status == "PREVIEW_READY" %}
+    {% include "ingestion/partials/_apply_import_form.html" %}
+  {% endif %}
+  <form method="post" action="{% url 'ingestion-cancel' department.id batch.id %}" class="mt-2">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-outline-secondary">Cancel review</button>
+  </form>
+</section>
 {% endblock %}

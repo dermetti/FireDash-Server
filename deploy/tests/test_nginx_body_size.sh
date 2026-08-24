@@ -27,6 +27,16 @@ fi
 
 grep -q 'Nginx client_max_body_size is 300m' "$VERIFY" \
     || fail "verifier does not check the 300m outer boundary"
+grep -Eq '^[[:space:]]*proxy_read_timeout[[:space:]]+95s;[[:space:]]*$' "$TEMPLATE" \
+    || fail "template proxy_read_timeout is not 95s"
+if grep -Eq '^[[:space:]]*proxy_read_timeout[[:space:]]+30s;[[:space:]]*$' "$TEMPLATE"; then
+    fail "template still uses the premature 30s proxy_read_timeout"
+fi
+grep -Eq '^[[:space:]]*timeout[[:space:]]*=[[:space:]]*90[[:space:]]*$' \
+    "$REPO_ROOT/deploy/gunicorn/gunicorn.conf.py" \
+    || fail "Gunicorn timeout is not retained at 90s"
+grep -q 'Nginx proxy_read_timeout is 95s' "$VERIFY" \
+    || fail "verifier does not check the 95s proxy timeout"
 
 if [[ $failures -eq 0 ]]; then
     echo "ok: Nginx outer boundary (300m) sits above the 256 MiB upload ceiling"

@@ -462,6 +462,9 @@ fi
 grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]+300m;[[:space:]]*$' "$nginx_site" \
     && ok "Nginx client_max_body_size is 300m (above the 256 MiB upload ceiling)" \
     || fail "Nginx client_max_body_size is not 300m"
+grep -Eq '^[[:space:]]*proxy_read_timeout[[:space:]]+95s;[[:space:]]*$' "$nginx_site" \
+    && ok "Nginx proxy_read_timeout is 95s (above the 90s Gunicorn timeout)" \
+    || fail "Nginx proxy_read_timeout is not 95s"
 
 neg_read fire_backend "$SECRET_DIR/publication-kek" "publication KEK"
 neg_read fire_backend "$SECRET_DIR/publication-signing-key" "private signing key"

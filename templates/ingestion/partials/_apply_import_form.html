@@ -1,0 +1,27 @@
+<form
+  method="post"
+  class="d-flex flex-column align-items-start gap-2"
+  x-data="{ applying: false }"
+  x-on:submit="if (applying) { $event.preventDefault(); } applying = true"
+  x-bind:aria-busy="applying.toString()"
+>
+  {% csrf_token %}
+  <button
+    type="submit"
+    class="btn btn-primary"
+    x-bind:disabled="applying"
+    x-bind:aria-disabled="applying.toString()"
+  >
+    <span x-show="!applying">Apply accepted changes</span>
+    <span x-show="applying" x-cloak>
+      <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+      Applying changes…
+    </span>
+  </button>
+  <p class="form-text mb-0" aria-live="polite">
+    <span x-show="!applying">Apply accepted changes when you are ready.</span>
+    <span x-show="applying" x-cloak role="status">
+      Processing this import. Large datasets may take a minute.
+    </span>
+  </p>
+</form>
