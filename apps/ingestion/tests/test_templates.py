@@ -3,7 +3,9 @@ import io
 import zipfile
 from pathlib import Path
 
-from apps.ingestion.parsers import parse_hydrants, parse_personnel
+import pytest
+
+from apps.ingestion.parsers import ImportValidationError, parse_hydrants, parse_personnel
 from apps.ingestion.pdf_packages import manifest_member_name, parse_pdf_package
 
 ROOT = Path(__file__).resolve().parents[1] / "static" / "ingestion" / "templates"
@@ -14,14 +16,12 @@ def test_structured_templates_are_utf8_and_parse_with_the_real_importers():
     hydrant_csv = (ROOT / "hydrants-v1.csv").read_bytes()
     hydrant_geojson = (ROOT / "hydrants-v1.geojson").read_bytes()
     personnel_csv = (ROOT / "personnel-v1.csv").read_bytes()
-    personnel_json = (ROOT / "personnel-v1.json").read_bytes()
     assert parse_hydrants(payload=hydrant_csv, import_format="csv")
     assert parse_hydrants(payload=hydrant_geojson, import_format="geojson")
     assert parse_personnel(payload=personnel_csv, import_format="csv")
-    assert parse_personnel(payload=personnel_json, import_format="json")
 
 
-def test_hydrant_address_columns_are_normalized_and_legacy_rows_remain_readable():
+def test_hydrant_address_columns_are_normalized_and_legacy_schema_is_rejected():
     current = parse_hydrants(
         payload=(
             b"external_identifier,longitude,latitude,street,house_number,hydrant_type,diameter_mm,status\n"
@@ -29,18 +29,28 @@ def test_hydrant_address_columns_are_normalized_and_legacy_rows_remain_readable(
         ),
         import_format="csv",
     )
-    legacy = parse_hydrants(
-        payload=(
-            b"external_identifier,longitude,latitude,hydrant_type,diameter_mm,status\n"
-            b"H-2,10.2,53.6,underground,100,ACTIVE\n"
-        ),
-        import_format="csv",
-    )
+    with pytest.raises(ImportValidationError):
+        parse_hydrants(
+            payload=(
+                b"external_identifier,longitude,latitude,hydrant_type,diameter_mm,status\n"
+                b"H-2,10.2,53.6,underground,100,ACTIVE\n"
+            ),
+            import_format="csv",
+        )
 
     assert current[0]["street"] == "Strasse"
     assert current[0]["house_number"] == "7"
-    assert legacy[0]["street"] == ""
-    assert legacy[0]["house_number"] == ""
+
+
+def test_legacy_personnel_four_column_schema_is_rejected():
+    with pytest.raises(ImportValidationError):
+        parse_personnel(
+            payload=(
+                b"personnel_number,first_name,last_name,incident_commander_eligible\n"
+                b"P-1,Ada,Lovelace,true\n"
+            ),
+            import_format="csv",
+        )
 
 
 def test_pdf_manifest_templates_have_the_exact_documented_columns():
@@ -50,7 +60,9 @@ def test_pdf_manifest_templates_have_the_exact_documented_columns():
         "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,"
         "fsd_location,bmz_location,rwa_info,action"
     )
-    assert klgv.splitlines()[0] == "external_id,filename,title,category,action"
+    assert klgv.splitlines()[0] == (
+        "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action"
+    )
     assert not any(".xlsx" in value or ".xls" in value for value in (fire, klgv))
     assert fire.splitlines()[0] in DOCS.read_text(encoding="utf-8")
 

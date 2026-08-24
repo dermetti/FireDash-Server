@@ -308,7 +308,7 @@ def update_klgv_plan(*, actor, klgv_plan: KlgvPlan, **values) -> KlgvPlan:
         KlgvPlan.objects.select_for_update().select_related("department").get(pk=klgv_plan.pk)
     )
     require_department_admin(actor, klgv_plan.department)
-    for field in ("external_identifier", "title", "category"):
+    for field in ("external_identifier", "object_name", "address", "postal_code", "city"):
         if field in values:
             setattr(klgv_plan, field, str(values[field] or "").strip())
     klgv_plan.full_clean()
@@ -319,7 +319,10 @@ def update_klgv_plan(*, actor, klgv_plan: KlgvPlan, **values) -> KlgvPlan:
         department=klgv_plan.department,
         target_type="klgv_plan",
         target_uuid=klgv_plan.id,
-        metadata={"external_identifier": klgv_plan.external_identifier, "title": klgv_plan.title},
+        metadata={
+            "external_identifier": klgv_plan.external_identifier,
+            "object_name": klgv_plan.object_name,
+        },
     )
     mark_dirty(
         department=klgv_plan.department, dataset_type_code="department_klgv_plans", actor=actor
@@ -333,10 +336,10 @@ def delete_klgv_plan(*, actor, klgv_plan: KlgvPlan) -> None:
         KlgvPlan.objects.select_for_update().select_related("department").get(pk=klgv_plan.pk)
     )
     require_department_admin(actor, klgv_plan.department)
-    plan_id, department, document_key = klgv_plan.id, klgv_plan.department, klgv_plan.document_key
+    plan_id, department, document_key = klgv_plan.id, klgv_plan.department, klgv_plan.path
     metadata: dict[str, str | int | bool | None] = {
         "external_identifier": klgv_plan.external_identifier,
-        "title": klgv_plan.title,
+        "object_name": klgv_plan.object_name,
     }
     try:
         klgv_plan.delete()
@@ -351,7 +354,7 @@ def delete_klgv_plan(*, actor, klgv_plan: KlgvPlan) -> None:
         metadata=metadata,
     )
     mark_dirty(department=department, dataset_type_code="department_klgv_plans", actor=actor)
-    accepted_path = settings.REFERENCE_DATA_ACCEPTED_ROOT / Path(document_key).name
+    accepted_path = settings.REFERENCE_DATA_ACCEPTED_ROOT / document_key
     transaction.on_commit(lambda: accepted_path.unlink(missing_ok=True))
 
 

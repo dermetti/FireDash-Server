@@ -55,6 +55,11 @@ urlpatterns = [
         name="ingestion-review-station-resolution",
     ),
     path(
+        "departments/<uuid:department_id>/imports/<uuid:batch_id>/review/<str:key>/personnel-home-station/",
+        views.review_personnel_home_station_resolution,
+        name="ingestion-review-personnel-home-station",
+    ),
+    path(
         "departments/<uuid:department_id>/imports/<uuid:batch_id>/review/coordinates/<int:row_index>/",
         views.review_coordinates,
         name="ingestion-review-coordinates",

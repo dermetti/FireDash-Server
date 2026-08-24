@@ -142,9 +142,11 @@ class FirePlanUploadForm(forms.Form):
 
 class KlgvPlanUploadForm(forms.Form):
     document = forms.FileField()
-    external_id = forms.CharField(max_length=255)
-    title = forms.CharField(max_length=255)
-    category = forms.CharField(max_length=128, required=False)
+    external_identifier = forms.CharField(max_length=255, required=False)
+    object_name = forms.CharField(max_length=255)
+    address = forms.CharField(max_length=255)
+    postal_code = forms.CharField(max_length=32)
+    city = forms.CharField(max_length=255)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -225,7 +227,7 @@ class FirePlanEditForm(_FirePlanModelForm):
 class KlgvPlanEditForm(_KlgvPlanModelForm):
     class Meta:
         model = KlgvPlan
-        fields = ("external_identifier", "title", "category")
+        fields = ("external_identifier", "object_name", "address", "postal_code", "city")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

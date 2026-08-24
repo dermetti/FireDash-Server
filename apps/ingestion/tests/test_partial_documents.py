@@ -19,7 +19,8 @@ from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitiz
 from apps.reference_data.pdf_validation import PdfValidationError
 
 FIRE_HEADER = (
-    "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action"
+    "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,"
+    "fsd_location,bmz_location,rwa_info,action"
 )
 
 
@@ -213,7 +214,9 @@ def test_valid_deactivate_plus_failed_upsert(partial_fixture):
     validation_rules[b"ENCRYPTED"] = PdfValidationError(
         "Encrypted PDFs are not accepted.", code="encrypted_pdf"
     )
-    manifest = fire_manifest("A,a.pdf,Plan A,Main 1,,,,,upsert\nOLD,,,Old Road 1,,,deactivate\n")
+    manifest = fire_manifest(
+        "A,a.pdf,Plan A,Main 1,,,,,,,,upsert\nOLD,,,Old Road 1,,,,,,,,deactivate\n"
+    )
     files = {"a.pdf": b"%PDF-1.4\nENCRYPTED"}
 
     # Pre-create the plan that will be deactivated.
@@ -298,8 +301,15 @@ def test_klgv_partial_acceptance(partial_fixture):
     validation_rules[b"ENCRYPTED"] = PdfValidationError(
         "Encrypted PDFs are not accepted.", code="encrypted_pdf"
     )
-    klgv_header = "external_id,filename,title,category,action"
-    manifest = klgv_header + "\nA,a.pdf,Plan A,site,upsert\nB,b.pdf,Plan B,site,upsert\n"
+    klgv_header = (
+        "external_identifier,filename,object_name,address,postal_code,city,"
+        "longitude,latitude,action"
+    )
+    manifest = (
+        klgv_header
+        + "\nA,a.pdf,Plan A,Garden 1,22041,Hamburg,,,upsert\n"
+        + "B,b.pdf,Plan B,Garden 2,22041,Hamburg,,,upsert\n"
+    )
     files = {"a.pdf": b"%PDF-1.4\nVALID", "b.pdf": b"%PDF-1.4\nENCRYPTED"}
 
     batch = create_preview(

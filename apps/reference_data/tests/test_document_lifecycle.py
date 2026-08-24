@@ -45,13 +45,16 @@ def _klgv_plan(actor, department):
     return KlgvPlan.objects.create(
         department=department,
         external_identifier="K-1",
-        title="KLGV",
-        document_key=f"{uuid.uuid4()}.pdf",
+        object_name="KLGV",
+        address="Garden 1",
+        postal_code="22041",
+        city="Hamburg",
+        path=f"plans/{uuid.uuid4()}.pdf",
         original_filename="plan.pdf",
         file_size=1,
         page_count=1,
         source_pdf_sha256="a" * 64,
-        sanitized_pdf_sha256="b" * 64,
+        sha256="b" * 64,
         uploaded_by=actor,
     )
 
@@ -121,7 +124,8 @@ def test_document_delete_is_audited_and_marks_its_scope(
     actor, department, _ = documents
     settings.REFERENCE_DATA_ACCEPTED_ROOT = tmp_path
     plan = factory(actor, department)
-    accepted = tmp_path / plan.document_key
+    accepted = tmp_path / (plan.document_key if isinstance(plan, FirePlan) else plan.path)
+    accepted.parent.mkdir(parents=True, exist_ok=True)
     accepted.write_bytes(b"accepted")
     keyword = "fire_plan" if isinstance(plan, FirePlan) else "klgv_plan"
     dataset = "department_fire_plans" if isinstance(plan, FirePlan) else "department_klgv_plans"

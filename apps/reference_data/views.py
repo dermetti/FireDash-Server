@@ -338,9 +338,11 @@ def klgv_plans(request: HttpRequest, department_id) -> HttpResponse:
                 department=department,
                 domain=ImportBatch.Domain.KLGV_PLANS,
                 values={
-                    "external_id": data["external_id"],
-                    "title": data["title"],
-                    "category": data["category"],
+                    "external_identifier": data["external_identifier"],
+                    "object_name": data["object_name"],
+                    "address": data["address"],
+                    "postal_code": data["postal_code"],
+                    "city": data["city"],
                 },
                 pdf_bytes=document.read(),
                 original_filename=document.name,
@@ -356,15 +358,15 @@ def klgv_plans(request: HttpRequest, department_id) -> HttpResponse:
             query = filters.cleaned_data["q"]
             queryset = queryset.filter(
                 Q(external_identifier__icontains=query)
-                | Q(title__icontains=query)
-                | Q(category__icontains=query)
+                | Q(object_name__icontains=query)
+                | Q(address__icontains=query)
             )
         if filters.cleaned_data["active"]:
             queryset = queryset.filter(active=filters.cleaned_data["active"] == "active")
     if "active" not in request.GET:
         queryset = queryset.filter(active=True)
     paginator = Paginator(
-        queryset.order_by("title", "external_identifier", "id"), DOCUMENT_LIST_PAGE_SIZE
+        queryset.order_by("object_name", "external_identifier", "id"), DOCUMENT_LIST_PAGE_SIZE
     )
     page = paginator.get_page(request.GET.get("page", 1))
     page_query = urlencode(

@@ -4,7 +4,11 @@ import zipfile
 import pytest
 
 from apps.ingestion.parsers import ImportValidationError
-from apps.ingestion.pdf_packages import FIRE_PLAN_MANIFEST_NAME, parse_pdf_package
+from apps.ingestion.pdf_packages import (
+    FIRE_PLAN_MANIFEST_NAME,
+    KLGV_MANIFEST_NAME,
+    parse_pdf_package,
+)
 
 
 def package(manifest: str, **files: bytes) -> bytes:
@@ -97,12 +101,12 @@ def test_pdf_package_rejects_stale_manifest_headers(stale_header):
         "FP-1,plan.pdf,Plan,Road,,,,53.456,upsert\n",
     ],
 )
-def test_pdf_package_requires_paired_longitude_latitude(coordinate_row):
-    with pytest.raises(ImportValidationError, match="supplied together"):
-        parse_pdf_package(
-            payload=package(fire_manifest(coordinate_row), **{"plan.pdf": b"%PDF-1.4\n"}),
-            domain="fire_plans",
-        )
+def test_pdf_package_allows_partial_coordinates_for_review_completion(coordinate_row):
+    entries = parse_pdf_package(
+        payload=package(fire_manifest(coordinate_row), **{"plan.pdf": b"%PDF-1.4\n"}),
+        domain="fire_plans",
+    )
+    assert len(entries) == 1
 
 
 @pytest.mark.parametrize("member", ["../plan.pdf", "/plan.pdf", "extra.pdf"])
@@ -148,3 +152,29 @@ def test_fire_plan_unicode_filename_is_accepted():
     )
     assert entries[0].filename == "l\u00f6schplan.pdf"
     assert entries[0].pdf_bytes == b"%PDF-1.4\n"
+
+
+def test_klgv_package_requires_current_location_metadata_and_rejects_legacy_aliases():
+    header = (
+        "external_identifier,filename,object_name,address,postal_code,city,"
+        "longitude,latitude,action"
+    )
+    manifest = header + "\nK-1,plan.pdf,Garden Plan,Garden Way 1,22041,Hamburg,,,upsert\n"
+    payload = raw_package({KLGV_MANIFEST_NAME: manifest, "plan.pdf": b"%PDF-1.4\n"})
+    entry = parse_pdf_package(payload=payload, domain="klgv_plans")[0]
+    assert (entry.external_identifier, entry.title, entry.address, entry.city) == (
+        "K-1",
+        "Garden Plan",
+        "Garden Way 1",
+        "Hamburg",
+    )
+    legacy = raw_package(
+        {
+            KLGV_MANIFEST_NAME: (
+                "external_id,filename,title,category,action\nK-1,plan.pdf,Old,site,upsert\n"
+            ),
+            "plan.pdf": b"%PDF-1.4\n",
+        }
+    )
+    with pytest.raises(ImportValidationError):
+        parse_pdf_package(payload=legacy, domain="klgv_plans")

@@ -53,7 +53,13 @@ def _json_bytes(value: object) -> bytes:
 
 def _safe_document_key(value: str) -> Path:
     path = Path(value)
-    if not value or path.is_absolute() or ".." in path.parts or path.name != value:
+    if (
+        not value
+        or "\\" in value
+        or path.is_absolute()
+        or ".." in path.parts
+        or path.suffix.lower() != ".pdf"
+    ):
         raise PdfBundleError("Accepted PDF document key is unsafe.")
     return path
 

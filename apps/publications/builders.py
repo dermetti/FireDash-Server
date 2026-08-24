@@ -11,12 +11,7 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
-from apps.publications.pdf_bundles import (
-    AcceptedPdfBundleDocument,
-    PdfBundleError,
-    build_pdf_bundle_v1,
-    read_accepted_pdf,
-)
+from apps.publications.pdf_bundles import PdfBundleError, read_accepted_pdf
 from apps.publications.registry import DatasetTypeDefinition
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
 
@@ -162,21 +157,40 @@ def _build_klgv_plans(*, department, station, source_revision: int) -> dict[str,
 def _artifact_klgv_plans(*, department, station, source_revision: int) -> bytes:
     if station is not None:
         raise PublicationBuildError("KLGV plan artifact requires a department scope.")
-    documents = [
-        AcceptedPdfBundleDocument(
-            id=plan.id,
-            title=plan.title,
-            document_key=plan.document_key,
-            sha256=plan.sanitized_pdf_sha256,
-            page_count=plan.page_count,
-            category=plan.category or None,
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        plans = []
+        for plan in KlgvPlan.objects.filter(department=department, active=True).order_by("id"):
+            try:
+                document = read_accepted_pdf(
+                    document_key=plan.path, accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT
+                )
+            except PdfBundleError as error:
+                raise PublicationBuildError("Accepted KLGV document is unavailable.") from error
+            if hashlib.sha256(document).hexdigest() != plan.sha256:
+                raise PublicationBuildError("Accepted KLGV document hash does not match metadata.")
+            archive_path = f"plans/{plan.id}.pdf"
+            archive.writestr(_zip_info(archive_path), document)
+            plans.append(
+                {
+                    "id": str(plan.id),
+                    "external_identifier": plan.external_identifier or None,
+                    "object_name": plan.object_name,
+                    "address": plan.address,
+                    "postal_code": plan.postal_code,
+                    "city": plan.city,
+                    "longitude": plan.location.x if plan.location is not None else None,
+                    "latitude": plan.location.y if plan.location is not None else None,
+                    "sha256": plan.sha256,
+                    "page_count": plan.page_count,
+                    "path": archive_path,
+                }
+            )
+        archive.writestr(
+            _zip_info("manifest.json"),
+            _json_bytes({"source_revision": source_revision, "klgv_plans": plans}),
         )
-        for plan in KlgvPlan.objects.filter(department=department, active=True).order_by("id")
-    ]
-    try:
-        return build_pdf_bundle_v1(documents=documents, source_revision=source_revision)
-    except PdfBundleError as error:
-        raise PublicationBuildError("Accepted KLGV document is unavailable.") from error
+    return output.getvalue()
 
 
 def build_artifact(

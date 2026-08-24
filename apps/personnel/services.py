@@ -116,6 +116,8 @@ def create_person(
     personnel_number: str | None,
     first_name: str,
     last_name: str,
+    incident_commander_eligible: bool = False,
+    incident_commander_email: str = "",
 ) -> Person:
     if not _is_department_admin(actor, department.id):
         raise PermissionDenied("Only department administrators can create personnel.")
@@ -124,12 +126,19 @@ def create_person(
     display_name = f"{first_name.strip()} {last_name.strip()}".strip()
     if not display_name:
         raise PersonnelError("Personnel display name is required.")
+    normalized_email = (
+        _normalize_email(incident_commander_email) if incident_commander_email else None
+    )
+    if normalized_email and not incident_commander_eligible:
+        raise PersonnelError("Commander eligibility is required before setting commander email.")
     person = Person.objects.create(
         department=department,
         personnel_number=personnel_number or None,
         first_name=first_name.strip(),
         last_name=last_name.strip(),
         display_name=display_name,
+        incident_commander_eligible=incident_commander_eligible,
+        incident_commander_email=normalized_email,
     )
     PersonnelStationAssignment.objects.create(
         person=person,

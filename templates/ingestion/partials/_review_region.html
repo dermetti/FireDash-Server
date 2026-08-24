@@ -3,7 +3,26 @@
     <section class="card mb-3">
       <div class="card-body">
         <h2 class="h5">Review {{ review.index|add:"1" }} of {{ review.summary.total }}</h2>
-        {% if station_resolution_form %}
+        {% if personnel_resolution_form %}
+          <p class="text-body-secondary mb-3"><strong>{{ review.current.display_name }}</strong> ({{ review.current.personnel_number }}) has an ambiguous Home Station reference: <strong>{{ review.current.reference }}</strong>.</p>
+          <p class="alert alert-warning">Multiple matching active Stations were found. Select the intended Department Station; this remains staged until final Apply.</p>
+          <div class="d-flex gap-2 mb-3">
+            <button type="submit" form="personnel-resolution-{{ review.current.key }}" class="btn btn-success">Resolve and accept</button>
+            <form method="post" action="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+              {% csrf_token %}<button type="submit" class="btn btn-outline-secondary">Skip changes</button>
+            </form>
+          </div>
+          <form id="personnel-resolution-{{ review.current.key }}" method="post" action="{% url 'ingestion-review-personnel-home-station' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-personnel-home-station' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+            {% csrf_token %}
+            <div class="mb-3"><label class="form-label" for="{{ personnel_resolution_form.station_id.id_for_label }}">Home Station</label>{{ personnel_resolution_form.station_id }}{% for error in personnel_resolution_form.station_id.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+          </form>
+        {% elif review.current.kind == "personnel_missing_home_station" %}
+          <p class="text-body-secondary mb-3"><strong>{{ review.current.display_name }}</strong> ({{ review.current.personnel_number }}) references Home Station <strong>{{ review.current.reference }}</strong>.</p>
+          <p class="alert alert-warning">Missing Home Station. Create or correct the Station through Station management, then upload a corrected Personnel CSV. This import cannot create Stations.</p>
+          <form method="post" action="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-post="{% url 'ingestion-review-skip' department.id batch.id review.current.key %}" hx-target="#import-review-region" hx-swap="outerHTML">
+            {% csrf_token %}<button type="submit" class="btn btn-outline-secondary">Skip changes</button>
+          </form>
+        {% elif station_resolution_form %}
           <p class="text-body-secondary mb-3">Vehicle <strong>{{ review.current.vehicle_name }}</strong> references {{ review.current.reference_kind|lower }} <strong>{{ review.current.reference }}</strong>.</p>
           {% if review.current.kind == "missing" %}
             <p class="alert alert-warning">Missing Station. Confirm the details to stage a new Station for final Apply.</p>

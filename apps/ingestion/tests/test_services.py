@@ -22,6 +22,7 @@ from apps.ingestion.services import (
     cancel_preview,
     create_preview,
     create_single_preview,
+    set_review_decision,
 )
 from apps.organizations.models import Department, Station
 from apps.personnel.models import Person
@@ -109,9 +110,12 @@ def sanitizer_stub(settings, tmp_path, monkeypatch):
         content = path.read_bytes()
         return len(content), 1, hashlib.sha256(content).hexdigest()
 
-    def promote(source, key):
+    def promote(source, key, *, replace=False):
         accepted_root.mkdir(parents=True, exist_ok=True)
         destination = accepted_root / key
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if replace:
+            destination.unlink(missing_ok=True)
         shutil.move(source, destination)
         return destination
 
@@ -648,7 +652,13 @@ def test_single_and_batch_klgv_inputs_share_normal_publication_scope(context, sa
         actor=actor,
         department=department,
         domain=ImportBatch.Domain.KLGV_PLANS,
-        values={"external_id": "KLGV-1", "title": "Plan", "category": "site"},
+        values={
+            "external_identifier": "KLGV-1",
+            "object_name": "Plan",
+            "address": "Garden 1",
+            "postal_code": "22041",
+            "city": "Hamburg",
+        },
         pdf_bytes=source_pdf,
     )
     apply_preview(actor=actor, batch_id=single.id)
@@ -724,7 +734,13 @@ def test_identical_pdf_reimport_skips_sanitizer_and_noop_dirtying(
         set_department_feature(
             actor=actor, department=department, feature_code="klgv_plans", enabled=True
         )
-        values: dict[str, object] = {"external_id": "D-1", "title": "Plan", "category": "site"}
+        values: dict[str, object] = {
+            "external_identifier": "D-1",
+            "object_name": "Plan",
+            "address": "Garden 1",
+            "postal_code": "22041",
+            "city": "Hamburg",
+        }
         code = "department_klgv_plans"
     else:
         values = {
@@ -818,10 +834,19 @@ def test_pdf_document_convergence_update_stale_zip_and_lifecycle_matrix(
         set_department_feature(
             actor=actor, department=department, feature_code="klgv_plans", enabled=True
         )
-        values: dict[str, object] = {"external_id": "M-1", "title": "Plan", "category": "one"}
-        changed_values = values | {"title": "Renamed", "category": "two"}
+        values: dict[str, object] = {
+            "external_identifier": "M-1",
+            "object_name": "Plan",
+            "address": "Garden 1",
+            "postal_code": "22041",
+            "city": "Hamburg",
+        }
+        changed_values = values | {"object_name": "Renamed", "address": "Garden 2"}
         model, code = KlgvPlan, "department_klgv_plans"
-        manifest = "external_id,filename,title,category,action\nM-1,same.pdf,Plan,one,upsert\n"
+        manifest = (
+            "external_identifier,filename,object_name,address,postal_code,city,"
+            "longitude,latitude,action\nM-1,same.pdf,Plan,Garden 1,22041,Hamburg,,,upsert\n"
+        )
     else:
         values = {
             "external_identifier": "M-1",
@@ -878,12 +903,16 @@ def test_pdf_document_convergence_update_stale_zip_and_lifecycle_matrix(
     )
     assert metadata.update_count == 1
     assert metadata.validation_summary["updates"]
+    review_key = str(metadata.validation_summary["review_items"][0]["key"])
+    set_review_decision(actor=actor, batch_id=metadata.id, key=review_key, decision="approved")
     assert apply_preview(actor=actor, batch_id=metadata.id).update_count == 1
     replacement = create_single_preview(
         actor=actor, department=department, domain=domain, values=changed_values, pdf_bytes=b"two"
     )
     assert replacement.update_count == 1
     assert len(settings.INGESTION_TEST_SANITIZER_CALLS) == 2
+    review_key = str(replacement.validation_summary["review_items"][0]["key"])
+    set_review_decision(actor=actor, batch_id=replacement.id, key=review_key, decision="approved")
     apply_preview(actor=actor, batch_id=replacement.id)
     stale = create_single_preview(
         actor=actor, department=department, domain=domain, values=changed_values, pdf_bytes=b"two"
@@ -934,10 +963,19 @@ def test_pdf_zip_omission_and_lifecycle_noops_have_no_side_effects(
         )
 
         def values(identifier):
-            return {"external_id": identifier, "title": identifier, "category": "site"}
+            return {
+                "external_identifier": identifier,
+                "object_name": identifier,
+                "address": "Garden 1",
+                "postal_code": "22041",
+                "city": "Hamburg",
+            }
 
         model, code = KlgvPlan, "department_klgv_plans"
-        manifest = "external_id,filename,title,category,action\nA,a.pdf,A,site,upsert\n"
+        manifest = (
+            "external_identifier,filename,object_name,address,postal_code,city,"
+            "longitude,latitude,action\nA,a.pdf,A,Garden 1,22041,Hamburg,,,upsert\n"
+        )
     else:
 
         def values(identifier):

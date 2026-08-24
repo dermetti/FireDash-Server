@@ -82,7 +82,7 @@ def test_anonymization_removes_identifying_fields_after_retention(department_adm
 
 
 @pytest.mark.django_db
-def test_personnel_forms_create_and_confirm_import_batches(
+def test_personnel_create_modal_and_detail_update_preview(
     client, department_admin, settings, tmp_path
 ):
     settings.INGESTION_STAGING_ROOT = tmp_path / "private-import-staging"
@@ -90,22 +90,18 @@ def test_personnel_forms_create_and_confirm_import_batches(
     client.force_login(actor)
 
     response = client.post(
-        reverse("personnel-list", args=(department.id,)),
+        reverse("personnel-create", args=(department.id,)),
         {
             "personnel_number": " 42 ",
             "first_name": " Alex ",
             "last_name": " Member ",
-            "home_station_id": station.id,
+            "home_station": station.id,
+            "incident_commander_eligible": "on",
+            "incident_commander_email": "commander@example.test",
         },
     )
 
     assert response.status_code == 302
-    from apps.ingestion.models import ImportBatch
-    from apps.ingestion.services import apply_preview
-
-    batch = ImportBatch.objects.get(department=department)
-    assert not Person.objects.filter(department=department, personnel_number="42").exists()
-    apply_preview(actor=actor, batch_id=batch.id)
     person = Person.objects.get(department=department, personnel_number="42")
     assert (person.first_name, person.last_name, person.display_name, person.active) == (
         "Alex",
@@ -113,15 +109,15 @@ def test_personnel_forms_create_and_confirm_import_batches(
         "Alex Member",
         True,
     )
+    assert person.incident_commander_eligible is True
+    assert person.incident_commander_email == "commander@example.test"
 
     response = client.post(
-        reverse("personnel-detail", args=(department.id, person.id)),
+        reverse("personnel-edit", args=(department.id, person.id)),
         {"personnel_number": "42", "first_name": "Taylor", "last_name": "Updated"},
     )
 
     assert response.status_code == 302
-    batch = ImportBatch.objects.exclude(pk=batch.id).get(department=department)
-    apply_preview(actor=actor, batch_id=batch.id)
     person.refresh_from_db()
     assert (person.personnel_number, person.display_name, person.active) == (
         "42",

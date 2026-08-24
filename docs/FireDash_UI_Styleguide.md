@@ -698,6 +698,11 @@ A Hydrant import page imports Hydrants.
 A Personnel import page imports Personnel.
 A Station and Vehicle import page imports the paired Station/Vehicle CSV.
 
+Personnel CSV uses the explicit `home_station` reference, never a generic
+`station` column. It accepts an active Department Station Short Code or exact
+full Station name; ambiguous references require review and missing references
+never create Stations.
+
 Do not use a cross-domain selector.
 
 Import pages should contain:

@@ -48,18 +48,21 @@ def document_scope(client, db, tmp_path):
     klgv = KlgvPlan.objects.create(
         department=department,
         external_identifier="KLGV-001",
-        title="KLGV",
-        category="Site",
-        document_key="klgv.pdf",
+        object_name="KLGV",
+        address="Garden 1",
+        postal_code="22041",
+        city="Hamburg",
+        path="plans/klgv.pdf",
         original_filename="klgv.pdf",
         file_size=len(PDF),
         page_count=1,
         source_pdf_sha256=PDF_SHA,
-        sanitized_pdf_sha256=PDF_SHA,
+        sha256=PDF_SHA,
         uploaded_by=admin,
     )
     (tmp_path / plan.document_key).write_bytes(PDF)
-    (tmp_path / klgv.document_key).write_bytes(PDF)
+    (tmp_path / klgv.path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / klgv.path).write_bytes(PDF)
     client.force_login(admin)
     return admin, department, other, plan, klgv, tmp_path
 
@@ -230,13 +233,16 @@ def test_klgv_ui_edit_lifecycle_delete_and_scope(client, document_scope):
                 KlgvPlan(
                     department=department,
                     external_identifier=f"K-{index + 1000}",
-                    title=f"KLGV {index:03}",
-                    document_key=f"bulk-k-{index}.pdf",
+                    object_name=f"KLGV {index:03}",
+                    address="Garden 1",
+                    postal_code="22041",
+                    city="Hamburg",
+                    path=f"plans/bulk-k-{index}.pdf",
                     original_filename="bulk.pdf",
                     file_size=1,
                     page_count=1,
                     source_pdf_sha256="a" * 64,
-                    sanitized_pdf_sha256="a" * 64,
+                    sha256="a" * 64,
                     uploaded_by=plan.uploaded_by,
                 )
                 for index in range(100)
@@ -267,18 +273,31 @@ def test_klgv_ui_edit_lifecycle_delete_and_scope(client, document_scope):
         assert b'hx-target="#klgv-action-modal-container"' in edit_get.content
         assert b'type="submit"' in edit_get.content
         invalid = client.post(
-            edit_url, {"external_identifier": "", "title": "Entered", "category": ""}
+            edit_url,
+            {
+                "external_identifier": "",
+                "object_name": "Entered",
+                "address": "",
+                "postal_code": "22041",
+                "city": "Hamburg",
+            },
         )
         assert invalid.status_code == 200 and b"Entered" in invalid.content
         assert (
             client.post(
                 edit_url,
-                {"external_identifier": "KLGV-001", "title": "Updated", "category": "Operational"},
+                {
+                    "external_identifier": "KLGV-001",
+                    "object_name": "Updated",
+                    "address": "Garden 2",
+                    "postal_code": "22041",
+                    "city": "Hamburg",
+                },
             ).status_code
             == 302
         )
         plan.refresh_from_db()
-        assert (plan.title, plan.category) == ("Updated", "Operational")
+        assert (plan.object_name, plan.address) == ("Updated", "Garden 2")
         assert AuditEvent.objects.filter(
             action="reference_data.klgv_plan_updated", target_uuid=plan.id
         ).exists()
@@ -287,7 +306,13 @@ def test_klgv_ui_edit_lifecycle_delete_and_scope(client, document_scope):
         ).exists()
         htmx_success = client.post(
             edit_url,
-            {"external_identifier": "KLGV-001", "title": "Updated", "category": "Operational"},
+            {
+                "external_identifier": "KLGV-001",
+                "object_name": "Updated",
+                "address": "Garden 2",
+                "postal_code": "22041",
+                "city": "Hamburg",
+            },
             HTTP_HX_REQUEST="true",
         )
         assert htmx_success.status_code == 204
@@ -306,7 +331,7 @@ def test_klgv_ui_edit_lifecycle_delete_and_scope(client, document_scope):
         assert client.get(delete_url, HTTP_HX_REQUEST="true").status_code == 200
         assert client.post(delete_url).status_code == 302
         assert not KlgvPlan.objects.filter(pk=plan.id).exists()
-        assert not (accepted_root / plan.document_key).exists()
+        assert not (accepted_root / plan.path).exists()
         assert AuditEvent.objects.filter(
             action="reference_data.klgv_plan_deleted", target_uuid=plan.id
         ).exists()
@@ -315,10 +340,8 @@ def test_klgv_ui_edit_lifecycle_delete_and_scope(client, document_scope):
 @pytest.mark.django_db
 def test_document_import_pages_are_domain_scoped(client, document_scope):
     _, department, _, _, _, _ = document_scope
-    fire = client.get(reverse("ingestion-imports", args=(department.id,)), {"domain": "fire_plans"})
-    klgv = client.get(reverse("ingestion-imports", args=(department.id,)), {"domain": "klgv_plans"})
+    fire = client.get(reverse("ingestion-import-fire-plans", args=(department.id,)))
+    klgv = client.get(reverse("ingestion-import-klgv-plans", args=(department.id,)))
     assert fire.status_code == klgv.status_code == 200
-    assert list(fire.context["form"].fields["domain"].choices) == [("fire_plans", "Fire plans")]
-    assert b"Fire Plan manifest CSV" in fire.content and b"KLGV manifest CSV" not in fire.content
-    assert list(klgv.context["form"].fields["domain"].choices) == [("klgv_plans", "KLGV plans")]
-    assert b"KLGV manifest CSV" in klgv.content and b"Fire Plan manifest CSV" not in klgv.content
+    assert b"Import Fire Plans" in fire.content and b"Import KLGV Plans" not in fire.content
+    assert b"Import KLGV Plans" in klgv.content and b"Import Fire Plans" not in klgv.content

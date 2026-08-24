@@ -48,13 +48,12 @@ class ImportUploadForm(forms.Form):
             ImportBatch.Domain.HYDRANTS: {
                 "formats": {
                     ImportBatch.Format.CSV,
-                    ImportBatch.Format.JSON,
                     ImportBatch.Format.GEOJSON,
                 },
                 "modes": {ImportBatch.Mode.MERGE},
             },
             ImportBatch.Domain.PERSONNEL: {
-                "formats": {ImportBatch.Format.CSV, ImportBatch.Format.JSON},
+                "formats": {ImportBatch.Format.CSV},
                 "modes": {ImportBatch.Mode.UPSERT},
             },
             ImportBatch.Domain.FIRE_PLANS: {

@@ -18,6 +18,13 @@ identity. If no External ID exists, the exact trimmed address is the fallback
 identity; it is not fuzzy-matched. Filename is ZIP transport metadata only.
 An omitted ZIP row never deactivates a Fire Plan.
 
+KLGV Plans use one ZIP containing `manifest.csv` plus the declared PDFs. Their
+current metadata contract is `external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action`.
+Object name, address, postal code, and city are required; coordinates are optional.
+PDF hash, page count, canonical UUID, and `plans/{uuid}.pdf` storage path are
+derived only after FireDash validates the accepted PDF. Personnel imports use
+the five-column CSV contract documented below; older four-column input is rejected.
+
 Format references:
 
 - [Hydrants v1](formats/hydrants-v1.md)

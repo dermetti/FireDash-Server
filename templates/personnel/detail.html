@@ -25,7 +25,9 @@
     {% endif %}</div></div>
     <div class="card"><div class="card-body">
     <h5>Lifecycle</h5>
+    <p class="small text-body-secondary">Offboard ends active operational use and current assignments while retaining the record until its Department retention period expires.</p>
     <form method="post" action="{% url 'personnel-offboard' person.department_id person.id %}">{% csrf_token %}<button type="submit" class="btn btn-warning btn-sm">Offboard</button></form>
+    <p class="small text-body-secondary mt-3">Anonymize is a later privacy action: it is available only after offboarding and the configured retention period, and replaces identifying fields under the existing retention policy.</p>
     <form method="post" action="{% url 'personnel-anonymize' person.department_id person.id %}" class="mt-2">{% csrf_token %}<button type="submit" class="btn btn-danger btn-sm">Anonymize</button></form>
     </div></div>
   </div>

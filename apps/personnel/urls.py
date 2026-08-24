@@ -5,6 +5,11 @@ from apps.personnel import views
 urlpatterns = [
     path("departments/<uuid:department_id>/people/", views.people, name="personnel-list"),
     path(
+        "departments/<uuid:department_id>/people/create/",
+        views.person_create_modal,
+        name="personnel-create",
+    ),
+    path(
         "departments/<uuid:department_id>/people/<uuid:person_id>/",
         views.person_detail,
         name="personnel-detail",

@@ -23,6 +23,7 @@ from apps.ingestion.services import (
     cancel_preview,
     create_preview,
     review_context,
+    set_personnel_home_station_resolution,
     set_review_coordinates,
     set_review_decision,
     set_station_vehicle_resolution,
@@ -115,8 +116,9 @@ def imports(request: HttpRequest, department_id) -> HttpResponse:
             "formats": ((ImportBatch.Format.CSV, "CSV"),),
             "mode": ImportBatch.Mode.UPSERT,
             "help": (
-                "CSV and JSON add or update personnel. Absence never offboards people or ends "
-                "assignments."
+                "CSV uses a Home Station Short Code or full Station name. Upsert creates or "
+                "updates stable personnel-number matches; absence never offboards people or "
+                "ends assignments."
             ),
             "template": "ingestion/personnel_import.html",
         },
@@ -132,7 +134,10 @@ def imports(request: HttpRequest, department_id) -> HttpResponse:
         ImportBatch.Domain.KLGV_PLANS: {
             "formats": ((ImportBatch.Format.ZIP, "ZIP package"),),
             "mode": ImportBatch.Mode.UPSERT,
-            "help": "ZIP packages use manifest.csv and create or update KLGV plans by stable ID.",
+            "help": (
+                "ZIP packages use manifest.csv. Object name, address, postal code, and city "
+                "are required; coordinates are optional staged review data."
+            ),
             "template": "ingestion/klgv_plans_import.html",
         },
         ImportBatch.Domain.STATION_VEHICLES: {
@@ -236,6 +241,7 @@ def _review_context(request: HttpRequest, batch: ImportBatch) -> dict[str, objec
         ImportBatch.Domain.FIRE_PLANS,
         ImportBatch.Domain.KLGV_PLANS,
         ImportBatch.Domain.STATION_VEHICLES,
+        ImportBatch.Domain.PERSONNEL,
     }:
         return None
     requested_index = request.GET.get("review")
@@ -279,6 +285,7 @@ def _review_region_context(
             latitude=coordinate_item["latitude"],
         )
     station_resolution_form = None
+    personnel_resolution_form = None
     current = review.get("current")
     if batch.domain == ImportBatch.Domain.STATION_VEHICLES and isinstance(current, dict):
         kind = str(current.get("kind", ""))
@@ -312,12 +319,20 @@ def _review_region_context(
                 resolution_kind=kind,
                 initial=initial,
             )
+    if batch.domain == ImportBatch.Domain.PERSONNEL and isinstance(current, dict):
+        if current.get("kind") == "personnel_ambiguous_home_station":
+            personnel_resolution_form = StationVehicleResolutionForm(
+                coordinate_data,
+                department=batch.department,
+                resolution_kind="ambiguous",
+            )
     return {
         "batch": batch,
         "review": review,
         "coordinate_item": coordinate_item,
         "coordinate_form": coordinate_form,
         "station_resolution_form": station_resolution_form,
+        "personnel_resolution_form": personnel_resolution_form,
     }
 
 
@@ -427,6 +442,47 @@ def review_station_resolution(request: HttpRequest, department_id, batch_id, key
             key=key,
             resolution_kind=kind,
             values=form.cleaned_data,
+        )
+    except ImportError as error:
+        messages.error(request, str(error))
+    batch.refresh_from_db()
+    if request.headers.get("HX-Request") == "true":
+        return _render_review_region(request, department, batch)
+    return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
+
+
+@login_required
+@require_http_methods(["POST"])
+def review_personnel_home_station_resolution(
+    request: HttpRequest, department_id, batch_id, key
+) -> HttpResponse:
+    department = _department(request, department_id)
+    batch = get_object_or_404(ImportBatch, pk=batch_id, department=department)
+    review = review_context(batch)
+    current = review.get("current")
+    if (
+        not isinstance(current, dict)
+        or current.get("kind") != "personnel_ambiguous_home_station"
+        or str(current.get("key")) != key
+    ):
+        messages.error(request, "Home Station review target is unavailable.")
+        return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
+    context = _review_region_context(batch, review=review, coordinate_data=request.POST)
+    form = context["personnel_resolution_form"]
+    if form is None or not form.is_valid():
+        if request.headers.get("HX-Request") == "true":
+            return render(
+                request,
+                "ingestion/partials/_review_region.html",
+                {"department": department, **context},
+            )
+        return render(request, "ingestion/preview.html", {"department": department, **context})
+    try:
+        set_personnel_home_station_resolution(
+            actor=request.user,
+            batch_id=batch.id,
+            key=key,
+            station=form.cleaned_data["station_id"],
         )
     except ImportError as error:
         messages.error(request, str(error))

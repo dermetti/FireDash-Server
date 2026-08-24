@@ -34,12 +34,19 @@ def output_path(*, job_id: str | None = None) -> Path:
     return job_directory / "sanitized.pdf"
 
 
-def promote_to_accepted(source: Path, document_key: str) -> Path:
-    if Path(document_key).name != document_key or not document_key.endswith(".pdf"):
+def promote_to_accepted(source: Path, document_key: str, *, replace: bool = False) -> Path:
+    relative = Path(document_key)
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or relative.suffix.lower() != ".pdf"
+        or any(part in {"", "."} for part in relative.parts)
+    ):
         raise StorageError("Invalid generated document key.")
     _ensure_private_roots()
-    destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / document_key
-    if destination.exists():
+    destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / relative
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if destination.exists() and not replace:
         raise StorageError("Generated document key already exists.")
     os.chmod(source, 0o640)
     os.replace(source, destination)

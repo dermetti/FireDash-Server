@@ -26,6 +26,7 @@ from apps.organizations.models import Department, Station
 from apps.personnel.forms import (
     CommanderEligibilityForm,
     CommanderEmailForm,
+    PersonCreateForm,
     PersonForm,
     PersonnelFilterForm,
     RetentionPolicyForm,
@@ -34,6 +35,7 @@ from apps.personnel.models import Person
 from apps.personnel.services import (
     PersonnelError,
     anonymize_person,
+    create_person,
     delete_person,
     offboard_person,
     set_commander_eligibility,
@@ -88,7 +90,7 @@ def _station_admin_station_or_403(request: HttpRequest, department: Department) 
     return station
 
 
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET"])
 @login_required
 def people(request: HttpRequest, department_id) -> HttpResponse:
     department = get_object_or_404(Department, pk=department_id)
@@ -124,34 +126,6 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
     station_queryset = department.stations.filter(active=True).order_by("name")
     if selected_station:
         station_queryset = station_queryset.filter(pk=selected_station.pk)
-    if request.method == "POST":
-        if not department_admin:
-            return HttpResponse(status=403)
-        form = PersonForm(request.POST)
-        home_station = get_object_or_404(
-            Station,
-            pk=request.POST.get("home_station_id"),
-            department=department,
-            active=True,
-        )
-        if form.is_valid():
-            try:
-                batch = create_single_preview(
-                    actor=request.user,
-                    department=department,
-                    domain=ImportBatch.Domain.PERSONNEL,
-                    values={
-                        **form.cleaned_data,
-                        "incident_commander_eligible": False,
-                    },
-                    station=home_station,
-                    original_filename="manual-personnel-v1.csv",
-                )
-                return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
-            except (PersonnelError, ImportError) as error:
-                form.add_error(None, str(error))
-    else:
-        form = PersonForm()
     page_query = urlencode(
         [(key, value) for key, values in request.GET.lists() if key != "page" for value in values]
     )
@@ -161,7 +135,6 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
         "page": page,
         "total_count": paginator.count,
         "filter_form": filter_form,
-        "form": form,
         "department_admin": department_admin,
         "stations": station_queryset,
         "station_options": [
@@ -187,6 +160,36 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
         if request.headers.get("HX-Request") == "true"
         else "personnel/list.html",
         context,
+    )
+
+
+@require_http_methods(["GET", "POST"])
+@login_required
+def person_create_modal(request: HttpRequest, department_id) -> HttpResponse:
+    department = get_object_or_404(Department, pk=department_id)
+    if department.id not in active_department_ids(request.user):
+        raise PermissionDenied("Department administrator scope is required.")
+    form = PersonCreateForm(request.POST or None, department=department)
+    if request.method == "POST" and form.is_valid():
+        try:
+            create_person(
+                actor=request.user,
+                department=department,
+                home_station=form.cleaned_data["home_station"],
+                personnel_number=form.cleaned_data["personnel_number"],
+                first_name=form.cleaned_data["first_name"],
+                last_name=form.cleaned_data["last_name"],
+                incident_commander_eligible=form.cleaned_data["incident_commander_eligible"],
+                incident_commander_email=form.cleaned_data["incident_commander_email"],
+            )
+        except PersonnelError as error:
+            form.add_error(None, str(error))
+        else:
+            return _modal_redirect(request, reverse("personnel-list", args=[department.id]))
+    return render(
+        request,
+        "personnel/_person_create_modal.html",
+        {"form": form, "department": department},
     )
 
 

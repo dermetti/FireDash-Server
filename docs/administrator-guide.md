@@ -51,7 +51,7 @@ for exchange. Merge leaves absent hydrants unchanged; **authoritative snapshot**
 is batch-only, prominently shows its deactivation count, and affects only its
 own department.
 
-Personnel accepts a manual person or UTF-8 CSV/JSON batch. It is add/update
+Personnel accepts a manual person or UTF-8 CSV batch. It is add/update
 only: absence never offboards a person or ends an assignment. A new manual or
 batch person requires an explicit home station.
 
@@ -69,13 +69,14 @@ proprietary GIS format is supported.
 
 The upload page links directly to the exact UTF-8 schemas: `hydrants-v1.geojson`
 (preferred) and `hydrants-v1.csv`; `personnel-v1.csv` and
-`personnel-v1.json`; `fire-plans-manifest-v1.csv`; and
+`fire-plans-manifest-v1.csv`; and
 `klgv-plans-manifest-v1.csv`. PDF batch ZIPs are manifest + PDF files:
 place the Fire Plan manifest (`fire-plans-manifest-v1.csv`) or KLGV manifest
 (`manifest.csv`) and every declared PDF at the root of one ZIP. Fire Plan
 columns are `external_identifier`, `filename`, `object_name`, `address`,
 `postal_code`, `city`, `longitude`, `latitude`, and `action`; KLGV uses
-`external_id`, `filename`, `title`, `category`, and `action`. `action` is
+`external_identifier`, `filename`, `object_name`, `address`, `postal_code`,
+`city`, `longitude`, `latitude`, and `action`. `action` is
 `upsert` or explicit `deactivate`; absence from a ZIP never deactivates a
 document.
 

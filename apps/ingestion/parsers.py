@@ -26,20 +26,15 @@ HYDRANT_FIELDS = frozenset(
         "status",
     }
 )
-LEGACY_HYDRANT_FIELDS = frozenset(
-    {
-        "external_identifier",
-        "longitude",
-        "latitude",
-        "hydrant_type",
-        "diameter_mm",
-        "status",
-    }
-)
 HYDRANT_GEOJSON_PROPERTY_FIELDS = HYDRANT_FIELDS - {"longitude", "latitude"}
-LEGACY_HYDRANT_GEOJSON_PROPERTY_FIELDS = LEGACY_HYDRANT_FIELDS - {"longitude", "latitude"}
 PERSONNEL_FIELDS = frozenset(
-    {"personnel_number", "first_name", "last_name", "incident_commander_eligible"}
+    {
+        "personnel_number",
+        "first_name",
+        "last_name",
+        "home_station",
+        "incident_commander_eligible",
+    }
 )
 STATION_VEHICLE_FIELDS = frozenset(
     {
@@ -60,7 +55,9 @@ STATION_VEHICLE_FIELDS = frozenset(
 def parse_hydrants(*, payload: bytes, import_format: str) -> list[dict[str, object]]:
     if import_format == "geojson":
         return _geojson_hydrants(payload)
-    rows = _rows(payload, import_format, (HYDRANT_FIELDS, LEGACY_HYDRANT_FIELDS))
+    if import_format != "csv":
+        raise ImportValidationError("Hydrant imports use CSV or GeoJSON only.")
+    rows = _rows(payload, import_format, HYDRANT_FIELDS)
     result = []
     for number, row in enumerate(rows, 2):
         identifier = _required(row, "external_identifier", number)
@@ -83,6 +80,8 @@ def parse_hydrants(*, payload: bytes, import_format: str) -> list[dict[str, obje
 
 
 def parse_personnel(*, payload: bytes, import_format: str) -> list[dict[str, object]]:
+    if import_format != "csv":
+        raise ImportValidationError("Personnel imports use CSV only.")
     rows = _rows(payload, import_format, PERSONNEL_FIELDS)
     result = []
     for number, row in enumerate(rows, 2):
@@ -98,6 +97,7 @@ def parse_personnel(*, payload: bytes, import_format: str) -> list[dict[str, obj
                 "personnel_number": _required(row, "personnel_number", number),
                 "first_name": _required(row, "first_name", number),
                 "last_name": _required(row, "last_name", number),
+                "home_station": _optional_text(row.get("home_station", ""), 255, number),
                 "incident_commander_eligible": eligible,
             }
         )
@@ -220,9 +220,9 @@ def _geojson_hydrants(payload: bytes) -> list[dict[str, object]]:
             or set(geometry) != {"type", "coordinates"}
         ):
             raise ImportValidationError(f"Feature {number}: geometry must be Point.")
-        if not isinstance(properties, Mapping) or frozenset(properties) not in (
-            HYDRANT_GEOJSON_PROPERTY_FIELDS,
-            LEGACY_HYDRANT_GEOJSON_PROPERTY_FIELDS,
+        if (
+            not isinstance(properties, Mapping)
+            or frozenset(properties) != HYDRANT_GEOJSON_PROPERTY_FIELDS
         ):
             raise ImportValidationError(f"Feature {number}: properties do not match schema.")
         coordinates = geometry["coordinates"]

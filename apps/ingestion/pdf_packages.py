@@ -50,7 +50,19 @@ FIRE_PLAN_COLUMNS = frozenset(
         "action",
     }
 )
-KLGV_COLUMNS = frozenset({"external_id", "filename", "title", "category", "action"})
+KLGV_COLUMNS = frozenset(
+    {
+        "external_identifier",
+        "filename",
+        "object_name",
+        "address",
+        "postal_code",
+        "city",
+        "longitude",
+        "latitude",
+        "action",
+    }
+)
 
 # Canonical ZIP member names. Fire Plans use the versioned manifest name produced
 # by the curation tool; KLGV keeps its existing documented ``manifest.csv`` name.
@@ -98,9 +110,13 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
                 address = row["address"].strip()
                 identity = _identity(external_identifier=external_id, address=address, index=index)
             else:
-                external_id = _required(row, "external_id", index)
-                address = ""
-                identity = ("external_identifier", external_id)
+                external_id = row["external_identifier"].strip()
+                address = _required(row, "address", index) if action == "upsert" else ""
+                identity = (
+                    ("external_identifier", external_id)
+                    if external_id
+                    else ("object_name_address", f"{row['object_name'].strip()}\x00{address}")
+                )
             if identity in seen_identities:
                 raise ImportValidationError("PDF package has duplicate Fire Plan identities.")
             seen_identities.add(identity)
@@ -151,20 +167,24 @@ def parse_pdf_package(*, payload: bytes, domain: str) -> list[PdfPackageEntry]:
                     )
                 )
             else:
+                longitude = _optional_coordinate(row["longitude"], -180, 180, index)
+                latitude = _optional_coordinate(row["latitude"], -90, 90, index)
                 entries.append(
                     PdfPackageEntry(
                         external_identifier=external_id,
                         filename=filename,
-                        title=_required(row, "title", index) if action == "upsert" else "",
-                        address="",
-                        postal_code="",
-                        city="",
+                        title=_required(row, "object_name", index) if action == "upsert" else "",
+                        address=address,
+                        postal_code=_required(row, "postal_code", index)
+                        if action == "upsert"
+                        else "",
+                        city=_required(row, "city", index) if action == "upsert" else "",
                         fsd_location="",
                         bmz_location="",
                         rwa_info="",
-                        category=row["category"],
-                        latitude=None,
-                        longitude=None,
+                        category="",
+                        latitude=latitude,
+                        longitude=longitude,
                         action=action,
                         pdf_bytes=pdf,
                     )

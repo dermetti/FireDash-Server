@@ -1,2 +1,2 @@
-external_id,filename,title,category,action
-KLGV-DEMO-001,site-plan.pdf,Example KLGV plan,site,upsert
+external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,action
+KLGV-DEMO-001,site-plan.pdf,Example KLGV plan,Gartenweg 12,22041,Hamburg,10.000992,53.551323,upsert

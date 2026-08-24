@@ -23,7 +23,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
-from apps.assignments.services import ensure_current_home
+from apps.assignments.services import transfer_home
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
 from apps.ingestion.models import ImportBatch
@@ -38,6 +38,7 @@ from apps.ingestion.storage import ImportStorageError, read_staged, remove_stage
 from apps.organizations.models import Station, Vehicle
 from apps.organizations.services import create_station, create_vehicle
 from apps.personnel.models import Person
+from apps.personnel.services import create_person, set_commander_eligibility, update_person
 from apps.publications.services import mark_dirty
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
 from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitizerError, sanitize
@@ -142,7 +143,18 @@ def create_single_preview(
         )
     if domain == ImportBatch.Domain.PERSONNEL:
         payload = _csv_payload(
-            ("personnel_number", "first_name", "last_name", "incident_commander_eligible"), values
+            (
+                "personnel_number",
+                "first_name",
+                "last_name",
+                "home_station",
+                "incident_commander_eligible",
+            ),
+            values
+            | {
+                "home_station": values.get("home_station")
+                or (station.short_code if station else "")
+            },
         )
         return create_preview(
             actor=actor,
@@ -220,12 +232,26 @@ def _single_pdf_package(*, domain: str, values: dict[str, object], pdf_bytes: by
             "action": "upsert",
         }
     else:
-        fields = ("external_id", "filename", "title", "category", "action")
+        fields = (
+            "external_identifier",
+            "filename",
+            "object_name",
+            "address",
+            "postal_code",
+            "city",
+            "longitude",
+            "latitude",
+            "action",
+        )
         row = {
-            "external_id": values.get("external_id", ""),
+            "external_identifier": values.get("external_identifier", ""),
             "filename": "document.pdf",
-            "title": values.get("title", ""),
-            "category": values.get("category", ""),
+            "object_name": values.get("object_name", ""),
+            "address": values.get("address", ""),
+            "postal_code": values.get("postal_code", ""),
+            "city": values.get("city", ""),
+            "longitude": values.get("longitude", ""),
+            "latitude": values.get("latitude", ""),
             "action": "upsert",
         }
     manifest = _csv_payload(fields, row)
@@ -319,8 +345,24 @@ def _hydrant_changed_fields(*, current: Hydrant, proposed: dict[str, object]) ->
 
 
 def _personnel_baseline(*, department) -> dict[str, str]:
+    homes = {
+        assignment.person_id: str(assignment.station_id)
+        for assignment in PersonnelStationAssignment.objects.filter(
+            person__department=department,
+            person__lifecycle_status=Person.LifecycleStatus.ACTIVE,
+            assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
+            ended_at__isnull=True,
+            valid_until__isnull=True,
+        ).only("person_id", "station_id")
+    }
     return {
-        number: _fingerprint({"updated_at": person.updated_at.isoformat(), "active": person.active})
+        number: _fingerprint(
+            {
+                "updated_at": person.updated_at.isoformat(),
+                "active": person.active,
+                "home_station_id": homes.get(person.id),
+            }
+        )
         for person in Person.objects.filter(
             department=department,
             personnel_number__isnull=False,
@@ -328,6 +370,81 @@ def _personnel_baseline(*, department) -> dict[str, str]:
         ).only("personnel_number", "updated_at", "active")
         for number in [person.personnel_number or ""]
     }
+
+
+def _personnel_home_station_matches(*, department, reference: str) -> list[Station]:
+    """Use the shared Station resolver: code first, then exact normalized name."""
+    return _station_matches(department=department, short_code=reference, name=reference)
+
+
+def _personnel_import_intent(*, rows, department, fallback_station=None):
+    existing = {
+        person.personnel_number: person
+        for person in Person.objects.filter(
+            department=department,
+            personnel_number__isnull=False,
+            lifecycle_status=Person.LifecycleStatus.ACTIVE,
+        )
+    }
+    intent: list[dict[str, object]] = []
+    review_items: list[dict[str, object]] = []
+    for index, source in enumerate(rows):
+        row = dict(source)
+        key = f"personnel:{index}"
+        row["key"] = key
+        current = existing.get(row["personnel_number"])
+        reference = str(row.get("home_station", "")).strip()
+        if not reference and current is None and fallback_station is not None:
+            row["home_station_resolution"] = {
+                "state": "existing",
+                "station_id": str(fallback_station.id),
+            }
+        elif not reference and current is not None:
+            row["home_station_resolution"] = {"state": "retain"}
+        elif not reference:
+            row["home_station_resolution"] = {"state": "missing"}
+            review_items.append(
+                {
+                    "key": key,
+                    "kind": "personnel_missing_home_station",
+                    "personnel_number": row["personnel_number"],
+                    "display_name": f"{row['first_name']} {row['last_name']}",
+                    "reference": "(blank)",
+                }
+            )
+        else:
+            matches = _personnel_home_station_matches(department=department, reference=reference)
+            if len(matches) == 1:
+                row["home_station_resolution"] = {
+                    "state": "existing",
+                    "station_id": str(matches[0].id),
+                }
+            elif len(matches) > 1:
+                row["home_station_resolution"] = {"state": "ambiguous"}
+                review_items.append(
+                    {
+                        "key": key,
+                        "kind": "personnel_ambiguous_home_station",
+                        "personnel_number": row["personnel_number"],
+                        "display_name": f"{row['first_name']} {row['last_name']}",
+                        "reference": reference,
+                        "candidate_ids": [str(station.id) for station in matches],
+                    }
+                )
+            else:
+                row["home_station_resolution"] = {"state": "missing"}
+                review_items.append(
+                    {
+                        "key": key,
+                        "kind": "personnel_missing_home_station",
+                        "personnel_number": row["personnel_number"],
+                        "display_name": f"{row['first_name']} {row['last_name']}",
+                        "reference": reference,
+                    }
+                )
+        row["action"] = "new" if current is None else "existing"
+        intent.append(row)
+    return intent, review_items
 
 
 def _station_reference_key(value: object) -> str:
@@ -526,7 +643,10 @@ def create_preview(
         elif domain == ImportBatch.Domain.PERSONNEL:
             if import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("Personnel imports support upsert mode only.")
-            intent = parse_personnel(payload=payload, import_format=import_format)
+            parsed_rows = parse_personnel(payload=payload, import_format=import_format)
+            intent, review_items = _personnel_import_intent(
+                rows=parsed_rows, department=department, fallback_station=station
+            )
             baseline = _personnel_baseline(department=department)
             counts, updates, updates_truncated = _preview_personnel(
                 intent=intent, department=department
@@ -594,10 +714,15 @@ def create_preview(
         ImportBatch.Domain.FIRE_PLANS,
         ImportBatch.Domain.KLGV_PLANS,
         ImportBatch.Domain.STATION_VEHICLES,
+        ImportBatch.Domain.PERSONNEL,
     }:
         batch.validation_summary["updates"] = updates
     batch.validation_summary["updates_truncated"] = updates_truncated
     if domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
+        batch.validation_summary["review_items"] = review_items
+        batch.validation_summary["review_decisions"] = {}
+        batch.validation_summary["skipped_update_count"] = 0
+    if domain == ImportBatch.Domain.PERSONNEL:
         batch.validation_summary["review_items"] = review_items
         batch.validation_summary["review_decisions"] = {}
         batch.validation_summary["skipped_update_count"] = 0
@@ -754,10 +879,15 @@ def apply_preview(*, actor, batch_id) -> ImportBatch:
                 raise ImportError("Canonical hydrants changed; re-preview is required.")
             scopes, counts = _apply_hydrants(batch=batch, rows=rows)
         elif batch.domain == ImportBatch.Domain.PERSONNEL:
-            rows = parse_personnel(payload=payload, import_format=batch.import_format)
+            # Re-parse only to prove the staged source still satisfies the
+            # documented CSV contract. Review-owned home-station resolutions
+            # live in normalized_intent and are applied only here.
+            parse_personnel(payload=payload, import_format=batch.import_format)
             if _personnel_baseline(department=batch.department) != batch.baseline:
                 raise ImportError("Canonical personnel changed; re-preview is required.")
-            scopes, counts = _apply_personnel(batch=batch, rows=rows)
+            scopes, counts = _apply_personnel(
+                batch=batch, rows=batch.normalized_intent.get("rows", [])
+            )
         elif batch.domain == ImportBatch.Domain.STATION_VEHICLES:
             # Re-parse the staged source to prove it is still a valid instance
             # of the documented CSV contract. Reviewer resolutions live in the
@@ -949,49 +1079,83 @@ def _apply_personnel(*, batch, rows):
             lifecycle_status=Person.LifecycleStatus.ACTIVE,
         )
     }
+    if _review_summary(batch)["pending"]:
+        raise ImportError("Resolve each Home Station review item before applying this import.")
+    decisions = _review_decisions(batch)
     add = update = unchanged = 0
-    changed_people: list[Person] = []
     for row in rows:
+        if not isinstance(row, dict):
+            raise ImportError("Personnel review data is unavailable.")
+        key = str(row.get("key", ""))
+        if decisions.get(key) == "skipped":
+            unchanged += 1
+            continue
         person = existing.get(row["personnel_number"])
         display_name = f"{row['first_name']} {row['last_name']}".strip()
+        resolution = row.get("home_station_resolution", {})
+        state = resolution.get("state") if isinstance(resolution, dict) else None
+        home_station = (
+            Station.objects.filter(
+                pk=resolution.get("station_id"), department=batch.department, active=True
+            ).first()
+            if state == "existing"
+            else None
+        )
         if person is None:
-            if batch.station is None:
-                raise ImportError("New personnel require an explicit home station.")
-            person = Person.objects.create(
-                department=batch.department, display_name=display_name, **row
+            if home_station is None:
+                raise ImportError("New personnel require an active Home Station.")
+            person = create_person(
+                actor=batch.actor,
+                department=batch.department,
+                home_station=home_station,
+                personnel_number=str(row["personnel_number"]),
+                first_name=str(row["first_name"]),
+                last_name=str(row["last_name"]),
+                incident_commander_eligible=bool(row["incident_commander_eligible"]),
             )
-            PersonnelStationAssignment.objects.create(
-                person=person,
-                station=batch.station,
-                assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
-                valid_from=timezone.now(),
-                created_by=batch.actor,
-            )
-            ensure_current_home(person)
             add += 1
-            changed_people.append(person)
-        elif (
-            _personnel_changed(current=person, proposed=row) or person.display_name != display_name
-        ):
-            for field, value in row.items():
-                setattr(person, field, value)
-            person.display_name = display_name
-            person.save()
-            update += 1
-            changed_people.append(person)
         else:
-            unchanged += 1
-    station_ids = set(
-        Station.objects.filter(
-            personnel_assignments__person__in=changed_people,
-            personnel_assignments__ended_at__isnull=True,
-        ).values_list("id", flat=True)
-    )
-    scopes = [
-        ("station_personnel", station)
-        for station in Station.objects.filter(id__in=station_ids).order_by("id")
-    ]
-    return scopes, (add, update, 0, unchanged)
+            changed = False
+            if (
+                _personnel_changed(current=person, proposed=row)
+                or person.display_name != display_name
+            ):
+                person = update_person(
+                    actor=batch.actor,
+                    person=person,
+                    personnel_number=str(row["personnel_number"]),
+                    first_name=str(row["first_name"]),
+                    last_name=str(row["last_name"]),
+                )
+                changed = True
+            if person.incident_commander_eligible != bool(row["incident_commander_eligible"]):
+                person = set_commander_eligibility(
+                    actor=batch.actor,
+                    person=person,
+                    eligible=bool(row["incident_commander_eligible"]),
+                )
+                changed = True
+            if home_station is not None:
+                current_home_id = (
+                    PersonnelStationAssignment.objects.filter(
+                        person=person,
+                        assignment_type=PersonnelStationAssignment.AssignmentType.HOME,
+                        ended_at__isnull=True,
+                        valid_until__isnull=True,
+                    )
+                    .values_list("station_id", flat=True)
+                    .first()
+                )
+                if current_home_id != home_station.id:
+                    transfer_home(person=person, station=home_station, actor=batch.actor)
+                    changed = True
+            if changed:
+                update += 1
+            else:
+                unchanged += 1
+    # Personnel services already mark every affected current/previous HOME
+    # scope exactly according to the authoritative assignment semantics.
+    return [], (add, update, 0, unchanged)
 
 
 def _staged_station_values(row: dict[str, object]) -> dict[str, str]:
@@ -1151,6 +1315,20 @@ def _document_identity_key(document_or_row, *, domain: str) -> str:
         if isinstance(document_or_row, dict)
         else document_or_row.external_identifier
     ).strip()
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        if external_identifier:
+            return f"external_identifier:{external_identifier}"
+        object_name = str(
+            document_or_row["title"]
+            if isinstance(document_or_row, dict)
+            else document_or_row.object_name
+        ).strip()
+        address = str(
+            document_or_row["address"]
+            if isinstance(document_or_row, dict)
+            else document_or_row.address
+        ).strip()
+        return f"object_name_address:{object_name}\x00{address}"
     if domain != ImportBatch.Domain.FIRE_PLANS:
         return f"external_identifier:{external_identifier}"
     address = str(
@@ -1164,6 +1342,13 @@ def _document_identity_key(document_or_row, *, domain: str) -> str:
 def _identity_match(row: dict[str, object], *, domain: str) -> dict[str, str]:
     """Describe which identity rule matched an incoming row (for the review wizard)."""
     external_identifier = str(row.get("external_identifier", "") or "").strip()
+    if domain == ImportBatch.Domain.KLGV_PLANS:
+        if external_identifier:
+            return {"strategy": "external_identifier", "value": external_identifier}
+        return {
+            "strategy": "object_name_address",
+            "value": f"{row.get('title', '')} · {row.get('address', '')}",
+        }
     if domain != ImportBatch.Domain.FIRE_PLANS:
         return {"strategy": "external_identifier", "value": external_identifier}
     address = str(row.get("address", "") or "").strip()
@@ -1224,18 +1409,28 @@ def _document_baseline(*, department, domain: str) -> dict[str, str]:
         "external_identifier",
         "updated_at",
         "active",
-        "sanitized_pdf_sha256",
-        "title",
-        "category",
+        "sha256",
+        "object_name",
+        "address",
+        "postal_code",
+        "city",
+        "location",
     )
     return {
         _document_identity_key(row, domain=domain): _fingerprint(
             {
                 "updated_at": row.updated_at.isoformat(),
                 "active": row.active,
-                "sha256": row.sanitized_pdf_sha256,
-                "title": row.title,
-                "category": row.category,
+                "sha256": row.sha256,
+                "object_name": row.object_name,
+                "address": row.address,
+                "postal_code": row.postal_code,
+                "city": row.city,
+                "location": (
+                    {"longitude": row.location.x, "latitude": row.location.y}
+                    if row.location is not None
+                    else None
+                ),
             }
         )
         for row in klgv_rows
@@ -1341,6 +1536,7 @@ def set_review_decision(*, actor, batch_id, key: str, decision: str) -> ImportBa
         ImportBatch.Domain.FIRE_PLANS,
         ImportBatch.Domain.KLGV_PLANS,
         ImportBatch.Domain.STATION_VEHICLES,
+        ImportBatch.Domain.PERSONNEL,
     }:
         raise ImportError("Update review is not available for this import domain.")
     if decision not in _REVIEW_DECISIONS:
@@ -1361,6 +1557,20 @@ def set_review_decision(*, actor, batch_id, key: str, decision: str) -> ImportBa
             "staged",
         }:
             raise ImportError("Resolve the Vehicle Station before accepting this change.")
+    if batch.domain == ImportBatch.Domain.PERSONNEL and decision == "approved":
+        row = next(
+            (
+                row
+                for row in batch.normalized_intent.get("rows", [])
+                if isinstance(row, dict) and str(row.get("key")) == key
+            ),
+            None,
+        )
+        if not isinstance(row, dict) or row.get("home_station_resolution", {}).get("state") not in {
+            "existing",
+            "retain",
+        }:
+            raise ImportError("Resolve the Home Station before accepting this change.")
     decisions = dict(batch.validation_summary.get("review_decisions", {}))
     decisions[key] = {
         "decision": decision,
@@ -1451,6 +1661,44 @@ def set_station_vehicle_resolution(
 
 
 @transaction.atomic
+def set_personnel_home_station_resolution(
+    *, actor, batch_id, key: str, station: Station
+) -> ImportBatch:
+    """Stage an explicit same-department resolution for an ambiguous home station."""
+    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    require_department_admin(actor, batch.department)
+    if batch.status != ImportBatch.Status.PREVIEW_READY:
+        raise ImportError("Only a ready preview can be reviewed.")
+    if batch.domain != ImportBatch.Domain.PERSONNEL:
+        raise ImportError("Home Station resolution is only available for Personnel imports.")
+    item = next(
+        (
+            item
+            for item in batch.validation_summary.get("review_items", [])
+            if isinstance(item, dict) and str(item.get("key")) == key
+        ),
+        None,
+    )
+    candidate_ids = {str(candidate) for candidate in (item or {}).get("candidate_ids", [])}
+    if not item or item.get("kind") != "personnel_ambiguous_home_station":
+        raise ImportError("Home Station review target is unavailable.")
+    if (
+        station.department_id != batch.department_id
+        or not station.active
+        or str(station.id) not in candidate_ids
+    ):
+        raise ImportError("Choose one of the matching active Department Stations.")
+    rows = [dict(row) for row in batch.normalized_intent.get("rows", []) if isinstance(row, dict)]
+    row = next((candidate for candidate in rows if str(candidate.get("key")) == key), None)
+    if row is None:
+        raise ImportError("Home Station review data is unavailable.")
+    row["home_station_resolution"] = {"state": "existing", "station_id": str(station.id)}
+    batch.normalized_intent["rows"] = rows
+    batch.save(update_fields=("normalized_intent",))
+    return set_review_decision(actor=actor, batch_id=batch.id, key=key, decision="approved")
+
+
+@transaction.atomic
 def approve_all_review_decisions(*, actor, batch_id) -> ImportBatch:
     """Approve every pending update; requires an explicit UI confirmation."""
     batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
@@ -1534,9 +1782,12 @@ def review_context(batch: ImportBatch, index: int | None = None) -> dict[str, ob
 
 
 def _coordinate_review_items(batch: ImportBatch) -> list[dict[str, object]]:
+    if batch.domain not in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
+        return []
+    model = FirePlan if batch.domain == ImportBatch.Domain.FIRE_PLANS else KlgvPlan
     existing_keys = {
-        _document_identity_key(plan, domain=ImportBatch.Domain.FIRE_PLANS): str(plan.id)
-        for plan in FirePlan.objects.filter(department=batch.department).only(
+        _document_identity_key(plan, domain=batch.domain): str(plan.id)
+        for plan in model.objects.filter(department=batch.department).only(
             "id", "external_identifier", "address"
         )
     }
@@ -1551,8 +1802,7 @@ def _coordinate_review_items(batch: ImportBatch) -> list[dict[str, object]]:
             "latitude": row.get("latitude"),
         }
         for row_index, row in enumerate(batch.normalized_intent.get("rows", []))
-        if batch.domain == ImportBatch.Domain.FIRE_PLANS
-        and isinstance(row, dict)
+        if isinstance(row, dict)
         and row.get("action") == "upsert"
         and (row.get("longitude") is None or row.get("latitude") is None)
         for identity in (_document_identity_key(row, domain=batch.domain),)
@@ -1573,8 +1823,8 @@ def set_review_coordinates(
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Only a ready preview can be corrected.")
-    if batch.domain != ImportBatch.Domain.FIRE_PLANS:
-        raise ImportError("Coordinate completion is only available for Fire Plan imports.")
+    if batch.domain not in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
+        raise ImportError("Coordinate completion is only available for document imports.")
     rows = list(batch.normalized_intent.get("rows", []))
     if row_index < 0 or row_index >= len(rows) or not isinstance(rows[row_index], dict):
         raise ImportError("Coordinate review target is unavailable.")
@@ -1702,9 +1952,7 @@ def _sanitize_pdf_preview(
                     | {
                         "source_pdf_sha256": source_sha256,
                         "sanitized_pdf_sha256": (
-                            current.sha256
-                            if isinstance(current, FirePlan)
-                            else current.sanitized_pdf_sha256
+                            current.sha256 if isinstance(current, FirePlan) else current.sha256
                         ),
                         "file_size": current.file_size,
                         "page_count": current.page_count,
@@ -1850,13 +2098,40 @@ def _apply_documents(*, batch: ImportBatch):
                 batch=batch, row=row, model=model, sanitized_path=sanitized_path
             )
             add += 1
+            if model is KlgvPlan:
+                record_event(
+                    action="reference_data.klgv_plan_created",
+                    actor_user=batch.actor,
+                    department=batch.department,
+                    target_type="klgv_plan",
+                    target_uuid=current.id,
+                    metadata={"external_identifier": current.external_identifier or None},
+                )
         elif is_new_content:
             _replace_document_content(
                 current=current, row=row, model=model, sanitized_path=sanitized_path
             )
             update += 1
+            if model is KlgvPlan:
+                record_event(
+                    action="reference_data.klgv_plan_updated",
+                    actor_user=batch.actor,
+                    department=batch.department,
+                    target_type="klgv_plan",
+                    target_uuid=current.id,
+                    metadata={"external_identifier": current.external_identifier or None},
+                )
         elif _merge_document_metadata(current=current, row=row, model=model):
             update += 1
+            if model is KlgvPlan:
+                record_event(
+                    action="reference_data.klgv_plan_updated",
+                    actor_user=batch.actor,
+                    department=batch.department,
+                    target_type="klgv_plan",
+                    target_uuid=current.id,
+                    metadata={"external_identifier": current.external_identifier or None},
+                )
         else:
             unchanged += 1
     batch.validation_summary["skipped_update_count"] = skipped
@@ -1867,7 +2142,11 @@ def _apply_documents(*, batch: ImportBatch):
 
 def _create_document(*, batch, row, model, sanitized_path):
     document_id = uuid.uuid4()
-    key = f"{document_id}.pdf"
+    key = f"plans/{document_id}.pdf" if model is KlgvPlan else f"{document_id}.pdf"
+    if model is KlgvPlan:
+        (settings.REFERENCE_DATA_ACCEPTED_ROOT / "plans").mkdir(
+            mode=0o700, parents=True, exist_ok=True
+        )
     promote_to_accepted(sanitized_path, key)
     common = {
         "id": document_id,
@@ -1894,19 +2173,28 @@ def _create_document(*, batch, row, model, sanitized_path):
             sha256=row["sanitized_pdf_sha256"],
             source_pdf_sha256=row["source_pdf_sha256"],
         )
+    klgv_common = common | {"path": common["document_key"]}
+    del klgv_common["document_key"]
     return KlgvPlan.objects.create(
-        **common,
-        title=row["title"],
-        category=row["category"],
+        **klgv_common,
+        object_name=row["title"],
+        address=row["address"],
+        postal_code=row["postal_code"],
+        city=row["city"],
+        location=_location(row),
         source_pdf_sha256=row["source_pdf_sha256"],
-        sanitized_pdf_sha256=row["sanitized_pdf_sha256"],
+        sha256=row["sanitized_pdf_sha256"],
     )
 
 
 def _replace_document_content(*, current, row, model, sanitized_path):
-    key = f"{uuid.uuid4()}.pdf"
-    promote_to_accepted(sanitized_path, key)
-    current.document_key = key
+    key = f"plans/{current.id}.pdf" if model is KlgvPlan else f"{uuid.uuid4()}.pdf"
+    if model is KlgvPlan:
+        promote_to_accepted(sanitized_path, key, replace=True)
+    else:
+        promote_to_accepted(sanitized_path, key)
+    if model is FirePlan:
+        current.document_key = key
     current.original_filename = row["original_filename"]
     current.file_size = row["file_size"]
     current.page_count = row["page_count"]
@@ -1927,10 +2215,14 @@ def _replace_document_content(*, current, row, model, sanitized_path):
                 setattr(current, field, value)
         current.location = _location(row) or current.location
     else:
-        current.sanitized_pdf_sha256 = row["sanitized_pdf_sha256"]
+        current.path = key
+        current.sha256 = row["sanitized_pdf_sha256"]
         current.source_pdf_sha256 = row["source_pdf_sha256"]
-        current.title = row["title"]
-        current.category = row["category"] or current.category
+        current.object_name = row["title"]
+        current.address = row["address"]
+        current.postal_code = row["postal_code"]
+        current.city = row["city"]
+        current.location = _location(row)
     current.save()
 
 
@@ -1952,9 +2244,14 @@ def _merge_document_metadata(*, current, row, model) -> bool:
             if _location(row) is not None:
                 current.location = _location(row)
         else:
-            for field, value in (("title", row["title"]), ("category", row["category"])):
-                if value:
-                    setattr(current, field, value)
+            for field, value in (
+                ("object_name", row["title"]),
+                ("address", row["address"]),
+                ("postal_code", row["postal_code"]),
+                ("city", row["city"]),
+            ):
+                setattr(current, field, value)
+            current.location = _location(row)
         current.save()
     return changed
 
@@ -1966,9 +2263,7 @@ def _document_content_changed(*, current, row, model) -> bool:
 def _document_changed_fields(*, current, row, model) -> list[dict[str, object]]:
     fields: list[dict[str, object]] = []
     if _document_content_changed(current=current, row=row, model=model):
-        sanitized_current = (
-            current.sha256 if isinstance(current, FirePlan) else current.sanitized_pdf_sha256
-        )
+        sanitized_current = current.sha256
         fields.extend(
             (
                 {
@@ -2044,8 +2339,10 @@ def _document_changed_fields(*, current, row, model) -> list[dict[str, object]]:
                 fields.append(field)
     else:
         for name, label, proposed in (
-            ("title", "Title", row["title"]),
-            ("category", "Category", row["category"]),
+            ("object_name", "Object name", row["title"]),
+            ("address", "Address", row["address"]),
+            ("postal_code", "Postal code", row["postal_code"]),
+            ("city", "City", row["city"]),
         ):
             if proposed and getattr(current, name) != proposed:
                 fields.append(
@@ -2076,17 +2373,22 @@ def _document_metadata_changes(*, current, row, model) -> bool:
         if _location(row) is not None and current.location != _location(row):
             changed = True
     else:
-        for field, value in (("title", row["title"]), ("category", row["category"])):
-            if value and getattr(current, field) != value:
+        for field, value in (
+            ("object_name", row["title"]),
+            ("address", row["address"]),
+            ("postal_code", row["postal_code"]),
+            ("city", row["city"]),
+        ):
+            if getattr(current, field) != value:
                 changed = True
+        if _location(row) != current.location:
+            changed = True
     return changed
 
 
 def _location(row: dict[str, object]) -> Point | None:
+    if row.get("longitude") is None or row.get("latitude") is None:
+        return None
     longitude = cast(str | int | float, row["longitude"])
     latitude = cast(str | int | float, row["latitude"])
-    return (
-        Point(float(longitude), float(latitude), srid=4326)
-        if row.get("longitude") is not None
-        else None
-    )
+    return Point(float(longitude), float(latitude), srid=4326)

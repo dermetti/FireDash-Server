@@ -4,20 +4,19 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('reference_data', '0009_fire_plan_operational_locations'),
+        ("reference_data", "0009_fire_plan_operational_locations"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='hydrant',
-            name='house_number',
+            model_name="hydrant",
+            name="house_number",
             field=models.CharField(blank=True, max_length=32),
         ),
         migrations.AddField(
-            model_name='hydrant',
-            name='street',
+            model_name="hydrant",
+            name="street",
             field=models.CharField(blank=True, max_length=255),
         ),
     ]
