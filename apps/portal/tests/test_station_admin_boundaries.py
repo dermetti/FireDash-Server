@@ -238,7 +238,7 @@ def test_department_admin_can_grant_and_revoke_station_scope(client, station_adm
 
     assert response.status_code == 302
     assignment = StationAdminAssignment.objects.get(user=station_admin, station=additional_station)
-    assert assignment.active is True
+    assert assignment.status == StationAdminAssignment.Status.ACTIVE
 
     response = client.post(
         reverse("portal-department-manage", args=(department.id,)),
@@ -247,5 +247,5 @@ def test_department_admin_can_grant_and_revoke_station_scope(client, station_adm
 
     assert response.status_code == 302
     assignment.refresh_from_db()
-    assert assignment.active is False
+    assert assignment.status == StationAdminAssignment.Status.REVOKED
     assert assignment.revoked_by == department_admin

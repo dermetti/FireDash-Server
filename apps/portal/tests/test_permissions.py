@@ -116,7 +116,7 @@ def test_department_admin_grants_and_revokes_explicit_station_scope(client, port
     session.save()
 
     assignment = StationAdminAssignment.objects.get(
-        user=station_admin, station=station, active=True
+        user=station_admin, station=station, status=StationAdminAssignment.Status.ACTIVE
     )
     response = client.post(
         reverse("portal-department-manage", args=(department.id,)),
@@ -124,7 +124,7 @@ def test_department_admin_grants_and_revokes_explicit_station_scope(client, port
     )
     assert response.status_code == 302
     assignment.refresh_from_db()
-    assert not assignment.active
+    assert assignment.status == StationAdminAssignment.Status.REVOKED
     assert AuditEvent.objects.filter(
         action="authorization.station_admin_revoked", target_uuid=assignment.id
     ).exists()

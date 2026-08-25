@@ -3,7 +3,7 @@
 {% block content %}
 {% include "components/_page_header.html" with title="Overview" description="FireDash administration overview." %}
 {% if nav_station_ambiguous %}<div class="alert alert-danger">This account has multiple active station assignments. Contact a System or Department Administrator to correct the configuration.</div>{% endif %}
-{% if nav_role == "department" or nav_role == "station" %}
+{% if nav_role == "system" or nav_role == "department" or nav_role == "station" %}
   <section class="mb-4" aria-labelledby="attention-heading"><h2 class="h4" id="attention-heading">Requires attention</h2>
   {% if attention %}<div class="vstack gap-2">{% for item in attention %}<a class="alert alert-{{ item.level }} mb-0 text-decoration-none" href="{{ item.url }}"><strong>{{ item.count }}</strong> — {{ item.text }} <span class="float-end">Resolve →</span></a>{% endfor %}</div>{% else %}<div class="alert alert-success mb-0">No current attention items require action.</div>{% endif %}</section>
 {% endif %}

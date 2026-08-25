@@ -83,6 +83,17 @@ class AdministratorForm(forms.Form):
     )
 
 
+class AdministratorRemovalForm(forms.Form):
+    confirmation = forms.CharField(
+        max_length=32, widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+
+    def clean_confirmation(self):
+        if self.cleaned_data["confirmation"] != "REMOVE":
+            raise forms.ValidationError("Type REMOVE to permanently remove this administrator.")
+        return "REMOVE"
+
+
 class StationScopeForm(forms.Form):
     user_id = forms.UUIDField()
     station_id = forms.UUIDField()

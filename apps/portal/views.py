@@ -30,13 +30,18 @@ from apps.authorization.services import (
     change_department_status,
     create_department,
     grant_station_admin,
+    permanently_remove_administrator,
     provision_department_admin,
     provision_station_admin,
+    reinstate_department_admin,
+    reinstate_station_admin,
     revoke_department_admin,
     revoke_station_admin,
     set_api_version_compatibility_policy,
     set_department_tablet_lease,
     set_system_department_tablet_lease,
+    suspend_department_admin,
+    suspend_station_admin,
 )
 from apps.organizations.models import Department, Station, Vehicle
 from apps.organizations.services import (
@@ -51,18 +56,17 @@ from apps.organizations.services import (
 from apps.personnel.services import set_retention_policy
 from apps.portal.forms import (
     AdministratorForm,
+    AdministratorRemovalForm,
     ApiVersionCompatibilityPolicyForm,
     DepartmentForm,
     DepartmentStatusForm,
     DepartmentSystemSettingsForm,
     DepartmentTabletLeaseForm,
-    RevokeStationScopeForm,
     StationForm,
     StationListFilterForm,
-    StationScopeForm,
     VehicleForm,
 )
-from apps.portal.overview import attention_for_request
+from apps.portal.overview import attention_for_request, system_attention
 
 
 def _mark_active(sections: list[dict[str, object]], path: str) -> None:
@@ -286,6 +290,8 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         context["attention"] = attention_for_request(request, department=context["nav_department"])
     elif context.get("nav_role") == "station" and context.get("nav_station") is not None:
         context["attention"] = attention_for_request(request, station=context["nav_station"])
+    elif context.get("nav_role") == "system":
+        context["attention"] = system_attention()
     else:
         context["attention"] = []
     return render(request, "portal/dashboard.html", context)
@@ -306,7 +312,9 @@ def system_departments(request: HttpRequest) -> HttpResponse:
     departments = Department.objects.all().prefetch_related(
         Prefetch(
             "memberships",
-            queryset=DepartmentMembership.objects.filter(active=True).select_related("user"),
+            queryset=DepartmentMembership.objects.filter(
+                status=DepartmentMembership.Status.ACTIVE
+            ).select_related("user"),
         )
     )
     if query:
@@ -536,6 +544,14 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
             "portal/setup_link.html",
             {"setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,)))},
         )
+    can_bootstrap_admin = (
+        department.status == Department.Status.ACTIVE
+        and not DepartmentMembership.objects.filter(
+            department=department,
+            status=DepartmentMembership.Status.ACTIVE,
+            user__is_active=True,
+        ).exists()
+    )
     return render(
         request,
         "portal/system_department_detail.html",
@@ -544,6 +560,7 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
             "status_form": status_form,
             "admin_form": admin_form,
             "lease_form": lease_form,
+            "can_bootstrap_admin": can_bootstrap_admin,
         },
     )
 
@@ -552,25 +569,39 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
 @require_http_methods(["GET", "POST"])
 def department_manage(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
-    form = AdministratorForm(request.POST or None)
-    scope_form = StationScopeForm(request.POST or None)
-    revoke_scope_form = RevokeStationScopeForm(request.POST or None)
-    action = request.POST.get("action")
-    if request.method == "POST" and action == "provision" and form.is_valid():
-        require_recent_reauthentication(
-            request,
-            return_url=reverse("portal-department-manage", args=(department.id,)),
-        )
-        token = provision_department_admin(
-            actor=request.user, department=department, **form.cleaned_data
-        )
-        return render(
-            request,
-            "portal/setup_link.html",
-            {"setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,)))},
-        )
+    if request.method == "POST":
+        require_recent_reauthentication(request, return_url=request.path)
+        action = request.POST.get("action")
+        if action == "grant-station":
+            user = get_object_or_404(User, pk=request.POST.get("user_id"))
+            if DepartmentMembership.objects.filter(
+                user=user,
+                department=department,
+            ).exists():
+                raise PermissionDenied(
+                    "Department Administrators are department-wide and cannot receive "
+                    "station scope."
+                )
+            station = get_object_or_404(
+                Station, pk=request.POST.get("station_id"), department=department, active=True
+            )
+            grant_station_admin(actor=request.user, user=user, station=station)
+        elif action == "revoke-station":
+            assignment = get_object_or_404(
+                StationAdminAssignment,
+                pk=request.POST.get("assignment_id"),
+                station__department=department,
+                status__in=(
+                    StationAdminAssignment.Status.ACTIVE,
+                    StationAdminAssignment.Status.SUSPENDED,
+                ),
+            )
+            revoke_station_admin(actor=request.user, assignment=assignment)
+        else:
+            raise PermissionDenied("Unsupported administrator action.")
+        return redirect("portal-department-manage", department_id=department.id)
     administrators = User.objects.filter(
-        Q(department_memberships__department=department, department_memberships__active=True)
+        Q(department_memberships__department=department)
         | Q(station_admin_assignments__station__department=department)
     ).distinct()
     query = request.GET.get("q", "").strip()
@@ -582,32 +613,7 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
     if station_filter:
         administrators = administrators.filter(
             station_admin_assignments__station_id=station_filter,
-            station_admin_assignments__active=True,
         )
-    if request.method == "POST" and action == "grant-station" and scope_form.is_valid():
-        require_recent_reauthentication(
-            request,
-            return_url=reverse("portal-department-manage", args=(department.id,)),
-        )
-        user = get_object_or_404(administrators, pk=scope_form.cleaned_data["user_id"])
-        station = get_object_or_404(
-            Station, pk=scope_form.cleaned_data["station_id"], department=department, active=True
-        )
-        grant_station_admin(actor=request.user, user=user, station=station)
-        return redirect("portal-department-manage", department_id=department.id)
-    if request.method == "POST" and action == "revoke-station" and revoke_scope_form.is_valid():
-        require_recent_reauthentication(
-            request,
-            return_url=reverse("portal-department-manage", args=(department.id,)),
-        )
-        assignment = get_object_or_404(
-            StationAdminAssignment,
-            pk=revoke_scope_form.cleaned_data["assignment_id"],
-            station__department=department,
-            active=True,
-        )
-        revoke_station_admin(actor=request.user, assignment=assignment)
-        return redirect("portal-department-manage", department_id=department.id)
     administrators = administrators.prefetch_related(
         "department_memberships", "station_admin_assignments__station"
     ).order_by("email")
@@ -619,7 +625,6 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
         "portal/department_manage.html",
         {
             "department": department,
-            "form": form,
             "administrators": page.object_list,
             "page": page,
             "total_count": paginator.count,
@@ -627,6 +632,110 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
             "query": query,
             "station_filter": station_filter,
             "current_user_id": current_user_id,
+        },
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def administrator_provision_modal(
+    request: HttpRequest, department_id, station_id=None
+) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    station = None
+    if station_id is not None:
+        station = get_object_or_404(Station, pk=station_id, department=department, active=True)
+    form = AdministratorForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        require_recent_reauthentication(request, return_url=request.path)
+        token = (
+            provision_station_admin(actor=request.user, station=station, **form.cleaned_data)
+            if station is not None
+            else provision_department_admin(
+                actor=request.user, department=department, **form.cleaned_data
+            )
+        )
+        return render(
+            request,
+            "portal/setup_link.html",
+            {"setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,)))},
+        )
+    return render(
+        request,
+        "portal/_administrator_provision_modal.html",
+        {"form": form, "department": department, "station": station},
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def administrator_detail(request: HttpRequest, department_id, user_id) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    administrator = get_object_or_404(User, pk=user_id)
+    memberships = DepartmentMembership.objects.filter(
+        user=administrator, department=department
+    ).order_by("-created_at")
+    assignments = (
+        StationAdminAssignment.objects.filter(user=administrator, station__department=department)
+        .select_related("station")
+        .order_by("station__short_code")
+    )
+    if not memberships.exists() and not assignments.exists():
+        raise PermissionDenied("Administrator is outside this department.")
+    removal_form = AdministratorRemovalForm(request.POST or None)
+    if request.method == "POST":
+        require_recent_reauthentication(request, return_url=request.path)
+        action = request.POST.get("action")
+        try:
+            if action == "permanent-remove" and removal_form.is_valid():
+                permanently_remove_administrator(
+                    actor=request.user, user=administrator, department=department
+                )
+                messages.success(request, "Administrator was permanently removed and anonymized.")
+                return redirect("portal-department-manage", department_id=department.id)
+            target = (
+                get_object_or_404(
+                    DepartmentMembership,
+                    pk=request.POST.get("membership_id"),
+                    department=department,
+                    user=administrator,
+                )
+                if request.POST.get("membership_id")
+                else get_object_or_404(
+                    StationAdminAssignment,
+                    pk=request.POST.get("assignment_id"),
+                    station__department=department,
+                    user=administrator,
+                )
+            )
+            operations = {
+                "suspend": suspend_department_admin
+                if isinstance(target, DepartmentMembership)
+                else suspend_station_admin,
+                "reinstate": reinstate_department_admin
+                if isinstance(target, DepartmentMembership)
+                else reinstate_station_admin,
+                "revoke": revoke_department_admin
+                if isinstance(target, DepartmentMembership)
+                else revoke_station_admin,
+            }
+            if action not in operations:
+                raise ValueError("Unsupported administrator lifecycle action.")
+            operations[action](actor=request.user, membership=target) if isinstance(
+                target, DepartmentMembership
+            ) else operations[action](actor=request.user, assignment=target)
+            return redirect(request.path)
+        except ValueError as error:
+            messages.error(request, str(error))
+    return render(
+        request,
+        "portal/administrator_detail.html",
+        {
+            "department": department,
+            "administrator": administrator,
+            "memberships": memberships,
+            "assignments": assignments,
+            "removal_form": removal_form,
         },
     )
 
@@ -641,7 +750,7 @@ def department_admin_revoke_modal(
         DepartmentMembership.objects.select_related("user"),
         pk=membership_id,
         department=department,
-        active=True,
+        status=DepartmentMembership.Status.ACTIVE,
     )
     if request.method == "POST":
         require_recent_reauthentication(
@@ -1050,7 +1159,9 @@ def station_manage(request: HttpRequest, station_id) -> HttpResponse:
             "department_admin": department_admin,
             "form": form,
             "admin_form": admin_form,
-            "assignments": StationAdminAssignment.objects.filter(station=station, active=True),
+            "assignments": StationAdminAssignment.objects.filter(
+                station=station, status=StationAdminAssignment.Status.ACTIVE
+            ),
             "vehicles": vehicles.order_by("-active", "display_name", "id"),
             "vehicle_status": vehicle_status,
         },

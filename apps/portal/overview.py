@@ -6,6 +6,7 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.authorization.scopes import orphaned_departments
 from apps.organizations.models import Department, Station
 from apps.publications.models import DatasetPublication, DatasetScopeState
 from apps.tablets.models import AdoptionInvitation, AppInstallation, Tablet
@@ -17,6 +18,26 @@ class AttentionItem:
     count: int
     text: str
     url: str
+
+
+def system_attention() -> list[AttentionItem]:
+    orphaned = orphaned_departments().order_by("name", "id")
+    count = orphaned.count()
+    if not count:
+        return []
+    first = orphaned.first()
+    assert first is not None
+    return [
+        AttentionItem(
+            "warning",
+            count,
+            (
+                f"{count} operational department{'s' if count != 1 else ''} require "
+                "administrator recovery"
+            ),
+            reverse("portal-system-department", args=[first.id]),
+        )
+    ]
 
 
 def department_attention(department: Department) -> list[AttentionItem]:

@@ -10,6 +10,18 @@ from django.utils.crypto import constant_time_compare, salted_hmac
 from apps.accounts.models import AccountSetupToken, AuthenticationThrottle
 
 
+def permanently_deactivate_and_anonymize_user(*, user) -> None:
+    """Retain an audited identity while removing reusable personal/account data."""
+    now = timezone.now()
+    user.email = f"deleted-{secrets.token_hex(16)}@anonymized.invalid"
+    user.display_name = "Deleted administrator"
+    user.is_active = False
+    user.mfa_enabled = False
+    user.set_unusable_password()
+    user.save(update_fields=("email", "display_name", "is_active", "mfa_enabled", "password"))
+    AccountSetupToken.objects.filter(user=user, used_at__isnull=True).update(used_at=now)
+
+
 def _hash(value: str) -> str:
     return salted_hmac("fire-backend-auth", value).hexdigest()
 

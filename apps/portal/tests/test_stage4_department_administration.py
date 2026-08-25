@@ -228,9 +228,8 @@ def test_department_accounts_are_bounded_and_mutations_require_reauth(client, st
     assert response.status_code == 200
     assert len(response.context["administrators"]) == 100
     assert "Page 1 of 2" in response.content.decode()
-    invalid_provision = client.post(
-        url, {"action": "provision", "email": "not-an-email", "display_name": ""}
-    )
+    provision_url = reverse("portal-administrator-provision", args=(department.id,))
+    invalid_provision = client.post(provision_url, {"email": "not-an-email", "display_name": ""})
     assert invalid_provision.status_code == 200
     assert b"Enter a valid email address" in invalid_provision.content
     candidate = User.objects.get(email="stage4-000@example.test")
@@ -243,13 +242,13 @@ def test_department_accounts_are_bounded_and_mutations_require_reauth(client, st
     blocked = client.post(revoke_url)
     assert blocked.status_code == 302
     membership.refresh_from_db()
-    assert membership.active is True
+    assert membership.status == DepartmentMembership.Status.ACTIVE
     _recent_reauth(client)
     revoked = client.post(revoke_url, HTTP_HX_REQUEST="true")
     assert revoked.status_code == 204
     assert revoked["HX-Redirect"] == url
     membership.refresh_from_db()
-    assert membership.active is False
+    assert membership.status == DepartmentMembership.Status.REVOKED
     assert AuditEvent.objects.filter(
         action="authorization.department_admin_revoked", department=department
     ).exists()

@@ -4,14 +4,18 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils import timezone
 
-from apps.accounts.services import create_setup_token
+from apps.accounts.services import create_setup_token, permanently_deactivate_and_anonymize_user
 from apps.audit.services import record_event
 from apps.authorization.models import (
     ApiVersionCompatibilityPolicy,
     DepartmentMembership,
     StationAdminAssignment,
 )
-from apps.authorization.scopes import active_department_ids, is_system_admin
+from apps.authorization.scopes import (
+    active_department_ids,
+    effective_department_admin_memberships,
+    is_system_admin,
+)
 from apps.organizations.models import Department, Station
 from apps.tablets.versions import AppVersionError, parse_app_version
 
@@ -173,12 +177,26 @@ def change_department_status(*, actor, department: Department, status: str) -> D
 def provision_department_admin(
     *, actor, department: Department, email: str, display_name: str
 ) -> str:
-    if not (is_system_admin(actor) or department.id in active_department_ids(actor)):
+    department = Department.objects.select_for_update().get(pk=department.pk)
+    system_actor = is_system_admin(actor)
+    if system_actor:
+        if department.status != Department.Status.ACTIVE:
+            raise PermissionDenied("Department must be operational before administrator bootstrap.")
+        if effective_department_admin_memberships(department).exists():
+            raise PermissionDenied("System administrators may only bootstrap orphaned departments.")
+    elif department.id not in active_department_ids(actor):
         raise PermissionDenied("Department administrator scope is required.")
+    had_prior_authority = DepartmentMembership.objects.filter(department=department).exists()
     token, raw_token = create_setup_token(actor=actor, email=email, display_name=display_name)
     DepartmentMembership.objects.create(user=token.user, department=department, created_by=actor)
     record_event(
-        action="authorization.department_admin_provisioned",
+        action=(
+            "authorization.department_admin_orphan_recovered"
+            if system_actor and had_prior_authority
+            else "authorization.department_admin_bootstrapped"
+            if system_actor
+            else "authorization.department_admin_provisioned"
+        ),
         actor_user=actor,
         department=department,
         target_type="user",
@@ -204,12 +222,107 @@ def provision_station_admin(*, actor, station: Station, email: str, display_name
 
 
 @transaction.atomic
+def _locked_membership(membership: DepartmentMembership) -> DepartmentMembership:
+    return (
+        DepartmentMembership.objects.select_for_update()
+        .select_related("user", "department")
+        .get(pk=membership.pk)
+    )
+
+
+def _locked_department(department_id) -> Department:
+    return Department.objects.select_for_update().get(pk=department_id)
+
+
+def _require_tenant_lifecycle_actor(actor, department: Department) -> None:
+    """Lifecycle administration belongs to the tenant, never the SaaS operator."""
+    if is_system_admin(actor):
+        raise PermissionDenied(
+            "System administrators may not manage tenant administrator lifecycle."
+        )
+    require_department_admin(actor, department)
+
+
+def _prevent_last_effective_admin_removal(
+    *, department: Department, membership: DepartmentMembership
+) -> None:
+    if membership.status != DepartmentMembership.Status.ACTIVE:
+        return
+    effective = effective_department_admin_memberships(department).select_for_update()
+    if not effective.filter(pk=membership.pk).exists():
+        return
+    if effective.count() <= 1:
+        raise ValueError(
+            "An operational department must retain one effective Department Administrator."
+        )
+
+
+@transaction.atomic
+def suspend_department_admin(*, actor, membership: DepartmentMembership) -> None:
+    department = _locked_department(membership.department_id)
+    membership = _locked_membership(membership)
+    _require_tenant_lifecycle_actor(actor, department)
+    if membership.status != DepartmentMembership.Status.ACTIVE:
+        raise ValueError("Only an active Department Administrator can be suspended.")
+    _prevent_last_effective_admin_removal(department=department, membership=membership)
+    membership.status = DepartmentMembership.Status.SUSPENDED
+    membership.suspended_at = timezone.now()
+    membership.suspended_by = actor
+    membership.save(update_fields=("status", "suspended_at", "suspended_by"))
+    record_event(
+        action="authorization.department_admin_suspended",
+        actor_user=actor,
+        department=department,
+        target_type="department_membership",
+        target_uuid=membership.id,
+    )
+
+
+@transaction.atomic
+def reinstate_department_admin(*, actor, membership: DepartmentMembership) -> None:
+    department = _locked_department(membership.department_id)
+    membership = _locked_membership(membership)
+    _require_tenant_lifecycle_actor(actor, department)
+    if membership.status != DepartmentMembership.Status.SUSPENDED:
+        raise ValueError("Only a suspended Department Administrator can be reinstated.")
+    if (
+        DepartmentMembership.objects.filter(
+            user=membership.user,
+            role=membership.role,
+            status=DepartmentMembership.Status.ACTIVE,
+        )
+        .exclude(pk=membership.pk)
+        .exists()
+    ):
+        raise ValueError("This account already actively administers a department.")
+    membership.status = DepartmentMembership.Status.ACTIVE
+    membership.save(update_fields=("status",))
+    record_event(
+        action="authorization.department_admin_reinstated",
+        actor_user=actor,
+        department=department,
+        target_type="department_membership",
+        target_uuid=membership.id,
+    )
+
+
+@transaction.atomic
 def revoke_department_admin(*, actor, membership: DepartmentMembership) -> None:
-    require_department_admin(actor, membership.department)
-    membership.active = False
+    department = _locked_department(membership.department_id)
+    membership = _locked_membership(membership)
+    _require_tenant_lifecycle_actor(actor, department)
+    if membership.status not in (
+        DepartmentMembership.Status.ACTIVE,
+        DepartmentMembership.Status.SUSPENDED,
+    ):
+        raise ValueError(
+            "Only active or suspended Department Administrator authority can be revoked."
+        )
+    _prevent_last_effective_admin_removal(department=department, membership=membership)
+    membership.status = DepartmentMembership.Status.REVOKED
     membership.revoked_at = timezone.now()
     membership.revoked_by = actor
-    membership.save(update_fields=("active", "revoked_at", "revoked_by"))
+    membership.save(update_fields=("status", "revoked_at", "revoked_by"))
     record_event(
         action="authorization.department_admin_revoked",
         actor_user=actor,
@@ -221,13 +334,82 @@ def revoke_department_admin(*, actor, membership: DepartmentMembership) -> None:
 
 @transaction.atomic
 def revoke_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
-    require_department_admin(actor, assignment.station.department)
-    assignment.active = False
+    department = _locked_department(assignment.station.department_id)
+    assignment = (
+        StationAdminAssignment.objects.select_for_update()
+        .select_related("station__department")
+        .get(pk=assignment.pk)
+    )
+    _require_tenant_lifecycle_actor(actor, department)
+    if assignment.status not in (
+        StationAdminAssignment.Status.ACTIVE,
+        StationAdminAssignment.Status.SUSPENDED,
+    ):
+        raise ValueError("Only active or suspended Station Administrator authority can be revoked.")
+    assignment.status = StationAdminAssignment.Status.REVOKED
     assignment.revoked_at = timezone.now()
     assignment.revoked_by = actor
-    assignment.save(update_fields=("active", "revoked_at", "revoked_by"))
+    assignment.save(update_fields=("status", "revoked_at", "revoked_by"))
     record_event(
         action="authorization.station_admin_revoked",
+        actor_user=actor,
+        department=assignment.station.department,
+        station=assignment.station,
+        target_type="station_admin_assignment",
+        target_uuid=assignment.id,
+    )
+
+
+@transaction.atomic
+def suspend_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
+    department = _locked_department(assignment.station.department_id)
+    assignment = (
+        StationAdminAssignment.objects.select_for_update()
+        .select_related("station__department")
+        .get(pk=assignment.pk)
+    )
+    _require_tenant_lifecycle_actor(actor, department)
+    if assignment.status != StationAdminAssignment.Status.ACTIVE:
+        raise ValueError("Only an active Station Administrator can be suspended.")
+    assignment.status = StationAdminAssignment.Status.SUSPENDED
+    assignment.suspended_at = timezone.now()
+    assignment.suspended_by = actor
+    assignment.save(update_fields=("status", "suspended_at", "suspended_by"))
+    record_event(
+        action="authorization.station_admin_suspended",
+        actor_user=actor,
+        department=assignment.station.department,
+        station=assignment.station,
+        target_type="station_admin_assignment",
+        target_uuid=assignment.id,
+    )
+
+
+@transaction.atomic
+def reinstate_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
+    department = _locked_department(assignment.station.department_id)
+    assignment = (
+        StationAdminAssignment.objects.select_for_update()
+        .select_related("station__department")
+        .get(pk=assignment.pk)
+    )
+    _require_tenant_lifecycle_actor(actor, department)
+    if assignment.status != StationAdminAssignment.Status.SUSPENDED:
+        raise ValueError("Only a suspended Station Administrator can be reinstated.")
+    if (
+        StationAdminAssignment.objects.filter(
+            user=assignment.user,
+            station=assignment.station,
+            status=StationAdminAssignment.Status.ACTIVE,
+        )
+        .exclude(pk=assignment.pk)
+        .exists()
+    ):
+        raise ValueError("This account already has active authority for this station.")
+    assignment.status = StationAdminAssignment.Status.ACTIVE
+    assignment.save(update_fields=("status",))
+    record_event(
+        action="authorization.station_admin_reinstated",
         actor_user=actor,
         department=assignment.station.department,
         station=assignment.station,
@@ -242,7 +424,7 @@ def grant_station_admin(*, actor, user, station: Station) -> StationAdminAssignm
     assignment, created = StationAdminAssignment.objects.get_or_create(
         user=user,
         station=station,
-        active=True,
+        status=StationAdminAssignment.Status.ACTIVE,
         defaults={"created_by": actor},
     )
     if not created:
@@ -256,3 +438,59 @@ def grant_station_admin(*, actor, user, station: Station) -> StationAdminAssignm
         target_uuid=assignment.id,
     )
     return assignment
+
+
+@transaction.atomic
+def permanently_remove_administrator(*, actor, user, department: Department) -> None:
+    """Revoke tenant authority and anonymize the retained historical account."""
+    department = Department.objects.select_for_update().get(pk=department.pk)
+    _require_tenant_lifecycle_actor(actor, department)
+    if is_system_admin(user):
+        raise ValueError(
+            "A System Administrator cannot be permanently removed from tenant administration."
+        )
+    memberships = list(
+        DepartmentMembership.objects.select_for_update().filter(user=user, department=department)
+    )
+    assignments = list(
+        StationAdminAssignment.objects.select_for_update().filter(
+            user=user, station__department=department
+        )
+    )
+    if not memberships and not assignments:
+        raise ValueError("User has no administrator authority in this department.")
+    if (
+        DepartmentMembership.objects.filter(user=user, status=DepartmentMembership.Status.ACTIVE)
+        .exclude(department=department)
+        .exists()
+        or StationAdminAssignment.objects.filter(
+            user=user, status=StationAdminAssignment.Status.ACTIVE
+        )
+        .exclude(station__department=department)
+        .exists()
+    ):
+        raise ValueError(
+            "Administrator has authority outside this department and cannot be permanently "
+            "removed here."
+        )
+    for membership in memberships:
+        _prevent_last_effective_admin_removal(department=department, membership=membership)
+        if membership.status != DepartmentMembership.Status.REVOKED:
+            membership.status = DepartmentMembership.Status.REVOKED
+            membership.revoked_at = timezone.now()
+            membership.revoked_by = actor
+            membership.save(update_fields=("status", "revoked_at", "revoked_by"))
+    for assignment in assignments:
+        if assignment.status != StationAdminAssignment.Status.REVOKED:
+            assignment.status = StationAdminAssignment.Status.REVOKED
+            assignment.revoked_at = timezone.now()
+            assignment.revoked_by = actor
+            assignment.save(update_fields=("status", "revoked_at", "revoked_by"))
+    permanently_deactivate_and_anonymize_user(user=user)
+    record_event(
+        action="authorization.administrator_permanently_removed",
+        actor_user=actor,
+        department=department,
+        target_type="user",
+        target_uuid=user.id,
+    )

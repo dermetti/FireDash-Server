@@ -61,13 +61,18 @@ class DepartmentMembership(models.Model):
     class Role(models.TextChoices):
         DEPARTMENT_ADMIN = "DEPARTMENT_ADMIN", "Department administrator"
 
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        SUSPENDED = "SUSPENDED", "Suspended"
+        REVOKED = "REVOKED", "Revoked"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="department_memberships"
     )
     department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="memberships")
     role = models.CharField(max_length=32, choices=Role.choices, default=Role.DEPARTMENT_ADMIN)
-    active = models.BooleanField(default=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -82,17 +87,25 @@ class DepartmentMembership(models.Model):
         on_delete=models.PROTECT,
         related_name="revoked_department_memberships",
     )
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    suspended_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="suspended_department_memberships",
+    )
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=("user", "department", "role"),
-                condition=Q(active=True),
+                condition=Q(status="ACTIVE"),
                 name="one_active_department_role",
             ),
             models.UniqueConstraint(
                 fields=("user", "role"),
-                condition=Q(active=True),
+                condition=Q(status="ACTIVE"),
                 name="one_active_department_admin",
             ),
             models.CheckConstraint(
@@ -100,21 +113,30 @@ class DepartmentMembership(models.Model):
             ),
             models.CheckConstraint(
                 condition=(
-                    Q(active=True, revoked_at__isnull=True, revoked_by__isnull=True)
-                    | Q(active=False, revoked_at__isnull=False, revoked_by__isnull=False)
+                    Q(
+                        status__in=("ACTIVE", "SUSPENDED"),
+                        revoked_at__isnull=True,
+                        revoked_by__isnull=True,
+                    )
+                    | Q(status="REVOKED", revoked_at__isnull=False, revoked_by__isnull=False)
                 ),
-                name="department_membership_revocation_state",
+                name="department_membership_lifecycle_provenance",
             ),
         ]
 
 
 class StationAdminAssignment(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        SUSPENDED = "SUSPENDED", "Suspended"
+        REVOKED = "REVOKED", "Revoked"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="station_admin_assignments"
     )
     station = models.ForeignKey(Station, on_delete=models.PROTECT, related_name="admin_assignments")
-    active = models.BooleanField(default=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -129,19 +151,31 @@ class StationAdminAssignment(models.Model):
         on_delete=models.PROTECT,
         related_name="revoked_station_admin_assignments",
     )
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    suspended_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="suspended_station_admin_assignments",
+    )
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=("user", "station"),
-                condition=Q(active=True),
+                condition=Q(status="ACTIVE"),
                 name="one_active_station_admin_assignment",
             ),
             models.CheckConstraint(
                 condition=(
-                    Q(active=True, revoked_at__isnull=True, revoked_by__isnull=True)
-                    | Q(active=False, revoked_at__isnull=False, revoked_by__isnull=False)
+                    Q(
+                        status__in=("ACTIVE", "SUSPENDED"),
+                        revoked_at__isnull=True,
+                        revoked_by__isnull=True,
+                    )
+                    | Q(status="REVOKED", revoked_at__isnull=False, revoked_by__isnull=False)
                 ),
-                name="station_assignment_revocation_state",
+                name="station_assignment_lifecycle_provenance",
             ),
         ]

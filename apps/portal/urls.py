@@ -18,7 +18,11 @@ urlpatterns = [
     ),
     path("system/settings/", views.system_settings, name="portal-system-settings"),
     path("system/audit/", views.system_audit, name="portal-system-audit"),
-    path("system/audit/<uuid:event_id>/", views.system_audit_detail, name="portal-system-audit-detail"),
+    path(
+        "system/audit/<uuid:event_id>/",
+        views.system_audit_detail,
+        name="portal-system-audit-detail",
+    ),
     path(
         "system/departments/<uuid:department_id>/",
         views.system_department_detail,
@@ -38,6 +42,21 @@ urlpatterns = [
         "departments/<uuid:department_id>/administrators/<uuid:membership_id>/revoke/",
         views.department_admin_revoke_modal,
         name="portal-department-admin-revoke",
+    ),
+    path(
+        "departments/<uuid:department_id>/administrators/provision/",
+        views.administrator_provision_modal,
+        name="portal-administrator-provision",
+    ),
+    path(
+        "departments/<uuid:department_id>/stations/<uuid:station_id>/administrators/provision/",
+        views.administrator_provision_modal,
+        name="portal-station-administrator-provision",
+    ),
+    path(
+        "departments/<uuid:department_id>/administrators/<uuid:user_id>/",
+        views.administrator_detail,
+        name="portal-administrator-detail",
     ),
     path("departments/<uuid:department_id>/stations/", views.stations, name="portal-stations"),
     path(
