@@ -205,9 +205,14 @@ def cleanup_stale_artifacts() -> int:
     from apps.publications.models import DatasetPublication
 
     for publication in DatasetPublication.objects.filter(
-        status__in=("FAILED", "OBSOLETE", "REJECTED"), artifact_path__gt=""
+        status__in=("FAILED", "OBSOLETE", "REJECTED", "CANCELLED"), artifact_path__gt=""
     ):
         remove_artifact(publication)
-        DatasetPublication.objects.filter(pk=publication.pk).update(artifact_path="")
+        # A READY artifact's signed metadata is immutable. Its terminal
+        # publication state prevents future distribution, so preserve the
+        # historical path/metadata even after ciphertext cleanup. Non-ready
+        # temporary records retain the legacy path-clearing behavior.
+        if publication.artifact_status != DatasetPublication.ArtifactStatus.READY:
+            DatasetPublication.objects.filter(pk=publication.pk).update(artifact_path="")
         removed += 1
     return removed

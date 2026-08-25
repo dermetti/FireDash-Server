@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, time, timedelta
 
 from django.core.exceptions import ValidationError
@@ -10,7 +11,6 @@ from apps.authorization.services import require_department_admin
 from apps.publications.artifacts import (
     ArtifactError,
     build_encrypted_artifact,
-    remove_artifact,
     remove_artifact_path,
 )
 from apps.publications.builders import (
@@ -21,6 +21,7 @@ from apps.publications.builders import (
     validate_built_summary,
 )
 from apps.publications.feature_services import FeatureDisabledError, require_feature
+from apps.publications.manifests import revoke_publication_dataset_key_grants
 from apps.publications.models import (
     DatasetPublication,
     DatasetScopeState,
@@ -37,6 +38,25 @@ from apps.publications.wake import wake_publication_build_worker
 
 class PublicationError(ValueError):
     pass
+
+
+logger = logging.getLogger(__name__)
+
+
+def _schedule_artifact_removal(relative_path: str) -> None:
+    """Remove retired ciphertext only after its lifecycle transaction commits."""
+    if not relative_path:
+        return
+
+    def remove_after_commit() -> None:
+        try:
+            remove_artifact_path(relative_path)
+        except ArtifactError as error:
+            # The database transition remains authoritative. Existing orphan
+            # artifact maintenance can safely retry a failed filesystem cleanup.
+            logger.warning("Publication artifact cleanup deferred for %s: %s", relative_path, error)
+
+    transaction.on_commit(remove_after_commit)
 
 
 def _scope_filter(*, department, station, dataset_type_code: str) -> dict[str, object]:
@@ -74,6 +94,56 @@ def _locked_scope(*, department, station, dataset_type_code: str) -> DatasetScop
     if scope is None:
         raise PublicationError("Dataset scope has not been initialized.")
     return scope
+
+
+def _allocate_staged_publication(
+    *, scope: DatasetScopeState, job: PublicationJob
+) -> DatasetPublication:
+    """Allocate an immutable attempt while the canonical scope row is locked."""
+    definition = get_dataset_definition(job.dataset_type_code)
+    version_number = (
+        DatasetPublication.objects.filter(scope_state=scope).aggregate(
+            maximum=Max("version_number")
+        )["maximum"]
+        or 0
+    ) + 1
+    return DatasetPublication.objects.create(
+        department=job.department,
+        station=job.station,
+        dataset_type_code=job.dataset_type_code,
+        scope_state=scope,
+        version_number=version_number,
+        schema_version=definition.current_schema_version,
+        source_revision=job.source_revision,
+        status=DatasetPublication.Status.STAGED,
+        created_by=job.requested_by,
+    )
+
+
+def _newer_live_attempt_exists(*, scope: DatasetScopeState, version_number: int) -> bool:
+    return DatasetPublication.objects.filter(
+        scope_state=scope,
+        version_number__gt=version_number,
+        status__in=(DatasetPublication.Status.STAGED, DatasetPublication.Status.BUILDING),
+    ).exists()
+
+
+def _eligible_predecessor(
+    *, scope: DatasetScopeState, before_version: int
+) -> DatasetPublication | None:
+    return (
+        DatasetPublication.objects.select_for_update()
+        .filter(
+            scope_state=scope,
+            status=DatasetPublication.Status.SUPERSEDED,
+            version_number__lt=before_version,
+            artifact_status=DatasetPublication.ArtifactStatus.READY,
+            artifact_ready=True,
+            artifact_path__gt="",
+        )
+        .order_by("-version_number")
+        .first()
+    )
 
 
 @transaction.atomic
@@ -175,6 +245,21 @@ def enqueue_publication_job(
                 now=now, debounce_started_at=active.debounce_started_at
             )
         active.save(update_fields=("source_revision", "trigger_type", "requested_by", "not_before"))
+        # A pending job may coalesce newer source data before its attempt
+        # starts. Keep its staged record aligned with that final build input;
+        # the immutable attempt/version identity itself is unchanged.
+        if active.build_publication_id:
+            staged = (
+                DatasetPublication.objects.select_for_update()
+                .filter(
+                    pk=active.build_publication_id,
+                    status=DatasetPublication.Status.STAGED,
+                )
+                .first()
+            )
+            if staged is not None:
+                staged.source_revision = active.source_revision
+                staged.save(update_fields=("source_revision",))
         return active
 
     job = PublicationJob(
@@ -199,6 +284,12 @@ def enqueue_publication_job(
         job.save()
     except IntegrityError:
         return None
+    # The pending job is an explicit staged attempt, not merely a queue entry.
+    # The scope lock held above serializes this MAX()+1 allocation, and terminal
+    # rows are never deleted, so version numbers remain permanently consumed.
+    publication = _allocate_staged_publication(scope=scope, job=job)
+    job.build_publication = publication
+    job.save(update_fields=("build_publication",))
     record_event(
         action="publication.job_queued",
         actor_user=requested_by,
@@ -206,7 +297,11 @@ def enqueue_publication_job(
         station=station,
         target_type="publication_job",
         target_uuid=job.id,
-        metadata={"dataset_type_code": dataset_type_code, "source_revision": job.source_revision},
+        metadata={
+            "dataset_type_code": dataset_type_code,
+            "source_revision": job.source_revision,
+            "version_number": publication.version_number,
+        },
     )
     return job
 
@@ -222,18 +317,28 @@ def _data_change_not_before(*, now: datetime, debounce_started_at: datetime | No
 @transaction.atomic
 def claim_next_job() -> PublicationJob | None:
     now = timezone.now()
-    job = (
-        PublicationJob.objects.select_for_update(skip_locked=True)
-        .filter(status=PublicationJob.Status.PENDING)
+    # All multi-row publication transitions lock scope -> job -> publication.
+    # Pick a candidate without a row lock first, then acquire the canonical
+    # scope lock before locking the job. A competing worker can harmlessly find
+    # that the job is no longer pending after it obtains the same scope lock.
+    candidate = (
+        PublicationJob.objects.filter(status=PublicationJob.Status.PENDING)
         .filter(Q(not_before__isnull=True) | Q(not_before__lte=now))
         .order_by("created_at")
         .first()
     )
+    if candidate is None:
+        return None
+    scope = DatasetScopeState.objects.select_for_update().get(pk=candidate.scope_state_id)
+    job = (
+        PublicationJob.objects.select_for_update()
+        .filter(pk=candidate.pk, status=PublicationJob.Status.PENDING)
+        .first()
+    )
     if job is None:
         return None
-    scope = DatasetScopeState.objects.select_for_update().get(pk=job.scope_state_id)
     try:
-        definition = get_dataset_definition(job.dataset_type_code)
+        get_dataset_definition(job.dataset_type_code)
     except DatasetRegistryError:
         job.status = PublicationJob.Status.FAILED
         job.completed_at = timezone.now()
@@ -243,25 +348,20 @@ def claim_next_job() -> PublicationJob | None:
         return job
     now = timezone.now()
     job.source_revision = scope.source_revision
-    # The locked scope serializes allocation. Every build attempt consumes an
-    # immutable number, including attempts that later fail or become obsolete.
-    version_number = (
-        DatasetPublication.objects.filter(scope_state=scope).aggregate(
-            maximum=Max("version_number")
-        )["maximum"]
-        or 0
-    ) + 1
-    publication = DatasetPublication.objects.create(
-        department=job.department,
-        station=job.station,
-        dataset_type_code=job.dataset_type_code,
-        scope_state=scope,
-        version_number=version_number,
-        schema_version=definition.current_schema_version,
-        source_revision=job.source_revision,
-        status=DatasetPublication.Status.BUILDING,
-        created_by=job.requested_by,
+    # Legacy pending jobs created before Phase 4A have no staged attempt. Give
+    # them one under the same locked scope; normal jobs already own their row.
+    publication = (
+        DatasetPublication.objects.select_for_update().filter(pk=job.build_publication_id).first()
+        if job.build_publication_id
+        else _allocate_staged_publication(scope=scope, job=job)
     )
+    if publication is None or publication.status != DatasetPublication.Status.STAGED:
+        job.status = PublicationJob.Status.OBSOLETE
+        job.completed_at = timezone.now()
+        job.save(update_fields=("status", "completed_at"))
+        return job
+    publication.status = DatasetPublication.Status.BUILDING
+    publication.save(update_fields=("status",))
     job.status = PublicationJob.Status.RUNNING
     job.started_at = now
     job.heartbeat_at = now
@@ -324,6 +424,11 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             station=job.station,
             source_revision=job.source_revision,
         )
+        # This is a cooperative early cancellation checkpoint. The final
+        # transaction below remains authoritative for a cancellation that races
+        # after this read and before publication activation.
+        if not _build_is_still_running(job_id=job.id):
+            return PublicationJob.objects.get(pk=job.id)
         publication = DatasetPublication.objects.get(pk=job.build_publication_id)
         artifact = build_encrypted_artifact(
             publication=publication,
@@ -334,6 +439,9 @@ def build_claimed_job(*, job_id) -> PublicationJob:
                 source_revision=job.source_revision,
             ),
         )
+        if not _build_is_still_running(job_id=job.id):
+            _compensate_artifact(artifact)
+            return PublicationJob.objects.get(pk=job.id)
         return finalize_publication_job(job_id=job.id, summary=summary, artifact=artifact)
     except (DatasetRegistryError, PublicationBuildError, PublicationError, ArtifactError) as error:
         _compensate_artifact(artifact)
@@ -378,6 +486,15 @@ def _compensate_artifact(artifact: dict[str, object] | None) -> None:
         pass
 
 
+def _build_is_still_running(*, job_id) -> bool:
+    """Return whether a worker may continue expensive work for one attempt."""
+    return PublicationJob.objects.filter(
+        pk=job_id,
+        status=PublicationJob.Status.RUNNING,
+        build_publication__status=DatasetPublication.Status.BUILDING,
+    ).exists()
+
+
 def _queue_follow_up_if_stale(*, job: PublicationJob) -> None:
     """Queue a debounced DATA_CHANGE follow-up if the scope moved past this job.
 
@@ -411,12 +528,19 @@ def _queue_follow_up_if_stale(*, job: PublicationJob) -> None:
 def finalize_publication_job(
     *, job_id, summary: dict[str, object], artifact: dict[str, object]
 ) -> PublicationJob:
+    job_preview = PublicationJob.objects.select_related("department", "station").get(pk=job_id)
+    scope = _locked_scope(
+        department=job_preview.department,
+        station=job_preview.station,
+        dataset_type_code=job_preview.dataset_type_code,
+    )
     job = (
         PublicationJob.objects.select_for_update(of=("self",))
         .select_related("department", "station")
         .get(pk=job_id)
     )
     if job.status != PublicationJob.Status.RUNNING:
+        _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         return job
     if job.build_publication_id is None:
         return fail_publication_job(
@@ -424,13 +548,13 @@ def finalize_publication_job(
             error_category="worker",
             error_message="Claim did not allocate a publication.",
         )
-    scope = _locked_scope(
-        department=job.department, station=job.station, dataset_type_code=job.dataset_type_code
-    )
     now = timezone.now()
     publication = DatasetPublication.objects.select_for_update().get(pk=job.build_publication_id)
+    if publication.status != DatasetPublication.Status.BUILDING:
+        _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
+        return job
     if scope.source_revision != job.source_revision:
-        remove_artifact_path(artifact["artifact_path"])
+        _schedule_artifact_removal(str(artifact["artifact_path"]))
         publication.status = DatasetPublication.Status.OBSOLETE
         # Keep the assigned value: it is included in the signed artifact
         # canonical payload and terminal history must remain verifiable.
@@ -472,6 +596,7 @@ def finalize_publication_job(
     publication.artifact_ready = True
     previous_current = scope.current_published_publication
     if previous_current is not None:
+        revoke_publication_dataset_key_grants(publication=previous_current)
         previous_current.status = DatasetPublication.Status.SUPERSEDED
         previous_current.save(update_fields=("status",))
     publication.status = DatasetPublication.Status.PUBLISHED
@@ -525,6 +650,12 @@ def finalize_publication_job(
 def fail_publication_job(
     *, job_id, error_message: str, error_category: str = "build"
 ) -> PublicationJob:
+    job_preview = PublicationJob.objects.select_related("department", "station").get(pk=job_id)
+    _locked_scope(
+        department=job_preview.department,
+        station=job_preview.station,
+        dataset_type_code=job_preview.dataset_type_code,
+    )
     job = PublicationJob.objects.select_for_update().get(pk=job_id)
     if job.status != PublicationJob.Status.RUNNING:
         return job
@@ -534,16 +665,20 @@ def fail_publication_job(
     job.error_category = error_category[:32]
     job.save(update_fields=("status", "completed_at", "error_message", "error_category"))
     if job.build_publication_id is not None:
-        publication = DatasetPublication.objects.filter(pk=job.build_publication_id).first()
-        if publication is not None:
-            remove_artifact(publication)
-        DatasetPublication.objects.filter(
-            pk=job.build_publication_id, status=DatasetPublication.Status.BUILDING
-        ).update(
-            status=DatasetPublication.Status.FAILED,
-            artifact_status=DatasetPublication.ArtifactStatus.FAILED,
-            build_error=job.error_message,
+        # Multi-row worker and administrator lifecycle operations use scope ->
+        # job -> publication locking before the attempt row is locked.
+        publication = (
+            DatasetPublication.objects.select_for_update()
+            .filter(pk=job.build_publication_id)
+            .first()
         )
+        if publication is not None:
+            _schedule_artifact_removal(publication.artifact_path)
+            if publication.status == DatasetPublication.Status.BUILDING:
+                publication.status = DatasetPublication.Status.FAILED
+                publication.artifact_status = DatasetPublication.ArtifactStatus.FAILED
+                publication.build_error = job.error_message
+                publication.save(update_fields=("status", "artifact_status", "build_error"))
     record_event(
         action="publication.build_failed",
         department=job.department,
@@ -563,20 +698,42 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
     if max_attempts < 1:
         raise PublicationError("Maximum job attempts must be positive.")
     cutoff = timezone.now() - timeout
-    jobs = list(
-        PublicationJob.objects.select_for_update(skip_locked=True).filter(
+    job_ids = list(
+        PublicationJob.objects.filter(
             status=PublicationJob.Status.RUNNING,
             heartbeat_at__lt=cutoff,
-        )
+        ).values_list("id", flat=True)
     )
-    for job in jobs:
+    recovered = 0
+    for job_id in job_ids:
+        preview = (
+            PublicationJob.objects.select_related("department", "station").filter(pk=job_id).first()
+        )
+        if preview is None:
+            continue
+        _locked_scope(
+            department=preview.department,
+            station=preview.station,
+            dataset_type_code=preview.dataset_type_code,
+        )
+        job = (
+            PublicationJob.objects.select_for_update()
+            .filter(pk=job_id, status=PublicationJob.Status.RUNNING, heartbeat_at__lt=cutoff)
+            .first()
+        )
+        if job is None:
+            continue
+        recovered += 1
         if job.build_publication_id is not None:
-            DatasetPublication.objects.filter(
-                pk=job.build_publication_id, status=DatasetPublication.Status.BUILDING
-            ).update(
-                status=DatasetPublication.Status.FAILED,
-                build_error="Worker heartbeat timed out.",
+            publication = (
+                DatasetPublication.objects.select_for_update()
+                .filter(pk=job.build_publication_id)
+                .first()
             )
+            if publication is not None and publication.status == DatasetPublication.Status.BUILDING:
+                publication.status = DatasetPublication.Status.FAILED
+                publication.build_error = "Worker heartbeat timed out."
+                publication.save(update_fields=("status", "build_error"))
         if job.attempt_count >= max_attempts:
             job.status = PublicationJob.Status.FAILED
             job.completed_at = timezone.now()
@@ -601,15 +758,13 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
                     "error_message",
                 )
             )
-    return len(jobs)
+    return recovered
 
 
 @transaction.atomic
 def publish_publication(*, actor, publication: DatasetPublication) -> DatasetPublication:
-    publication = (
-        DatasetPublication.objects.select_for_update(of=("self",))
-        .select_related("department", "station")
-        .get(pk=publication.pk)
+    publication = DatasetPublication.objects.select_related("department", "station").get(
+        pk=publication.pk
     )
     require_department_admin(actor, publication.department)
     if publication.status != DatasetPublication.Status.READY_FOR_REVIEW:
@@ -626,8 +781,10 @@ def publish_publication(*, actor, publication: DatasetPublication) -> DatasetPub
         station=publication.station,
         dataset_type_code=publication.dataset_type_code,
     )
+    publication = DatasetPublication.objects.select_for_update().get(pk=publication.pk)
     previous = scope.current_published_publication
     if previous is not None:
+        revoke_publication_dataset_key_grants(publication=previous)
         previous.status = DatasetPublication.Status.SUPERSEDED
         previous.save(update_fields=("status",))
     now = timezone.now()
@@ -736,15 +893,128 @@ def request_rebuild(
 
 
 @transaction.atomic
+def delete_staged_publication(*, actor, publication: DatasetPublication) -> DatasetPublication:
+    """Terminalize one unstarted attempt while preserving its immutable identity."""
+    candidate = DatasetPublication.objects.select_related("department", "station").get(
+        pk=publication.pk
+    )
+    require_department_admin(actor, candidate.department)
+    scope = _locked_scope(
+        department=candidate.department,
+        station=candidate.station,
+        dataset_type_code=candidate.dataset_type_code,
+    )
+    job = (
+        PublicationJob.objects.select_for_update()
+        .filter(build_publication=candidate)
+        .order_by("-created_at")
+        .first()
+    )
+    candidate = DatasetPublication.objects.select_for_update().get(pk=candidate.pk)
+    if candidate.scope_state_id != scope.id or candidate.status != DatasetPublication.Status.STAGED:
+        raise PublicationError("Only a staged publication can be deleted.")
+    if job is not None and job.status != PublicationJob.Status.PENDING:
+        raise PublicationError("A started publication build must be cancelled instead.")
+    candidate.status = DatasetPublication.Status.OBSOLETE
+    candidate.save(update_fields=("status",))
+    if job is not None:
+        job.status = PublicationJob.Status.OBSOLETE
+        job.completed_at = timezone.now()
+        job.save(update_fields=("status", "completed_at"))
+    record_event(
+        action="publication.staged_deleted",
+        actor_user=actor,
+        department=candidate.department,
+        station=candidate.station,
+        target_type="dataset_publication",
+        target_uuid=candidate.id,
+        metadata={
+            "dataset_type_code": candidate.dataset_type_code,
+            "version_number": candidate.version_number,
+        },
+    )
+    return candidate
+
+
+@transaction.atomic
+def cancel_publication_build(*, actor, publication: DatasetPublication) -> DatasetPublication:
+    """Authoritatively cancel a running attempt; the worker observes this at closeout."""
+    candidate = DatasetPublication.objects.select_related("department", "station").get(
+        pk=publication.pk
+    )
+    require_department_admin(actor, candidate.department)
+    scope = _locked_scope(
+        department=candidate.department,
+        station=candidate.station,
+        dataset_type_code=candidate.dataset_type_code,
+    )
+    job = (
+        PublicationJob.objects.select_for_update()
+        .filter(build_publication=candidate)
+        .order_by("-created_at")
+        .first()
+    )
+    if job is None:
+        raise PublicationError("Publication has no build job to cancel.")
+    candidate = DatasetPublication.objects.select_for_update().get(pk=candidate.pk)
+    if candidate.scope_state_id != scope.id or job.status != PublicationJob.Status.RUNNING:
+        raise PublicationError("Only a building publication can be cancelled.")
+    if candidate.status != DatasetPublication.Status.BUILDING:
+        raise PublicationError("Only a building publication can be cancelled.")
+    candidate.status = DatasetPublication.Status.CANCELLED
+    candidate.build_error = "Build cancelled by an administrator."
+    candidate.save(update_fields=("status", "build_error"))
+    job.status = PublicationJob.Status.CANCELLED
+    job.completed_at = timezone.now()
+    job.error_category = "cancelled"
+    job.error_message = "Build cancelled by an administrator."
+    job.save(update_fields=("status", "completed_at", "error_category", "error_message"))
+    _schedule_artifact_removal(candidate.artifact_path)
+    record_event(
+        action="publication.build_cancelled",
+        actor_user=actor,
+        department=candidate.department,
+        station=candidate.station,
+        target_type="dataset_publication",
+        target_uuid=candidate.id,
+        metadata={
+            "dataset_type_code": candidate.dataset_type_code,
+            "version_number": candidate.version_number,
+        },
+    )
+    return candidate
+
+
+def _activate_publication(
+    *, scope: DatasetScopeState, target: DatasetPublication, actor, action: str
+) -> DatasetPublication:
+    previous = scope.current_published_publication
+    if previous is not None and previous.pk != target.pk:
+        revoke_publication_dataset_key_grants(publication=previous)
+        previous.status = DatasetPublication.Status.SUPERSEDED
+        previous.save(update_fields=("status",))
+    target.status = DatasetPublication.Status.PUBLISHED
+    target.published_at = timezone.now()
+    target.published_by = actor
+    target.save(update_fields=("status", "published_at", "published_by"))
+    scope.current_published_publication = target
+    scope.save(update_fields=("current_published_publication", "updated_at"))
+    PublicationActivation.objects.create(
+        publication=target,
+        scope_state=scope,
+        previous_publication=previous,
+        action=action,
+        activated_by=actor,
+    )
+    return target
+
+
+@transaction.atomic
 def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPublication:
-    publication = (
-        DatasetPublication.objects.select_for_update(of=("self",))
-        .select_related("department", "station")
-        .get(pk=publication.pk)
+    publication = DatasetPublication.objects.select_related("department", "station").get(
+        pk=publication.pk
     )
     require_department_admin(actor, publication.department)
-    if publication.status != DatasetPublication.Status.SUPERSEDED:
-        raise PublicationError("Only a superseded publication can be restored.")
     _validate_scope(
         department=publication.department,
         station=publication.station,
@@ -755,23 +1025,26 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
         station=publication.station,
         dataset_type_code=publication.dataset_type_code,
     )
+    publication = DatasetPublication.objects.select_for_update().get(pk=publication.pk)
+    if (
+        publication.scope_state_id != scope.id
+        or publication.status != DatasetPublication.Status.SUPERSEDED
+    ):
+        raise PublicationError("Only a superseded publication can be restored.")
+    if (
+        publication.artifact_status != DatasetPublication.ArtifactStatus.READY
+        or not publication.artifact_path
+    ):
+        raise PublicationError("Rollback target has no usable artifact.")
     previous = scope.current_published_publication
     if previous is None:
         raise PublicationError("Dataset scope has no current publication.")
-    previous.status = DatasetPublication.Status.SUPERSEDED
-    previous.save(update_fields=("status",))
-    publication.status = DatasetPublication.Status.PUBLISHED
-    publication.published_at = timezone.now()
-    publication.published_by = actor
-    publication.save(update_fields=("status", "published_at", "published_by"))
-    scope.current_published_publication = publication
-    scope.save(update_fields=("current_published_publication", "updated_at"))
-    PublicationActivation.objects.create(
-        publication=publication,
-        scope_state=scope,
-        previous_publication=previous,
-        action=PublicationActivation.Action.ROLLBACK,
-        activated_by=actor,
+    if _newer_live_attempt_exists(scope=scope, version_number=previous.version_number):
+        raise PublicationError(
+            "Rollback is unavailable while a newer attempt is staged or building."
+        )
+    _activate_publication(
+        scope=scope, target=publication, actor=actor, action=PublicationActivation.Action.ROLLBACK
     )
     record_event(
         action="publication.rolled_back",
@@ -783,6 +1056,80 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
         metadata={"dataset_type_code": publication.dataset_type_code},
     )
     return publication
+
+
+@transaction.atomic
+def delete_publication(*, actor, publication: DatasetPublication) -> DatasetPublication:
+    """Retire an immutable attempt, retaining its row and consuming its version."""
+    candidate = DatasetPublication.objects.select_related("department", "station").get(
+        pk=publication.pk
+    )
+    require_department_admin(actor, candidate.department)
+    _validate_scope(
+        department=candidate.department,
+        station=candidate.station,
+        dataset_type_code=candidate.dataset_type_code,
+    )
+    scope = _locked_scope(
+        department=candidate.department,
+        station=candidate.station,
+        dataset_type_code=candidate.dataset_type_code,
+    )
+    candidate = DatasetPublication.objects.select_for_update().get(pk=candidate.pk)
+    if candidate.scope_state_id != scope.id:
+        raise PublicationError("Publication is outside this dataset scope.")
+    if candidate.status == DatasetPublication.Status.PUBLISHED:
+        if scope.current_published_publication_id != candidate.id:
+            raise PublicationError("Publication is not the authoritative active publication.")
+        if _newer_live_attempt_exists(scope=scope, version_number=candidate.version_number):
+            raise PublicationError(
+                "Active deletion is unavailable while a newer attempt is staged or building."
+            )
+        predecessor = _eligible_predecessor(scope=scope, before_version=candidate.version_number)
+        if predecessor is None:
+            raise PublicationError("Active publication has no safe predecessor to activate.")
+        _activate_publication(
+            scope=scope,
+            target=predecessor,
+            actor=actor,
+            action=PublicationActivation.Action.ROLLBACK,
+        )
+        record_event(
+            action="publication.active_replaced_before_delete",
+            actor_user=actor,
+            department=candidate.department,
+            station=candidate.station,
+            target_type="dataset_publication",
+            target_uuid=candidate.id,
+            metadata={"replacement_version": predecessor.version_number},
+        )
+    elif candidate.status != DatasetPublication.Status.SUPERSEDED:
+        raise PublicationError("Only active or superseded successful publications can be deleted.")
+    artifact_path = candidate.artifact_path
+    revoke_publication_dataset_key_grants(publication=candidate)
+    candidate.status = DatasetPublication.Status.OBSOLETE
+    # Artifact metadata is cryptographically immutable once READY. The terminal
+    # lifecycle state makes this attempt unavailable to manifests/downloads;
+    # leave its signed metadata intact for historical integrity and remove only
+    # the ciphertext after the transaction commits.
+    candidate.save(update_fields=("status",))
+    if scope.latest_built_publication_id == candidate.id:
+        scope.latest_built_publication = scope.current_published_publication
+        scope.save(update_fields=("latest_built_publication", "updated_at"))
+    _schedule_artifact_removal(artifact_path)
+    record_event(
+        action="publication.deleted",
+        actor_user=actor,
+        department=candidate.department,
+        station=candidate.station,
+        target_type="dataset_publication",
+        target_uuid=candidate.id,
+        metadata={
+            "dataset_type_code": candidate.dataset_type_code,
+            "version_number": candidate.version_number,
+        },
+    )
+    return candidate
 
 
 def _latest_publication_status_by_scope(department) -> dict[object, object]:

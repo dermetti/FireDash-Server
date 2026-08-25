@@ -81,6 +81,7 @@ class DatasetPublication(models.Model):
         FAILED = "FAILED", "Failed"
 
     class Status(models.TextChoices):
+        STAGED = "STAGED", "Staged"
         BUILDING = "BUILDING", "Building"
         READY_FOR_REVIEW = "READY_FOR_REVIEW", "Ready for review"
         PUBLISHED = "PUBLISHED", "Published"
@@ -88,6 +89,7 @@ class DatasetPublication(models.Model):
         SUPERSEDED = "SUPERSEDED", "Superseded"
         REJECTED = "REJECTED", "Rejected"
         OBSOLETE = "OBSOLETE", "Obsolete"
+        CANCELLED = "CANCELLED", "Cancelled"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     department = models.ForeignKey(
@@ -104,7 +106,7 @@ class DatasetPublication(models.Model):
     scope_state = models.ForeignKey(
         DatasetScopeState, on_delete=models.PROTECT, related_name="publications"
     )
-    # Every claimed build attempt receives one immutable scope-local version.
+    # Every staged build attempt receives one immutable scope-local version.
     # It is part of the artifact signature payload and is never reused.
     version_number = models.PositiveBigIntegerField()
     schema_version = models.PositiveIntegerField()
@@ -234,6 +236,7 @@ class PublicationJob(models.Model):
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
         OBSOLETE = "OBSOLETE", "Obsolete"
+        CANCELLED = "CANCELLED", "Cancelled"
 
     class TriggerType(models.TextChoices):
         USER_REQUEST = "USER_REQUEST", "User request"

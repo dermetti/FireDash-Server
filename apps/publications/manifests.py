@@ -312,6 +312,25 @@ def revoke_dataset_key_grants(*, installation: AppInstallation) -> int:
     ).update(status=DatasetKeyGrant.Status.REVOKED, revoked_at=timezone.now())
 
 
+def revoke_publication_dataset_key_grants(*, publication: DatasetPublication) -> int:
+    """Invalidate grant material for a publication that is no longer current.
+
+    Manifest and download authorization independently require a current
+    ``PUBLISHED`` publication.  Revoking the associated HPKE grant rows at the
+    same lifecycle boundary makes the stored grant state match that authority
+    decision as well, while retaining the immutable grant history.
+    """
+    return DatasetKeyGrant.objects.filter(
+        publication=publication,
+        status__in=(
+            DatasetKeyGrant.Status.PENDING,
+            DatasetKeyGrant.Status.RUNNING,
+            DatasetKeyGrant.Status.READY,
+            DatasetKeyGrant.Status.FAILED,
+        ),
+    ).update(status=DatasetKeyGrant.Status.REVOKED, revoked_at=timezone.now())
+
+
 def request_manifest(
     *, installation: AppInstallation, generation: int = 1, now: datetime | None = None
 ) -> ManifestRequest:
