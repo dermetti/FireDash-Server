@@ -1,9 +1,11 @@
+from dataclasses import dataclass
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -23,6 +25,7 @@ from apps.authorization.scopes import (
     StationAdminContextError,
     active_department_ids,
     active_station_ids,
+    effective_department_admin_memberships,
     is_system_admin,
     station_admin_station,
 )
@@ -38,6 +41,7 @@ from apps.authorization.services import (
     revoke_department_admin,
     revoke_station_admin,
     set_api_version_compatibility_policy,
+    set_department_tablet_asset_number_policy,
     set_department_tablet_lease,
     set_system_department_tablet_lease,
     suspend_department_admin,
@@ -60,12 +64,85 @@ from apps.portal.forms import (
     DepartmentForm,
     DepartmentStatusForm,
     DepartmentSystemSettingsForm,
+    DepartmentTabletAssetNumberPolicyForm,
     DepartmentTabletLeaseForm,
     StationForm,
     StationListFilterForm,
     VehicleForm,
 )
 from apps.portal.overview import attention_for_request, system_attention
+
+
+@dataclass(frozen=True)
+class AdministratorListRow:
+    """One current operational authority presentation for one User.
+
+    The management list intentionally projects current authority only.  Full
+    Department and Station lifecycle history remains on the administrator detail
+    view and is never reconstructed from the list's joins.
+    """
+
+    administrator: User
+    scope: str
+    lifecycle: str
+    lifecycle_display: str
+    membership: DepartmentMembership | None
+    station_assignment: StationAdminAssignment | None
+    can_lifecycle_actions: bool
+
+    @property
+    def lifecycle_css(self) -> str:
+        return {
+            DepartmentMembership.Status.ACTIVE: "success",
+            DepartmentMembership.Status.SUSPENDED: "warning",
+            DepartmentMembership.Status.REVOKED: "secondary",
+        }[self.lifecycle]
+
+
+def _current_administrator_rows(
+    *, users, department_admin_actions_allowed: bool
+) -> list[AdministratorListRow]:
+    """Build one sparse list row per User from current authority only.
+
+    Effective Department administration takes precedence over any Station
+    assignments.  Station-only rows contain only active assignments at active
+    Stations; suspended and revoked Station history is detail-only.
+    """
+    rows: list[AdministratorListRow] = []
+    for administrator in users:
+        memberships = administrator.current_department_memberships
+        if memberships:
+            membership = memberships[0]
+            rows.append(
+                AdministratorListRow(
+                    administrator=administrator,
+                    scope="Department",
+                    lifecycle=membership.status,
+                    lifecycle_display=membership.get_status_display(),
+                    membership=membership,
+                    station_assignment=None,
+                    can_lifecycle_actions=department_admin_actions_allowed,
+                )
+            )
+            continue
+
+        assignments = administrator.current_station_assignments
+        if not assignments:
+            continue
+        scope = ", ".join(assignment.station.short_code for assignment in assignments)
+        assignment = assignments[0]
+        rows.append(
+            AdministratorListRow(
+                administrator=administrator,
+                scope=scope,
+                lifecycle=assignment.status,
+                lifecycle_display=assignment.get_status_display(),
+                membership=None,
+                station_assignment=assignment,
+                can_lifecycle_actions=True,
+            )
+        )
+    return rows
 
 
 def _mark_active(sections: list[dict[str, object]], path: str) -> None:
@@ -599,38 +676,73 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
         else:
             raise PermissionDenied("Unsupported administrator action.")
         return redirect("portal-department-manage", department_id=department.id)
-    administrators = User.objects.filter(
-        Q(department_memberships__department=department)
-        | Q(station_admin_assignments__station__department=department)
-    ).distinct()
+    effective_memberships = effective_department_admin_memberships(department)
+    current_station_assignments = StationAdminAssignment.objects.filter(
+        station__department=department,
+        station__active=True,
+        status=StationAdminAssignment.Status.ACTIVE,
+    )
+    effective_membership_for_user = effective_memberships.filter(user_id=OuterRef("pk"))
+    current_station_assignment_for_user = current_station_assignments.filter(user_id=OuterRef("pk"))
+    administrators = (
+        User.objects.filter(is_active=True)
+        .annotate(
+            has_effective_department_admin=Exists(effective_membership_for_user),
+            has_current_station_admin=Exists(current_station_assignment_for_user),
+        )
+        .filter(Q(has_effective_department_admin=True) | Q(has_current_station_admin=True))
+    )
     query = request.GET.get("q", "").strip()
-    station_filter = request.GET.get("station", "")
+    scope_filter = request.GET.get("scope", request.GET.get("station", ""))
     if query:
         administrators = administrators.filter(
             Q(display_name__icontains=query) | Q(email__icontains=query)
         )
-    if station_filter:
+    if scope_filter == "department":
+        administrators = administrators.filter(has_effective_department_admin=True)
+    elif scope_filter:
         administrators = administrators.filter(
-            station_admin_assignments__station_id=station_filter,
+            has_effective_department_admin=False,
+            station_admin_assignments__station_id=scope_filter,
+            station_admin_assignments__station__department=department,
+            station_admin_assignments__station__active=True,
+            station_admin_assignments__status=StationAdminAssignment.Status.ACTIVE,
         )
     administrators = administrators.prefetch_related(
-        "department_memberships", "station_admin_assignments__station"
-    ).order_by("email")
+        Prefetch(
+            "department_memberships",
+            queryset=effective_memberships.order_by("pk"),
+            to_attr="current_department_memberships",
+        ),
+        Prefetch(
+            "station_admin_assignments",
+            queryset=current_station_assignments.select_related("station").order_by(
+                "station__short_code", "pk"
+            ),
+            to_attr="current_station_assignments",
+        ),
+    ).order_by("email", "pk")
     paginator = Paginator(administrators, 100)
     page = paginator.get_page(request.GET.get("page", 1))
+    page_query = request.GET.copy()
+    page_query.pop("page", None)
     current_user_id = request.user.id
     return render(
         request,
         "portal/department_manage.html",
         {
             "department": department,
-            "administrators": page.object_list,
+            "administrators": _current_administrator_rows(
+                users=page.object_list,
+                department_admin_actions_allowed=effective_memberships.count() > 1,
+            ),
             "page": page,
             "total_count": paginator.count,
             "stations": department.stations.filter(active=True).order_by("name"),
             "query": query,
-            "station_filter": station_filter,
+            "scope_filter": scope_filter,
             "current_user_id": current_user_id,
+            "page_query": page_query.urlencode(),
         },
     )
 
@@ -771,12 +883,41 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     """Edit only existing, authoritative per-department settings."""
     department = _department_or_403(request, department_id)
     policy = getattr(department, "personnel_retention_policy", None)
-    initial = {
+    system_initial = {
         "tablet_lease_days": department.tablet_lease_days,
         "retention_days": policy.retention_period.days if policy else 30,
     }
-    form = DepartmentSystemSettingsForm(request.POST or None, initial=initial)
-    if request.method == "POST" and form.is_valid():
+    asset_number_initial = {
+        "auto_enabled": department.tablet_asset_number_auto_enabled,
+        "prefix": department.tablet_asset_number_prefix,
+        "width": department.tablet_asset_number_width,
+    }
+    asset_number_action = (
+        request.method == "POST" and request.POST.get("action") == "asset-numbering"
+    )
+    form = DepartmentSystemSettingsForm(
+        request.POST if request.method == "POST" and not asset_number_action else None,
+        initial=system_initial,
+    )
+    asset_number_form = DepartmentTabletAssetNumberPolicyForm(
+        request.POST if asset_number_action else None,
+        initial=asset_number_initial,
+    )
+    if asset_number_action and asset_number_form.is_valid():
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-settings", args=(department.id,)),
+        )
+        set_department_tablet_asset_number_policy(
+            actor=request.user,
+            department=department,
+            auto_enabled=asset_number_form.cleaned_data["auto_enabled"],
+            prefix=asset_number_form.cleaned_data["prefix"],
+            width=asset_number_form.cleaned_data["width"],
+        )
+        messages.success(request, "Tablet asset-numbering policy was updated.")
+        return redirect("portal-department-settings", department_id=department.id)
+    if request.method == "POST" and not asset_number_action and form.is_valid():
         require_recent_reauthentication(
             request,
             return_url=reverse("portal-department-settings", args=(department.id,)),
@@ -799,7 +940,12 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     return render(
         request,
         "portal/department_settings.html",
-        {"department": department, "form": form, "retention_policy": policy},
+        {
+            "department": department,
+            "form": form,
+            "asset_number_form": asset_number_form,
+            "retention_policy": policy,
+        },
     )
 
 

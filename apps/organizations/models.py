@@ -1,7 +1,7 @@
 import uuid
 
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -18,6 +18,14 @@ class Department(models.Model):
     tablet_lease_days = models.PositiveSmallIntegerField(
         default=7, validators=[MinValueValidator(3)]
     )
+    tablet_asset_number_auto_enabled = models.BooleanField(default=False)
+    tablet_asset_number_prefix = models.CharField(max_length=128, blank=True, default="")
+    tablet_asset_number_width = models.PositiveSmallIntegerField(
+        default=1, validators=[MinValueValidator(1), MaxValueValidator(20)]
+    )
+    # This is the authoritative numeric allocator state.  It is deliberately
+    # separate from the presentation prefix and zero-padding width.
+    tablet_asset_number_sequence = models.PositiveBigIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -30,7 +38,18 @@ class Department(models.Model):
             models.CheckConstraint(
                 condition=models.Q(tablet_lease_days__gte=3),
                 name="department_tablet_lease_days_min",
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    tablet_asset_number_width__gte=1,
+                    tablet_asset_number_width__lte=20,
+                ),
+                name="department_tablet_asset_number_width_range",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(tablet_asset_number_sequence__gte=0),
+                name="department_tablet_asset_number_sequence_nonnegative",
+            ),
         ]
 
     def __str__(self) -> str:

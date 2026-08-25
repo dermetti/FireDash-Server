@@ -17,10 +17,18 @@ class TabletForm(forms.Form):
             attrs={"class": "form-control", "aria-describedby": "tablet-asset-number-help"}
         ),
     )
+    generate_asset_number = forms.BooleanField(
+        required=False,
+        label="Generate automatically",
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
 
     def __init__(self, *args, department=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.department = department
+        self.auto_asset_number_generation_enabled = bool(
+            department and department.tablet_asset_number_auto_enabled
+        )
 
     def clean_display_name(self):
         name = self.cleaned_data["display_name"].strip()
@@ -46,6 +54,22 @@ class TabletForm(forms.Form):
                 "A tablet with this asset number already exists in the department."
             )
         return asset
+
+    def clean(self):
+        cleaned_data = super().clean()
+        generate_asset_number = cleaned_data.get("generate_asset_number", False)
+        asset_number = cleaned_data.get("asset_number", "")
+        if generate_asset_number and not self.auto_asset_number_generation_enabled:
+            self.add_error(
+                "generate_asset_number",
+                "Automatic asset-number generation is not enabled for this Department.",
+            )
+        if generate_asset_number and asset_number:
+            self.add_error(
+                "asset_number",
+                "Choose automatic generation or enter a manual asset number.",
+            )
+        return cleaned_data
 
 
 class TabletVehicleAssignmentForm(forms.Form):

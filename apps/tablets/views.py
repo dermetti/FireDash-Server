@@ -278,13 +278,19 @@ def tablet_create(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
     form = TabletForm(request.POST or None, department=department)
     if request.method == "POST" and form.is_valid():
-        tablet = create_tablet(actor=request.user, department=department, **form.cleaned_data)
-        messages.success(request, f'Tablet "{tablet.display_name}" was registered successfully.')
-        if _is_hx(request):
-            response = HttpResponse(status=204)
-            response["HX-Redirect"] = reverse("tablet-list", args=(department.id,))
-            return response
-        return redirect("tablet-list", department_id=department.id)
+        try:
+            tablet = create_tablet(actor=request.user, department=department, **form.cleaned_data)
+        except TabletError as error:
+            form.add_error(None, str(error))
+        else:
+            messages.success(
+                request, f'Tablet "{tablet.display_name}" was registered successfully.'
+            )
+            if _is_hx(request):
+                response = HttpResponse(status=204)
+                response["HX-Redirect"] = reverse("tablet-list", args=(department.id,))
+                return response
+            return redirect("tablet-list", department_id=department.id)
     if _is_hx(request):
         return render(
             request, "tablets/_create_modal.html", {"form": form, "department": department}

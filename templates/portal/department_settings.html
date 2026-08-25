@@ -1,10 +1,23 @@
 {% extends "base.html" %}
 {% block title %}{{ department.name }} System Settings{% endblock %}
 {% block content %}
-{% include "components/_page_header.html" with breadcrumb=department.name title="System Settings" description="Supported per-department authorization and personnel-retention settings." %}
-<form method="post" class="card"><div class="card-body">{% csrf_token %}
+{% include "components/_page_header.html" with breadcrumb=department.name title="System Settings" description="Supported per-department authorization, personnel-retention, and Tablet-numbering settings." %}
+
+<form method="post" class="card mb-4"><div class="card-body">{% csrf_token %}
   <div class="mb-4"><h2 class="h5">Tablet authorization</h2><p class="text-body-secondary">Controls the maximum offline authorization lease issued to this department’s tablets. Eligible authenticated check-ins renew it using the existing server policy.</p><label class="form-label" for="{{ form.tablet_lease_days.id_for_label }}">{{ form.tablet_lease_days.label }}</label>{{ form.tablet_lease_days }}{{ form.tablet_lease_days.errors }}<div class="form-text">Between 3 and 365 days. Stale-installation sweeps remain a server maintenance operation and are not configured here.</div></div>
   <div class="mb-4"><h2 class="h5">Personnel retention</h2><p class="text-body-secondary">Controls how long a departed person is retained before the existing explicit anonymization workflow may run.</p><label class="form-label" for="{{ form.retention_days.id_for_label }}">{{ form.retention_days.label }}</label>{{ form.retention_days }}{{ form.retention_days.errors }}</div>
   <button type="submit" class="btn btn-primary">Save settings</button>
 </div></form>
+
+<section class="card"><div class="card-body">
+  <h2 class="h5">Tablet asset numbering</h2>
+  <p class="text-body-secondary">Automatic generation is optional. Manual asset-number entry remains available when registering a Tablet.</p>
+  <form method="post">{% csrf_token %}<input type="hidden" name="action" value="asset-numbering">
+    {% for error in asset_number_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+    <div class="form-check mb-3">{{ asset_number_form.auto_enabled }}<label class="form-check-label" for="{{ asset_number_form.auto_enabled.id_for_label }}">{{ asset_number_form.auto_enabled.label }}</label>{% for error in asset_number_form.auto_enabled.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}<div class="form-text">Generate a Department-local sequential asset number when requested during Tablet registration.</div></div>
+    <div class="mb-3"><label class="form-label" for="{{ asset_number_form.prefix.id_for_label }}">{{ asset_number_form.prefix.label }}</label>{{ asset_number_form.prefix }}{% for error in asset_number_form.prefix.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}<div class="form-text">Optional text placed before generated numbers.</div></div>
+    <div class="mb-3"><label class="form-label" for="{{ asset_number_form.width.id_for_label }}">{{ asset_number_form.width.label }}</label>{{ asset_number_form.width }}{% for error in asset_number_form.width.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}<div class="form-text">Minimum number of digits in the generated numeric portion (1–20). Changing the prefix or number width does not reset the sequence.</div></div>
+    <button type="submit" class="btn btn-primary">Apply tablet asset numbering</button>
+  </form>
+</div></section>
 {% endblock %}

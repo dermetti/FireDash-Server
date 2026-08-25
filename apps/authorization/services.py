@@ -116,6 +116,68 @@ def set_department_tablet_lease(
 
 
 @transaction.atomic
+def set_department_tablet_asset_number_policy(
+    *, actor, department: Department, auto_enabled: bool, prefix: str, width: int
+) -> Department:
+    """Update the Department-owned Tablet asset-number formatting policy.
+
+    The persistent numeric sequence is intentionally not an administrator-editable
+    preference.  Changing the optional prefix or minimum width only affects future
+    formatting and never resets or reinterprets previously allocated values.
+    """
+    require_department_admin(actor, department)
+    prefix = prefix.strip()
+    if width < 1 or width > 20:
+        raise ValueError("Tablet asset-number width must be between 1 and 20 digits.")
+
+    # Keep the policy structurally compatible with the canonical Tablet identifier
+    # field.  Allocation separately verifies that future numeric growth still fits.
+    from apps.tablets.models import Tablet
+
+    asset_number_max_length = Tablet._meta.get_field("asset_number").max_length
+    if len(prefix) + width > asset_number_max_length:
+        raise ValueError(
+            "The prefix and number width must fit within the Tablet asset-number length."
+        )
+
+    department = Department.objects.select_for_update().get(pk=department.pk)
+    old_values = {
+        "auto_enabled": department.tablet_asset_number_auto_enabled,
+        "prefix": department.tablet_asset_number_prefix,
+        "width": department.tablet_asset_number_width,
+    }
+    new_values = {"auto_enabled": auto_enabled, "prefix": prefix, "width": width}
+    if old_values == new_values:
+        return department
+    department.tablet_asset_number_auto_enabled = auto_enabled
+    department.tablet_asset_number_prefix = prefix
+    department.tablet_asset_number_width = width
+    department.save(
+        update_fields=(
+            "tablet_asset_number_auto_enabled",
+            "tablet_asset_number_prefix",
+            "tablet_asset_number_width",
+        )
+    )
+    record_event(
+        action="authorization.department_tablet_asset_number_policy_changed",
+        actor_user=actor,
+        department=department,
+        target_type="department",
+        target_uuid=department.id,
+        metadata={
+            "old_auto_enabled": old_values["auto_enabled"],
+            "new_auto_enabled": new_values["auto_enabled"],
+            "old_prefix": old_values["prefix"],
+            "new_prefix": new_values["prefix"],
+            "old_width": old_values["width"],
+            "new_width": new_values["width"],
+        },
+    )
+    return department
+
+
+@transaction.atomic
 def set_system_department_tablet_lease(
     *, actor, department: Department, tablet_lease_days: int
 ) -> Department:

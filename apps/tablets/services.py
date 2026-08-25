@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
+from apps.organizations.models import Department
 from apps.publications.hpke import (
     HPKE_CIPHERSUITE,
     HPKEError,
@@ -37,6 +38,7 @@ CHALLENGE_DURATION = timedelta(minutes=5)
 MAX_FAILED_ATTEMPTS = 5
 ADOPTION_PROTOCOL = "tablet-adoption-v1"
 COMPLETION_REPLAY_DURATION = timedelta(minutes=10)
+MAX_ASSET_NUMBER_ALLOCATION_ATTEMPTS = 1000
 
 # Authoritative physical asset lifecycle. Each intent-driven service enforces
 # these transitions server-side; the UI only surfaces what is valid.
@@ -260,31 +262,115 @@ def _recover_stale_installation(*, installation: AppInstallation, now: datetime)
     )
 
 
+def _formatted_asset_number(*, department: Department, sequence: int) -> str:
+    numeric_part = str(sequence).zfill(department.tablet_asset_number_width)
+    asset_number = f"{department.tablet_asset_number_prefix}{numeric_part}"
+    max_length = Tablet._meta.get_field("asset_number").max_length
+    if len(asset_number) > max_length:
+        raise TabletError(
+            "The next generated asset number does not fit the Tablet asset-number length.",
+            code="asset_number_exhausted",
+        )
+    return asset_number
+
+
+def _next_generated_asset_number(*, department: Department) -> str:
+    """Advance the locked Department-local sequence and return its formatted value.
+
+    ``create_tablet`` always locks the Department row before calling this helper.
+    That single lock serializes automatic allocation, policy updates, and normal
+    manual creation inside FireDash.  The caller's outer transaction couples the
+    sequence advancement to the Tablet creation, so failed registrations roll
+    both changes back.
+    """
+    sequence = department.tablet_asset_number_sequence + 1
+    asset_number = _formatted_asset_number(department=department, sequence=sequence)
+    department.tablet_asset_number_sequence = sequence
+    department.save(update_fields=("tablet_asset_number_sequence",))
+    return asset_number
+
+
+def _create_generated_tablet(*, actor, department: Department, display_name: str) -> Tablet:
+    """Create one Tablet using the locked Department's persistent allocator.
+
+    Manual identifiers can legally look like generated identifiers.  Existing
+    values are skipped before attempting the insert.  The nested savepoint also
+    handles a direct/out-of-band insert racing this service without poisoning the
+    enclosing transaction.  The loop is deliberately bounded.
+    """
+    for _ in range(MAX_ASSET_NUMBER_ALLOCATION_ATTEMPTS):
+        asset_number = _next_generated_asset_number(department=department)
+        if Tablet.objects.filter(department=department, asset_number=asset_number).exists():
+            continue
+        try:
+            with transaction.atomic():
+                return Tablet.objects.create(
+                    department=department,
+                    display_name=display_name,
+                    asset_number=asset_number,
+                    created_by=actor,
+                )
+        except IntegrityError as error:
+            # A concurrent direct write may have claimed the generated identifier
+            # without following the Department-row locking convention.  Treat only
+            # that collision as retryable; other integrity failures remain errors.
+            if Tablet.objects.filter(department=department, asset_number=asset_number).exists():
+                continue
+            raise TabletError(
+                "A tablet with this display name already exists in the department."
+            ) from error
+    raise TabletError(
+        "Unable to allocate a unique Tablet asset number after "
+        f"{MAX_ASSET_NUMBER_ALLOCATION_ATTEMPTS} attempts.",
+        code="asset_number_allocation_exhausted",
+    )
+
+
 @transaction.atomic
-def create_tablet(*, actor, department, display_name: str, asset_number: str = "") -> Tablet:
+def create_tablet(
+    *,
+    actor,
+    department: Department,
+    display_name: str,
+    asset_number: str = "",
+    generate_asset_number: bool = False,
+) -> Tablet:
+    # Department is the allocator's authoritative row and is deliberately
+    # acquired first.  This lock ordering is shared by policy updates and all
+    # normal Tablet registration paths.
+    department = Department.objects.select_for_update().get(pk=department.pk)
     require_department_admin(actor, department)
     if not display_name.strip():
         raise TabletError("Tablet display name is required.")
     display_name = display_name.strip()
     asset_number = asset_number.strip()
+    if generate_asset_number and asset_number:
+        raise TabletError("Choose automatic generation or enter a manual asset number.")
     if Tablet.objects.filter(department=department, display_name=display_name).exists():
         raise TabletError("A tablet with this display name already exists in the department.")
-    if (
-        asset_number
-        and Tablet.objects.filter(department=department, asset_number=asset_number).exists()
-    ):
-        raise TabletError("A tablet with this asset number already exists in the department.")
-    try:
-        tablet = Tablet.objects.create(
-            department=department,
-            display_name=display_name,
-            asset_number=asset_number,
-            created_by=actor,
+    if generate_asset_number:
+        if not department.tablet_asset_number_auto_enabled:
+            raise TabletError("Automatic Tablet asset-number generation is not enabled.")
+        tablet = _create_generated_tablet(
+            actor=actor, department=department, display_name=display_name
         )
-    except IntegrityError as error:
-        raise TabletError(
-            "A tablet with this display name or asset number already exists in the department."
-        ) from error
+    else:
+        if (
+            asset_number
+            and Tablet.objects.filter(department=department, asset_number=asset_number).exists()
+        ):
+            raise TabletError("A tablet with this asset number already exists in the department.")
+        try:
+            tablet = Tablet.objects.create(
+                department=department,
+                display_name=display_name,
+                asset_number=asset_number,
+                created_by=actor,
+            )
+        except IntegrityError as error:
+            raise TabletError(
+                "A tablet with this display name or asset number already exists in the department."
+            ) from error
     record_event(
         action="tablet.created",
         actor_user=actor,

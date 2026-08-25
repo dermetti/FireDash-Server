@@ -1,5 +1,6 @@
 from django import forms
 
+from apps.tablets.models import Tablet
 from apps.tablets.versions import AppVersionError, parse_app_version
 
 
@@ -131,6 +132,42 @@ class DepartmentSystemSettingsForm(DepartmentTabletLeaseForm):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             field.widget.attrs["class"] = "form-control"
+
+
+class DepartmentTabletAssetNumberPolicyForm(forms.Form):
+    auto_enabled = forms.BooleanField(
+        required=False,
+        label="Automatically generate asset numbers",
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+    prefix = forms.CharField(
+        max_length=128,
+        required=False,
+        label="Prefix",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    width = forms.IntegerField(
+        min_value=1,
+        max_value=20,
+        label="Number width",
+        widget=forms.NumberInput(attrs={"class": "form-control", "min": 1, "max": 20}),
+    )
+
+    def clean_prefix(self):
+        return self.cleaned_data["prefix"].strip()
+
+    def clean(self):
+        cleaned_data = super().clean()
+        prefix = cleaned_data.get("prefix", "")
+        width = cleaned_data.get("width")
+        if width is not None:
+            asset_number_max_length = Tablet._meta.get_field("asset_number").max_length
+            if len(prefix) + width > asset_number_max_length:
+                self.add_error(
+                    "prefix",
+                    "The prefix and number width must fit within the Tablet asset-number length.",
+                )
+        return cleaned_data
 
 
 class ApiVersionCompatibilityPolicyForm(forms.Form):
