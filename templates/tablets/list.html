@@ -39,6 +39,15 @@
       </select>
     </div>
     <div class="col-6 col-md-2">
+      <label class="form-label" for="tablet-assignment">Assignment</label>
+      <select id="tablet-assignment" class="form-select" name="assignment"
+              hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"
+              hx-target="#tablet-results" hx-push-url="true" hx-include="#tablet-filter-form">
+        <option value="">All</option>
+        {% for value, label in assignment_options %}<option value="{{ value }}" {% if filters.assignment == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
       <label class="form-label" for="tablet-installation">Installation</label>
       <select id="tablet-installation" class="form-select" name="installation"
               hx-get="{% url 'tablet-list' department.id %}" hx-trigger="change"

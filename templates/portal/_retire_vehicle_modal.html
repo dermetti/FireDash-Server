@@ -1,0 +1,7 @@
+<div class="modal fade show" id="portal-action-modal" tabindex="-1" style="display:block" aria-modal="true" role="dialog">
+  <div class="modal-dialog"><div class="modal-content"><form method="post" hx-post="{{ request.path }}" hx-target="#{{ modal_container_id }}">
+    {% csrf_token %}<div class="modal-header"><h2 class="modal-title fs-5">Retire Vehicle</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body"><p>Retire <strong>{{ vehicle.display_name }}</strong> from operational service?</p><p class="text-body-secondary mb-0">If this Vehicle has a current Tablet assignment, retirement ends that assignment. The Tablet remains provisioned and appears as Unassigned until reassigned.</p>{% if error %}<div class="alert alert-danger mt-3 mb-0">{{ error }}</div>{% endif %}</div>
+    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button type="submit" class="btn btn-warning">Retire Vehicle</button></div>
+  </form></div></div>
+</div>

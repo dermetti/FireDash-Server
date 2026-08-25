@@ -236,41 +236,39 @@ def test_vehicle_edit_modal_validation_success_audit_and_department_boundary(
 
 
 @pytest.mark.django_db
-def test_vehicle_retirement_and_delete_audit_rollback(client, station_vehicle_scope):
+def test_vehicle_retirement_ends_assignment_and_preserves_tablet(client, station_vehicle_scope):
     admin = station_vehicle_scope["admin"]
     station = station_vehicle_scope["station"]
     vehicle = station_vehicle_scope["vehicle"]
 
-    retire = client.post(reverse("portal-vehicle-manage", args=(vehicle.id,)), {"action": "retire"})
-    assert retire.status_code == 302
-    vehicle.refresh_from_db()
-    assert vehicle.active is False and Vehicle.objects.filter(pk=vehicle.id).exists()
-
-    unused = Vehicle.objects.create(
-        department=station.department, station=station, display_name="Delete me"
-    )
-    delete_url = reverse("portal-vehicle-delete", args=(unused.id,))
-    confirmation = client.get(delete_url, HTTP_HX_REQUEST="true")
-    assert confirmation.status_code == 200 and Vehicle.objects.filter(pk=unused.id).exists()
-    deleted = client.post(delete_url)
-    assert deleted.status_code == 302 and not Vehicle.objects.filter(pk=unused.id).exists()
-    assert AuditEvent.objects.filter(
-        action="organization.vehicle_deleted", target_uuid=unused.id
-    ).exists()
-
     tablet = Tablet.objects.create(
         department=station.department, display_name="Assigned tablet", created_by=admin
     )
-    TabletVehicleAssignment.objects.create(
+    assignment = TabletVehicleAssignment.objects.create(
         tablet=tablet, vehicle=vehicle, valid_from=timezone.now(), created_by=admin
     )
-    protected = client.post(reverse("portal-vehicle-delete", args=(vehicle.id,)))
-    assert protected.status_code == 200
-    assert b"cannot be deleted" in protected.content
-    assert b'hx-target="#portal-action-modal-container"' in protected.content
+    session = client.session
+    session["recent_reauthentication_at"] = timezone.now().timestamp()
+    session.save()
+    retire_url = reverse("portal-vehicle-retire", args=(vehicle.id,))
+    confirmation = client.get(retire_url, HTTP_HX_REQUEST="true")
+    assert confirmation.status_code == 200
+    assert b"remain provisioned" in confirmation.content
+    retired = client.post(retire_url, HTTP_HX_REQUEST="true")
+    assert retired.status_code == 204
+    vehicle.refresh_from_db()
+    tablet.refresh_from_db()
+    assignment.refresh_from_db()
+    assert vehicle.active is False
+    assert tablet.status == Tablet.Status.INACTIVE
+    assert assignment.ended_at is not None and assignment.valid_until is not None
+    assert assignment.end_reason == TabletVehicleAssignment.EndReason.VEHICLE_RETIRED
     assert Vehicle.objects.filter(pk=vehicle.id).exists()
-    assert not AuditEvent.objects.filter(
-        action="organization.vehicle_deleted", target_uuid=vehicle.id
+    assert AuditEvent.objects.filter(
+        action="organization.vehicle_retired", target_uuid=vehicle.id
+    ).exists()
+    assert AuditEvent.objects.filter(
+        action="tablet.vehicle_assignment_ended_vehicle_retired", target_uuid=assignment.id
     ).exists()
 
 
@@ -285,7 +283,8 @@ def test_station_detail_vehicle_actions_legacy_redirect_and_navigation(
     assert detail.status_code == 200
     assert vehicle.display_name in body
     assert station_vehicle_scope["other_vehicle"].display_name not in body
-    assert all(label in body for label in ("Edit Data", "Delete Data", "Create Vehicle", "Retire"))
+    assert all(label in body for label in ("Edit Data", "Create Vehicle", "Retire"))
+    assert "Delete Data" not in body
     assert "portal-action-modal-container" in body
     assert 'data-bs-toggle="modal"' not in body
     assert "htmx:afterSwap" in body
@@ -300,7 +299,8 @@ def test_station_detail_vehicle_actions_legacy_redirect_and_navigation(
     assert vehicle_detail.status_code == 200
     vehicle_body = vehicle_detail.content.decode()
     assert reverse("portal-station-manage", args=(station.id,)) in vehicle_body
-    assert all(label in vehicle_body for label in ("Edit Data", "Retire", "Delete Data"))
+    assert all(label in vehicle_body for label in ("Edit Data", "Retire"))
+    assert "Delete Data" not in vehicle_body
     assert "portal-action-modal-container" in vehicle_body
     assert 'data-bs-toggle="modal"' not in vehicle_body
     assert reverse("portal-vehicles", args=(station.id,)) not in vehicle_body
@@ -319,7 +319,7 @@ def test_gets_do_not_mutate_and_csrf_remains_enforced(client, station_vehicle_sc
         reverse("portal-station-delete", args=(station.id,)),
         reverse("portal-vehicle-create", args=(station.id,)),
         reverse("portal-vehicle-edit", args=(vehicle.id,)),
-        reverse("portal-vehicle-delete", args=(vehicle.id,)),
+        reverse("portal-vehicle-retire", args=(vehicle.id,)),
     ):
         assert client.get(url).status_code == 200
     station.refresh_from_db()

@@ -80,9 +80,9 @@ urlpatterns = [
     path("vehicles/<uuid:vehicle_id>/", views.vehicle_manage, name="portal-vehicle-manage"),
     path("vehicles/<uuid:vehicle_id>/edit/", views.vehicle_edit_modal, name="portal-vehicle-edit"),
     path(
-        "vehicles/<uuid:vehicle_id>/delete/",
-        views.vehicle_delete_modal,
-        name="portal-vehicle-delete",
+        "vehicles/<uuid:vehicle_id>/retire/",
+        views.vehicle_retire_modal,
+        name="portal-vehicle-retire",
     ),
     path(
         "departments/<uuid:department_id>/audit/",

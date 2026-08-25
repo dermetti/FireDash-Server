@@ -122,6 +122,7 @@ def _tablet_queryset(department: Department, request: HttpRequest):
     query = request.GET.get("search", "").strip()
     status = request.GET.get("status", "").strip()
     installation = request.GET.get("installation", "").strip()
+    assignment_state = request.GET.get("assignment", "").strip()
     station_id = request.GET.get("station", "").strip()
     vehicle_id = request.GET.get("vehicle", "").strip()
     if query:
@@ -165,6 +166,8 @@ def _tablet_queryset(department: Department, request: HttpRequest):
         installation_status=Subquery(current_installation.values("status")[:1]),
         has_open_vehicle=open_vehicle,
     )
+    if assignment_state == "unassigned":
+        queryset = queryset.filter(has_open_vehicle=False)
     if installation == "current":
         queryset = queryset.filter(installation_status=AppInstallation.Status.ACTIVE)
     elif installation == "stale":
@@ -221,12 +224,14 @@ def _list_context(department: Department, request: HttpRequest) -> dict[str, obj
             ("stale", "Stale"),
             ("none", "No installation"),
         ],
+        "assignment_options": [("unassigned", "Unassigned")],
         "station_options": station_options,
         "vehicle_options": vehicle_options,
         "filters": {
             "search": request.GET.get("search", ""),
             "status": request.GET.get("status", ""),
             "installation": request.GET.get("installation", ""),
+            "assignment": request.GET.get("assignment", ""),
             "station": request.GET.get("station", ""),
             "vehicle": request.GET.get("vehicle", ""),
         },

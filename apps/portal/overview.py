@@ -10,6 +10,7 @@ from apps.authorization.scopes import orphaned_departments
 from apps.organizations.models import Department, Station
 from apps.publications.models import DatasetPublication, DatasetScopeState
 from apps.tablets.models import AdoptionInvitation, AppInstallation, Tablet
+from apps.tablets.queries import operationally_unassigned_tablets
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,16 @@ def system_attention() -> list[AttentionItem]:
 def department_attention(department: Department) -> list[AttentionItem]:
     """Return only actionable, authoritative department signals."""
     items: list[AttentionItem] = []
+    unassigned = operationally_unassigned_tablets(department).count()
+    if unassigned:
+        items.append(
+            AttentionItem(
+                "warning",
+                unassigned,
+                f"{unassigned} tablet{'s are' if unassigned != 1 else ' is'} unassigned",
+                reverse("tablet-list", args=[department.id]) + "?assignment=unassigned",
+            )
+        )
     stale = AppInstallation.objects.filter(
         tablet__department=department, status=AppInstallation.Status.STALE
     ).count()

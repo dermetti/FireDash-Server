@@ -55,6 +55,10 @@ class PersonnelStationAssignment(models.Model):
 
 
 class TabletVehicleAssignment(models.Model):
+    class EndReason(models.TextChoices):
+        REASSIGNED = "REASSIGNED", "Reassigned"
+        VEHICLE_RETIRED = "VEHICLE_RETIRED", "Vehicle retired"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tablet = models.ForeignKey(Tablet, on_delete=models.PROTECT, related_name="vehicle_assignments")
     vehicle = models.ForeignKey(
@@ -77,6 +81,7 @@ class TabletVehicleAssignment(models.Model):
     )
     ended_at = models.DateTimeField(null=True, blank=True)
     reason = models.CharField(max_length=512, blank=True)
+    end_reason = models.CharField(max_length=32, choices=EndReason.choices, blank=True)
 
     class Meta:
         constraints = [

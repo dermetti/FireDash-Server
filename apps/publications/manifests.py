@@ -162,7 +162,9 @@ def control_plane_context(*, installation: AppInstallation, now):
         .first()
     )
     if assignment is None or assignment.vehicle.department_id != installation.tablet.department_id:
-        raise ManifestError("Installation has no current authorized vehicle assignment.")
+        # The installation remains authenticated for control-plane synchronization,
+        # but an unassigned ACTIVE tablet receives no operational distribution.
+        return installation, None
     return installation, assignment.vehicle
 
 
@@ -219,6 +221,8 @@ def manifest_publications(*, installation: AppInstallation, now=None):
         return installation, vehicle, []
     if installation.tablet.status != installation.tablet.Status.ACTIVE:
         raise ManifestError("Installation is not authorized for a manifest.")
+    if vehicle is None:
+        return installation, None, []
     publications = (
         DatasetPublication.objects.filter(
             department_id=installation.tablet.department_id,

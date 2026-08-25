@@ -4,7 +4,7 @@ These helpers never mutate state; mutations live in ``apps.tablets.services`` an
 ``apps.assignments.services``.
 """
 
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Exists, OuterRef, Prefetch
 
 from apps.assignments.models import TabletVehicleAssignment
 from apps.organizations.models import Department, Vehicle
@@ -32,11 +32,36 @@ def tablet_status_counts(department: Department) -> dict[str, int]:
 def current_vehicle(tablet: Tablet) -> Vehicle | None:
     """Return the vehicle of the tablet's current open assignment, if any."""
     assignment = (
-        tablet.vehicle_assignments.filter(valid_until__isnull=True, ended_at__isnull=True)
+        tablet.vehicle_assignments.filter(
+            valid_until__isnull=True,
+            ended_at__isnull=True,
+            vehicle__active=True,
+            vehicle__station__active=True,
+        )
         .select_related("vehicle__station")
         .first()
     )
     return assignment.vehicle if assignment is not None else None
+
+
+def operationally_unassigned_tablets(department: Department):
+    """Physical Tablet assets needing a valid operational Vehicle assignment."""
+    operational_assignment = TabletVehicleAssignment.objects.filter(
+        tablet=OuterRef("pk"),
+        valid_until__isnull=True,
+        ended_at__isnull=True,
+        vehicle__active=True,
+        vehicle__station__active=True,
+        vehicle__department_id=department.id,
+    )
+    return (
+        Tablet.objects.filter(
+            department=department,
+            status__in=(Tablet.Status.ACTIVE, Tablet.Status.INACTIVE),
+        )
+        .annotate(has_operational_assignment=Exists(operational_assignment))
+        .filter(has_operational_assignment=False)
+    )
 
 
 def tablet_adoption_ready(tablet: Tablet) -> bool:
@@ -73,7 +98,10 @@ def tablets_with_current_state(queryset):
         Prefetch(
             "vehicle_assignments",
             queryset=TabletVehicleAssignment.objects.filter(
-                valid_until__isnull=True, ended_at__isnull=True
+                valid_until__isnull=True,
+                ended_at__isnull=True,
+                vehicle__active=True,
+                vehicle__station__active=True,
             ).select_related("vehicle__station"),
             to_attr="current_assignment",
         ),

@@ -12,10 +12,13 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
+from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station, Vehicle
+from apps.organizations.services import retire_vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE, serialize_p256_public_key
 from apps.publications.manifests import (
     authorized_publications,
+    manifest_publications,
     request_dataset_key_grant,
     request_manifest,
 )
@@ -40,6 +43,7 @@ def pub_fixture(db):
     now = timezone.now()
     user = User.objects.create_user("grants@example.test", "Grants User", "safe-password")
     department = Department.objects.create(name="Grants", short_code="GRT", created_by=user)
+    DepartmentMembership.objects.create(user=user, department=department, created_by=user)
     station = Station.objects.create(department=department, name="Station", short_code="STA")
     vehicle = Vehicle.objects.create(
         department=department, station=station, display_name="Engine 1"
@@ -281,11 +285,15 @@ def test_download_requires_authorized_publication(pub_fixture):
 
 
 def test_download_denied_when_no_vehicle_assignment(pub_fixture):
-    _, _, installation, publication, _, _, _ = pub_fixture
-    TabletVehicleAssignment.objects.filter(tablet=installation.tablet).update(
-        ended_at=timezone.now()
-    )
+    user, _, installation, publication, _, _, _ = pub_fixture
+    vehicle = TabletVehicleAssignment.objects.get(tablet=installation.tablet).vehicle
+    grant = request_dataset_key_grant(publication=publication, installation=installation)
+    retire_vehicle(actor=user, vehicle=vehicle)
     from apps.publications.manifests import ManifestError
 
     with pytest.raises(ManifestError, match="vehicle"):
         authorized_publications(installation=installation)
+    _, unassigned_vehicle, publications = manifest_publications(installation=installation)
+    assert unassigned_vehicle is None and publications == []
+    grant.refresh_from_db()
+    assert grant.status == DatasetKeyGrant.Status.REVOKED

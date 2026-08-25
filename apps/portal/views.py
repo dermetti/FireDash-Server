@@ -47,9 +47,8 @@ from apps.organizations.models import Department, Station, Vehicle
 from apps.organizations.services import (
     create_station,
     create_vehicle,
-    deactivate_vehicle,
     delete_station,
-    delete_vehicle,
+    retire_vehicle,
     update_station,
     update_vehicle,
 )
@@ -1064,33 +1063,29 @@ def station_delete_modal(request: HttpRequest, station_id) -> HttpResponse:
 
 @login_required
 @require_http_methods(["GET", "POST"])
-def vehicle_delete_modal(request: HttpRequest, vehicle_id) -> HttpResponse:
+def vehicle_retire_modal(request: HttpRequest, vehicle_id) -> HttpResponse:
     vehicle = get_object_or_404(Vehicle, pk=vehicle_id)
     if vehicle.department_id not in active_department_ids(request.user):
         raise PermissionDenied("Department administrator role is required.")
     if request.method == "POST":
+        require_recent_reauthentication(request, return_url=request.path)
         try:
-            delete_vehicle(actor=request.user, vehicle=vehicle)
+            retire_vehicle(actor=request.user, vehicle=vehicle)
         except AssignmentError as error:
             return _modal(
                 request,
-                "portal/_delete_modal.html",
+                "portal/_retire_vehicle_modal.html",
                 {
-                    "object": vehicle,
+                    "vehicle": vehicle,
                     "error": str(error),
-                    "action_url": request.path,
                     "modal_container_id": "portal-action-modal-container",
                 },
             )
-        return _modal_redirect(request, reverse("portal-station-manage", args=[vehicle.station_id]))
+        return _modal_redirect(request, reverse("portal-vehicle-manage", args=[vehicle.id]))
     return _modal(
         request,
-        "portal/_delete_modal.html",
-        {
-            "object": vehicle,
-            "action_url": request.path,
-            "modal_container_id": "portal-action-modal-container",
-        },
+        "portal/_retire_vehicle_modal.html",
+        {"vehicle": vehicle, "modal_container_id": "portal-action-modal-container"},
     )
 
 
@@ -1199,25 +1194,6 @@ def vehicle_manage(request: HttpRequest, vehicle_id) -> HttpResponse:
     if request.method == "POST" and form.is_valid():
         update_vehicle(actor=request.user, vehicle=vehicle, **form.cleaned_data)
         return redirect("portal-vehicle-manage", vehicle_id=vehicle.id)
-    if request.method == "POST" and request.POST.get("action") == "retire":
-        try:
-            deactivate_vehicle(vehicle=vehicle)
-        except AssignmentError as error:
-            messages.error(request, str(error))
-        else:
-            messages.success(request, "Vehicle retired.")
-        return redirect("portal-vehicle-manage", vehicle_id=vehicle.id)
-    if request.method == "POST" and request.POST.get("action") == "delete":
-        if request.POST.get("confirm") != "DELETE":
-            messages.error(request, "Type DELETE to permanently remove this erroneous vehicle.")
-        else:
-            try:
-                delete_vehicle(actor=request.user, vehicle=vehicle)
-            except AssignmentError as error:
-                messages.error(request, str(error))
-            else:
-                messages.success(request, "Vehicle data permanently deleted.")
-                return redirect("portal-station-manage", station_id=vehicle.station_id)
     return render(request, "portal/vehicle_manage.html", {"vehicle": vehicle, "form": form})
 
 

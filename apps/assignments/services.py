@@ -244,7 +244,8 @@ def assign_tablet_vehicle(
         current.valid_until = _now(effective_at)
         current.ended_at = timezone.now()
         current.ended_by = actor
-        current.save(update_fields=("valid_until", "ended_at", "ended_by"))
+        current.end_reason = TabletVehicleAssignment.EndReason.REASSIGNED
+        current.save(update_fields=("valid_until", "ended_at", "ended_by", "end_reason"))
     assignment = TabletVehicleAssignment.objects.create(
         tablet=tablet,
         vehicle=vehicle,

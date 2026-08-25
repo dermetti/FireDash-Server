@@ -22,7 +22,7 @@
           <dt class="col-sm-4">Asset number</dt><dd class="col-sm-8">{{ tablet.asset_number|default:"—" }}</dd>
           <dt class="col-sm-4">Asset state</dt><dd class="col-sm-8">{% include "tablets/_tablet_status_badge.html" with status=tablet.status %}</dd>
           <dt class="col-sm-4">Assigned</dt>
-          <dd class="col-sm-8">{% if vehicle %}{{ vehicle.display_name }} &middot; {{ vehicle.station.name }}{% else %}—{% endif %}</dd>
+          <dd class="col-sm-8">{% if vehicle %}{{ vehicle.display_name }} &middot; {{ vehicle.station.name }}{% else %}<span class="badge text-bg-warning">Unassigned</span>{% endif %}</dd>
           <dt class="col-sm-4">Created</dt><dd class="col-sm-8">{{ tablet.created_at|date:"Y-m-d H:i" }}</dd>
         </dl>
       </div>
@@ -34,7 +34,7 @@
         <div class="d-flex gap-2 flex-wrap">
           {% if tablet.status == "ACTIVE" %}
             <a class="btn btn-outline-primary btn-sm" href="{% url 'tablet-assign' department.id tablet.id %}?next={{ detail_url|urlencode }}"
-               hx-get="{% url 'tablet-assign' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Transfer</a>
+               hx-get="{% url 'tablet-assign' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">{% if vehicle %}Transfer{% else %}Assign{% endif %}</a>
             <a class="btn btn-outline-secondary btn-sm" href="{% url 'tablet-deactivate' department.id tablet.id %}?next={{ detail_url|urlencode }}"
                hx-get="{% url 'tablet-deactivate' department.id tablet.id %}?next={{ detail_url|urlencode }}" hx-target="#tablet-action-modal-container">Deactivate</a>
             <a class="btn btn-outline-danger btn-sm" href="{% url 'tablet-mark-lost' department.id tablet.id %}?next={{ detail_url|urlencode }}"

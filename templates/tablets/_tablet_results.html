@@ -27,7 +27,7 @@
         <td class="d-none d-md-table-cell">
           {% for assignment in tablet.current_assignment %}
             {{ assignment.vehicle.display_name }} &middot; {{ assignment.vehicle.station.name }}
-          {% empty %}&mdash;{% endfor %}
+          {% empty %}<span class="badge text-bg-warning">Unassigned</span>{% endfor %}
         </td>
         <td class="d-none d-md-table-cell">
           {% if tablet.last_seen %}{{ tablet.last_seen|timesince }} ago{% else %}&mdash;{% endif %}
@@ -40,7 +40,7 @@
               {% if tablet.status == "ACTIVE" %}
                 <li><a class="dropdown-item" href="{% url 'tablet-assign' department.id tablet.id %}?next={{ list_url|urlencode }}"
                        hx-get="{% url 'tablet-assign' department.id tablet.id %}?next={{ list_url|urlencode }}"
-                       hx-target="#tablet-action-modal-container">Transfer</a></li>
+                       hx-target="#tablet-action-modal-container">{% if tablet.current_assignment %}Transfer{% else %}Assign{% endif %}</a></li>
                 <li><a class="dropdown-item" href="{% url 'tablet-deactivate' department.id tablet.id %}?next={{ list_url|urlencode }}"
                        hx-get="{% url 'tablet-deactivate' department.id tablet.id %}?next={{ list_url|urlencode }}"
                        hx-target="#tablet-action-modal-container">Deactivate</a></li>
