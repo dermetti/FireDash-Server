@@ -17,11 +17,6 @@ class TabletForm(forms.Form):
             attrs={"class": "form-control", "aria-describedby": "tablet-asset-number-help"}
         ),
     )
-    generate_asset_number = forms.BooleanField(
-        required=False,
-        label="Generate automatically",
-        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-    )
 
     def __init__(self, *args, department=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -29,6 +24,21 @@ class TabletForm(forms.Form):
         self.auto_asset_number_generation_enabled = bool(
             department and department.tablet_asset_number_auto_enabled
         )
+        if self.auto_asset_number_generation_enabled:
+            from apps.tablets.services import tablet_asset_number_preview
+
+            preview = tablet_asset_number_preview(department=department)
+            self.asset_number_preview = preview
+            self.fields["asset_number"].required = False
+            self.fields["asset_number"].widget.attrs["readonly"] = "readonly"
+            self.fields["asset_number"].widget.attrs["aria-readonly"] = "true"
+            self.fields["asset_number"].initial = preview
+            # A browser can still submit a different readonly value. Replace it
+            # before binding so errors never echo an untrusted manual override.
+            if self.is_bound:
+                data = self.data.copy()
+                data["asset_number"] = preview
+                self.data = data
 
     def clean_display_name(self):
         name = self.cleaned_data["display_name"].strip()
@@ -44,6 +54,10 @@ class TabletForm(forms.Form):
         return name
 
     def clean_asset_number(self):
+        if self.auto_asset_number_generation_enabled:
+            # The service will allocate the actual value transactionally; this
+            # displayed candidate is only a non-reserved preview.
+            return ""
         asset = self.cleaned_data.get("asset_number", "").strip()
         if (
             self.department is not None
@@ -54,22 +68,6 @@ class TabletForm(forms.Form):
                 "A tablet with this asset number already exists in the department."
             )
         return asset
-
-    def clean(self):
-        cleaned_data = super().clean()
-        generate_asset_number = cleaned_data.get("generate_asset_number", False)
-        asset_number = cleaned_data.get("asset_number", "")
-        if generate_asset_number and not self.auto_asset_number_generation_enabled:
-            self.add_error(
-                "generate_asset_number",
-                "Automatic asset-number generation is not enabled for this Department.",
-            )
-        if generate_asset_number and asset_number:
-            self.add_error(
-                "asset_number",
-                "Choose automatic generation or enter a manual asset number.",
-            )
-        return cleaned_data
 
 
 class TabletVehicleAssignmentForm(forms.Form):

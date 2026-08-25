@@ -1,7 +1,8 @@
+{% load department_presentation %}
 {% if state == "waiting" %}
 <div id="adoption-status" hx-get="{{ status_url }}" hx-trigger="every 4s" hx-swap="outerHTML">
   <div class="alert alert-info mb-0">
-    Waiting for tablet&hellip; <span class="text-body-secondary">The invitation expires at {{ invitation.expires_at|date:"H:i" }}.</span>
+    Waiting for tablet&hellip; <span class="text-body-secondary">The invitation expires at {{ invitation.expires_at|department_datetime:department }}.</span>
   </div>
 </div>
 {% elif state == "completed" %}

@@ -8,14 +8,10 @@
 <div class="mb-3">
   <label class="form-label" for="{{ form.asset_number.id_for_label }}">Asset number</label>
   {{ form.asset_number }}
-  <div class="form-text">Identifier used to match the physical tablet. Manual entry remains available.</div>
+  {% if form.auto_asset_number_generation_enabled %}
+  <div class="form-text">Assigned automatically using this Department's Tablet asset-numbering policy. The displayed value is a preview and may change before registration completes.</div>
+  {% else %}
+  <div class="form-text">Identifier used to match the physical tablet.</div>
+  {% endif %}
   {% for error in form.asset_number.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
 </div>
-{% if form.auto_asset_number_generation_enabled %}
-<div class="mb-3 form-check">
-  {{ form.generate_asset_number }}
-  <label class="form-check-label" for="{{ form.generate_asset_number.id_for_label }}">{{ form.generate_asset_number.label }}</label>
-  <div class="form-text">Use the Department’s configured prefix and minimum number width. Leave Asset number empty when generating automatically.</div>
-  {% for error in form.generate_asset_number.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
-</div>
-{% endif %}

@@ -4,6 +4,13 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+from apps.organizations.presentation import (
+    DEFAULT_DEPARTMENT_LOCALE,
+    DEFAULT_DEPARTMENT_TIMEZONE,
+    DEPARTMENT_LOCALE_CHOICES,
+    DEPARTMENT_TIMEZONE_CHOICES,
+)
+
 
 class Department(models.Model):
     class Status(models.TextChoices):
@@ -26,6 +33,16 @@ class Department(models.Model):
     # This is the authoritative numeric allocator state.  It is deliberately
     # separate from the presentation prefix and zero-padding width.
     tablet_asset_number_sequence = models.PositiveBigIntegerField(default=0)
+    locale = models.CharField(
+        max_length=8,
+        choices=DEPARTMENT_LOCALE_CHOICES,
+        default=DEFAULT_DEPARTMENT_LOCALE,
+    )
+    timezone = models.CharField(
+        max_length=64,
+        choices=DEPARTMENT_TIMEZONE_CHOICES,
+        default=DEFAULT_DEPARTMENT_TIMEZONE,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

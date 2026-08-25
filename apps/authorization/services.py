@@ -17,6 +17,10 @@ from apps.authorization.scopes import (
     is_system_admin,
 )
 from apps.organizations.models import Department, Station
+from apps.organizations.presentation import (
+    DEPARTMENT_LOCALE_CHOICES,
+    DEPARTMENT_TIMEZONE_CHOICES,
+)
 from apps.tablets.versions import AppVersionError, parse_app_version
 
 
@@ -172,6 +176,46 @@ def set_department_tablet_asset_number_policy(
             "new_prefix": new_values["prefix"],
             "old_width": old_values["width"],
             "new_width": new_values["width"],
+        },
+    )
+    return department
+
+
+@transaction.atomic
+def set_department_locale_time_policy(
+    *, actor, department: Department, locale: str, timezone_name: str
+) -> Department:
+    """Update Department-local HTML presentation policy only.
+
+    This deliberately does not activate a process-wide timezone or affect any
+    protocol, signing, or security timestamp semantics.
+    """
+    require_department_admin(actor, department)
+    supported_locales = {value for value, _ in DEPARTMENT_LOCALE_CHOICES}
+    supported_timezones = {value for value, _ in DEPARTMENT_TIMEZONE_CHOICES}
+    if locale not in supported_locales:
+        raise ValueError("Unsupported Department locale.")
+    if timezone_name not in supported_timezones:
+        raise ValueError("Unsupported Department timezone.")
+    department = Department.objects.select_for_update().get(pk=department.pk)
+    old_values = {"locale": department.locale, "timezone": department.timezone}
+    new_values = {"locale": locale, "timezone": timezone_name}
+    if old_values == new_values:
+        return department
+    department.locale = locale
+    department.timezone = timezone_name
+    department.save(update_fields=("locale", "timezone"))
+    record_event(
+        action="authorization.department_locale_time_policy_changed",
+        actor_user=actor,
+        department=department,
+        target_type="department",
+        target_uuid=department.id,
+        metadata={
+            "old_locale": old_values["locale"],
+            "new_locale": new_values["locale"],
+            "old_timezone": old_values["timezone"],
+            "new_timezone": new_values["timezone"],
         },
     )
     return department

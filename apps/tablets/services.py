@@ -274,6 +274,18 @@ def _formatted_asset_number(*, department: Department, sequence: int) -> str:
     return asset_number
 
 
+def tablet_asset_number_preview(*, department: Department) -> str:
+    """Return the unreserved next formatting candidate for registration UI.
+
+    This intentionally reads no lock and changes no sequence.  A POST always
+    re-evaluates and allocates under the authoritative Department row lock, so
+    a preview can never imply a reservation.
+    """
+    return _formatted_asset_number(
+        department=department, sequence=department.tablet_asset_number_sequence + 1
+    )
+
+
 def _next_generated_asset_number(*, department: Department) -> str:
     """Advance the locked Department-local sequence and return its formatted value.
 
@@ -333,7 +345,7 @@ def create_tablet(
     department: Department,
     display_name: str,
     asset_number: str = "",
-    generate_asset_number: bool = False,
+    generate_asset_number: bool | None = None,
 ) -> Tablet:
     # Department is the allocator's authoritative row and is deliberately
     # acquired first.  This lock ordering is shared by policy updates and all
@@ -344,13 +356,12 @@ def create_tablet(
         raise TabletError("Tablet display name is required.")
     display_name = display_name.strip()
     asset_number = asset_number.strip()
-    if generate_asset_number and asset_number:
-        raise TabletError("Choose automatic generation or enter a manual asset number.")
     if Tablet.objects.filter(department=department, display_name=display_name).exists():
         raise TabletError("A tablet with this display name already exists in the department.")
-    if generate_asset_number:
-        if not department.tablet_asset_number_auto_enabled:
-            raise TabletError("Automatic Tablet asset-number generation is not enabled.")
+    # The Department policy is the sole automatic-numbering decision.  The
+    # retained argument is deliberately ignored for source compatibility with
+    # callers from the earlier per-registration UI; it cannot override policy.
+    if department.tablet_asset_number_auto_enabled:
         tablet = _create_generated_tablet(
             actor=actor, department=department, display_name=display_name
         )

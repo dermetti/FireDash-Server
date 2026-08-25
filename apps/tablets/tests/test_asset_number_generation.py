@@ -149,21 +149,18 @@ def test_width_twenty_is_accepted_and_pads_the_numeric_part(asset_number_scope):
 
 
 @pytest.mark.django_db
-def test_manual_entry_never_changes_automatic_counter_and_is_available_when_enabled(
-    asset_number_scope,
-):
+def test_automatic_policy_ignores_manual_value_and_uses_department_allocator(asset_number_scope):
     admin, _, department, _ = asset_number_scope
     _set_policy(admin, department, prefix="TAB", width=4)
-    manual = create_tablet(
-        actor=admin, department=department, display_name="Manual", asset_number="100"
+    tablet = create_tablet(
+        actor=admin,
+        department=department,
+        display_name="Generated",
+        asset_number="MANUAL-OVERRIDE",
     )
     department.refresh_from_db()
-    generated = create_tablet(
-        actor=admin, department=department, display_name="Generated", generate_asset_number=True
-    )
-    assert manual.asset_number == "100"
-    assert department.tablet_asset_number_sequence == 0
-    assert generated.asset_number == "TAB0001"
+    assert tablet.asset_number == "TAB0001"
+    assert department.tablet_asset_number_sequence == 1
 
 
 @pytest.mark.django_db
@@ -238,7 +235,7 @@ def test_future_growth_that_no_longer_fits_asset_number_fails_without_advancing(
 
 
 @pytest.mark.django_db
-def test_generation_is_department_local_and_disabled_policy_rejects_requests(asset_number_scope):
+def test_generation_is_department_local_and_disabled_policy_uses_manual_path(asset_number_scope):
     admin, other_admin, department, other_department = asset_number_scope
     _set_policy(admin, department, prefix="A", width=2)
     _set_policy(other_admin, other_department, prefix="B", width=2)
@@ -258,10 +255,16 @@ def test_generation_is_department_local_and_disabled_policy_rejects_requests(ass
         == "B01"
     )
     _set_policy(admin, department, auto_enabled=False, width=2)
-    with pytest.raises(TabletError, match="not enabled"):
+    assert (
         create_tablet(
-            actor=admin, department=department, display_name="Disabled", generate_asset_number=True
-        )
+            actor=admin,
+            department=department,
+            display_name="Manual after disabling",
+            asset_number="MANUAL-1",
+            generate_asset_number=True,
+        ).asset_number
+        == "MANUAL-1"
+    )
 
 
 @pytest.mark.django_db
@@ -333,7 +336,7 @@ def test_retired_tablets_do_not_reuse_an_allocated_asset_number(asset_number_sco
 
 
 @pytest.mark.django_db
-def test_registration_ui_does_not_allocate_on_get_and_supports_explicit_auto_choice(
+def test_registration_ui_uses_department_policy_without_consuming_preview(
     client, asset_number_scope
 ):
     admin, _, department, _ = asset_number_scope
@@ -342,17 +345,72 @@ def test_registration_ui_does_not_allocate_on_get_and_supports_explicit_auto_cho
     url = reverse("tablet-create", args=(department.id,))
     response = client.get(url)
     assert response.status_code == 200
-    assert "Generate automatically" in response.content.decode()
+    content = response.content.decode()
+    assert "Generate automatically" not in content
+    assert 'value="0001"' in content
+    assert "readonly" in content
     department.refresh_from_db()
     assert department.tablet_asset_number_sequence == 0
     response = client.post(
         url,
-        {"display_name": "Created through UI", "asset_number": "", "generate_asset_number": "on"},
+        {"display_name": "Created through UI", "asset_number": "MANUAL-OVERRIDE"},
     )
     assert response.status_code == 302
     assert (
         Tablet.objects.get(department=department, display_name="Created through UI").asset_number
         == "0001"
+    )
+
+
+@pytest.mark.django_db
+def test_registration_ui_manual_field_when_automatic_numbering_is_disabled(
+    client, asset_number_scope
+):
+    admin, _, department, _ = asset_number_scope
+    client.force_login(admin)
+    url = reverse("tablet-create", args=(department.id,))
+    response = client.get(url)
+    content = response.content.decode()
+    assert "Generate automatically" not in content
+    assert "readonly" not in content
+    response = client.post(url, {"display_name": "Manual UI", "asset_number": "MANUAL-10"})
+    assert response.status_code == 302
+    assert (
+        Tablet.objects.get(department=department, display_name="Manual UI").asset_number
+        == "MANUAL-10"
+    )
+
+
+@pytest.mark.django_db
+def test_preview_changes_with_policy_but_does_not_reserve_the_candidate(client, asset_number_scope):
+    admin, _, department, _ = asset_number_scope
+    _set_policy(admin, department, prefix="TAB", width=4)
+    client.force_login(admin)
+    url = reverse("tablet-create", args=(department.id,))
+    assert 'value="TAB0001"' in client.get(url).content.decode()
+    _set_policy(admin, department, prefix="NEW", width=6)
+    assert 'value="NEW000001"' in client.get(url).content.decode()
+    department.refresh_from_db()
+    assert department.tablet_asset_number_sequence == 0
+
+
+@pytest.mark.django_db
+def test_post_after_preview_allocates_current_candidate_not_the_stale_preview(
+    client, asset_number_scope
+):
+    admin, _, department, _ = asset_number_scope
+    _set_policy(admin, department, width=4)
+    client.force_login(admin)
+    url = reverse("tablet-create", args=(department.id,))
+    assert 'value="0001"' in client.get(url).content.decode()
+    create_tablet(
+        actor=admin, department=department, display_name="Concurrent", asset_number="ignored"
+    )
+    response = client.post(url, {"display_name": "After preview", "asset_number": "0001"})
+    assert response.status_code == 302
+    assert (
+        Tablet.objects.get(department=department, display_name="After preview").asset_number
+        == "0002"
     )
 
 

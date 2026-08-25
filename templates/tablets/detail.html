@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load department_presentation %}
 {% block title %}{{ tablet.display_name|default:"Tablet" }} — Devices / Tablets{% endblock %}
 {% block content %}
 
@@ -23,7 +24,7 @@
           <dt class="col-sm-4">Asset state</dt><dd class="col-sm-8">{% include "tablets/_tablet_status_badge.html" with status=tablet.status %}</dd>
           <dt class="col-sm-4">Assigned</dt>
           <dd class="col-sm-8">{% if vehicle %}{{ vehicle.display_name }} &middot; {{ vehicle.station.name }}{% else %}<span class="badge text-bg-warning">Unassigned</span>{% endif %}</dd>
-          <dt class="col-sm-4">Created</dt><dd class="col-sm-8">{{ tablet.created_at|date:"Y-m-d H:i" }}</dd>
+          <dt class="col-sm-4">Created</dt><dd class="col-sm-8">{{ tablet.created_at|department_datetime:department }}</dd>
         </dl>
       </div>
     </div>
@@ -73,11 +74,11 @@
             <dt class="col-sm-5">Health</dt>
             <dd class="col-sm-7">{% if current_installation_stale %}<span class="badge text-bg-warning">Stale</span>{% else %}<span class="badge text-bg-success">Healthy</span>{% endif %}</dd>
             <dt class="col-sm-5">Last contact</dt>
-            <dd class="col-sm-7">{{ current_installation.last_successful_check_in_at|date:"Y-m-d H:i"|default:"Never" }}</dd>
+            <dd class="col-sm-7">{% if current_installation.last_successful_check_in_at %}{{ current_installation.last_successful_check_in_at|department_datetime:department }}{% else %}Never{% endif %}</dd>
             <dt class="col-sm-5">Adopted</dt>
-            <dd class="col-sm-7">{{ current_installation.adopted_at|date:"Y-m-d H:i" }}</dd>
+            <dd class="col-sm-7">{{ current_installation.adopted_at|department_datetime:department }}</dd>
             <dt class="col-sm-5">Authorization valid until</dt>
-            <dd class="col-sm-7">{{ current_installation.authorization_valid_until|date:"Y-m-d H:i" }}</dd>
+            <dd class="col-sm-7">{{ current_installation.authorization_valid_until|department_datetime:department }}</dd>
             <dt class="col-sm-5">App version</dt>
             <dd class="col-sm-7">{{ current_installation.app_version }}</dd>
           </dl>
@@ -115,7 +116,7 @@
         <tr>
           <td>{% if installation.status == "ACTIVE" %}<span class="badge text-bg-success">Active</span>{% elif installation.status == "STALE" %}<span class="badge text-bg-warning">Stale</span>{% elif installation.status == "REVOKED" %}<span class="badge text-bg-secondary">Revoked</span>{% elif installation.status == "REPLACED" %}<span class="badge text-bg-secondary">Replaced</span>{% else %}<span class="badge text-bg-secondary">{{ installation.status }}</span>{% endif %}</td>
           <td>{{ installation.app_version }}</td>
-          <td>{{ installation.adopted_at|date:"Y-m-d H:i" }}</td>
+          <td>{{ installation.adopted_at|department_datetime:department }}</td>
         </tr>
         {% endfor %}
       </tbody>

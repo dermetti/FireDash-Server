@@ -242,8 +242,8 @@ Use full-width settings cards, one per row, each with its own Apply action:
 - Tablet authorization: max offline lease, 3–365 days.
 - Personnel retention.
 - Locale/time display.
-- Publication retention.
-- Stale/cleanup policy only if an authoritative per-department backend setting is introduced.
+- Publication retention is deferred to Stage 4, where storage and lifecycle enforcement are delivered together.
+- Stale/cleanup policy remains deferred unless an authoritative per-department backend setting is introduced.
 
 **Acceptance:** last effective Department Admin cannot be removed; suspended/revoked access cannot continue; no Department Admin Station-scope mutation survives; Vehicle retirement never silently destroys Tablet provisioning; orphaned Tablets are explicit/auditable/recoverable; asset-number allocation passes concurrent-create tests.
 

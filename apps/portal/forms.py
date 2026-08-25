@@ -1,5 +1,6 @@
 from django import forms
 
+from apps.organizations.presentation import DEPARTMENT_LOCALE_CHOICES, DEPARTMENT_TIMEZONE_CHOICES
 from apps.tablets.models import Tablet
 from apps.tablets.versions import AppVersionError, parse_app_version
 
@@ -132,6 +133,28 @@ class DepartmentSystemSettingsForm(DepartmentTabletLeaseForm):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             field.widget.attrs["class"] = "form-control"
+
+
+class DepartmentPersonnelRetentionForm(forms.Form):
+    retention_days = forms.IntegerField(
+        min_value=1,
+        max_value=36500,
+        label="Personnel retention period after offboarding (days)",
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+
+
+class DepartmentLocaleTimePolicyForm(forms.Form):
+    locale = forms.ChoiceField(
+        choices=DEPARTMENT_LOCALE_CHOICES,
+        label="Locale",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    timezone = forms.ChoiceField(
+        choices=DEPARTMENT_TIMEZONE_CHOICES,
+        label="Timezone",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
 
 
 class DepartmentTabletAssetNumberPolicyForm(forms.Form):

@@ -41,6 +41,7 @@ from apps.authorization.services import (
     revoke_department_admin,
     revoke_station_admin,
     set_api_version_compatibility_policy,
+    set_department_locale_time_policy,
     set_department_tablet_asset_number_policy,
     set_department_tablet_lease,
     set_system_department_tablet_lease,
@@ -62,6 +63,8 @@ from apps.portal.forms import (
     AdministratorRemovalForm,
     ApiVersionCompatibilityPolicyForm,
     DepartmentForm,
+    DepartmentLocaleTimePolicyForm,
+    DepartmentPersonnelRetentionForm,
     DepartmentStatusForm,
     DepartmentSystemSettingsForm,
     DepartmentTabletAssetNumberPolicyForm,
@@ -883,27 +886,29 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     """Edit only existing, authoritative per-department settings."""
     department = _department_or_403(request, department_id)
     policy = getattr(department, "personnel_retention_policy", None)
-    system_initial = {
-        "tablet_lease_days": department.tablet_lease_days,
-        "retention_days": policy.retention_period.days if policy else 30,
-    }
+    lease_initial = {"tablet_lease_days": department.tablet_lease_days}
+    retention_initial = {"retention_days": policy.retention_period.days if policy else 30}
     asset_number_initial = {
         "auto_enabled": department.tablet_asset_number_auto_enabled,
         "prefix": department.tablet_asset_number_prefix,
         "width": department.tablet_asset_number_width,
     }
-    asset_number_action = (
-        request.method == "POST" and request.POST.get("action") == "asset-numbering"
+    action = request.POST.get("action", "") if request.method == "POST" else ""
+    lease_form = DepartmentTabletLeaseForm(
+        request.POST if action == "tablet-lease" else None, initial=lease_initial
     )
-    form = DepartmentSystemSettingsForm(
-        request.POST if request.method == "POST" and not asset_number_action else None,
-        initial=system_initial,
+    retention_form = DepartmentPersonnelRetentionForm(
+        request.POST if action == "personnel-retention" else None, initial=retention_initial
     )
     asset_number_form = DepartmentTabletAssetNumberPolicyForm(
-        request.POST if asset_number_action else None,
+        request.POST if action == "asset-numbering" else None,
         initial=asset_number_initial,
     )
-    if asset_number_action and asset_number_form.is_valid():
+    locale_time_form = DepartmentLocaleTimePolicyForm(
+        request.POST if action == "locale-time" else None,
+        initial={"locale": department.locale, "timezone": department.timezone},
+    )
+    if action == "asset-numbering" and asset_number_form.is_valid():
         require_recent_reauthentication(
             request,
             return_url=reverse("portal-department-settings", args=(department.id,)),
@@ -917,23 +922,67 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         )
         messages.success(request, "Tablet asset-numbering policy was updated.")
         return redirect("portal-department-settings", department_id=department.id)
-    if request.method == "POST" and not asset_number_action and form.is_valid():
+    if action == "tablet-lease" and lease_form.is_valid():
         require_recent_reauthentication(
             request,
             return_url=reverse("portal-department-settings", args=(department.id,)),
+        )
+        set_department_tablet_lease(
+            actor=request.user,
+            department=department,
+            tablet_lease_days=lease_form.cleaned_data["tablet_lease_days"],
+        )
+        messages.success(request, "Tablet authorization policy was updated.")
+        return redirect("portal-department-settings", department_id=department.id)
+    if action == "personnel-retention" and retention_form.is_valid():
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-settings", args=(department.id,)),
+        )
+        from datetime import timedelta
+
+        set_retention_policy(
+            actor=request.user,
+            department=department,
+            retention_period=timedelta(days=retention_form.cleaned_data["retention_days"]),
+        )
+        messages.success(request, "Personnel retention policy was updated.")
+        return redirect("portal-department-settings", department_id=department.id)
+    if action == "locale-time" and locale_time_form.is_valid():
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-settings", args=(department.id,)),
+        )
+        set_department_locale_time_policy(
+            actor=request.user,
+            department=department,
+            locale=locale_time_form.cleaned_data["locale"],
+            timezone_name=locale_time_form.cleaned_data["timezone"],
+        )
+        messages.success(request, "Locale and time display policy was updated.")
+        return redirect("portal-department-settings", department_id=department.id)
+    # Existing POST callers predate independent cards. Keep their atomic
+    # behavior as a compatibility path while all rendered cards use actions.
+    legacy_form = DepartmentSystemSettingsForm(
+        request.POST if request.method == "POST" and not action else None,
+        initial={**lease_initial, **retention_initial},
+    )
+    if request.method == "POST" and not action and legacy_form.is_valid():
+        require_recent_reauthentication(
+            request, return_url=reverse("portal-department-settings", args=(department.id,))
         )
         with transaction.atomic():
             set_department_tablet_lease(
                 actor=request.user,
                 department=department,
-                tablet_lease_days=form.cleaned_data["tablet_lease_days"],
+                tablet_lease_days=legacy_form.cleaned_data["tablet_lease_days"],
             )
             from datetime import timedelta
 
             set_retention_policy(
                 actor=request.user,
                 department=department,
-                retention_period=timedelta(days=form.cleaned_data["retention_days"]),
+                retention_period=timedelta(days=legacy_form.cleaned_data["retention_days"]),
             )
         messages.success(request, "Department system settings were updated.")
         return redirect("portal-department-settings", department_id=department.id)
@@ -942,8 +991,10 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         "portal/department_settings.html",
         {
             "department": department,
-            "form": form,
+            "lease_form": lease_form,
+            "retention_form": retention_form,
             "asset_number_form": asset_number_form,
+            "locale_time_form": locale_time_form,
             "retention_policy": policy,
         },
     )

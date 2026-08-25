@@ -772,7 +772,11 @@ Personnel retention
 [settings...]
 [Apply]
 
-Locale
+Tablet asset numbering
+[settings...]
+[Apply]
+
+Locale and time display
 [settings...]
 [Apply]
 ```
@@ -861,6 +865,12 @@ Expires at 14:47
 Locale/timezone may affect UI presentation.
 
 Do not change signed/protocol/security timestamp semantics merely for display.
+
+Department locale/time policy is presentation-only: use bounded IANA timezone
+choices and render Department-scoped administrator pages at the presentation
+boundary. Station Administrators inherit their Department policy. Global System
+Administrator views use a stable system presentation and never inherit an
+arbitrary tenant policy.
 
 ---
 

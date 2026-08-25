@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load publications_extras %}
+{% load department_presentation %}
 {% block title %}Publication Review — {{ dataset_name }}{% endblock %}
 {% block content %}
 
@@ -15,9 +16,9 @@
       <dt class="col-sm-3">Scope</dt><dd class="col-sm-9">{{ scope_label }}</dd>
       <dt class="col-sm-3">Source revision</dt><dd class="col-sm-9">{{ publication.source_revision }}</dd>
       <dt class="col-sm-3">Status</dt><dd class="col-sm-9"><span class="badge text-bg-{{ publication.status|publication_status_badge }}">{{ publication.status|publication_status_label }}</span></dd>
-      <dt class="col-sm-3">Built</dt><dd class="col-sm-9">{{ publication.created_at|date:"j M Y H:i" }}</dd>
+      <dt class="col-sm-3">Built</dt><dd class="col-sm-9">{{ publication.created_at|department_datetime:publication.department }}</dd>
       {% if publication.published_at %}
-      <dt class="col-sm-3">Published</dt><dd class="col-sm-9">{{ publication.published_at|date:"j M Y H:i" }}</dd>
+      <dt class="col-sm-3">Published</dt><dd class="col-sm-9">{{ publication.published_at|department_datetime:publication.department }}</dd>
       {% endif %}
       {% if publication.change_summary %}
       <dt class="col-sm-3">Change summary</dt><dd class="col-sm-9"><code class="text-break">{{ publication.change_summary }}</code></dd>

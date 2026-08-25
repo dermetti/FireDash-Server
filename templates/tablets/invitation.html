@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% load department_presentation %}
 {% block title %}{% if mode == 'adoption' %}Tablet adoption invitation{% elif mode == 'replacement' %}Re-provision FireDash invitation{% else %}Installation recovery invitation{% endif %}{% endblock %}
 {% block content %}
 <div class="row justify-content-center"><div class="col-md-6 col-lg-5">
   <h1 class="h3 mb-1">{% if mode == 'adoption' %}Tablet adoption invitation{% elif mode == 'replacement' %}Re-provision FireDash invitation{% else %}Installation recovery invitation{% endif %}</h1>
-  <div class="alert alert-warning py-2">This invitation is shown only once and expires at {{ expires_at|date:"H:i" }}.</div>
+  <div class="alert alert-warning py-2">This invitation is shown only once and expires at {{ expires_at|department_datetime:department }}.</div>
   <div class="card shadow-sm"><div class="card-body">
     <p class="mb-1">Tablet: <strong>{{ tablet.display_name|default:"Unnamed tablet" }}</strong>
       {% if tablet.asset_number %}<span class="text-body-secondary">({{ tablet.asset_number }})</span>{% endif %}</p>
