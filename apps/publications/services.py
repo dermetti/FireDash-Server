@@ -128,10 +128,6 @@ def _allocate_staged_publication(
     )
 
 
-def _current_source_fingerprint(*, scope: DatasetScopeState) -> str:
-    return source_fingerprint_for_payload(_current_source_snapshot(scope=scope))
-
-
 def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, object]:
     return build_source_payload(
         definition=get_dataset_definition(scope.dataset_type_code),
@@ -140,19 +136,22 @@ def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, object]:
     )
 
 
+def _current_source_state(*, scope: DatasetScopeState) -> tuple[dict[str, object], str]:
+    snapshot = _current_source_snapshot(scope=scope)
+    return snapshot, source_fingerprint_for_payload(snapshot)
+
+
 def _scope_is_dirty(*, scope: DatasetScopeState, fingerprint: str | None = None) -> bool:
-    """Compare logical source content, retaining a conservative legacy fallback."""
+    """Compare stored logical source fingerprints without rebuilding canonical data."""
     current = scope.current_published_publication
     if current is None:
         return True
-    if current.source_fingerprint:
-        return (
-            fingerprint or _current_source_fingerprint(scope=scope)
-        ) != current.source_fingerprint
-    # Pre-fingerprint publications cannot safely be reconstructed from encrypted
-    # artifacts.  Preserve their established revision comparison until their
-    # next successful publication records a canonical source fingerprint.
-    return scope.source_revision != current.source_revision
+    current_fingerprint = fingerprint or scope.current_source_fingerprint
+    # Existing scopes remain conservatively dirty until a locked mutation or
+    # publication operation computes the authoritative canonical fingerprint.
+    if not current_fingerprint or not current.source_fingerprint:
+        return True
+    return current_fingerprint != current.source_fingerprint
 
 
 def _newer_live_attempt_exists(*, scope: DatasetScopeState, version_number: int) -> bool:
@@ -213,8 +212,8 @@ def mark_dirty(
                 department=department, station=station, dataset_type_code=dataset_type_code
             )
     scope.source_revision += 1
-    snapshot = _current_source_snapshot(scope=scope)
-    fingerprint = source_fingerprint_for_payload(snapshot)
+    snapshot, fingerprint = _current_source_state(scope=scope)
+    scope.current_source_fingerprint = fingerprint
     dirty = _scope_is_dirty(scope=scope, fingerprint=fingerprint)
     if dirty and scope.dirty_since is None:
         scope.dirty_since = now
@@ -223,28 +222,50 @@ def mark_dirty(
         # A canonical revert can make a queued automatic attempt redundant.
         # Keep its immutable version row, but prevent it from later publishing
         # an identical copy of the active source.
+        # `build_publication` is nullable.  Lock the job row first and lock its
+        # attempt separately below: combining select_for_update() with
+        # select_related("build_publication") would issue FOR UPDATE across a
+        # nullable outer join on PostgreSQL.
         pending = (
             PublicationJob.objects.select_for_update()
-            .select_related("build_publication")
             .filter(scope_state=scope, status=PublicationJob.Status.PENDING)
             .first()
         )
         if pending is not None:
-            pending_publication = (
-                DatasetPublication.objects.select_for_update()
-                .filter(pk=pending.build_publication_id)
-                .first()
-            )
+            pending_publication = None
+            if pending.build_publication_id is not None:
+                pending_publication = (
+                    DatasetPublication.objects.select_for_update()
+                    .filter(pk=pending.build_publication_id)
+                    .first()
+                )
             if (
                 pending_publication is not None
                 and pending_publication.status == DatasetPublication.Status.STAGED
             ):
-                pending_publication.status = DatasetPublication.Status.OBSOLETE
-                pending_publication.save(update_fields=("status",))
-            pending.status = PublicationJob.Status.OBSOLETE
+                pending_publication.status = DatasetPublication.Status.CANCELLED
+                pending_publication.build_error = (
+                    "Source reverted to the active publication; staged candidate "
+                    "is no longer required."
+                )
+                pending_publication.save(update_fields=("status", "build_error"))
+            pending.status = PublicationJob.Status.CANCELLED
             pending.completed_at = now
-            pending.save(update_fields=("status", "completed_at"))
-    scope.save(update_fields=("source_revision", "dirty_since", "updated_at"))
+            pending.error_category = "source_reverted"
+            pending.error_message = (
+                "Source reverted to the active publication; staged candidate was cancelled."
+            )
+            pending.save(
+                update_fields=("status", "completed_at", "error_category", "error_message")
+            )
+    scope.save(
+        update_fields=(
+            "source_revision",
+            "current_source_fingerprint",
+            "dirty_since",
+            "updated_at",
+        )
+    )
     record_event(
         action="publication.scope_marked_dirty",
         actor_user=actor,
@@ -255,14 +276,17 @@ def mark_dirty(
         metadata={"dataset_type_code": dataset_type_code, "source_revision": scope.source_revision},
     )
     if dirty:
-        transaction.on_commit(
-            lambda: enqueue_publication_job(
-                department=department,
-                station=station,
-                dataset_type_code=dataset_type_code,
-                requested_by=actor,
-                trigger_type=PublicationJob.TriggerType.DATA_CHANGE,
-            )
+        # This nested service call shares the already-held scope lock and the
+        # canonical mutation transaction. Passing the computed state avoids a
+        # second full source reconstruction while retaining rollback safety.
+        enqueue_publication_job(
+            department=department,
+            station=station,
+            dataset_type_code=dataset_type_code,
+            requested_by=actor,
+            trigger_type=PublicationJob.TriggerType.DATA_CHANGE,
+            source_snapshot=snapshot,
+            source_fingerprint_value=fingerprint,
         )
     return scope
 
@@ -277,13 +301,21 @@ def enqueue_publication_job(
     trigger_type: str = PublicationJob.TriggerType.DATA_CHANGE,
     debounce_started_at: datetime | None = None,
     allow_clean_rebuild: bool = False,
+    source_snapshot: dict[str, object] | None = None,
+    source_fingerprint_value: str | None = None,
 ) -> PublicationJob | None:
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
     scope = _locked_scope(
         department=department, station=station, dataset_type_code=dataset_type_code
     )
-    snapshot = _current_source_snapshot(scope=scope)
-    fingerprint = source_fingerprint_for_payload(snapshot)
+    if source_snapshot is None or source_fingerprint_value is None:
+        snapshot, fingerprint = _current_source_state(scope=scope)
+        if scope.current_source_fingerprint != fingerprint:
+            scope.current_source_fingerprint = fingerprint
+            scope.save(update_fields=("current_source_fingerprint", "updated_at"))
+    else:
+        snapshot = source_snapshot
+        fingerprint = source_fingerprint_value
     if not allow_clean_rebuild and not _scope_is_dirty(scope=scope, fingerprint=fingerprint):
         return None
     now = timezone.now()
@@ -309,7 +341,7 @@ def enqueue_publication_job(
             # An explicit rebuild makes any pending work immediately eligible.
             active.trigger_type = trigger_type
             active.requested_by = requested_by
-            active.not_before = None
+            active.not_before = now
         elif active.trigger_type == PublicationJob.TriggerType.DATA_CHANGE:
             active.not_before = _data_change_not_before(
                 now=now, debounce_started_at=active.debounce_started_at
@@ -352,7 +384,7 @@ def enqueue_publication_job(
         )
     else:
         job.debounce_started_at = None
-        job.not_before = None
+        job.not_before = now
     job.full_clean()
     try:
         job.save()
@@ -427,6 +459,12 @@ def claim_next_job() -> PublicationJob | None:
         return job
     now = timezone.now()
     job.source_revision = scope.source_revision
+    # The scope lock makes one current source read sufficient for both a
+    # legacy staged-attempt allocation and the STAGED -> BUILDING freeze.
+    snapshot, fingerprint = _current_source_state(scope=scope)
+    if scope.current_source_fingerprint != fingerprint:
+        scope.current_source_fingerprint = fingerprint
+        scope.save(update_fields=("current_source_fingerprint", "updated_at"))
     # Legacy pending jobs created before Phase 4A have no staged attempt. Give
     # them one under the same locked scope; normal jobs already own their row.
     publication = (
@@ -435,8 +473,8 @@ def claim_next_job() -> PublicationJob | None:
         else _allocate_staged_publication(
             scope=scope,
             job=job,
-            source_fingerprint_value=_current_source_fingerprint(scope=scope),
-            source_snapshot=_current_source_snapshot(scope=scope),
+            source_fingerprint_value=fingerprint,
+            source_snapshot=snapshot,
         )
     )
     if publication is None or publication.status != DatasetPublication.Status.STAGED:
@@ -447,10 +485,9 @@ def claim_next_job() -> PublicationJob | None:
     # The scope lock makes this the mutable-candidate freeze boundary. A
     # canonical edit that committed first has already refreshed this STAGED
     # row; a later edit sees BUILDING and belongs to a following attempt.
-    snapshot = _current_source_snapshot(scope=scope)
     publication.source_revision = scope.source_revision
     publication.source_snapshot = snapshot
-    publication.source_fingerprint = source_fingerprint_for_payload(snapshot)
+    publication.source_fingerprint = fingerprint
     publication.status = DatasetPublication.Status.BUILDING
     publication.save(
         update_fields=("source_revision", "source_snapshot", "source_fingerprint", "status")
@@ -1062,19 +1099,26 @@ def build_staged_publication(*, actor, scope: DatasetScopeState) -> PublicationJ
         station=scope.station,
         dataset_type_code=scope.dataset_type_code,
     )
+    # `build_publication` is nullable.  Preserve scope -> job -> publication
+    # locking by loading the job directly and locking the staged attempt in a
+    # separate base-row query below.
     job = (
         PublicationJob.objects.select_for_update()
-        .select_related("build_publication")
         .filter(scope_state=locked_scope, status=PublicationJob.Status.PENDING)
         .order_by("created_at")
         .first()
     )
-    if job is None or job.build_publication is None:
+    if job is None or job.build_publication_id is None:
         raise PublicationError("No staged publication is available to build.")
-    if job.build_publication.status != DatasetPublication.Status.STAGED:
+    publication = (
+        DatasetPublication.objects.select_for_update().filter(pk=job.build_publication_id).first()
+    )
+    if publication is None or publication.status != DatasetPublication.Status.STAGED:
         raise PublicationError("Only a staged publication can be built now.")
     job.trigger_type = PublicationJob.TriggerType.USER_REQUEST
-    job.not_before = None
+    # `not_before` is the server-authoritative immediate-claim timestamp. The
+    # list may poll this staged row only for a bounded grace interval from it.
+    job.not_before = timezone.now()
     job.requested_by = actor
     job.save(update_fields=("trigger_type", "not_before", "requested_by"))
     record_event(
@@ -1086,7 +1130,7 @@ def build_staged_publication(*, actor, scope: DatasetScopeState) -> PublicationJ
         target_uuid=job.build_publication_id,
         metadata={
             "dataset_type_code": locked_scope.dataset_type_code,
-            "version_number": job.build_publication.version_number,
+            "version_number": publication.version_number,
         },
     )
     transaction.on_commit(wake_publication_build_worker)

@@ -39,6 +39,9 @@ class DatasetScopeState(models.Model):
     )
     dataset_type_code = models.CharField(max_length=100)
     source_revision = models.PositiveBigIntegerField(default=0)
+    # The current deterministic publishable canonical source. Empty means an
+    # older scope has not yet been safely initialized by a locked service path.
+    current_source_fingerprint = models.CharField(max_length=64, blank=True, default="")
     dirty_since = models.DateTimeField(null=True, blank=True)
     latest_built_publication = models.ForeignKey(
         "DatasetPublication",

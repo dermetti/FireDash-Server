@@ -33,6 +33,16 @@ def _hydrant_summary(revision):
     return {"active_count": 0, "source_revision": revision, "status_counts": {}}
 
 
+def _personnel_summary(revision, station):
+    return {
+        "person_count": 0,
+        "station_id": str(station.id),
+        "commander_eligible_count": 0,
+        "verified_commander_email_count": 0,
+        "source_revision": revision,
+    }
+
+
 def _artifact_metadata(department_id, publication_id):
     return {
         "artifact_path": f"{department_id}/{publication_id}/artifact.bin",
@@ -164,7 +174,7 @@ def test_user_request_makes_existing_pending_job_immediately_eligible(debounce_c
     assert jobs.count() == 1
     job = jobs.get()
     assert job.trigger_type == PublicationJob.TriggerType.USER_REQUEST
-    assert job.not_before is None
+    assert job.not_before is not None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -230,7 +240,7 @@ def test_revision_only_change_during_running_build_does_not_requeue_identical_so
 
     finalized = finalize_publication_job(
         job_id=job.id,
-        summary=_hydrant_summary(job.source_revision),
+        summary=_personnel_summary(job.source_revision, station_a),
         artifact=_artifact_metadata(department.id, job.build_publication_id),
     )
     finalized.refresh_from_db()

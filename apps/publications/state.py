@@ -6,14 +6,16 @@ dataset scope so templates never infer business state from several models.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 
-from apps.publications.builders import source_fingerprint
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.registry import get_dataset_definition
+
+STAGED_POLL_GRACE_PERIOD = timedelta(seconds=20)
 
 # Operational state keys.
 CURRENT = "CURRENT"
@@ -142,18 +144,15 @@ def scope_operational_states(
         job = active_jobs.get(scope.id)
         latest_built = scope.latest_built_publication
         current_published = scope.current_published_publication
-        current_fingerprint = source_fingerprint(
-            definition=definition, department=scope.department, station=scope.station
-        )
+        current_fingerprint = scope.current_source_fingerprint
         if current_published is None:
             dirty = True
-        elif current_published.source_fingerprint:
+        elif current_fingerprint and current_published.source_fingerprint:
             dirty = current_fingerprint != current_published.source_fingerprint
         else:
-            # Historical publications cannot truthfully be reconstructed from
-            # their encrypted artifacts. Keep legacy revision behavior only
-            # until the next successful publication establishes the fingerprint.
-            dirty = scope.source_revision != current_published.source_revision
+            # Legacy rows are initialized only through a locked service path;
+            # list rendering deliberately never rebuilds canonical sources.
+            dirty = True
         state = compute_scope_state(
             dirty=dirty,
             latest_status=scope.latest_status,
@@ -211,21 +210,13 @@ def scope_operational_states(
                 "active_job_publication_version": (
                     job.build_publication.version_number if job and job.build_publication else None
                 ),
-                "should_poll": (
-                    state == BUILDING
-                    or (
-                        state in (UPDATE_QUEUED, QUEUED)
-                        and job is not None
-                        # Poll only a staged candidate the worker can claim
-                        # now.  This lets automatic pickup become a BUILDING
-                        # row without reloading the page, without polling a
-                        # delayed data-change job for hours.
-                        and (
-                            job.trigger_type == PublicationJob.TriggerType.USER_REQUEST
-                            or job.not_before is None
-                            or job.not_before <= now
-                        )
-                    )
+                "should_poll": state == BUILDING
+                or (
+                    state in (UPDATE_QUEUED, QUEUED)
+                    and job is not None
+                    and job.not_before is not None
+                    and job.not_before <= now
+                    and now - job.not_before <= STAGED_POLL_GRACE_PERIOD
                 ),
             }
         )

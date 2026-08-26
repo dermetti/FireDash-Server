@@ -7,6 +7,7 @@ import pytest
 from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
+from apps.publications.models import DatasetScopeState, PublicationJob
 from apps.publications.services import mark_dirty
 from apps.publications.state import (
     BUILDING,
@@ -16,6 +17,7 @@ from apps.publications.state import (
     NOT_PUBLISHED,
     QUEUED,
     READY_TO_PUBLISH,
+    STAGED_POLL_GRACE_PERIOD,
     UPDATE_QUEUED,
     compute_scope_state,
     scope_operational_states,
@@ -167,3 +169,30 @@ def test_scope_operational_states_derives_per_scope_state():
     assert row["state_label"] == "Update queued"
     assert row["distributed_version"] is None
     assert row["source_revision"] == 1
+    assert len(row["source_fingerprint"]) == 64
+
+
+@pytest.mark.django_db(transaction=True)
+def test_immediately_claimable_staged_polling_expires_after_grace_period():
+    admin = User.objects.create_user("state-poll@example.test", "State Poll", "safe-password")
+    department = Department.objects.create(name="State Poll", short_code="STP", created_by=admin)
+    DepartmentMembership.objects.create(user=admin, department=department, created_by=admin)
+    station = Station.objects.create(department=department, name="Station Poll", short_code="STP1")
+    mark_dirty(
+        department=department, station=station, dataset_type_code="station_personnel", actor=admin
+    )
+    scope = DatasetScopeState.objects.get(
+        department=department, station=station, dataset_type_code="station_personnel"
+    )
+    job = PublicationJob.objects.get(scope_state=scope)
+    started = NOW
+    job.trigger_type = PublicationJob.TriggerType.USER_REQUEST
+    job.not_before = started
+    job.save(update_fields=("trigger_type", "not_before"))
+
+    assert scope_operational_states(department, now=started + timedelta(seconds=1))[0][
+        "should_poll"
+    ]
+    assert not scope_operational_states(
+        department, now=started + STAGED_POLL_GRACE_PERIOD + timedelta(seconds=1)
+    )[0]["should_poll"]

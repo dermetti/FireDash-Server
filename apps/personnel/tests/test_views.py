@@ -290,7 +290,10 @@ def test_permission_denied_is_not_converted_to_302(client, department_admin):
         "station@example.test", "Station Admin", "safe-password"
     )
     StationAdminAssignment.objects.create(
-        user=station_admin, station=station, active=True, created_by=actor
+        user=station_admin,
+        station=station,
+        status=StationAdminAssignment.Status.ACTIVE,
+        created_by=actor,
     )
     client.force_login(station_admin)
     response = client.post(

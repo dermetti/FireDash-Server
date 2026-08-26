@@ -94,6 +94,7 @@ def test_explicit_document_deactivation_is_idempotent_and_audited(
     setter(**kwargs)
     scope = DatasetScopeState.objects.get(department=department, dataset_type_code=dataset)
     assert (plan.active, scope.source_revision) == (False, 1)
+    assert len(scope.current_source_fingerprint) == 64
     assert AuditEvent.objects.filter(action=event, target_uuid=plan.id).exists()
     setter(**kwargs)
     scope.refresh_from_db()

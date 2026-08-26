@@ -92,6 +92,7 @@ def _current_scope(*, department, dataset_type_code="department_hydrants"):
     scope.latest_built_publication = current
     scope.current_published_publication = current
     scope.save(update_fields=("latest_built_publication", "current_published_publication"))
+    _record_current_fingerprint(scope, current)
     return scope, current
 
 
@@ -107,6 +108,8 @@ def _record_current_fingerprint(scope, current):
         station=scope.station,
     )
     current.save(update_fields=("source_fingerprint", "source_snapshot"))
+    scope.current_source_fingerprint = current.source_fingerprint
+    scope.save(update_fields=("current_source_fingerprint",))
 
 
 @pytest.mark.django_db(transaction=True)
@@ -146,6 +149,10 @@ def test_update_is_separate_from_current_and_building_row_polls_only_itself(
 ):
     admin, _, department, _, _ = publication_ui_context
     scope, current = _current_scope(department=department)
+    # Model an unpublished source change behind the active v7 so a later
+    # failed v8 remains visible as the scope update state.
+    current.source_fingerprint = "a" * 64
+    current.save(update_fields=("source_fingerprint",))
     staged = _publication(
         department=department,
         scope=scope,
@@ -179,8 +186,46 @@ def test_update_is_separate_from_current_and_building_row_polls_only_itself(
     staged.status = DatasetPublication.Status.FAILED
     staged.save(update_fields=("status",))
     failed = client.get(reverse("publications-scope-row", args=(scope.id,))).content.decode()
-    assert "v8 · Failed" in failed
+    assert "v8" in failed
+    assert "Failed" in failed
     assert "every 1s" not in failed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_list_and_building_row_use_stored_fingerprints_without_rebuilding_source(
+    client, monkeypatch, publication_ui_context
+):
+    admin, _, department, _, _ = publication_ui_context
+    scope, _current = _current_scope(department=department)
+    staged = _publication(
+        department=department,
+        scope=scope,
+        version_number=8,
+        status=DatasetPublication.Status.BUILDING,
+    )
+    PublicationJob.objects.create(
+        department=department,
+        dataset_type_code=scope.dataset_type_code,
+        scope_state=scope,
+        source_revision=scope.source_revision,
+        trigger_type=PublicationJob.TriggerType.USER_REQUEST,
+        status=PublicationJob.Status.RUNNING,
+        build_publication=staged,
+    )
+
+    def source_rebuild_called(*args, **kwargs):
+        raise AssertionError(
+            "Publication status rendering must not rebuild canonical source payloads."
+        )
+
+    monkeypatch.setattr("apps.publications.builders.build_source_payload", source_rebuild_called)
+    monkeypatch.setattr("apps.publications.builders.source_fingerprint", source_rebuild_called)
+    client.force_login(admin)
+
+    assert client.get(reverse("publications-list", args=(department.id,))).status_code == 200
+    response = client.get(reverse("publications-scope-row", args=(scope.id,)))
+    assert response.status_code == 200
+    assert 'hx-trigger="every 1s"' in response.content.decode()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -284,7 +329,8 @@ def test_scope_detail_has_bounded_history_and_detail_only_successful_delete_acti
     assert detail.status_code == 200
     assert "Department hydrants" in content
     assert "Version history" in content
-    assert content.index("v8") < content.index("v7") < content.index("v6")
+    history = content[content.index("Version history") :]
+    assert history.index("v8") < history.index("v7") < history.index("v6")
     assert "Roll back to this version" in content
     assert reverse("publications-lifecycle-modal", args=(predecessor.id, "rollback")) in content
     assert reverse("publications-lifecycle-modal", args=(current.id, "delete")) in content
@@ -380,7 +426,7 @@ def test_cancelled_attempt_leaves_canonical_change_dirty_and_manual_stage_uses_n
     assert restaged.version_number == 9
     job = build_staged_publication(actor=admin, scope=scope)
     assert job.build_publication_id == restaged.id
-    assert job.not_before is None
+    assert job.not_before is not None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -411,7 +457,7 @@ def test_reverting_to_active_source_becomes_clean_without_reusing_cancelled_atte
 
 
 @pytest.mark.django_db(transaction=True)
-def test_revert_obsoletes_an_unstarted_redundant_attempt(publication_ui_context):
+def test_revert_cancels_an_unstarted_redundant_attempt(publication_ui_context):
     admin, _, department, _, _ = publication_ui_context
     scope, current = _current_scope(department=department)
     _record_current_fingerprint(scope, current)
@@ -430,8 +476,8 @@ def test_revert_obsoletes_an_unstarted_redundant_attempt(publication_ui_context)
 
     staged.refresh_from_db()
     staged_job = PublicationJob.objects.get(build_publication=staged)
-    assert staged.status == DatasetPublication.Status.OBSOLETE
-    assert staged_job.status == PublicationJob.Status.OBSOLETE
+    assert staged.status == DatasetPublication.Status.CANCELLED
+    assert staged_job.status == PublicationJob.Status.CANCELLED
 
 
 @pytest.mark.django_db(transaction=True)

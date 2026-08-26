@@ -57,6 +57,7 @@ def _signed_publication(
         version_number=version,
         schema_version=1,
         source_revision=scope.source_revision,
+        source_snapshot={"test_attempt_version": version},
         status=DatasetPublication.Status.BUILDING,
         build_summary=_summary(scope.source_revision),
         change_summary={"changed": 0},

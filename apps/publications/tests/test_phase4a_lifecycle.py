@@ -138,6 +138,12 @@ def test_rollback_and_active_delete_require_scope_stability(lifecycle_scope):
     scope.current_published_publication = current
     scope.latest_built_publication = current
     scope.save(update_fields=("current_published_publication", "latest_built_publication"))
+    # This synthetic current attempt predates canonical source fixtures. Make
+    # its source intentionally differ so the staged-attempt lifecycle under
+    # test is reachable through the current fingerprint semantics.
+    current.source_fingerprint = "a" * 64
+    current.source_snapshot = {"synthetic": "current"}
+    current.save(update_fields=("source_fingerprint", "source_snapshot"))
     staged_job = enqueue_publication_job(
         department=department,
         dataset_type_code=scope.dataset_type_code,
