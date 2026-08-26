@@ -1,17 +1,30 @@
 """Phase 4B scope-centric Publications UI regressions."""
 
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from django.db import close_old_connections
 from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
+from apps.publications import services
+from apps.publications.builders import build_source_payload, source_fingerprint
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.paths import publication_artifact_relative_path
-from apps.publications.services import mark_dirty
+from apps.publications.registry import get_dataset_definition
+from apps.publications.services import (
+    build_staged_publication,
+    claim_next_job,
+    delete_staged_publication,
+    mark_dirty,
+    stage_publication_update,
+)
+from apps.reference_data.services import create_hydrant, delete_hydrant, update_hydrant
 
 
 @pytest.fixture
@@ -80,6 +93,20 @@ def _current_scope(*, department, dataset_type_code="department_hydrants"):
     scope.current_published_publication = current
     scope.save(update_fields=("latest_built_publication", "current_published_publication"))
     return scope, current
+
+
+def _record_current_fingerprint(scope, current):
+    current.source_fingerprint = source_fingerprint(
+        definition=get_dataset_definition(scope.dataset_type_code),
+        department=scope.department,
+        station=scope.station,
+    )
+    current.source_snapshot = build_source_payload(
+        definition=get_dataset_definition(scope.dataset_type_code),
+        department=scope.department,
+        station=scope.station,
+    )
+    current.save(update_fields=("source_fingerprint", "source_snapshot"))
 
 
 @pytest.mark.django_db(transaction=True)
@@ -182,6 +209,7 @@ def test_staged_action_modal_is_scope_authorized_and_explains_history(
 
     list_content = client.get(reverse("publications-list", args=(department.id,))).content.decode()
     assert "Delete staged" in list_content
+    assert "Build now" in list_content
     assert "Roll back" not in list_content
     modal = client.get(modal_url, HTTP_HX_REQUEST="true")
     assert modal.status_code == 200
@@ -191,6 +219,13 @@ def test_staged_action_modal_is_scope_authorized_and_explains_history(
     session = client.session
     session["recent_reauthentication_at"] = time.time()
     session.save()
+    build_now = client.post(
+        reverse("publications-scope-build-now", args=(scope.id,)), HTTP_HX_REQUEST="true"
+    )
+    assert build_now.status_code == 200
+    assert 'hx-trigger="every 1s"' in build_now.content.decode()
+    assert DatasetPublication.objects.get(pk=staged.id).version_number == 8
+
     deleted = client.post(modal_url, HTTP_HX_REQUEST="true")
     assert deleted.status_code == 204
     assert deleted["HX-Redirect"] == reverse("publications-scope-detail", args=(scope.id,))
@@ -303,3 +338,286 @@ def test_filters_are_server_side_and_count_scopes_not_attempts(client, publicati
     assert "Showing 1 of 1 publication scope" in content
     assert "Station personnel · UIS" in content
     assert "Department hydrants" not in content
+
+
+@pytest.mark.django_db(transaction=True)
+def test_cancelled_attempt_leaves_canonical_change_dirty_and_manual_stage_uses_new_version(
+    client, publication_ui_context
+):
+    admin, _, department, _, _ = publication_ui_context
+    scope, current = _current_scope(department=department)
+    _record_current_fingerprint(scope, current)
+    hydrant = create_hydrant(
+        actor=admin,
+        department=department,
+        longitude=10.0,
+        latitude=53.0,
+        external_identifier="FB-003",
+    )
+    staged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+    assert staged.version_number == 8
+
+    delete_staged_publication(actor=admin, publication=staged)
+    staged.refresh_from_db()
+    assert staged.status == DatasetPublication.Status.OBSOLETE
+    assert hydrant.external_identifier == "FB-003"
+
+    client.force_login(admin)
+    content = client.get(reverse("publications-list", args=(department.id,))).content.decode()
+    assert "Changes not published" in content
+    assert "Stage update" in content
+
+    stage_publication_update(
+        actor=admin,
+        department=department,
+        dataset_type_code=scope.dataset_type_code,
+    )
+    restaged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+    assert restaged.version_number == 9
+    job = build_staged_publication(actor=admin, scope=scope)
+    assert job.build_publication_id == restaged.id
+    assert job.not_before is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reverting_to_active_source_becomes_clean_without_reusing_cancelled_attempt(
+    client, publication_ui_context
+):
+    admin, _, department, _, _ = publication_ui_context
+    scope, current = _current_scope(department=department)
+    _record_current_fingerprint(scope, current)
+    hydrant = create_hydrant(
+        actor=admin,
+        department=department,
+        longitude=10.0,
+        latitude=53.0,
+        external_identifier="FB-003",
+    )
+    staged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+    delete_staged_publication(actor=admin, publication=staged)
+    delete_hydrant(actor=admin, hydrant=hydrant)
+
+    client.force_login(admin)
+    content = client.get(reverse("publications-list", args=(department.id,))).content.decode()
+    assert "Changes not published" not in content
+    assert "Stage update" not in content
+    assert DatasetPublication.objects.filter(scope_state=scope).count() == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revert_obsoletes_an_unstarted_redundant_attempt(publication_ui_context):
+    admin, _, department, _, _ = publication_ui_context
+    scope, current = _current_scope(department=department)
+    _record_current_fingerprint(scope, current)
+    hydrant = create_hydrant(
+        actor=admin,
+        department=department,
+        longitude=10.0,
+        latitude=53.0,
+        external_identifier="FB-003",
+    )
+    staged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+
+    delete_hydrant(actor=admin, hydrant=hydrant)
+
+    staged.refresh_from_db()
+    staged_job = PublicationJob.objects.get(build_publication=staged)
+    assert staged.status == DatasetPublication.Status.OBSOLETE
+    assert staged_job.status == PublicationJob.Status.OBSOLETE
+
+
+@pytest.mark.django_db(transaction=True)
+def test_staged_candidate_coalesces_latest_source_and_freezes_when_claimed(publication_ui_context):
+    admin, _, department, _, _ = publication_ui_context
+    scope, current = _current_scope(department=department)
+    _record_current_fingerprint(scope, current)
+    hydrant = create_hydrant(
+        actor=admin,
+        department=department,
+        longitude=10.0,
+        latitude=53.0,
+        external_identifier="FB-002",
+        street="First street",
+    )
+    staged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+    first_fingerprint = staged.source_fingerprint
+
+    update_hydrant(actor=admin, hydrant=hydrant, street="Second street")
+    staged.refresh_from_db()
+    assert DatasetPublication.objects.filter(scope_state=scope).count() == 2
+    assert staged.status == DatasetPublication.Status.STAGED
+    assert staged.source_fingerprint != first_fingerprint
+
+    build_staged_publication(actor=admin, scope=scope)
+    claimed = claim_next_job()
+    assert claimed is not None
+    staged.refresh_from_db()
+    frozen = staged.source_fingerprint
+    assert frozen == source_fingerprint(
+        definition=get_dataset_definition(scope.dataset_type_code),
+        department=department,
+        station=None,
+    )
+    update_hydrant(actor=admin, hydrant=hydrant, street="Third street")
+    staged.refresh_from_db()
+    assert staged.status == DatasetPublication.Status.BUILDING
+    assert staged.source_fingerprint == frozen
+
+
+@pytest.mark.django_db(transaction=True)
+def test_inspect_changes_uses_the_latest_coalesced_staged_snapshot(client, publication_ui_context):
+    admin, _, department, _, _ = publication_ui_context
+    scope, current = _current_scope(department=department)
+    hydrant = create_hydrant(
+        actor=admin,
+        department=department,
+        longitude=10.0,
+        latitude=53.0,
+        external_identifier="FB-002",
+        street="First street",
+    )
+    initial_staged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+    delete_staged_publication(actor=admin, publication=initial_staged)
+    _record_current_fingerprint(scope, current)
+
+    update_hydrant(actor=admin, hydrant=hydrant, street="Second street")
+    staged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+    update_hydrant(actor=admin, hydrant=hydrant, street="Third street")
+    staged.refresh_from_db()
+    assert staged.source_snapshot["features"][0]["properties"]["street"] == "Third street"
+
+    client.force_login(admin)
+    response = client.get(reverse("publications-inspect-changes", args=(scope.id,)))
+
+    assert response.status_code == 200
+    content = response.content.decode()
+    assert f"Changes in publication v{staged.version_number}" in content
+    assert "Street: First street → Third street" in content
+
+
+@pytest.mark.django_db(transaction=True)
+def test_claim_freeze_wins_over_later_canonical_edit_with_real_scope_lock(
+    monkeypatch, publication_ui_context
+):
+    admin, _, department, _, _ = publication_ui_context
+    scope, current = _current_scope(department=department)
+    hydrant = create_hydrant(
+        actor=admin,
+        department=department,
+        longitude=10.0,
+        latitude=53.0,
+        external_identifier="FB-002",
+        street="First street",
+    )
+    initial_staged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+    delete_staged_publication(actor=admin, publication=initial_staged)
+    _record_current_fingerprint(scope, current)
+    update_hydrant(actor=admin, hydrant=hydrant, street="Second street")
+    staged = DatasetPublication.objects.get(
+        scope_state=scope, status=DatasetPublication.Status.STAGED
+    )
+    build_staged_publication(actor=admin, scope=scope)
+
+    original_snapshot = services._current_source_snapshot
+    snapshot_taken = threading.Event()
+    release_claim = threading.Event()
+    blocked_once = False
+
+    def pause_after_claim_snapshot(*, scope):
+        nonlocal blocked_once
+        snapshot = original_snapshot(scope=scope)
+        if threading.current_thread() is not threading.main_thread() and not blocked_once:
+            blocked_once = True
+            snapshot_taken.set()
+            assert release_claim.wait(timeout=10)
+        return snapshot
+
+    monkeypatch.setattr(services, "_current_source_snapshot", pause_after_claim_snapshot)
+
+    def claim_in_worker():
+        close_old_connections()
+        try:
+            return claim_next_job()
+        finally:
+            close_old_connections()
+
+    def mutate_after_freeze_started():
+        close_old_connections()
+        try:
+            worker_admin = User.objects.get(pk=admin.pk)
+            worker_hydrant = type(hydrant).objects.get(pk=hydrant.pk)
+            update_hydrant(actor=worker_admin, hydrant=worker_hydrant, street="Third street")
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        claim = executor.submit(claim_in_worker)
+        assert snapshot_taken.wait(timeout=10)
+        mutation = executor.submit(mutate_after_freeze_started)
+        release_claim.set()
+        claimed = claim.result(timeout=10)
+        mutation.result(timeout=10)
+
+    assert claimed is not None
+    staged.refresh_from_db()
+    assert staged.status == DatasetPublication.Status.BUILDING
+    frozen_fingerprint = staged.source_fingerprint
+    assert frozen_fingerprint != source_fingerprint(
+        definition=get_dataset_definition(scope.dataset_type_code),
+        department=department,
+        station=None,
+    )
+    assert not PublicationJob.objects.filter(
+        scope_state=scope, status=PublicationJob.Status.PENDING
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_noop_hydrant_edit_does_not_mark_scope_or_stage_a_publication(publication_ui_context):
+    admin, _, department, _, _ = publication_ui_context
+    hydrant = create_hydrant(
+        actor=admin,
+        department=department,
+        longitude=10.0,
+        latitude=53.0,
+        external_identifier="FB-002",
+        street="Main Street",
+    )
+    scope = DatasetScopeState.objects.get(
+        department=department, dataset_type_code="department_hydrants"
+    )
+    revision = scope.source_revision
+    attempts = DatasetPublication.objects.filter(scope_state=scope).count()
+
+    update_hydrant(
+        actor=admin,
+        hydrant=hydrant,
+        longitude=10.0,
+        latitude=53.0,
+        external_identifier="FB-002",
+        street="Main Street",
+        house_number="",
+        hydrant_type="",
+        diameter_mm=None,
+        status="ACTIVE",
+    )
+
+    scope.refresh_from_db()
+    assert scope.source_revision == revision
+    assert DatasetPublication.objects.filter(scope_state=scope).count() == attempts

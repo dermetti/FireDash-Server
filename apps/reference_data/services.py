@@ -118,6 +118,16 @@ def confirm_hydrant_preview(*, actor, department, preview_id) -> tuple[int, int,
 def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
     hydrant = Hydrant.objects.select_for_update().select_related("department").get(pk=hydrant.pk)
     require_department_admin(actor, hydrant.department)
+    previous_publication_values = (
+        hydrant.external_identifier,
+        hydrant.street,
+        hydrant.house_number,
+        hydrant.hydrant_type,
+        hydrant.diameter_mm,
+        hydrant.status,
+        hydrant.location.ewkt,
+    )
+    previous_flow_information = hydrant.flow_information
     previous_active = hydrant.active
     for field in ("external_identifier", "street", "house_number", "hydrant_type", "status"):
         if field in values:
@@ -128,6 +138,18 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
         hydrant.diameter_mm = values["diameter_mm"] or None
     if "longitude" in values and "latitude" in values:
         hydrant.location = Point(float(values["longitude"]), float(values["latitude"]), srid=4326)
+    publication_changed = previous_publication_values != (
+        hydrant.external_identifier,
+        hydrant.street,
+        hydrant.house_number,
+        hydrant.hydrant_type,
+        hydrant.diameter_mm,
+        hydrant.status,
+        hydrant.location.ewkt,
+    )
+    changed = publication_changed or hydrant.flow_information != previous_flow_information
+    if not changed:
+        return hydrant
     hydrant.save()
     new_active = hydrant.active
     record_event(
@@ -144,7 +166,10 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
         target_uuid=hydrant.id,
         metadata={"status": hydrant.status, "diameter_mm": hydrant.diameter_mm},
     )
-    mark_dirty(department=hydrant.department, dataset_type_code="department_hydrants", actor=actor)
+    if publication_changed:
+        mark_dirty(
+            department=hydrant.department, dataset_type_code="department_hydrants", actor=actor
+        )
     return hydrant
 
 
@@ -209,6 +234,17 @@ def update_fire_plan(*, actor, fire_plan: FirePlan, **values) -> FirePlan:
         FirePlan.objects.select_for_update().select_related("department").get(pk=fire_plan.pk)
     )
     require_department_admin(actor, fire_plan.department)
+    previous = (
+        fire_plan.external_identifier,
+        fire_plan.object_name,
+        fire_plan.address,
+        fire_plan.postal_code,
+        fire_plan.city,
+        fire_plan.fsd_location,
+        fire_plan.bmz_location,
+        fire_plan.rwa_info,
+        fire_plan.location.ewkt if fire_plan.location is not None else None,
+    )
     for field in (
         "external_identifier",
         "object_name",
@@ -228,6 +264,19 @@ def update_fire_plan(*, actor, fire_plan: FirePlan, **values) -> FirePlan:
             if longitude is not None and latitude is not None
             else None
         )
+    current = (
+        fire_plan.external_identifier,
+        fire_plan.object_name,
+        fire_plan.address,
+        fire_plan.postal_code,
+        fire_plan.city,
+        fire_plan.fsd_location,
+        fire_plan.bmz_location,
+        fire_plan.rwa_info,
+        fire_plan.location.ewkt if fire_plan.location is not None else None,
+    )
+    if current == previous:
+        return fire_plan
     fire_plan.full_clean()
     fire_plan.save()
     record_event(
@@ -308,9 +357,24 @@ def update_klgv_plan(*, actor, klgv_plan: KlgvPlan, **values) -> KlgvPlan:
         KlgvPlan.objects.select_for_update().select_related("department").get(pk=klgv_plan.pk)
     )
     require_department_admin(actor, klgv_plan.department)
+    previous = (
+        klgv_plan.external_identifier,
+        klgv_plan.object_name,
+        klgv_plan.address,
+        klgv_plan.postal_code,
+        klgv_plan.city,
+    )
     for field in ("external_identifier", "object_name", "address", "postal_code", "city"):
         if field in values:
             setattr(klgv_plan, field, str(values[field] or "").strip())
+    if (
+        klgv_plan.external_identifier,
+        klgv_plan.object_name,
+        klgv_plan.address,
+        klgv_plan.postal_code,
+        klgv_plan.city,
+    ) == previous:
+        return klgv_plan
     klgv_plan.full_clean()
     klgv_plan.save()
     record_event(

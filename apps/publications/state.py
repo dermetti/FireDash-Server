@@ -11,6 +11,7 @@ from typing import Any
 from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 
+from apps.publications.builders import source_fingerprint
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.registry import get_dataset_definition
 
@@ -64,6 +65,8 @@ def compute_scope_state(
     active_job_status: str | None,
     active_job_not_before,
     now,
+    latest_source_fingerprint: str | None = None,
+    current_source_fingerprint: str | None = None,
 ) -> str:
     """Derive the single operational state for one scope from its inputs."""
     if active_job_status == PublicationJob.Status.RUNNING:
@@ -78,7 +81,15 @@ def compute_scope_state(
         return BUILDING
     if latest_status == DatasetPublication.Status.STAGED:
         return UPDATE_QUEUED
-    if latest_status == DatasetPublication.Status.FAILED:
+    if (
+        latest_status == DatasetPublication.Status.FAILED
+        and dirty
+        and (
+            # Legacy attempts predate source fingerprints; retain their former
+            # failed-state presentation until new attempts establish the value.
+            not latest_source_fingerprint or latest_source_fingerprint == current_source_fingerprint
+        )
+    ):
         return FAILED
     if latest_built_status == DatasetPublication.Status.READY_FOR_REVIEW:
         return READY_TO_PUBLISH
@@ -109,6 +120,7 @@ def scope_operational_states(
             latest_publication_id=Subquery(latest.values("id")[:1]),
             latest_publication_version=Subquery(latest.values("version_number")[:1]),
             latest_build_error=Subquery(latest.values("build_error")[:1]),
+            latest_source_fingerprint=Subquery(latest.values("source_fingerprint")[:1]),
             latest_built_at=Subquery(latest.values("created_at")[:1]),
         )
         .order_by("dataset_type_code", "station__name")
@@ -130,9 +142,23 @@ def scope_operational_states(
         job = active_jobs.get(scope.id)
         latest_built = scope.latest_built_publication
         current_published = scope.current_published_publication
+        current_fingerprint = source_fingerprint(
+            definition=definition, department=scope.department, station=scope.station
+        )
+        if current_published is None:
+            dirty = True
+        elif current_published.source_fingerprint:
+            dirty = current_fingerprint != current_published.source_fingerprint
+        else:
+            # Historical publications cannot truthfully be reconstructed from
+            # their encrypted artifacts. Keep legacy revision behavior only
+            # until the next successful publication establishes the fingerprint.
+            dirty = scope.source_revision != current_published.source_revision
         state = compute_scope_state(
-            dirty=scope.dirty_since is not None,
+            dirty=dirty,
             latest_status=scope.latest_status,
+            latest_source_fingerprint=scope.latest_source_fingerprint,
+            current_source_fingerprint=current_fingerprint,
             latest_built_status=latest_built.status if latest_built else None,
             current_published=current_published is not None,
             active_job_status=job.status if job else None,
@@ -154,6 +180,8 @@ def scope_operational_states(
                 "state_label": STATE_LABELS[state],
                 "state_badge": STATE_BADGE[state],
                 "source_revision": scope.source_revision,
+                "source_fingerprint": current_fingerprint,
+                "is_dirty": dirty,
                 "distributed_version": (
                     current_published.version_number if current_published else None
                 ),
@@ -182,6 +210,22 @@ def scope_operational_states(
                 "active_job_publication_id": job.build_publication_id if job else None,
                 "active_job_publication_version": (
                     job.build_publication.version_number if job and job.build_publication else None
+                ),
+                "should_poll": (
+                    state == BUILDING
+                    or (
+                        state in (UPDATE_QUEUED, QUEUED)
+                        and job is not None
+                        # Poll only a staged candidate the worker can claim
+                        # now.  This lets automatic pickup become a BUILDING
+                        # row without reloading the page, without polling a
+                        # delayed data-change job for hours.
+                        and (
+                            job.trigger_type == PublicationJob.TriggerType.USER_REQUEST
+                            or job.not_before is None
+                            or job.not_before <= now
+                        )
+                    )
                 ),
             }
         )

@@ -20,11 +20,40 @@ logger = logging.getLogger(__name__)
 MAX_HYDRANT_STATUS_BUCKETS = 50
 BUILDERS: dict[str, Callable[..., dict[str, object]]] = {}
 ARTIFACT_BUILDERS: dict[str, Callable[..., bytes]] = {}
+SOURCE_BUILDERS: dict[str, Callable[..., dict[str, object]]] = {}
 VALIDATORS: dict[str, Callable[..., None]] = {}
 
 
 class PublicationBuildError(ValueError):
     pass
+
+
+def source_fingerprint(*, definition: DatasetTypeDefinition, department, station) -> str:
+    """Return the stable hash of the logical content distributed for a scope.
+
+    The representation intentionally excludes source revisions, build times,
+    ciphertext, signatures and artifact metadata.  It is therefore safe to
+    compare with a successful publication after a canonical change was later
+    reverted.
+    """
+    return source_fingerprint_for_payload(
+        build_source_payload(definition=definition, department=department, station=station)
+    )
+
+
+def source_fingerprint_for_payload(payload: dict[str, object]) -> str:
+    return hashlib.sha256(_json_bytes(payload)).hexdigest()
+
+
+def build_source_payload(
+    *, definition: DatasetTypeDefinition, department, station
+) -> dict[str, object]:
+    """Build deterministic publishable source content without volatile fields."""
+    try:
+        builder = SOURCE_BUILDERS[definition.builder_service]
+    except KeyError as error:
+        raise PublicationBuildError("No source fingerprint builder is available.") from error
+    return builder(department=department, station=station)
 
 
 def build_summary(
@@ -154,38 +183,33 @@ def _build_klgv_plans(*, department, station, source_revision: int) -> dict[str,
     }
 
 
-def _artifact_klgv_plans(*, department, station, source_revision: int) -> bytes:
+def _artifact_klgv_plans(
+    *, department, station, source_revision: int, source_snapshot=None
+) -> bytes:
     if station is not None:
         raise PublicationBuildError("KLGV plan artifact requires a department scope.")
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        plans = []
-        for plan in KlgvPlan.objects.filter(department=department, active=True).order_by("id"):
+        plans = (
+            source_snapshot or _klgv_source_payload(department=department, station=station)
+        ).get("klgv_plans", [])
+        for entry in plans:
+            try:
+                plan = KlgvPlan.objects.get(pk=entry["id"], department=department)
+            except KlgvPlan.DoesNotExist as error:
+                raise PublicationBuildError(
+                    "Accepted KLGV document is no longer available."
+                ) from error
             try:
                 document = read_accepted_pdf(
                     document_key=plan.path, accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT
                 )
             except PdfBundleError as error:
                 raise PublicationBuildError("Accepted KLGV document is unavailable.") from error
-            if hashlib.sha256(document).hexdigest() != plan.sha256:
+            if hashlib.sha256(document).hexdigest() != entry["sha256"]:
                 raise PublicationBuildError("Accepted KLGV document hash does not match metadata.")
             archive_path = f"plans/{plan.id}.pdf"
             archive.writestr(_zip_info(archive_path), document)
-            plans.append(
-                {
-                    "id": str(plan.id),
-                    "external_identifier": plan.external_identifier or None,
-                    "object_name": plan.object_name,
-                    "address": plan.address,
-                    "postal_code": plan.postal_code,
-                    "city": plan.city,
-                    "longitude": plan.location.x if plan.location is not None else None,
-                    "latitude": plan.location.y if plan.location is not None else None,
-                    "sha256": plan.sha256,
-                    "page_count": plan.page_count,
-                    "path": archive_path,
-                }
-            )
         archive.writestr(
             _zip_info("manifest.json"),
             _json_bytes({"source_revision": source_revision, "klgv_plans": plans}),
@@ -194,11 +218,19 @@ def _artifact_klgv_plans(*, department, station, source_revision: int) -> bytes:
 
 
 def build_artifact(
-    *, definition: DatasetTypeDefinition, department, station, source_revision: int
+    *,
+    definition: DatasetTypeDefinition,
+    department,
+    station,
+    source_revision: int,
+    source_snapshot=None,
 ) -> bytes:
     try:
         artifact = ARTIFACT_BUILDERS[definition.builder_service](
-            department=department, station=station, source_revision=source_revision
+            department=department,
+            station=station,
+            source_revision=source_revision,
+            source_snapshot=source_snapshot,
         )
     except KeyError as error:
         raise PublicationBuildError("No registered artifact builder is available.") from error
@@ -236,78 +268,39 @@ def _zip_info(name: str) -> zipfile.ZipInfo:
     return info
 
 
-def _artifact_hydrants(*, department, station, source_revision: int) -> bytes:
+def _artifact_hydrants(*, department, station, source_revision: int, source_snapshot=None) -> bytes:
     if station is not None:
         raise PublicationBuildError("Hydrant artifact requires a department scope.")
-    features = []
-    for hydrant in Hydrant.objects.filter(department=department, status="ACTIVE").order_by("id"):
-        features.append(
-            {
-                "type": "Feature",
-                "id": str(hydrant.id),
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [hydrant.location.x, hydrant.location.y],
-                },
-                "properties": {
-                    "external_identifier": hydrant.external_identifier,
-                    "street": hydrant.street or None,
-                    "house_number": hydrant.house_number or None,
-                    "hydrant_type": hydrant.hydrant_type,
-                    "diameter_mm": hydrant.diameter_mm,
-                    "status": hydrant.status,
-                },
-            }
-        )
-    return _json_bytes(
-        {
-            "type": "FeatureCollection",
-            "features": features,
-            "schema_version": 1,
-            "source_revision": source_revision,
-        }
-    )
+    payload = source_snapshot or _hydrant_source_payload(department=department, station=station)
+    return _json_bytes(payload | {"source_revision": source_revision})
 
 
-def _artifact_personnel(*, department, station, source_revision: int) -> bytes:
+def _artifact_personnel(
+    *, department, station, source_revision: int, source_snapshot=None
+) -> bytes:
     if station is None or station.department_id != department.id:
         raise PublicationBuildError("Personnel artifact requires a station in the department.")
-    now = timezone.now()
-    assignments = (
-        PersonnelStationAssignment.objects.filter(
-            station=station,
-            person__department=department,
-            person__active=True,
-            ended_at__isnull=True,
-            valid_from__lte=now,
-        )
-        .filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now))
-        .select_related("person")
-        .order_by("person_id")
-    )
-    people = [
-        {
-            "id": str(a.person_id),
-            "display_name": a.person.display_name,
-            "incident_commander_eligible": a.person.incident_commander_eligible,
-            "commander_email": a.person.incident_commander_email
-            if a.person.email_verified_at
-            else None,
-        }
-        for a in assignments
-    ]
-    return _json_bytes(
-        {"station_id": str(station.id), "source_revision": source_revision, "people": people}
-    )
+    payload = source_snapshot or _personnel_source_payload(department=department, station=station)
+    return _json_bytes(payload | {"source_revision": source_revision})
 
 
-def _artifact_fire_plans(*, department, station, source_revision: int) -> bytes:
+def _artifact_fire_plans(
+    *, department, station, source_revision: int, source_snapshot=None
+) -> bytes:
     if station is not None:
         raise PublicationBuildError("Fire-plan artifact requires a department scope.")
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        manifest = []
-        for plan in FirePlan.objects.filter(department=department, active=True).order_by("id"):
+        manifest = (
+            source_snapshot or _fire_plan_source_payload(department=department, station=station)
+        ).get("fire_plans", [])
+        for entry in manifest:
+            try:
+                plan = FirePlan.objects.get(pk=entry["id"], department=department)
+            except FirePlan.DoesNotExist as error:
+                raise PublicationBuildError(
+                    "Accepted fire-plan document is no longer available."
+                ) from error
             try:
                 document = read_accepted_pdf(
                     document_key=plan.document_key,
@@ -317,31 +310,12 @@ def _artifact_fire_plans(*, department, station, source_revision: int) -> bytes:
                 raise PublicationBuildError(
                     "Accepted fire-plan document is unavailable."
                 ) from error
-            if hashlib.sha256(document).hexdigest() != plan.sha256:
+            if hashlib.sha256(document).hexdigest() != entry["sha256"]:
                 raise PublicationBuildError(
                     "Accepted fire-plan document hash does not match metadata."
                 )
             archive_name = f"plans/{plan.id}.pdf"
             archive.writestr(_zip_info(archive_name), document)
-            plan_location = plan.location
-            manifest.append(
-                {
-                    "id": str(plan.id),
-                    "external_identifier": plan.external_identifier or None,
-                    "object_name": plan.object_name or None,
-                    "address": plan.address or None,
-                    "postal_code": plan.postal_code or None,
-                    "city": plan.city or None,
-                    "fsd_location": plan.fsd_location or None,
-                    "bmz_location": plan.bmz_location or None,
-                    "rwa_info": plan.rwa_info or None,
-                    "longitude": plan_location.x if plan_location is not None else None,
-                    "latitude": plan_location.y if plan_location is not None else None,
-                    "sha256": plan.sha256,
-                    "page_count": plan.page_count,
-                    "path": archive_name,
-                }
-            )
         archive.writestr(
             _zip_info("manifest.json"),
             _json_bytes({"source_revision": source_revision, "fire_plans": manifest}),
@@ -362,6 +336,130 @@ BUILDERS.update(
     }
 )
 VALIDATORS["summary"] = validate_summary
+
+
+def _hydrant_source_payload(*, department, station) -> dict[str, object]:
+    if station is not None:
+        raise PublicationBuildError("Hydrant source requires a department scope.")
+    features = []
+    for hydrant in Hydrant.objects.filter(department=department, status="ACTIVE").order_by("id"):
+        features.append(
+            {
+                "type": "Feature",
+                "id": str(hydrant.id),
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [hydrant.location.x, hydrant.location.y],
+                },
+                "properties": {
+                    "external_identifier": hydrant.external_identifier,
+                    "street": hydrant.street or None,
+                    "house_number": hydrant.house_number or None,
+                    "hydrant_type": hydrant.hydrant_type,
+                    "diameter_mm": hydrant.diameter_mm,
+                    "status": hydrant.status,
+                },
+            }
+        )
+    return {"type": "FeatureCollection", "features": features, "schema_version": 1}
+
+
+def _personnel_source_payload(*, department, station) -> dict[str, object]:
+    if station is None or station.department_id != department.id:
+        raise PublicationBuildError("Personnel source requires a station in the department.")
+    now = timezone.now()
+    assignments = (
+        PersonnelStationAssignment.objects.filter(
+            station=station,
+            person__department=department,
+            person__active=True,
+            ended_at__isnull=True,
+            valid_from__lte=now,
+        )
+        .filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now))
+        .select_related("person")
+        .order_by("person_id")
+    )
+    return {
+        "station_id": str(station.id),
+        "people": [
+            {
+                "id": str(assignment.person_id),
+                "display_name": assignment.person.display_name,
+                "incident_commander_eligible": assignment.person.incident_commander_eligible,
+                "commander_email": (
+                    assignment.person.incident_commander_email
+                    if assignment.person.email_verified_at
+                    else None
+                ),
+            }
+            for assignment in assignments
+        ],
+    }
+
+
+def _fire_plan_source_manifest(*, department, station) -> list[dict[str, object]]:
+    if station is not None:
+        raise PublicationBuildError("Fire-plan source requires a department scope.")
+    return [
+        {
+            "id": str(plan.id),
+            "external_identifier": plan.external_identifier or None,
+            "object_name": plan.object_name or None,
+            "address": plan.address or None,
+            "postal_code": plan.postal_code or None,
+            "city": plan.city or None,
+            "fsd_location": plan.fsd_location or None,
+            "bmz_location": plan.bmz_location or None,
+            "rwa_info": plan.rwa_info or None,
+            "longitude": plan.location.x if plan.location is not None else None,
+            "latitude": plan.location.y if plan.location is not None else None,
+            "sha256": plan.sha256,
+            "page_count": plan.page_count,
+            "path": f"plans/{plan.id}.pdf",
+        }
+        for plan in FirePlan.objects.filter(department=department, active=True).order_by("id")
+    ]
+
+
+def _fire_plan_source_payload(*, department, station) -> dict[str, object]:
+    return {"fire_plans": _fire_plan_source_manifest(department=department, station=station)}
+
+
+def _klgv_source_manifest(*, department, station) -> list[dict[str, object]]:
+    if station is not None:
+        raise PublicationBuildError("KLGV plan source requires a department scope.")
+    return [
+        {
+            "id": str(plan.id),
+            "external_identifier": plan.external_identifier or None,
+            "object_name": plan.object_name,
+            "address": plan.address,
+            "postal_code": plan.postal_code,
+            "city": plan.city,
+            "longitude": plan.location.x if plan.location is not None else None,
+            "latitude": plan.location.y if plan.location is not None else None,
+            "sha256": plan.sha256,
+            "page_count": plan.page_count,
+            "path": f"plans/{plan.id}.pdf",
+        }
+        for plan in KlgvPlan.objects.filter(department=department, active=True).order_by("id")
+    ]
+
+
+def _klgv_source_payload(*, department, station) -> dict[str, object]:
+    return {"klgv_plans": _klgv_source_manifest(department=department, station=station)}
+
+
+SOURCE_BUILDERS.update(
+    {
+        "department_hydrants": _hydrant_source_payload,
+        "department_fire_plans": _fire_plan_source_payload,
+        "station_personnel": _personnel_source_payload,
+        "department_klgv_plans": _klgv_source_payload,
+        "test_department_incidents": lambda **_: {"incidents": []},
+    }
+)
 ARTIFACT_BUILDERS.update(
     {
         "department_hydrants": _artifact_hydrants,

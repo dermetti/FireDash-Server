@@ -8,13 +8,14 @@
 
 <section class="mb-4">{% include "publications/_scope_detail_status.html" %}</section>
 
-{% if row.actions.delete_staged or row.actions.cancel_build or row.actions.build_update %}
+{% if row.actions.delete_staged or row.actions.cancel_build or row.actions.build_now or row.actions.stage_update or row.actions.inspect_changes %}
 <section class="mb-4">
   <h2 class="h5 mb-3">Actions</h2>
   <div class="d-flex gap-2 flex-wrap">
-    {% if row.actions.delete_staged %}<button class="btn btn-outline-danger" type="button" hx-get="{% url 'publications-lifecycle-modal' row.update_publication_id 'delete-staged' %}" hx-target="#publication-action-modal-container">Delete staged</button>{% endif %}
+    {% if row.actions.inspect_changes %}<button class="btn btn-outline-secondary" type="button" hx-get="{% url 'publications-inspect-changes' scope.id %}" hx-target="#publication-action-modal-container">Inspect changes</button>{% endif %}
+    {% if row.actions.delete_staged %}<form method="post" action="{% url 'publications-scope-build-now' scope.id %}">{% csrf_token %}<button class="btn btn-primary">Build now</button></form><button class="btn btn-outline-danger" type="button" hx-get="{% url 'publications-lifecycle-modal' row.update_publication_id 'delete-staged' %}" hx-target="#publication-action-modal-container">Delete staged</button>{% endif %}
     {% if row.actions.cancel_build %}<button class="btn btn-outline-warning" type="button" hx-get="{% url 'publications-lifecycle-modal' row.update_publication_id 'cancel' %}" hx-target="#publication-action-modal-container">Cancel build</button>{% endif %}
-    {% if row.actions.build_update %}<form method="post" action="{% url 'publications-scope-rebuild' scope.id %}">{% csrf_token %}<button class="btn btn-primary">Build update</button></form>{% endif %}
+    {% if row.actions.stage_update %}<form method="post" action="{% url 'publications-scope-stage-update' scope.id %}">{% csrf_token %}<button class="btn btn-primary">Stage update</button></form>{% endif %}
   </div>
 </section>
 {% endif %}

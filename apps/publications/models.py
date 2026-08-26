@@ -111,6 +111,14 @@ class DatasetPublication(models.Model):
     version_number = models.PositiveBigIntegerField()
     schema_version = models.PositiveIntegerField()
     source_revision = models.PositiveBigIntegerField()
+    # The deterministic logical input to this immutable attempt.  This is
+    # deliberately separate from artifact_sha256: encrypted artifact bytes can
+    # change without any canonical dataset content changing.
+    source_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    # The canonical representation retained for source-aware lifecycle comparison
+    # and a frozen build input. It contains logical distributed records/manifest
+    # metadata, never ciphertext, PDF bytes, or signing material.
+    source_snapshot = models.JSONField(default=dict)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.BUILDING)
     build_summary = models.JSONField(default=dict)
     change_summary = models.JSONField(default=dict)

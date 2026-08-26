@@ -209,7 +209,9 @@ def test_historical_terminal_candidate_consumes_its_immutable_attempt_version(de
 
 
 @pytest.mark.django_db(transaction=True)
-def test_edits_during_running_build_requeue_after_obsolete(debounce_context):
+def test_revision_only_change_during_running_build_does_not_requeue_identical_source(
+    debounce_context,
+):
     admin, department, station_a, _ = debounce_context
     mark_dirty(
         department=department, station=station_a, dataset_type_code="station_personnel", actor=admin
@@ -226,18 +228,17 @@ def test_edits_during_running_build_requeue_after_obsolete(debounce_context):
     )
     assert PublicationJob.objects.filter(status__in=("PENDING", "RUNNING")).count() == 1
 
-    stale = finalize_publication_job(
+    finalized = finalize_publication_job(
         job_id=job.id,
         summary=_hydrant_summary(job.source_revision),
         artifact=_artifact_metadata(department.id, job.build_publication_id),
     )
-    stale.refresh_from_db()
-    assert stale.status == PublicationJob.Status.OBSOLETE
+    finalized.refresh_from_db()
+    assert finalized.status == PublicationJob.Status.SUCCEEDED
     pending = PublicationJob.objects.filter(
         department=department, status=PublicationJob.Status.PENDING
     )
-    assert pending.count() == 1
-    assert pending.get().source_revision == 2
+    assert pending.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)

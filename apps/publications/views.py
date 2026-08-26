@@ -13,16 +13,20 @@ from apps.accounts.reauth import require_recent_reauthentication
 from apps.authorization.scopes import active_department_ids
 from apps.authorization.services import require_department_admin
 from apps.organizations.models import Department
+from apps.publications.builders import build_source_payload
+from apps.publications.diffs import source_diff
 from apps.publications.models import DatasetPublication, DatasetScopeState
 from apps.publications.registry import get_dataset_definition
 from apps.publications.services import (
     PublicationError,
+    build_staged_publication,
     bulk_request_rebuilds,
     cancel_publication_build,
     delete_publication,
     delete_staged_publication,
     request_rebuild,
     rollback_publication,
+    stage_publication_update,
 )
 from apps.publications.state import (
     BUILDING,
@@ -30,7 +34,6 @@ from apps.publications.state import (
     NEEDS_REBUILD,
     NOT_PUBLISHED,
     QUEUED,
-    READY_TO_PUBLISH,
     UPDATE_QUEUED,
     scope_operational_states,
 )
@@ -81,7 +84,10 @@ def _row_actions(row: dict[str, object]) -> dict[str, bool]:
         and (row["active_job_publication_id"] or row["latest_publication_id"]) is not None,
         "cancel_build": state == BUILDING
         and (row["active_job_publication_id"] or row["latest_publication_id"]) is not None,
-        "build_update": state in (FAILED, NEEDS_REBUILD, NOT_PUBLISHED, READY_TO_PUBLISH),
+        "build_now": state in (UPDATE_QUEUED, QUEUED)
+        and (row["active_job_publication_id"] or row["latest_publication_id"]) is not None,
+        "stage_update": state in (FAILED, NEEDS_REBUILD, NOT_PUBLISHED),
+        "inspect_changes": state in (FAILED, NEEDS_REBUILD, NOT_PUBLISHED, UPDATE_QUEUED, QUEUED),
         "rollback": has_predecessor and state not in (UPDATE_QUEUED, QUEUED, BUILDING),
     }
 
@@ -258,6 +264,42 @@ def publication_scope_detail(request: HttpRequest, scope_id) -> HttpResponse:
 
 
 @login_required
+@require_http_methods(["GET"])
+def publication_inspect_changes(request: HttpRequest, scope_id) -> HttpResponse:
+    scope = _scope_or_403(request, scope_id)
+    row = _scope_row_context(scope)["row"]
+    candidate = None
+    if row["state"] in (UPDATE_QUEUED, QUEUED):
+        candidate = DatasetPublication.objects.filter(pk=row["update_publication_id"]).first()
+    current = scope.current_published_publication
+    if current is None or not current.source_snapshot:
+        return render(
+            request,
+            "publications/_inspect_changes_modal.html",
+            {"scope": scope, "scope_title": _scope_title(scope), "legacy": True},
+        )
+    target_snapshot = (
+        candidate.source_snapshot
+        if candidate is not None and candidate.source_snapshot
+        else build_source_payload(
+            definition=get_dataset_definition(scope.dataset_type_code),
+            department=scope.department,
+            station=scope.station,
+        )
+    )
+    return render(
+        request,
+        "publications/_inspect_changes_modal.html",
+        {
+            "scope": scope,
+            "scope_title": _scope_title(scope),
+            "candidate": candidate,
+            "diff": source_diff(current.source_snapshot, target_snapshot),
+        },
+    )
+
+
+@login_required
 @require_http_methods(["POST"])
 def scope_rebuild(request: HttpRequest, scope_id) -> HttpResponse:
     scope = _scope_or_403(request, scope_id)
@@ -275,6 +317,49 @@ def scope_rebuild(request: HttpRequest, scope_id) -> HttpResponse:
     else:
         messages.success(request, "Publication rebuild requested.")
     return redirect("publications-scope-detail", scope_id=scope.id)
+
+
+def _scope_mutation_response(request: HttpRequest, scope: DatasetScopeState) -> HttpResponse:
+    if request.headers.get("HX-Request") == "true":
+        return render(request, "publications/_scope_row.html", _scope_row_context(scope))
+    return redirect("publications-scope-detail", scope_id=scope.id)
+
+
+@login_required
+@require_http_methods(["POST"])
+def scope_stage_update(request: HttpRequest, scope_id) -> HttpResponse:
+    scope = _scope_or_403(request, scope_id)
+    require_recent_reauthentication(
+        request, return_url=reverse("publications-scope-detail", args=(scope.id,))
+    )
+    try:
+        stage_publication_update(
+            actor=request.user,
+            department=scope.department,
+            station=scope.station,
+            dataset_type_code=scope.dataset_type_code,
+        )
+    except PublicationError as error:
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(str(error), status=409)
+        messages.info(request, str(error))
+    return _scope_mutation_response(request, scope)
+
+
+@login_required
+@require_http_methods(["POST"])
+def scope_build_now(request: HttpRequest, scope_id) -> HttpResponse:
+    scope = _scope_or_403(request, scope_id)
+    require_recent_reauthentication(
+        request, return_url=reverse("publications-scope-detail", args=(scope.id,))
+    )
+    try:
+        build_staged_publication(actor=request.user, scope=scope)
+    except PublicationError as error:
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(str(error), status=409)
+        messages.info(request, str(error))
+    return _scope_mutation_response(request, scope)
 
 
 @login_required
@@ -310,7 +395,10 @@ def publication_lifecycle_modal(request: HttpRequest, publication_id, action: st
             "button_class": "btn-danger",
             "description": (
                 "This staged publication has not been distributed. Deleting it abandons this "
-                "publication attempt. Its version remains in publication history and is not reused."
+                "publication attempt. Changes to the underlying canonical data are not undone. "
+                "If they still differ from the current publication, this scope remains marked "
+                "as Changes not published. Its version remains in publication history and is "
+                "not reused."
             ),
             "service": delete_staged_publication,
         },
@@ -320,7 +408,8 @@ def publication_lifecycle_modal(request: HttpRequest, publication_id, action: st
             "button_class": "btn-warning",
             "description": (
                 "The build is currently running. If it finishes before cancellation takes effect, "
-                "the new version is published normally."
+                "the new version is published normally. Cancelling does not undo underlying "
+                "canonical data changes; they remain Changes not published until staged again."
             ),
             "service": cancel_publication_build,
         },

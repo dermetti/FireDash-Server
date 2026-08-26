@@ -170,7 +170,7 @@ def test_mark_dirty_advances_revision_preserves_first_dirty_time_and_coalesces_j
 
 
 @pytest.mark.django_db(transaction=True)
-def test_claim_finalize_stale_job_obsoletes_build_and_queues_current_revision(publication_context):
+def test_revision_only_change_during_build_does_not_obsolete_identical_source(publication_context):
     admin, _, department, _, _ = publication_context
     scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
     PublicationJob.objects.filter(department=department).update(
@@ -184,24 +184,25 @@ def test_claim_finalize_stale_job_obsoletes_build_and_queues_current_revision(pu
     assert job.attempt_count == 1
     assert job.build_publication.version_number == 1
 
+    # A monotonic revision alone is not canonical publication content.  The
+    # source snapshot is still identical, so the frozen attempt remains valid.
     mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
-    stale = finalize_publication_job(
+    finalized = finalize_publication_job(
         job_id=job.id,
         summary=hydrant_summary(job.source_revision),
         artifact=artifact_metadata(
             department_id=department.id, publication_id=job.build_publication_id
         ),
     )
-    stale.refresh_from_db()
-    assert stale.build_publication is not None
-    stale.build_publication.refresh_from_db()
+    finalized.refresh_from_db()
+    assert finalized.build_publication is not None
+    finalized.build_publication.refresh_from_db()
     scope.refresh_from_db()
 
-    assert stale.status == PublicationJob.Status.OBSOLETE
-    assert stale.build_publication.status == DatasetPublication.Status.OBSOLETE
+    assert finalized.status == PublicationJob.Status.SUCCEEDED
+    assert finalized.build_publication.status == DatasetPublication.Status.PUBLISHED
     assert scope.source_revision == 2
-    pending = PublicationJob.objects.get(status=PublicationJob.Status.PENDING)
-    assert pending.source_revision == 2
+    assert not PublicationJob.objects.filter(status=PublicationJob.Status.PENDING).exists()
 
 
 @pytest.mark.django_db(transaction=True)

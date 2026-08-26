@@ -17,7 +17,9 @@ from apps.publications.builders import (
     PublicationBuildError,
     build_artifact,
     build_change_summary,
+    build_source_payload,
     build_summary,
+    source_fingerprint_for_payload,
     validate_built_summary,
 )
 from apps.publications.feature_services import FeatureDisabledError, require_feature
@@ -97,7 +99,11 @@ def _locked_scope(*, department, station, dataset_type_code: str) -> DatasetScop
 
 
 def _allocate_staged_publication(
-    *, scope: DatasetScopeState, job: PublicationJob
+    *,
+    scope: DatasetScopeState,
+    job: PublicationJob,
+    source_fingerprint_value: str,
+    source_snapshot: dict[str, object],
 ) -> DatasetPublication:
     """Allocate an immutable attempt while the canonical scope row is locked."""
     definition = get_dataset_definition(job.dataset_type_code)
@@ -115,9 +121,38 @@ def _allocate_staged_publication(
         version_number=version_number,
         schema_version=definition.current_schema_version,
         source_revision=job.source_revision,
+        source_fingerprint=source_fingerprint_value,
+        source_snapshot=source_snapshot,
         status=DatasetPublication.Status.STAGED,
         created_by=job.requested_by,
     )
+
+
+def _current_source_fingerprint(*, scope: DatasetScopeState) -> str:
+    return source_fingerprint_for_payload(_current_source_snapshot(scope=scope))
+
+
+def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, object]:
+    return build_source_payload(
+        definition=get_dataset_definition(scope.dataset_type_code),
+        department=scope.department,
+        station=scope.station,
+    )
+
+
+def _scope_is_dirty(*, scope: DatasetScopeState, fingerprint: str | None = None) -> bool:
+    """Compare logical source content, retaining a conservative legacy fallback."""
+    current = scope.current_published_publication
+    if current is None:
+        return True
+    if current.source_fingerprint:
+        return (
+            fingerprint or _current_source_fingerprint(scope=scope)
+        ) != current.source_fingerprint
+    # Pre-fingerprint publications cannot safely be reconstructed from encrypted
+    # artifacts.  Preserve their established revision comparison until their
+    # next successful publication records a canonical source fingerprint.
+    return scope.source_revision != current.source_revision
 
 
 def _newer_live_attempt_exists(*, scope: DatasetScopeState, version_number: int) -> bool:
@@ -178,8 +213,37 @@ def mark_dirty(
                 department=department, station=station, dataset_type_code=dataset_type_code
             )
     scope.source_revision += 1
-    if scope.dirty_since is None:
+    snapshot = _current_source_snapshot(scope=scope)
+    fingerprint = source_fingerprint_for_payload(snapshot)
+    dirty = _scope_is_dirty(scope=scope, fingerprint=fingerprint)
+    if dirty and scope.dirty_since is None:
         scope.dirty_since = now
+    if not dirty:
+        scope.dirty_since = None
+        # A canonical revert can make a queued automatic attempt redundant.
+        # Keep its immutable version row, but prevent it from later publishing
+        # an identical copy of the active source.
+        pending = (
+            PublicationJob.objects.select_for_update()
+            .select_related("build_publication")
+            .filter(scope_state=scope, status=PublicationJob.Status.PENDING)
+            .first()
+        )
+        if pending is not None:
+            pending_publication = (
+                DatasetPublication.objects.select_for_update()
+                .filter(pk=pending.build_publication_id)
+                .first()
+            )
+            if (
+                pending_publication is not None
+                and pending_publication.status == DatasetPublication.Status.STAGED
+            ):
+                pending_publication.status = DatasetPublication.Status.OBSOLETE
+                pending_publication.save(update_fields=("status",))
+            pending.status = PublicationJob.Status.OBSOLETE
+            pending.completed_at = now
+            pending.save(update_fields=("status", "completed_at"))
     scope.save(update_fields=("source_revision", "dirty_since", "updated_at"))
     record_event(
         action="publication.scope_marked_dirty",
@@ -190,15 +254,16 @@ def mark_dirty(
         target_uuid=scope.id,
         metadata={"dataset_type_code": dataset_type_code, "source_revision": scope.source_revision},
     )
-    transaction.on_commit(
-        lambda: enqueue_publication_job(
-            department=department,
-            station=station,
-            dataset_type_code=dataset_type_code,
-            requested_by=actor,
-            trigger_type=PublicationJob.TriggerType.DATA_CHANGE,
+    if dirty:
+        transaction.on_commit(
+            lambda: enqueue_publication_job(
+                department=department,
+                station=station,
+                dataset_type_code=dataset_type_code,
+                requested_by=actor,
+                trigger_type=PublicationJob.TriggerType.DATA_CHANGE,
+            )
         )
-    )
     return scope
 
 
@@ -211,11 +276,16 @@ def enqueue_publication_job(
     requested_by=None,
     trigger_type: str = PublicationJob.TriggerType.DATA_CHANGE,
     debounce_started_at: datetime | None = None,
+    allow_clean_rebuild: bool = False,
 ) -> PublicationJob | None:
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
     scope = _locked_scope(
         department=department, station=station, dataset_type_code=dataset_type_code
     )
+    snapshot = _current_source_snapshot(scope=scope)
+    fingerprint = source_fingerprint_for_payload(snapshot)
+    if not allow_clean_rebuild and not _scope_is_dirty(scope=scope, fingerprint=fingerprint):
+        return None
     now = timezone.now()
     active = (
         PublicationJob.objects.select_for_update()
@@ -259,7 +329,11 @@ def enqueue_publication_job(
             )
             if staged is not None:
                 staged.source_revision = active.source_revision
-                staged.save(update_fields=("source_revision",))
+                staged.source_fingerprint = fingerprint
+                staged.source_snapshot = snapshot
+                staged.save(
+                    update_fields=("source_revision", "source_fingerprint", "source_snapshot")
+                )
         return active
 
     job = PublicationJob(
@@ -287,7 +361,12 @@ def enqueue_publication_job(
     # The pending job is an explicit staged attempt, not merely a queue entry.
     # The scope lock held above serializes this MAX()+1 allocation, and terminal
     # rows are never deleted, so version numbers remain permanently consumed.
-    publication = _allocate_staged_publication(scope=scope, job=job)
+    publication = _allocate_staged_publication(
+        scope=scope,
+        job=job,
+        source_fingerprint_value=fingerprint,
+        source_snapshot=snapshot,
+    )
     job.build_publication = publication
     job.save(update_fields=("build_publication",))
     record_event(
@@ -353,15 +432,29 @@ def claim_next_job() -> PublicationJob | None:
     publication = (
         DatasetPublication.objects.select_for_update().filter(pk=job.build_publication_id).first()
         if job.build_publication_id
-        else _allocate_staged_publication(scope=scope, job=job)
+        else _allocate_staged_publication(
+            scope=scope,
+            job=job,
+            source_fingerprint_value=_current_source_fingerprint(scope=scope),
+            source_snapshot=_current_source_snapshot(scope=scope),
+        )
     )
     if publication is None or publication.status != DatasetPublication.Status.STAGED:
         job.status = PublicationJob.Status.OBSOLETE
         job.completed_at = timezone.now()
         job.save(update_fields=("status", "completed_at"))
         return job
+    # The scope lock makes this the mutable-candidate freeze boundary. A
+    # canonical edit that committed first has already refreshed this STAGED
+    # row; a later edit sees BUILDING and belongs to a following attempt.
+    snapshot = _current_source_snapshot(scope=scope)
+    publication.source_revision = scope.source_revision
+    publication.source_snapshot = snapshot
+    publication.source_fingerprint = source_fingerprint_for_payload(snapshot)
     publication.status = DatasetPublication.Status.BUILDING
-    publication.save(update_fields=("status",))
+    publication.save(
+        update_fields=("source_revision", "source_snapshot", "source_fingerprint", "status")
+    )
     job.status = PublicationJob.Status.RUNNING
     job.started_at = now
     job.heartbeat_at = now
@@ -418,6 +511,8 @@ def build_claimed_job(*, job_id) -> PublicationJob:
         _validate_scope(
             department=job.department, station=job.station, dataset_type_code=job.dataset_type_code
         )
+        publication = DatasetPublication.objects.get(pk=job.build_publication_id)
+        source_fingerprint_value = publication.source_fingerprint
         summary = build_summary(
             definition=definition,
             department=job.department,
@@ -429,7 +524,6 @@ def build_claimed_job(*, job_id) -> PublicationJob:
         # after this read and before publication activation.
         if not _build_is_still_running(job_id=job.id):
             return PublicationJob.objects.get(pk=job.id)
-        publication = DatasetPublication.objects.get(pk=job.build_publication_id)
         artifact = build_encrypted_artifact(
             publication=publication,
             plaintext=build_artifact(
@@ -437,12 +531,18 @@ def build_claimed_job(*, job_id) -> PublicationJob:
                 department=job.department,
                 station=job.station,
                 source_revision=job.source_revision,
+                source_snapshot=publication.source_snapshot,
             ),
         )
         if not _build_is_still_running(job_id=job.id):
             _compensate_artifact(artifact)
             return PublicationJob.objects.get(pk=job.id)
-        return finalize_publication_job(job_id=job.id, summary=summary, artifact=artifact)
+        return finalize_publication_job(
+            job_id=job.id,
+            summary=summary,
+            artifact=artifact,
+            source_fingerprint_value=source_fingerprint_value,
+        )
     except (DatasetRegistryError, PublicationBuildError, PublicationError, ArtifactError) as error:
         _compensate_artifact(artifact)
         return fail_publication_job(job_id=job.id, error_message=str(error))
@@ -507,7 +607,7 @@ def _queue_follow_up_if_stale(*, job: PublicationJob) -> None:
     scope = _locked_scope(
         department=job.department, station=job.station, dataset_type_code=job.dataset_type_code
     )
-    if scope.source_revision <= job.source_revision:
+    if not _scope_is_dirty(scope=scope):
         return
     department = job.department
     station = job.station
@@ -526,7 +626,11 @@ def _queue_follow_up_if_stale(*, job: PublicationJob) -> None:
 
 @transaction.atomic
 def finalize_publication_job(
-    *, job_id, summary: dict[str, object], artifact: dict[str, object]
+    *,
+    job_id,
+    summary: dict[str, object],
+    artifact: dict[str, object],
+    source_fingerprint_value: str | None = None,
 ) -> PublicationJob:
     job_preview = PublicationJob.objects.select_related("department", "station").get(pk=job_id)
     scope = _locked_scope(
@@ -553,38 +657,11 @@ def finalize_publication_job(
     if publication.status != DatasetPublication.Status.BUILDING:
         _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         return job
-    if scope.source_revision != job.source_revision:
-        _schedule_artifact_removal(str(artifact["artifact_path"]))
-        publication.status = DatasetPublication.Status.OBSOLETE
-        # Keep the assigned value: it is included in the signed artifact
-        # canonical payload and terminal history must remain verifiable.
-        publication.save(update_fields=("status",))
-        job.status = PublicationJob.Status.OBSOLETE
-        job.completed_at = now
-        job.save(update_fields=("status", "completed_at"))
-        record_event(
-            action="publication.job_obsolete",
-            department=job.department,
-            station=job.station,
-            target_type="publication_job",
-            target_uuid=job.id,
-            metadata={
-                "dataset_type_code": job.dataset_type_code,
-                "source_revision": job.source_revision,
-            },
-        )
-        transaction.on_commit(
-            lambda: enqueue_publication_job(
-                department=job.department,
-                station=job.station,
-                dataset_type_code=job.dataset_type_code,
-                trigger_type=PublicationJob.TriggerType.DATA_CHANGE,
-            )
-        )
-        return job
+    source_fingerprint_value = source_fingerprint_value or publication.source_fingerprint
     definition = get_dataset_definition(job.dataset_type_code)
     validate_built_summary(definition=definition, summary=summary)
     publication.build_summary = summary
+    publication.source_fingerprint = source_fingerprint_value
     previous_publication = scope.latest_built_publication
     previous_summary = previous_publication.build_summary if previous_publication else {}
     publication.change_summary = build_change_summary(
@@ -595,6 +672,32 @@ def finalize_publication_job(
     publication.artifact_status = DatasetPublication.ArtifactStatus.READY
     publication.artifact_ready = True
     previous_current = scope.current_published_publication
+    if (
+        previous_current is not None
+        and previous_current.source_fingerprint
+        and previous_current.source_fingerprint == source_fingerprint_value
+    ):
+        _schedule_artifact_removal(str(artifact["artifact_path"]))
+        publication.status = DatasetPublication.Status.OBSOLETE
+        publication.save(update_fields=("status", "source_fingerprint"))
+        job.status = PublicationJob.Status.OBSOLETE
+        job.completed_at = now
+        job.save(update_fields=("status", "completed_at"))
+        scope.dirty_since = None
+        scope.save(update_fields=("dirty_since", "updated_at"))
+        record_event(
+            action="publication.job_obsolete",
+            department=job.department,
+            station=job.station,
+            target_type="publication_job",
+            target_uuid=job.id,
+            metadata={
+                "dataset_type_code": job.dataset_type_code,
+                "source_revision": job.source_revision,
+                "reason": "source_matches_current_publication",
+            },
+        )
+        return job
     if previous_current is not None:
         revoke_publication_dataset_key_grants(publication=previous_current)
         previous_current.status = DatasetPublication.Status.SUPERSEDED
@@ -606,6 +709,7 @@ def finalize_publication_job(
     publication.save(
         update_fields=(
             "build_summary",
+            "source_fingerprint",
             "change_summary",
             "artifact_status",
             "artifact_ready",
@@ -617,7 +721,11 @@ def finalize_publication_job(
     )
     scope.latest_built_publication = publication
     scope.current_published_publication = publication
-    scope.dirty_since = None
+    # A canonical edit can commit while this attempt is BUILDING.  Do not clear
+    # its existing dirty window merely because the older frozen attempt became
+    # current; it is the debounce provenance for the one follow-up candidate.
+    source_changed_during_build = _scope_is_dirty(scope=scope)
+    scope.dirty_since = None if not source_changed_during_build else scope.dirty_since or now
     scope.save(
         update_fields=(
             "latest_built_publication",
@@ -643,6 +751,19 @@ def finalize_publication_job(
             "source_revision": publication.source_revision,
         },
     )
+    # A later canonical edit must not rewrite this completed attempt. Once the
+    # new active fingerprint is visible, queue one coalescing successor only
+    # when the canonical source still differs.
+    if source_changed_during_build:
+        transaction.on_commit(
+            lambda: enqueue_publication_job(
+                department=job.department,
+                station=job.station,
+                dataset_type_code=job.dataset_type_code,
+                trigger_type=PublicationJob.TriggerType.DATA_CHANGE,
+                debounce_started_at=scope.dirty_since,
+            )
+        )
     return job
 
 
@@ -874,6 +995,7 @@ def request_rebuild(
                 dataset_type_code=dataset_type_code,
                 requested_by=actor,
                 trigger_type=PublicationJob.TriggerType.USER_REQUEST,
+                allow_clean_rebuild=True,
             )
         )
         transaction.on_commit(wake_publication_build_worker)
@@ -890,6 +1012,85 @@ def request_rebuild(
             },
         )
         return scope
+
+
+@transaction.atomic
+def stage_publication_update(
+    *, actor, department, station=None, dataset_type_code: str
+) -> DatasetScopeState:
+    """Create one new staged attempt only for logically unpublished source content."""
+    require_department_admin(actor, department)
+    _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
+    scope = _locked_scope(
+        department=department, station=station, dataset_type_code=dataset_type_code
+    )
+    if not _scope_is_dirty(scope=scope):
+        raise PublicationError("This dataset scope has no unpublished changes.")
+    live = PublicationJob.objects.select_for_update().filter(
+        scope_state=scope,
+        status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+    )
+    if live.exists():
+        raise PublicationError("A publication update is already staged or building.")
+    queued = enqueue_publication_job(
+        department=department,
+        station=station,
+        dataset_type_code=dataset_type_code,
+        requested_by=actor,
+        trigger_type=PublicationJob.TriggerType.DATA_CHANGE,
+    )
+    if queued is None:
+        raise PublicationError("This dataset scope has no unpublished changes.")
+    record_event(
+        action="publication.update_staged",
+        actor_user=actor,
+        department=department,
+        station=station,
+        target_type="dataset_scope_state",
+        target_uuid=scope.id,
+        metadata={"dataset_type_code": dataset_type_code, "source_revision": scope.source_revision},
+    )
+    return scope
+
+
+@transaction.atomic
+def build_staged_publication(*, actor, scope: DatasetScopeState) -> PublicationJob:
+    """Promote exactly the existing staged attempt; never allocate another version."""
+    require_department_admin(actor, scope.department)
+    locked_scope = _locked_scope(
+        department=scope.department,
+        station=scope.station,
+        dataset_type_code=scope.dataset_type_code,
+    )
+    job = (
+        PublicationJob.objects.select_for_update()
+        .select_related("build_publication")
+        .filter(scope_state=locked_scope, status=PublicationJob.Status.PENDING)
+        .order_by("created_at")
+        .first()
+    )
+    if job is None or job.build_publication is None:
+        raise PublicationError("No staged publication is available to build.")
+    if job.build_publication.status != DatasetPublication.Status.STAGED:
+        raise PublicationError("Only a staged publication can be built now.")
+    job.trigger_type = PublicationJob.TriggerType.USER_REQUEST
+    job.not_before = None
+    job.requested_by = actor
+    job.save(update_fields=("trigger_type", "not_before", "requested_by"))
+    record_event(
+        action="publication.build_now_requested",
+        actor_user=actor,
+        department=locked_scope.department,
+        station=locked_scope.station,
+        target_type="dataset_publication",
+        target_uuid=job.build_publication_id,
+        metadata={
+            "dataset_type_code": locked_scope.dataset_type_code,
+            "version_number": job.build_publication.version_number,
+        },
+    )
+    transaction.on_commit(wake_publication_build_worker)
+    return job
 
 
 @transaction.atomic
@@ -1159,7 +1360,6 @@ def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
             "station", "latest_built_publication"
         )
     )
-    latest_status = _latest_publication_status_by_scope(department)
     running_scope_ids = set(
         PublicationJob.objects.filter(
             department=department,
@@ -1172,11 +1372,7 @@ def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
         if scope.id in running_scope_ids:
             already_running += 1
             continue
-        needs_attention = (
-            scope.dirty_since is not None
-            or scope.latest_built_publication_id is None
-            or latest_status.get(scope.id) == DatasetPublication.Status.FAILED
-        )
+        needs_attention = _scope_is_dirty(scope=scope) or scope.latest_built_publication_id is None
         if not needs_attention:
             skipped_current += 1
             continue

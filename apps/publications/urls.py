@@ -29,6 +29,11 @@ urlpatterns = [
         name="publications-scope-status",
     ),
     path(
+        "publications/scopes/<uuid:scope_id>/inspect-changes/",
+        views.publication_inspect_changes,
+        name="publications-inspect-changes",
+    ),
+    path(
         "departments/<uuid:department_id>/publications/rebuild-affected/",
         views.bulk_rebuild,
         name="publications-bulk-rebuild",
@@ -37,6 +42,16 @@ urlpatterns = [
         "publications/<uuid:scope_id>/rebuild/",
         views.scope_rebuild,
         name="publications-scope-rebuild",
+    ),
+    path(
+        "publications/<uuid:scope_id>/stage-update/",
+        views.scope_stage_update,
+        name="publications-scope-stage-update",
+    ),
+    path(
+        "publications/<uuid:scope_id>/build-now/",
+        views.scope_build_now,
+        name="publications-scope-build-now",
     ),
     path(
         "publications/<uuid:publication_id>/review/",

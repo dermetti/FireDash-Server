@@ -73,8 +73,25 @@ def test_compute_state_precedence():
             active_job_status=None,
             active_job_not_before=None,
             now=NOW,
+            latest_source_fingerprint="a" * 64,
+            current_source_fingerprint="a" * 64,
         )
         == FAILED
+    )
+
+    assert (
+        compute_scope_state(
+            dirty=True,
+            latest_status="FAILED",
+            latest_built_status=None,
+            current_published=True,
+            active_job_status=None,
+            active_job_not_before=None,
+            now=NOW,
+            latest_source_fingerprint="a" * 64,
+            current_source_fingerprint="b" * 64,
+        )
+        == NEEDS_REBUILD
     )
 
     assert (

@@ -173,12 +173,20 @@ def update_person(
     _require_department_person_admin(actor, person)
     if person.lifecycle_status != Person.LifecycleStatus.ACTIVE:
         raise PersonnelError("Only active personnel can be edited.")
+    previous = (person.personnel_number, person.first_name, person.last_name, person.display_name)
     person.personnel_number = personnel_number or None
     person.first_name = first_name.strip()
     person.last_name = last_name.strip()
     person.display_name = f"{person.first_name} {person.last_name}".strip()
     if not person.display_name:
         raise PersonnelError("Personnel display name is required.")
+    if (
+        person.personnel_number,
+        person.first_name,
+        person.last_name,
+        person.display_name,
+    ) == previous:
+        return person
     person.save(
         update_fields=("personnel_number", "first_name", "last_name", "display_name", "updated_at")
     )
@@ -241,6 +249,8 @@ def set_commander_eligibility(
         raise PermissionDenied("Personnel is outside the administrator's scope.")
     if person.lifecycle_status != Person.LifecycleStatus.ACTIVE:
         raise PersonnelError("Only active personnel can be commander eligible.")
+    if person.incident_commander_eligible == eligible:
+        return person
     person.incident_commander_eligible = eligible
     if not eligible:
         person.email_verified_at = None
@@ -270,7 +280,10 @@ def set_commander_email(*, actor, person: Person, email: str) -> Person:
     _require_department_person_admin(actor, person)
     if not person.incident_commander_eligible:
         raise PersonnelError("Commander eligibility is required before setting commander email.")
-    person.incident_commander_email = _normalize_email(email)
+    normalized_email = _normalize_email(email)
+    if person.incident_commander_email == normalized_email and person.email_verified_at is None:
+        return person
+    person.incident_commander_email = normalized_email
     person.email_verified_at = None
     person.email_verified_by = None
     person.save(
@@ -300,6 +313,8 @@ def verify_commander_email(*, actor, person: Person) -> Person:
         raise PersonnelError(
             "Eligible personnel with an email address are required for verification."
         )
+    if person.email_verified_at is not None:
+        return person
     person.email_verified_at = timezone.now()
     person.email_verified_by = actor
     person.save(update_fields=("email_verified_at", "email_verified_by", "updated_at"))
