@@ -51,7 +51,7 @@ def _schedule_artifact_removal(relative_path: str) -> None:
     def remove_after_commit() -> None:
         try:
             remove_artifact_path(relative_path)
-        except ArtifactError as error:
+        except (ArtifactError, OSError) as error:
             # The database transition remains authoritative. Existing orphan
             # artifact maintenance can safely retry a failed filesystem cleanup.
             logger.warning("Publication artifact cleanup deferred for %s: %s", relative_path, error)

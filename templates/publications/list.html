@@ -3,15 +3,9 @@
 {% block content %}
 <p class="text-body-secondary small mb-0">Distributed Data / Publications</p>
 <h1 class="mb-1">Publications</h1>
-<p class="text-body-secondary">Source changes are coalesced for the nightly build. Successful current builds publish automatically; a failed build leaves the last known-good dataset active.</p>
-
-<section class="mb-4">
-  <form method="post" action="{% url 'publications-bulk-rebuild' department.id %}">
-    {% csrf_token %}
-    <button type="submit" class="btn btn-primary">Build &amp; publish affected datasets now</button>
-  </form>
-  <p class="text-body-secondary small mt-2 mb-0">This promotes existing affected work where possible and wakes the build runner after the request commits.</p>
-</section>
-
-{% include "publications/_status.html" %}
+<p class="text-body-secondary">Current publication status and the active update workflow for each dataset scope.</p>
+<section class="mb-4"><form method="post" action="{% url 'publications-bulk-rebuild' department.id %}">{% csrf_token %}<button type="submit" class="btn btn-primary">Build affected datasets</button></form></section>
+<section class="mb-4" aria-label="Publication filters"><form method="get" hx-get="{% url 'publications-list' department.id %}" hx-target="#publication-scope-results" hx-push-url="true" hx-trigger="change"><label class="form-label" for="publication-state-filter">Show</label><div class="d-flex align-items-center gap-2 flex-wrap"><select class="form-select" id="publication-state-filter" name="state" style="max-width: 18rem">{% for value, label in scope_filters.items %}<option value="{{ value }}"{% if value == selected_filter %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% if selected_filter %}<a class="btn btn-outline-secondary" href="{% url 'publications-list' department.id %}">Reset</a>{% endif %}</div></form></section>
+{% include "publications/_scope_results.html" %}
+{% include "components/_htmx_action_modal.html" with modal_container_id="publication-action-modal-container" %}
 {% endblock %}

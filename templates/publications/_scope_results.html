@@ -1,0 +1,5 @@
+<div id="publication-scope-results">
+  <p class="text-body-secondary small">Showing {{ scope_rows|length }} of {{ total_count }} publication scope{{ total_count|pluralize }}.</p>
+  <table class="table table-hover align-middle"><thead><tr><th>Dataset / Scope</th><th>Current publication</th><th>Update</th><th>Last changed</th><th class="text-end">Actions</th></tr></thead><tbody>{% for row in scope_rows %}{% include "publications/_scope_row.html" %}{% empty %}<tr><td colspan="5" class="text-center text-body-secondary py-4">No publication scopes match this filter.</td></tr>{% endfor %}</tbody></table>
+  {% include "components/_pagination.html" with hx_target="#publication-scope-results" hx_base=request.path hx_swap="outerHTML" %}
+</div>

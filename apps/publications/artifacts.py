@@ -207,7 +207,13 @@ def cleanup_stale_artifacts() -> int:
     for publication in DatasetPublication.objects.filter(
         status__in=("FAILED", "OBSOLETE", "REJECTED", "CANCELLED"), artifact_path__gt=""
     ):
-        remove_artifact(publication)
+        try:
+            remove_artifact(publication)
+        except (ArtifactError, OSError) as error:
+            logger.warning(
+                "Publication artifact cleanup deferred for %s: %s", publication.id, error
+            )
+            continue
         # A READY artifact's signed metadata is immutable. Its terminal
         # publication state prevents future distribution, so preserve the
         # historical path/metadata even after ciphertext cleanup. Non-ready

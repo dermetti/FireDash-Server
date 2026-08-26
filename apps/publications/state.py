@@ -72,6 +72,12 @@ def compute_scope_state(
         if active_job_not_before is not None and active_job_not_before > now:
             return UPDATE_QUEUED
         return QUEUED
+    # A publication attempt normally has its corresponding active job. Retain
+    # its lifecycle visibility if legacy/recovery work has left that link behind.
+    if latest_status == DatasetPublication.Status.BUILDING:
+        return BUILDING
+    if latest_status == DatasetPublication.Status.STAGED:
+        return UPDATE_QUEUED
     if latest_status == DatasetPublication.Status.FAILED:
         return FAILED
     if latest_built_status == DatasetPublication.Status.READY_FOR_REVIEW:
@@ -83,18 +89,25 @@ def compute_scope_state(
     return NOT_PUBLISHED
 
 
-def scope_operational_states(department, *, now=None) -> list[dict[str, Any]]:
+def scope_operational_states(
+    department, *, now=None, scope_ids: set[object] | None = None
+) -> list[dict[str, Any]]:
     """Return one operational-state view model per dataset scope (batched)."""
     now = now or timezone.now()
     latest = DatasetPublication.objects.filter(scope_state=OuterRef("pk")).order_by(
         "-version_number"
     )
+    scope_queryset = DatasetScopeState.objects.filter(department=department)
+    if scope_ids is not None:
+        scope_queryset = scope_queryset.filter(pk__in=scope_ids)
     scopes = (
-        DatasetScopeState.objects.filter(department=department)
-        .select_related("station", "latest_built_publication", "current_published_publication")
+        scope_queryset.select_related(
+            "station", "latest_built_publication", "current_published_publication"
+        )
         .annotate(
             latest_status=Subquery(latest.values("status")[:1]),
             latest_publication_id=Subquery(latest.values("id")[:1]),
+            latest_publication_version=Subquery(latest.values("version_number")[:1]),
             latest_build_error=Subquery(latest.values("build_error")[:1]),
             latest_built_at=Subquery(latest.values("created_at")[:1]),
         )
@@ -106,7 +119,9 @@ def scope_operational_states(department, *, now=None) -> list[dict[str, Any]]:
         for job in PublicationJob.objects.filter(
             department=department,
             status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
-        ).select_related("build_publication")
+        )
+        .filter(scope_state__in=scopes)
+        .select_related("build_publication")
     }
 
     rows: list[dict[str, Any]] = []
@@ -130,6 +145,11 @@ def scope_operational_states(department, *, now=None) -> list[dict[str, Any]]:
                 "dataset_type_code": scope.dataset_type_code,
                 "dataset_name": definition.display_name,
                 "scope_label": scope.station.name if scope.station else "Department",
+                "scope_display_name": (
+                    f"{definition.display_name} · {scope.station.short_code}"
+                    if scope.station
+                    else definition.display_name
+                ),
                 "state": state,
                 "state_label": STATE_LABELS[state],
                 "state_badge": STATE_BADGE[state],
@@ -144,6 +164,7 @@ def scope_operational_states(department, *, now=None) -> list[dict[str, Any]]:
                 "latest_built_status": latest_built.status if latest_built else None,
                 "latest_built_publication_id": latest_built.id if latest_built else None,
                 "latest_publication_id": scope.latest_publication_id,
+                "latest_publication_version": scope.latest_publication_version,
                 "current_published_publication_id": (
                     current_published.id if current_published else None
                 ),

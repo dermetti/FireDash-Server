@@ -260,3 +260,135 @@ def test_concurrent_rollbacks_leave_exactly_one_active_publication(lifecycle_sco
         ).count()
         == 1
     )
+
+
+def _running_attempt(*, admin, department, scope):
+    request_rebuild(actor=admin, department=department, dataset_type_code=scope.dataset_type_code)
+    job = claim_next_job()
+    assert job is not None and job.build_publication_id is not None
+    return job
+
+
+def _cancel_while_holding_scope(*, admin_id, publication_id, scope_id, barrier):
+    close_old_connections()
+    try:
+        admin = User.objects.get(pk=admin_id)
+        publication = DatasetPublication.objects.get(pk=publication_id)
+        with transaction.atomic():
+            DatasetScopeState.objects.select_for_update().get(pk=scope_id)
+            barrier.wait(timeout=10)
+            cancel_publication_build(actor=admin, publication=publication)
+        return "cancelled"
+    finally:
+        close_old_connections()
+
+
+def _publish_while_holding_scope(*, job_id, department_id, publication_id, scope_id, barrier):
+    close_old_connections()
+    try:
+        with transaction.atomic():
+            DatasetScopeState.objects.select_for_update().get(pk=scope_id)
+            barrier.wait(timeout=10)
+            finalized = finalize_publication_job(
+                job_id=job_id,
+                summary={"active_count": 0, "source_revision": 1, "status_counts": {}},
+                artifact=_metadata(Department.objects.get(pk=department_id), publication_id),
+            )
+        return finalized.status
+    finally:
+        close_old_connections()
+
+
+def _publish_after_scope_lock(*, job_id, department_id, publication_id, barrier):
+    close_old_connections()
+    try:
+        barrier.wait(timeout=10)
+        finalized = finalize_publication_job(
+            job_id=job_id,
+            summary={"active_count": 0, "source_revision": 1, "status_counts": {}},
+            artifact=_metadata(Department.objects.get(pk=department_id), publication_id),
+        )
+        return finalized.status
+    finally:
+        close_old_connections()
+
+
+def _cancel_after_scope_lock(*, admin_id, publication_id, barrier):
+    close_old_connections()
+    try:
+        admin = User.objects.get(pk=admin_id)
+        publication = DatasetPublication.objects.get(pk=publication_id)
+        barrier.wait(timeout=10)
+        try:
+            cancel_publication_build(actor=admin, publication=publication)
+        except PublicationError:
+            return "rejected"
+        return "cancelled"
+    finally:
+        close_old_connections()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_cancel_committing_first_prevents_publication_activation(lifecycle_scope):
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL row-locking semantics are required for this regression test.")
+    admin, _, department, _, scope = lifecycle_scope
+    job = _running_attempt(admin=admin, department=department, scope=scope)
+    barrier = threading.Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        cancelled = executor.submit(
+            _cancel_while_holding_scope,
+            admin_id=admin.id,
+            publication_id=job.build_publication_id,
+            scope_id=scope.id,
+            barrier=barrier,
+        )
+        finalized = executor.submit(
+            _publish_after_scope_lock,
+            job_id=job.id,
+            department_id=department.id,
+            publication_id=job.build_publication_id,
+            barrier=barrier,
+        )
+        assert cancelled.result(timeout=15) == "cancelled"
+        assert finalized.result(timeout=15) == PublicationJob.Status.CANCELLED
+
+    job.refresh_from_db()
+    job.build_publication.refresh_from_db()
+    scope.refresh_from_db()
+    assert job.status == PublicationJob.Status.CANCELLED
+    assert job.build_publication.status == DatasetPublication.Status.CANCELLED
+    assert scope.current_published_publication is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_activation_committing_first_rejects_cancellation(lifecycle_scope):
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL row-locking semantics are required for this regression test.")
+    admin, _, department, _, scope = lifecycle_scope
+    job = _running_attempt(admin=admin, department=department, scope=scope)
+    barrier = threading.Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        finalized = executor.submit(
+            _publish_while_holding_scope,
+            job_id=job.id,
+            department_id=department.id,
+            publication_id=job.build_publication_id,
+            scope_id=scope.id,
+            barrier=barrier,
+        )
+        cancelled = executor.submit(
+            _cancel_after_scope_lock,
+            admin_id=admin.id,
+            publication_id=job.build_publication_id,
+            barrier=barrier,
+        )
+        assert finalized.result(timeout=15) == PublicationJob.Status.SUCCEEDED
+        assert cancelled.result(timeout=15) == "rejected"
+
+    job.refresh_from_db()
+    job.build_publication.refresh_from_db()
+    scope.refresh_from_db()
+    assert job.status == PublicationJob.Status.SUCCEEDED
+    assert job.build_publication.status == DatasetPublication.Status.PUBLISHED
+    assert scope.current_published_publication_id == job.build_publication_id

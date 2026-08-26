@@ -7,16 +7,19 @@ from apps.publications.registry import DATASET_REGISTRY
 register = template.Library()
 
 _STATUS_LABELS = {
+    "STAGED": "Scheduled",
     "BUILDING": "Building",
     "READY_FOR_REVIEW": "Ready to publish",
-    "PUBLISHED": "Published",
+    "PUBLISHED": "Current",
     "FAILED": "Failed",
     "SUPERSEDED": "Superseded",
     "REJECTED": "Rejected",
-    "OBSOLETE": "Out of date",
+    "OBSOLETE": "Obsolete",
+    "CANCELLED": "Cancelled",
 }
 
 _STATUS_BADGES = {
+    "STAGED": "info",
     "BUILDING": "info",
     "READY_FOR_REVIEW": "warning",
     "PUBLISHED": "success",
@@ -24,6 +27,7 @@ _STATUS_BADGES = {
     "SUPERSEDED": "secondary",
     "REJECTED": "secondary",
     "OBSOLETE": "secondary",
+    "CANCELLED": "secondary",
 }
 
 
