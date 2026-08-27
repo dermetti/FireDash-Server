@@ -121,7 +121,10 @@ class DatasetPublication(models.Model):
     # The canonical representation retained for source-aware lifecycle comparison
     # and a frozen build input. It contains logical distributed records/manifest
     # metadata, never ciphertext, PDF bytes, or signing material.
-    source_snapshot = models.JSONField(default=dict)
+    # ``NULL`` intentionally means that the historical source snapshot is no
+    # longer retained.  An empty object remains a valid snapshot for an empty
+    # publishable source and must not be conflated with retention cleanup.
+    source_snapshot = models.JSONField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.BUILDING)
     build_summary = models.JSONField(default=dict)
     change_summary = models.JSONField(default=dict)
@@ -181,6 +184,16 @@ class DatasetPublication(models.Model):
                 | Q(artifact_status="READY"),
                 name="review_publication_requires_ready_artifact",
             ),
+        ]
+        indexes = [
+            # Bounded retention needs the newest usable successful attempts
+            # per scope without scanning all publication history.
+            models.Index(
+                fields=("status", "scope_state", "-version_number"),
+                name="pub_status_scope_ver_idx",
+            ),
+            # Terminal snapshot expiry is selected in small status/age batches.
+            models.Index(fields=("status", "created_at"), name="pub_status_created_idx"),
         ]
 
     def clean(self) -> None:

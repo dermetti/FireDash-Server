@@ -233,6 +233,15 @@ PUBLICATION_ARTIFACT_MAX_BYTES = get_typed_env(
 PUBLICATION_ARTIFACT_STALE_SECONDS = get_typed_env(
     "PUBLICATION_ARTIFACT_STALE_SECONDS", int, default=3600
 )
+PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS = get_typed_env(
+    "PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS", int, default=2
+)
+PUBLICATION_TERMINAL_SNAPSHOT_RETENTION_DAYS = get_typed_env(
+    "PUBLICATION_TERMINAL_SNAPSHOT_RETENTION_DAYS", int, default=30
+)
+PUBLICATION_RETENTION_BATCH_SIZE = get_typed_env(
+    "PUBLICATION_RETENTION_BATCH_SIZE", int, default=100
+)
 
 
 def publication_credential_path(*, override_name: str, credential_name: str) -> Path:

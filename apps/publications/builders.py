@@ -191,7 +191,9 @@ def _artifact_klgv_plans(
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         plans = (
-            source_snapshot or _klgv_source_payload(department=department, station=station)
+            source_snapshot
+            if source_snapshot is not None
+            else _klgv_source_payload(department=department, station=station)
         ).get("klgv_plans", [])
         for entry in plans:
             try:
@@ -271,7 +273,11 @@ def _zip_info(name: str) -> zipfile.ZipInfo:
 def _artifact_hydrants(*, department, station, source_revision: int, source_snapshot=None) -> bytes:
     if station is not None:
         raise PublicationBuildError("Hydrant artifact requires a department scope.")
-    payload = source_snapshot or _hydrant_source_payload(department=department, station=station)
+    payload = (
+        source_snapshot
+        if source_snapshot is not None
+        else _hydrant_source_payload(department=department, station=station)
+    )
     return _json_bytes(payload | {"source_revision": source_revision})
 
 
@@ -280,7 +286,11 @@ def _artifact_personnel(
 ) -> bytes:
     if station is None or station.department_id != department.id:
         raise PublicationBuildError("Personnel artifact requires a station in the department.")
-    payload = source_snapshot or _personnel_source_payload(department=department, station=station)
+    payload = (
+        source_snapshot
+        if source_snapshot is not None
+        else _personnel_source_payload(department=department, station=station)
+    )
     return _json_bytes(payload | {"source_revision": source_revision})
 
 
@@ -292,7 +302,9 @@ def _artifact_fire_plans(
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         manifest = (
-            source_snapshot or _fire_plan_source_payload(department=department, station=station)
+            source_snapshot
+            if source_snapshot is not None
+            else _fire_plan_source_payload(department=department, station=station)
         ).get("fire_plans", [])
         for entry in manifest:
             try:

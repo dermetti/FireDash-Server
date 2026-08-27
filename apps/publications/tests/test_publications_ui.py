@@ -275,7 +275,7 @@ def test_staged_action_modal_is_scope_authorized_and_explains_history(
     assert deleted.status_code == 204
     assert deleted["HX-Redirect"] == reverse("publications-scope-detail", args=(scope.id,))
     staged.refresh_from_db()
-    assert staged.status == DatasetPublication.Status.OBSOLETE
+    assert staged.status == DatasetPublication.Status.CANCELLED
 
     client.force_login(outsider)
     assert client.get(modal_url, HTTP_HX_REQUEST="true").status_code == 403
@@ -436,7 +436,7 @@ def test_cancelled_attempt_leaves_canonical_change_dirty_and_manual_stage_uses_n
 
     delete_staged_publication(actor=admin, publication=staged)
     staged.refresh_from_db()
-    assert staged.status == DatasetPublication.Status.OBSOLETE
+    assert staged.status == DatasetPublication.Status.CANCELLED
     assert hydrant.external_identifier == "FB-003"
 
     client.force_login(admin)

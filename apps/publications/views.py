@@ -81,6 +81,10 @@ def _row_actions(row: dict[str, object]) -> dict[str, bool]:
     """UI affordances only; Phase 4A services remain authoritative."""
     state = row["state"]
     has_predecessor = bool(row["has_eligible_predecessor"])
+    requires_candidate_snapshot = state in (UPDATE_QUEUED, QUEUED)
+    can_inspect = bool(row["current_snapshot_retained"]) and (
+        not requires_candidate_snapshot or bool(row["latest_snapshot_retained"])
+    )
     return {
         "delete_staged": state in (UPDATE_QUEUED, QUEUED)
         and (row["active_job_publication_id"] or row["latest_publication_id"]) is not None,
@@ -89,7 +93,7 @@ def _row_actions(row: dict[str, object]) -> dict[str, bool]:
         "build_now": state in (UPDATE_QUEUED, QUEUED)
         and (row["active_job_publication_id"] or row["latest_publication_id"]) is not None,
         "stage_update": state in (FAILED, NEEDS_REBUILD, NOT_PUBLISHED),
-        "inspect_changes": state in (FAILED, NEEDS_REBUILD, NOT_PUBLISHED, UPDATE_QUEUED, QUEUED),
+        "inspect_changes": can_inspect and state in (FAILED, NEEDS_REBUILD, UPDATE_QUEUED, QUEUED),
         "rollback": has_predecessor and state not in (UPDATE_QUEUED, QUEUED, BUILDING),
     }
 
@@ -341,7 +345,13 @@ def publication_inspect_changes(request: HttpRequest, scope_id) -> HttpResponse:
     if row["state"] in (UPDATE_QUEUED, QUEUED):
         candidate = DatasetPublication.objects.filter(pk=row["update_publication_id"]).first()
     current = scope.current_published_publication
-    if current is None or not current.source_snapshot:
+    if current is None or current.source_snapshot is None:
+        return render(
+            request,
+            "publications/_inspect_changes_modal.html",
+            {"scope": scope, "scope_title": _scope_title(scope), "legacy": True},
+        )
+    if candidate is not None and candidate.source_snapshot is None:
         return render(
             request,
             "publications/_inspect_changes_modal.html",
@@ -349,7 +359,7 @@ def publication_inspect_changes(request: HttpRequest, scope_id) -> HttpResponse:
         )
     target_snapshot = (
         candidate.source_snapshot
-        if candidate is not None and candidate.source_snapshot
+        if candidate is not None
         else build_source_payload(
             definition=get_dataset_definition(scope.dataset_type_code),
             department=scope.department,

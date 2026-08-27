@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
+from django.db.models import BooleanField, Case, Value, When
 from django.utils import timezone
 
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
@@ -150,9 +151,15 @@ def _state_publications_and_jobs(scopes: list[DatasetScopeState]):
         "created_at",
         "published_at",
     )
+    source_snapshot_retained = Case(
+        When(source_snapshot__isnull=False, then=Value(True)),
+        default=Value(False),
+        output_field=BooleanField(),
+    )
     latest_by_scope = {
         publication.scope_state_id: publication
         for publication in DatasetPublication.objects.filter(scope_state_id__in=scope_ids)
+        .annotate(source_snapshot_retained=source_snapshot_retained)
         .order_by("scope_state_id", "-version_number")
         .distinct("scope_state_id")
         .only(*publication_fields)
@@ -187,9 +194,9 @@ def _state_publications_and_jobs(scopes: list[DatasetScopeState]):
     )
     linked_publications = {
         publication.id: publication
-        for publication in DatasetPublication.objects.filter(pk__in=linked_publication_ids).only(
-            *publication_fields
-        )
+        for publication in DatasetPublication.objects.filter(pk__in=linked_publication_ids)
+        .only(*publication_fields)
+        .annotate(source_snapshot_retained=source_snapshot_retained)
     }
     return latest_by_scope, active_jobs, linked_publications
 
@@ -278,6 +285,13 @@ def scope_operational_states_for_scopes(
                 "latest_publication_version": latest.version_number if latest else None,
                 "current_published_publication_id": (
                     current_published.id if current_published else None
+                ),
+                "current_snapshot_retained": bool(
+                    current_published
+                    and getattr(current_published, "source_snapshot_retained", False)
+                ),
+                "latest_snapshot_retained": bool(
+                    latest and getattr(latest, "source_snapshot_retained", False)
                 ),
                 "current_update_label": (
                     CURRENT_UPDATE_LABELS.get(state) if current_published else None

@@ -549,6 +549,11 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             department=job.department, station=job.station, dataset_type_code=job.dataset_type_code
         )
         publication = DatasetPublication.objects.get(pk=job.build_publication_id)
+        if publication.source_snapshot is None:
+            # A BUILDING attempt must consume its frozen source.  Retention
+            # never clears BUILDING snapshots; treating a missing snapshot as
+            # current canonical data here would break that immutable boundary.
+            raise PublicationBuildError("Frozen publication source is unavailable.")
         source_fingerprint_value = publication.source_fingerprint
         summary = build_summary(
             definition=definition,
@@ -716,7 +721,8 @@ def finalize_publication_job(
     ):
         _schedule_artifact_removal(str(artifact["artifact_path"]))
         publication.status = DatasetPublication.Status.OBSOLETE
-        publication.save(update_fields=("status", "source_fingerprint"))
+        publication.source_snapshot = None
+        publication.save(update_fields=("status", "source_fingerprint", "source_snapshot"))
         job.status = PublicationJob.Status.OBSOLETE
         job.completed_at = now
         job.save(update_fields=("status", "completed_at"))
@@ -1160,10 +1166,13 @@ def delete_staged_publication(*, actor, publication: DatasetPublication) -> Data
         raise PublicationError("Only a staged publication can be deleted.")
     if job is not None and job.status != PublicationJob.Status.PENDING:
         raise PublicationError("A started publication build must be cancelled instead.")
-    candidate.status = DatasetPublication.Status.OBSOLETE
+    # An unstarted attempt was never a successful publication.  Retain its
+    # immutable identity as CANCELLED; OBSOLETE is reserved for successful
+    # publication artifacts retired by lifecycle deletion/retention.
+    candidate.status = DatasetPublication.Status.CANCELLED
     candidate.save(update_fields=("status",))
     if job is not None:
-        job.status = PublicationJob.Status.OBSOLETE
+        job.status = PublicationJob.Status.CANCELLED
         job.completed_at = timezone.now()
         job.save(update_fields=("status", "completed_at"))
     record_event(
@@ -1353,11 +1362,12 @@ def delete_publication(*, actor, publication: DatasetPublication) -> DatasetPubl
     artifact_path = candidate.artifact_path
     revoke_publication_dataset_key_grants(publication=candidate)
     candidate.status = DatasetPublication.Status.OBSOLETE
+    candidate.source_snapshot = None
     # Artifact metadata is cryptographically immutable once READY. The terminal
     # lifecycle state makes this attempt unavailable to manifests/downloads;
     # leave its signed metadata intact for historical integrity and remove only
     # the ciphertext after the transaction commits.
-    candidate.save(update_fields=("status",))
+    candidate.save(update_fields=("status", "source_snapshot"))
     if scope.latest_built_publication_id == candidate.id:
         scope.latest_built_publication = scope.current_published_publication
         scope.save(update_fields=("latest_built_publication", "updated_at"))

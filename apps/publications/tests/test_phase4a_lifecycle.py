@@ -88,8 +88,8 @@ def test_staged_delete_preserves_attempt_identity_and_next_version(lifecycle_sco
     delete_staged_publication(actor=admin, publication=staged)
     staged.refresh_from_db()
     job.refresh_from_db()
-    assert staged.status == DatasetPublication.Status.OBSOLETE
-    assert job.status == PublicationJob.Status.OBSOLETE
+    assert staged.status == DatasetPublication.Status.CANCELLED
+    assert job.status == PublicationJob.Status.CANCELLED
     next_job = enqueue_publication_job(
         department=department,
         dataset_type_code=scope.dataset_type_code,
@@ -165,6 +165,7 @@ def test_rollback_and_active_delete_require_scope_stability(lifecycle_scope):
     old.refresh_from_db()
     scope.refresh_from_db()
     assert deleted.status == DatasetPublication.Status.OBSOLETE
+    assert deleted.source_snapshot is None
     assert deleted.artifact_path
     assert deleted.artifact_status == DatasetPublication.ArtifactStatus.READY
     assert scope.current_published_publication_id == old.id
