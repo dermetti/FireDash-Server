@@ -9,7 +9,6 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
@@ -102,61 +101,146 @@ def compute_scope_state(
     return NOT_PUBLISHED
 
 
-def scope_operational_states(
-    department, *, now=None, scope_ids: set[object] | None = None
-) -> list[dict[str, Any]]:
-    """Return one operational-state view model per dataset scope (batched)."""
-    now = now or timezone.now()
-    latest = DatasetPublication.objects.filter(scope_state=OuterRef("pk")).order_by(
-        "-version_number"
-    )
-    scope_queryset = DatasetScopeState.objects.filter(department=department)
-    if scope_ids is not None:
-        scope_queryset = scope_queryset.filter(pk__in=scope_ids)
-    scopes = (
-        scope_queryset.select_related(
-            "station", "latest_built_publication", "current_published_publication"
-        )
-        .annotate(
-            latest_status=Subquery(latest.values("status")[:1]),
-            latest_publication_id=Subquery(latest.values("id")[:1]),
-            latest_publication_version=Subquery(latest.values("version_number")[:1]),
-            latest_build_error=Subquery(latest.values("build_error")[:1]),
-            latest_source_fingerprint=Subquery(latest.values("source_fingerprint")[:1]),
-            latest_built_at=Subquery(latest.values("created_at")[:1]),
-        )
-        .order_by("dataset_type_code", "station__name")
-    )
+def publication_scope_queryset(department, *, include_station: bool = True):
+    """Return the narrow, ordered scope queryset used by the Publications list.
 
+    The list view paginates this queryset before asking for publication state.
+    Keeping the base query independent from publication attempts is important:
+    a large department must not deserialize every candidate's source snapshot
+    merely to render one page of scope rows.
+    """
+    fields = [
+        "id",
+        "dataset_type_code",
+        "source_revision",
+        "current_source_fingerprint",
+        "dirty_since",
+        "updated_at",
+        "station_id",
+        "latest_built_publication_id",
+        "current_published_publication_id",
+    ]
+    if include_station:
+        fields.extend(("station__id", "station__name", "station__short_code"))
+    queryset = DatasetScopeState.objects.filter(department=department).only(*fields)
+    if include_station:
+        queryset = queryset.select_related("station")
+        return queryset.order_by("dataset_type_code", "station__name", "id")
+    return queryset.order_by("dataset_type_code", "id")
+
+
+def _state_publications_and_jobs(scopes: list[DatasetScopeState]):
+    """Fetch the state-only publication data for a bounded collection of scopes.
+
+    `DISTINCT ON` is PostgreSQL's efficient one-row-per-scope form.  The
+    projection deliberately omits source_snapshot, build_summary and all
+    artifact/crypto fields; list and polling state need none of them.
+    """
+    scope_ids = [scope.id for scope in scopes]
+    if not scope_ids:
+        return {}, {}, {}
+
+    publication_fields = (
+        "id",
+        "scope_state_id",
+        "version_number",
+        "status",
+        "build_error",
+        "source_fingerprint",
+        "created_at",
+        "published_at",
+    )
+    latest_by_scope = {
+        publication.scope_state_id: publication
+        for publication in DatasetPublication.objects.filter(scope_state_id__in=scope_ids)
+        .order_by("scope_state_id", "-version_number")
+        .distinct("scope_state_id")
+        .only(*publication_fields)
+    }
     active_jobs = {
         job.scope_state_id: job
         for job in PublicationJob.objects.filter(
-            department=department,
+            scope_state_id__in=scope_ids,
             status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+        ).only(
+            "id",
+            "scope_state_id",
+            "status",
+            "trigger_type",
+            "not_before",
+            "build_publication_id",
         )
-        .filter(scope_state__in=scopes)
-        .select_related("build_publication")
     }
+    linked_publication_ids = {
+        publication_id
+        for scope in scopes
+        for publication_id in (
+            scope.latest_built_publication_id,
+            scope.current_published_publication_id,
+        )
+        if publication_id is not None
+    }
+    linked_publication_ids.update(
+        job.build_publication_id
+        for job in active_jobs.values()
+        if job.build_publication_id is not None
+    )
+    linked_publications = {
+        publication.id: publication
+        for publication in DatasetPublication.objects.filter(pk__in=linked_publication_ids).only(
+            *publication_fields
+        )
+    }
+    return latest_by_scope, active_jobs, linked_publications
+
+
+def _scope_state_inputs(
+    *,
+    scope: DatasetScopeState,
+    latest_by_scope: dict,
+    active_jobs: dict,
+    linked_publications: dict,
+):
+    """Return the compact values shared by detailed and aggregate state paths."""
+    latest = latest_by_scope.get(scope.id)
+    job = active_jobs.get(scope.id)
+    latest_built = linked_publications.get(scope.latest_built_publication_id)
+    current_published = linked_publications.get(scope.current_published_publication_id)
+    current_fingerprint = scope.current_source_fingerprint
+    if current_published is None:
+        dirty = True
+    elif current_fingerprint and current_published.source_fingerprint:
+        dirty = current_fingerprint != current_published.source_fingerprint
+    else:
+        # Legacy rows are initialized only through a locked service path; list
+        # rendering deliberately never rebuilds canonical sources.
+        dirty = True
+    return latest, job, latest_built, current_published, current_fingerprint, dirty
+
+
+def scope_operational_states_for_scopes(
+    scopes: list[DatasetScopeState], *, now=None
+) -> list[dict[str, Any]]:
+    """Return detailed state rows for scopes that have already been paginated."""
+    now = now or timezone.now()
+    scopes = list(scopes)
+    latest_by_scope, active_jobs, linked_publications = _state_publications_and_jobs(scopes)
 
     rows: list[dict[str, Any]] = []
     for scope in scopes:
         definition = get_dataset_definition(scope.dataset_type_code)
-        job = active_jobs.get(scope.id)
-        latest_built = scope.latest_built_publication
-        current_published = scope.current_published_publication
-        current_fingerprint = scope.current_source_fingerprint
-        if current_published is None:
-            dirty = True
-        elif current_fingerprint and current_published.source_fingerprint:
-            dirty = current_fingerprint != current_published.source_fingerprint
-        else:
-            # Legacy rows are initialized only through a locked service path;
-            # list rendering deliberately never rebuilds canonical sources.
-            dirty = True
+        latest, job, latest_built, current_published, current_fingerprint, dirty = (
+            _scope_state_inputs(
+                scope=scope,
+                latest_by_scope=latest_by_scope,
+                active_jobs=active_jobs,
+                linked_publications=linked_publications,
+            )
+        )
         state = compute_scope_state(
             dirty=dirty,
-            latest_status=scope.latest_status,
-            latest_source_fingerprint=scope.latest_source_fingerprint,
+            latest_status=latest.status if latest else None,
+            latest_source_fingerprint=latest.source_fingerprint if latest else None,
             current_source_fingerprint=current_fingerprint,
             latest_built_status=latest_built.status if latest_built else None,
             current_published=current_published is not None,
@@ -190,8 +274,8 @@ def scope_operational_states(
                 "latest_built_version": latest_built.version_number if latest_built else None,
                 "latest_built_status": latest_built.status if latest_built else None,
                 "latest_built_publication_id": latest_built.id if latest_built else None,
-                "latest_publication_id": scope.latest_publication_id,
-                "latest_publication_version": scope.latest_publication_version,
+                "latest_publication_id": latest.id if latest else None,
+                "latest_publication_version": latest.version_number if latest else None,
                 "current_published_publication_id": (
                     current_published.id if current_published else None
                 ),
@@ -201,14 +285,16 @@ def scope_operational_states(
                 "current_update_badge": (
                     STATE_BADGE.get(state) if current_published and state != CURRENT else None
                 ),
-                "build_error": scope.latest_build_error if state == FAILED else None,
-                "last_activity": scope.latest_built_at or scope.updated_at,
+                "build_error": latest.build_error if latest and state == FAILED else None,
+                "last_activity": (latest.created_at if latest else None) or scope.updated_at,
                 "active_job_status": job.status if job else None,
                 "active_job_trigger_type": job.trigger_type if job else None,
                 "active_job_not_before": job.not_before if job else None,
                 "active_job_publication_id": job.build_publication_id if job else None,
                 "active_job_publication_version": (
-                    job.build_publication.version_number if job and job.build_publication else None
+                    linked_publications[job.build_publication_id].version_number
+                    if job and job.build_publication_id in linked_publications
+                    else None
                 ),
                 "should_poll": state == BUILDING
                 or (
@@ -221,6 +307,102 @@ def scope_operational_states(
             }
         )
     return rows
+
+
+def scope_operational_states(
+    department, *, now=None, scope_ids: set[object] | None = None
+) -> list[dict[str, Any]]:
+    """Return detailed state for all requested scopes (compatibility helper).
+
+    Publications list callers should use publication_scope_queryset followed by
+    scope_operational_states_for_scopes so only the visible page is enriched.
+    """
+    scopes = publication_scope_queryset(department)
+    if scope_ids is not None:
+        scopes = scopes.filter(pk__in=scope_ids)
+    return scope_operational_states_for_scopes(list(scopes), now=now)
+
+
+def dataset_publication_summaries(
+    department, *, dataset_type_codes: set[str] | None = None, now=None
+) -> dict[str, dict[str, Any]]:
+    """Return compact per-dataset card state without detailed scope row models.
+
+    Station-scoped datasets may have hundreds of scopes.  Data Hub only needs
+    a module-level publication summary, so it derives aggregate counters from
+    the same narrow batch projections instead of constructing every row's UI
+    affordances, labels and actions.
+    """
+    now = now or timezone.now()
+    scopes = publication_scope_queryset(department, include_station=False)
+    if dataset_type_codes is not None:
+        scopes = scopes.filter(dataset_type_code__in=dataset_type_codes)
+    scopes = list(scopes)
+    latest_by_scope, active_jobs, linked_publications = _state_publications_and_jobs(scopes)
+    summaries: dict[str, dict[str, Any]] = {}
+    state_priority = {
+        BUILDING: 6,
+        UPDATE_QUEUED: 5,
+        QUEUED: 5,
+        FAILED: 4,
+        NEEDS_REBUILD: 3,
+        READY_TO_PUBLISH: 2,
+        CURRENT: 1,
+        NOT_PUBLISHED: 0,
+    }
+    for scope in scopes:
+        latest, job, latest_built, current, current_fingerprint, dirty = _scope_state_inputs(
+            scope=scope,
+            latest_by_scope=latest_by_scope,
+            active_jobs=active_jobs,
+            linked_publications=linked_publications,
+        )
+        state = compute_scope_state(
+            dirty=dirty,
+            latest_status=latest.status if latest else None,
+            latest_source_fingerprint=latest.source_fingerprint if latest else None,
+            current_source_fingerprint=current_fingerprint,
+            latest_built_status=latest_built.status if latest_built else None,
+            current_published=current is not None,
+            active_job_status=job.status if job else None,
+            active_job_not_before=job.not_before if job else None,
+            now=now,
+        )
+        summary = summaries.setdefault(
+            scope.dataset_type_code,
+            {
+                "distributed_version": None,
+                "state": NOT_PUBLISHED,
+                "state_label": STATE_LABELS[NOT_PUBLISHED],
+                "current_update_label": None,
+                "scope_count": 0,
+                "published_scope_count": 0,
+            },
+        )
+        summary["scope_count"] += 1
+        if current is not None:
+            summary["published_scope_count"] += 1
+            # A card is an aggregate, so its version is a representative
+            # current version rather than a candidate version.  It can never
+            # expose a STAGED/BUILDING attempt as authoritative.
+            if (
+                summary["distributed_version"] is None
+                or current.version_number > summary["distributed_version"]
+            ):
+                summary["distributed_version"] = current.version_number
+        if state_priority[state] > state_priority[summary["state"]]:
+            summary["state"] = state
+
+    for summary in summaries.values():
+        if summary["distributed_version"] is None:
+            summary["state"] = NOT_PUBLISHED
+        summary["state_label"] = STATE_LABELS[summary["state"]]
+        summary["current_update_label"] = (
+            CURRENT_UPDATE_LABELS.get(summary["state"])
+            if summary["distributed_version"] is not None
+            else None
+        )
+    return summaries
 
 
 def operational_summary(rows: list[dict[str, Any]]) -> dict[str, int]:

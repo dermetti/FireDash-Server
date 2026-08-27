@@ -258,3 +258,23 @@ def test_department_accounts_are_bounded_and_mutations_require_reauth(client, st
         ).status_code
         == 403
     )
+
+
+@pytest.mark.django_db
+def test_htmx_administrator_revoke_uses_the_shared_reauthentication_redirect(client, stage4_scope):
+    department = stage4_scope["department"]
+    candidate = User.objects.create_user("reauth-candidate@example.test", "Candidate", "password")
+    membership = DepartmentMembership.objects.create(
+        user=candidate,
+        department=department,
+        created_by=stage4_scope["admin"],
+    )
+    revoke_url = reverse("portal-department-admin-revoke", args=(department.id, membership.id))
+
+    response = client.post(revoke_url, HTTP_HX_REQUEST="true")
+
+    assert response.status_code == 200
+    assert response.content == b""
+    assert response["HX-Redirect"].startswith(reverse("accounts-reauthenticate"))
+    membership.refresh_from_db()
+    assert membership.status == DepartmentMembership.Status.ACTIVE

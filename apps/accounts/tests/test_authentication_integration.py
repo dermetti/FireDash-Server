@@ -162,6 +162,101 @@ def test_reauthentication_pending_action_expires_and_is_single_use(client) -> No
     assert b"North" not in replay_response.content
 
 
+@pytest.mark.django_db
+def test_htmx_reauthentication_uses_full_page_redirect_and_explicit_form_action(client) -> None:
+    user = User.objects.create_user("htmx-admin@example.test", "HTMX Admin", "safe-password")
+    SystemRole.objects.create(user=user)
+    device = _confirmed_device(user)
+    client.force_login(user)
+    action_url = reverse("portal-system-departments")
+
+    htmx_response = client.post(
+        action_url,
+        {"name": "North", "short_code": "NORTH"},
+        HTTP_HX_REQUEST="true",
+    )
+
+    assert htmx_response.status_code == 200
+    assert htmx_response.content == b""
+    assert "HX-Redirect" in htmx_response
+    reauth_url = htmx_response["HX-Redirect"]
+    token = parse_qs(urlparse(reauth_url).query)["pending"][0]
+    assert reauth_url.startswith(reverse("accounts-reauthenticate"))
+    assert client.session["pending_reauth"]["url"] == action_url
+    assert not Department.objects.filter(short_code="NORTH").exists()
+
+    reauth_page = client.get(reauth_url)
+
+    assert reauth_page.status_code == 200
+    assert reauth_page.wsgi_request.path == reverse("accounts-reauthenticate")
+    assert (
+        f'action="{reverse("accounts-reauthenticate")}?pending={token}"'
+        in reauth_page.content.decode()
+    )
+
+    valid_response = client.post(
+        reauth_url,
+        {"pending": token, "token": _current_token(device)},
+    )
+
+    # Pending reauthentication deliberately returns to the safe page without
+    # replaying the original POST body. The operator submits the action once
+    # after reauthentication, rather than posting back to the old HTMX page.
+    assert valid_response.status_code == 302
+    assert valid_response.url == action_url
+    assert "pending_reauth" not in client.session
+    assert not Department.objects.filter(short_code="NORTH").exists()
+
+    first_resubmission = client.post(action_url, {"name": "North", "short_code": "NORTH"})
+
+    assert first_resubmission.status_code == 302
+    assert Department.objects.filter(short_code="NORTH").count() == 1
+
+
+@pytest.mark.django_db
+def test_invalid_htmx_reauthentication_otp_stays_on_the_reauthentication_page(client) -> None:
+    user = User.objects.create_user("invalid-otp@example.test", "Invalid OTP", "safe-password")
+    SystemRole.objects.create(user=user)
+    _confirmed_device(user)
+    client.force_login(user)
+    action_url = reverse("portal-system-departments")
+    htmx_response = client.post(
+        action_url,
+        {"name": "East", "short_code": "EAST"},
+        HTTP_HX_REQUEST="true",
+    )
+    reauth_url = htmx_response["HX-Redirect"]
+    token = parse_qs(urlparse(reauth_url).query)["pending"][0]
+
+    invalid_response = client.post(
+        reauth_url,
+        {"pending": token, "token": "000000"},
+    )
+
+    assert invalid_response.status_code == 200
+    assert invalid_response.wsgi_request.path == reverse("accounts-reauthenticate")
+    assert b"Invalid TOTP code." in invalid_response.content
+    assert "pending_reauth" in client.session
+    assert not Department.objects.filter(short_code="EAST").exists()
+
+
+@pytest.mark.django_db
+def test_non_htmx_reauthentication_keeps_ordinary_redirect(client) -> None:
+    user = User.objects.create_user("browser-admin@example.test", "Browser Admin", "safe-password")
+    SystemRole.objects.create(user=user)
+    _confirmed_device(user)
+    client.force_login(user)
+
+    response = client.post(
+        reverse("portal-system-departments"),
+        {"name": "West", "short_code": "WEST"},
+    )
+
+    assert response.status_code == 302
+    assert response.url.startswith(reverse("accounts-reauthenticate"))
+    assert "HX-Redirect" not in response
+
+
 @pytest.mark.parametrize("return_url", ("https://attacker.example/", "//attacker.example/"))
 def test_reauthentication_rejects_unsafe_or_missing_continuations(return_url) -> None:
     request = RequestFactory().post("/sensitive-action/")

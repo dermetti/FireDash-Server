@@ -75,7 +75,16 @@ def _activate(*, department, scope, version=17):
     )
     scope.latest_built_publication = publication
     scope.current_published_publication = publication
-    scope.save(update_fields=("latest_built_publication", "current_published_publication"))
+    publication.source_fingerprint = "a" * 64
+    publication.save(update_fields=("source_fingerprint",))
+    scope.current_source_fingerprint = publication.source_fingerprint
+    scope.save(
+        update_fields=(
+            "latest_built_publication",
+            "current_published_publication",
+            "current_source_fingerprint",
+        )
+    )
     return publication
 
 
@@ -162,7 +171,10 @@ def test_data_hub_shows_failed_update_without_replacing_current(data_hub_scope, 
         status=DatasetPublication.Status.FAILED,
     )
     scope.latest_built_publication = failed
-    scope.save(update_fields=("latest_built_publication",))
+    # A failed update is only current card state while canonical source still
+    # differs from the active publication.
+    scope.current_source_fingerprint = "b" * 64
+    scope.save(update_fields=("latest_built_publication", "current_source_fingerprint"))
 
     content = _page(client, department)
 

@@ -523,3 +523,22 @@ def test_mark_lost_requires_reauth(client, tablet_ui_scope):
     assert "reauthenticate" in response.url
     tablet.refresh_from_db()
     assert tablet.status == Tablet.Status.INACTIVE
+
+
+@pytest.mark.django_db
+def test_htmx_tablet_mutation_uses_the_shared_reauthentication_redirect(client, tablet_ui_scope):
+    scope = tablet_ui_scope
+    tablet = _pending_tablet(scope.department)
+    client.force_login(scope.admin)
+
+    response = client.post(
+        reverse("tablet-mark-lost", args=(scope.department.id, tablet.id)),
+        {"reason": "Lost on scene"},
+        HTTP_HX_REQUEST="true",
+    )
+
+    assert response.status_code == 200
+    assert response.content == b""
+    assert response["HX-Redirect"].startswith(reverse("accounts-reauthenticate"))
+    tablet.refresh_from_db()
+    assert tablet.status == Tablet.Status.INACTIVE

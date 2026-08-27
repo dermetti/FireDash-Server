@@ -7,7 +7,7 @@
     <div class="card-body">
       {% if operation %}<p class="text-body-secondary small">Confirm your identity to continue: <code>{{ operation }}</code></p>{% endif %}
       <p class="small">Enter your TOTP code to confirm your administrative session.</p>
-      <form method="post">{% csrf_token %}
+      <form method="post" action="{% url 'accounts-reauthenticate' %}{% if pending_token %}?pending={{ pending_token|urlencode }}{% endif %}">{% csrf_token %}
         {% if pending_token %}<input type="hidden" name="pending" value="{{ pending_token }}">{% endif %}
         {% include "components/_form_field.html" with field=form.token %}
         <button class="btn btn-warning w-100">Confirm</button>

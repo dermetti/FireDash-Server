@@ -282,6 +282,35 @@ def test_staged_action_modal_is_scope_authorized_and_explains_history(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_htmx_publication_mutations_redirect_to_reauthentication(client, publication_ui_context):
+    admin, _, department, _, _ = publication_ui_context
+    scope, _ = _current_scope(department=department)
+    staged = _publication(
+        department=department,
+        scope=scope,
+        version_number=8,
+        status=DatasetPublication.Status.STAGED,
+    )
+    client.force_login(admin)
+
+    action_urls = (
+        reverse("publications-scope-stage-update", args=(scope.id,)),
+        reverse("publications-scope-build-now", args=(scope.id,)),
+        reverse("publications-lifecycle-modal", args=(staged.id, "delete-staged")),
+        reverse("publications-lifecycle-modal", args=(staged.id, "rollback")),
+    )
+    for action_url in action_urls:
+        response = client.post(action_url, HTTP_HX_REQUEST="true")
+
+        assert response.status_code == 200
+        assert response.content == b""
+        assert response["HX-Redirect"].startswith(reverse("accounts-reauthenticate"))
+
+    staged.refresh_from_db()
+    assert staged.status == DatasetPublication.Status.STAGED
+
+
+@pytest.mark.django_db(transaction=True)
 def test_cancel_modal_reports_a_build_that_finished_first(client, publication_ui_context):
     admin, _, department, _, _ = publication_ui_context
     _scope, current = _current_scope(department=department)

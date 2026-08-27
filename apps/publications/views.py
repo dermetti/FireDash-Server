@@ -4,6 +4,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
+from django.db.models import Exists, F, OuterRef, Q, Subquery
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -15,7 +16,7 @@ from apps.authorization.services import require_department_admin
 from apps.organizations.models import Department
 from apps.publications.builders import build_source_payload
 from apps.publications.diffs import source_diff
-from apps.publications.models import DatasetPublication, DatasetScopeState
+from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.registry import get_dataset_definition
 from apps.publications.services import (
     PublicationError,
@@ -35,7 +36,8 @@ from apps.publications.state import (
     NOT_PUBLISHED,
     QUEUED,
     UPDATE_QUEUED,
-    scope_operational_states,
+    publication_scope_queryset,
+    scope_operational_states_for_scopes,
 )
 
 SCOPE_PAGE_SIZE = 50
@@ -127,31 +129,98 @@ def _decorate_scope_rows(rows: list[dict[str, object]]) -> list[dict[str, object
     return rows
 
 
-def _matches_filter(row: dict[str, object], selected_filter: str) -> bool:
-    state = row["state"]
-    return {
-        "": True,
-        "current": state == "CURRENT",
-        "scheduled": state in (UPDATE_QUEUED, QUEUED),
-        "building": state == BUILDING,
-        "failed": state == FAILED,
-        "not_published": state == NOT_PUBLISHED,
-    }.get(selected_filter, True)
+def _filtered_scope_queryset(department: Department, selected_filter: str):
+    """Filter scope rows before pagination without materializing every row.
+
+    The normal list path has no publication subqueries at all.  State filters
+    need a small number of boolean/latest-status predicates for an accurate
+    count, but intentionally never project a publication's heavy payload.
+    """
+    queryset = publication_scope_queryset(department)
+    if not selected_filter:
+        return queryset
+
+    active_jobs = PublicationJob.objects.filter(
+        scope_state_id=OuterRef("pk"),
+        status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+    )
+    running_jobs = active_jobs.filter(status=PublicationJob.Status.RUNNING)
+    pending_jobs = active_jobs.filter(status=PublicationJob.Status.PENDING)
+    latest = DatasetPublication.objects.filter(scope_state_id=OuterRef("pk")).order_by(
+        "-version_number"
+    )
+    queryset = queryset.annotate(
+        has_running_job=Exists(running_jobs),
+        has_pending_job=Exists(pending_jobs),
+        latest_status=Subquery(latest.values("status")[:1]),
+    )
+    dirty = (
+        Q(current_published_publication__isnull=True)
+        | Q(current_source_fingerprint="")
+        | Q(current_published_publication__source_fingerprint="")
+        | ~Q(current_source_fingerprint=F("current_published_publication__source_fingerprint"))
+    )
+    no_active_job = Q(has_running_job=False, has_pending_job=False)
+    if selected_filter == "building":
+        return queryset.filter(
+            Q(has_running_job=True) | Q(latest_status=DatasetPublication.Status.BUILDING)
+        )
+    if selected_filter == "scheduled":
+        return queryset.filter(
+            Q(has_running_job=False)
+            & (Q(has_pending_job=True) | Q(latest_status=DatasetPublication.Status.STAGED))
+        )
+    if selected_filter == "failed":
+        # Failed is current only when the latest failed attempt belongs to the
+        # current source. This extra scalar exists only for the explicit
+        # Failed filter; normal list rendering remains page-first and batched.
+        queryset = queryset.annotate(
+            latest_source_fingerprint=Subquery(latest.values("source_fingerprint")[:1])
+        )
+        return (
+            queryset.filter(no_active_job, latest_status=DatasetPublication.Status.FAILED)
+            .filter(dirty)
+            .filter(
+                Q(latest_source_fingerprint="")
+                | Q(latest_source_fingerprint=F("current_source_fingerprint"))
+            )
+        )
+    if selected_filter == "current":
+        return (
+            queryset.filter(
+                no_active_job,
+                current_published_publication__isnull=False,
+                current_source_fingerprint=F("current_published_publication__source_fingerprint"),
+            )
+            .exclude(
+                latest_status__in=(
+                    DatasetPublication.Status.STAGED,
+                    DatasetPublication.Status.BUILDING,
+                )
+            )
+            .exclude(latest_built_publication__status=DatasetPublication.Status.READY_FOR_REVIEW)
+        )
+    if selected_filter == "not_published":
+        return queryset.filter(
+            no_active_job,
+            current_published_publication__isnull=True,
+            latest_status__isnull=True,
+        )
+    return queryset
 
 
 def _publication_list_context(request: HttpRequest, department: Department) -> dict[str, object]:
     selected_filter = request.GET.get("state", "")
     if selected_filter not in SCOPE_FILTERS:
         selected_filter = ""
-    rows = _decorate_scope_rows(scope_operational_states(department))
-    rows = [row for row in rows if _matches_filter(row, selected_filter)]
-    paginator = Paginator(rows, SCOPE_PAGE_SIZE)
+    paginator = Paginator(_filtered_scope_queryset(department, selected_filter), SCOPE_PAGE_SIZE)
     page = paginator.get_page(request.GET.get("page"))
+    rows = _decorate_scope_rows(scope_operational_states_for_scopes(list(page.object_list)))
     page_query = request.GET.copy()
     page_query.pop("page", None)
     return {
         "department": department,
-        "scope_rows": page.object_list,
+        "scope_rows": rows,
         "page": page,
         "total_count": paginator.count,
         "selected_filter": selected_filter,
@@ -161,7 +230,7 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
 
 
 def _scope_row_context(scope: DatasetScopeState) -> dict[str, object]:
-    rows = _decorate_scope_rows(scope_operational_states(scope.department, scope_ids={scope.id}))
+    rows = _decorate_scope_rows(scope_operational_states_for_scopes([scope]))
     if not rows:
         raise PermissionDenied("Dataset scope is unavailable.")
     return {"row": rows[0], "department": scope.department}

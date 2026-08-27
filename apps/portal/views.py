@@ -1008,12 +1008,18 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     # Keep this gateway read-only: the cheap authoritative counts help an
     # administrator choose a module without duplicating CRUD controls here.
     from apps.personnel.models import Person
-    from apps.publications.state import scope_operational_states
+    from apps.publications.state import dataset_publication_summaries
     from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
 
-    publication_states = {
-        row["dataset_type_code"]: row for row in scope_operational_states(department)
-    }
+    publication_states = dataset_publication_summaries(
+        department,
+        dataset_type_codes={
+            "department_hydrants",
+            "station_personnel",
+            "department_fire_plans",
+            "department_klgv_plans",
+        },
+    )
 
     def module(*, dataset_type_code: str, **values):
         state = publication_states.get(dataset_type_code)
