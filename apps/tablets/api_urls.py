@@ -20,4 +20,14 @@ urlpatterns = [
         api.DownloadView.as_view(),
         name="api-dataset-download",
     ),
+    path(
+        "tablet/fire-plan-generations/<uuid:publication_id>/manifest",
+        api.FirePlanGenerationManifestView.as_view(),
+        name="api-fire-plan-generation-manifest",
+    ),
+    path(
+        "tablet/fire-plan-generations/<uuid:publication_id>/artifacts/<uuid:artifact_id>/download",
+        api.FirePlanDocumentArtifactDownloadView.as_view(),
+        name="api-fire-plan-document-download",
+    ),
 ]

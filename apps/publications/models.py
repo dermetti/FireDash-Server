@@ -358,6 +358,88 @@ class PublicationFirePlanArtifactReference(models.Model):
             raise ValidationError(errors)
 
 
+class FirePlanGenerationKey(models.Model):
+    """Worker-held random key for one dormant Fire Plan v2 generation."""
+
+    publication = models.OneToOneField(
+        DatasetPublication,
+        primary_key=True,
+        on_delete=models.PROTECT,
+        related_name="fire_plan_generation_key",
+    )
+    wrapped_key = models.BinaryField()
+    wrapping_algorithm = models.CharField(max_length=32)
+    kek_version = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self) -> None:
+        if (
+            self.wrapping_algorithm != "AES-KW-RFC3394"
+            or not self.kek_version
+            or not self.wrapped_key
+        ):
+            raise ValidationError("Generation keys require protected wrapping metadata.")
+
+
+class FirePlanGenerationKeyGrant(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RUNNING = "RUNNING", "Running"
+        READY = "READY", "Ready"
+        FAILED = "FAILED", "Failed"
+        REVOKED = "REVOKED", "Revoked"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publication = models.ForeignKey(
+        DatasetPublication, on_delete=models.PROTECT, related_name="fire_plan_generation_key_grants"
+    )
+    app_installation = models.ForeignKey(
+        "tablets.AppInstallation",
+        on_delete=models.PROTECT,
+        related_name="fire_plan_generation_key_grants",
+    )
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    hpke_ciphersuite = models.CharField(max_length=128, blank=True)
+    hpke_encapsulated_key = models.BinaryField(null=True, blank=True)
+    hpke_wrapped_generation_key = models.BinaryField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.CharField(max_length=512, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("publication", "app_installation"),
+                name="unique_fire_plan_generation_key_grant",
+            )
+        ]
+
+
+class FirePlanGenerationManifest(models.Model):
+    """One deterministic signed complete manifest for a v2 generation."""
+
+    publication = models.OneToOneField(
+        DatasetPublication,
+        primary_key=True,
+        on_delete=models.PROTECT,
+        related_name="fire_plan_generation_manifest",
+    )
+    payload = models.JSONField(default=dict)
+    signature = models.BinaryField()
+    signature_algorithm = models.CharField(max_length=32)
+    signing_key_version = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self) -> None:
+        if (
+            self.signature_algorithm != "Ed25519"
+            or not self.signing_key_version
+            or not self.signature
+        ):
+            raise ValidationError("Generation manifests require a signature.")
+
+
 class PublicationJob(models.Model):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"

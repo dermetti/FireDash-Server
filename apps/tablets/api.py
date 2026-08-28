@@ -27,6 +27,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authorization.services import minimum_supported_app_version
+from apps.publications.fire_plan_v2_delivery import (
+    _authorized_generation,
+    request_fire_plan_v2_generation_key_grant,
+)
 from apps.publications.manifests import (
     ManifestError,
     authorized_publications,
@@ -34,6 +38,11 @@ from apps.publications.manifests import (
     manifest_response_etag,
     publication_signing_public_key_for_requested_version,
     request_manifest,
+)
+from apps.publications.models import (
+    FirePlanGenerationKeyGrant,
+    FirePlanGenerationManifest,
+    PublicationFirePlanArtifactReference,
 )
 from apps.tablets.activity import record_tablet_api_activity
 from apps.tablets.models import AppInstallation
@@ -655,4 +664,73 @@ class DownloadView(InstallationAPIView):
         response["ETag"] = etag
         response["Accept-Ranges"] = "bytes"
         response["X-Accel-Redirect"] = f"/internal-protected-datasets/{publication.artifact_path}"
+        return response
+
+
+class FirePlanGenerationManifestView(InstallationAPIView):
+    """Dormant v2 endpoint; it is not referenced by the live v1 manifest."""
+
+    def get(self, request, publication_id: UUID):
+        try:
+            manifest = FirePlanGenerationManifest.objects.select_related("publication").get(
+                publication_id=publication_id
+            )
+            _authorized_generation(publication=manifest.publication, installation=self.installation)
+            grant = request_fire_plan_v2_generation_key_grant(
+                publication=manifest.publication, installation=self.installation
+            )
+        except FirePlanGenerationManifest.DoesNotExist as error:
+            raise exceptions.NotFound("Fire Plan generation is not available.") from error
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
+        if grant.status != FirePlanGenerationKeyGrant.Status.READY:
+            return Response(status=status.HTTP_202_ACCEPTED, headers={"Retry-After": "5"})
+        payload = dict(manifest.payload)
+        payload["signature"] = base64.b64encode(bytes(manifest.signature)).decode("ascii")
+        payload["signature_algorithm"] = manifest.signature_algorithm
+        payload["signing_key_version"] = manifest.signing_key_version
+        payload["generation_key_grant"] = {
+            "scheme": "HPKE",
+            "ciphersuite": grant.hpke_ciphersuite,
+            "encapsulated_key": base64.b64encode(bytes(grant.hpke_encapsulated_key)).decode(
+                "ascii"
+            ),
+            "wrapped_generation_key": base64.b64encode(
+                bytes(grant.hpke_wrapped_generation_key)
+            ).decode("ascii"),
+        }
+        return Response(payload)
+
+
+class FirePlanDocumentArtifactDownloadView(InstallationAPIView):
+    renderer_classes = [renderers.JSONRenderer, OctetStreamRenderer]
+
+    def get(self, request, publication_id: UUID, artifact_id: UUID):
+        try:
+            reference = PublicationFirePlanArtifactReference.objects.select_related(
+                "publication", "document_artifact"
+            ).get(publication_id=publication_id, document_artifact_id=artifact_id)
+            _authorized_generation(
+                publication=reference.publication, installation=self.installation
+            )
+            FirePlanGenerationKeyGrant.objects.get(
+                publication_id=publication_id,
+                app_installation=self.installation,
+                status=FirePlanGenerationKeyGrant.Status.READY,
+            )
+        except PublicationFirePlanArtifactReference.DoesNotExist as error:
+            raise exceptions.NotFound("Fire Plan document is not available.") from error
+        except FirePlanGenerationKeyGrant.DoesNotExist as error:
+            raise exceptions.PermissionDenied(
+                "Fire Plan generation key is not available."
+            ) from error
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
+        artifact = reference.document_artifact
+        etag = f'"{artifact.ciphertext_sha256}"'
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+        response = HttpResponse(content_type="application/octet-stream")
+        response["ETag"] = etag
+        response["X-Accel-Redirect"] = f"/internal-protected-datasets/{artifact.artifact_path}"
         return response
