@@ -1,38 +1,34 @@
 {% extends "base.html" %}
 {% block title %}Overview{% endblock %}
 {% block content %}
-{% include "components/_page_header.html" with title="Overview" description="FireDash administration overview." %}
+{% include "components/_page_header.html" with title="Overview" description="Operational attention, current state, and next destinations." %}
 {% if nav_station_ambiguous %}<div class="alert alert-danger">This account has multiple active station assignments. Contact a System or Department Administrator to correct the configuration.</div>{% endif %}
 {% if nav_role == "system" or nav_role == "department" or nav_role == "station" %}
-  <section class="mb-4" aria-labelledby="attention-heading"><h2 class="h4" id="attention-heading">Requires attention</h2>
-  {% if attention %}<div class="vstack gap-2">{% for item in attention %}<a class="alert alert-{{ item.level }} mb-0 text-decoration-none" href="{{ item.url }}"><strong>{{ item.count }}</strong> — {{ item.text }} <span class="float-end">Resolve →</span></a>{% endfor %}</div>{% else %}<div class="alert alert-success mb-0">No current attention items require action.</div>{% endif %}</section>
-{% endif %}
-<div class="card shadow-sm"><div class="card-body">
-    {% if nav_role == "system" %}
-      <p>You are administering the FireDash server.</p>
-      <div class="d-flex gap-2 flex-wrap">
-        <a class="btn btn-outline-primary" href="{% url 'portal-system-departments' %}">Departments</a>
-        <a class="btn btn-outline-primary" href="{% url 'portal-system-api-compatibility' %}">API Compatibility</a>
-      </div>
-    {% elif nav_role == "department" %}
-      <h2 class="h5">Operational state</h2><p>You are administering <strong>{{ nav_department.name }}</strong> across all of its stations.</p>
-      <div class="d-flex gap-2 flex-wrap">
-        <a class="btn btn-outline-primary" href="{% url 'portal-stations' nav_department.id %}">Stations</a>
-        <a class="btn btn-outline-primary" href="{% url 'tablet-list' nav_department.id %}">Tablets</a>
-      </div>
-    {% elif nav_role == "station" %}
-      {% if nav_station %}
-        <h2 class="h5">Station state</h2><p>You are administering <strong>{{ nav_station.name }}</strong>.</p>
-        <div class="d-flex gap-2 flex-wrap">
-          <a class="btn btn-outline-primary" href="{% url 'portal-station-manage' nav_station.id %}">Station Details</a>
-          <a class="btn btn-outline-primary" href="{% url 'personnel-list' nav_station.department_id %}">Personnel</a>
-        </div>
-      {% else %}
-        <p class="text-body-secondary">No single station context could be determined for this account.</p>
-      {% endif %}
+  <section class="mb-4" aria-labelledby="attention-heading">
+    <h2 class="h4" id="attention-heading">Requires attention</h2>
+    {% if attention %}
+      <div class="vstack gap-2">{% for item in attention %}<a class="alert alert-{{ item.level }} mb-0 text-decoration-none" href="{{ item.url }}"><strong>{{ item.count }}</strong> &mdash; {{ item.text }} <span class="float-end">Resolve &rarr;</span></a>{% endfor %}</div>
     {% else %}
-      <p class="text-body-secondary">No administrative role is currently assigned to this account.</p>
+      <div class="alert alert-success mb-0" role="status">No current attention items require action.</div>
     {% endif %}
-  </div>
-</div>
+  </section>
+{% endif %}
+<section class="card shadow-sm" aria-labelledby="operational-state-heading"><div class="card-body">
+  {% if nav_role == "system" %}
+    <h2 class="h5" id="operational-state-heading">Operational state</h2><p>You are administering the FireDash server.</p>
+  {% elif nav_role == "department" %}
+    <h2 class="h5" id="operational-state-heading">Operational state</h2><p>You are administering <strong>{{ nav_department.name }}</strong> across all of its stations.</p>
+  {% elif nav_role == "station" %}
+    {% if nav_station %}
+      <h2 class="h5" id="operational-state-heading">Operational state</h2><p>You are administering <strong>{{ nav_station.name }}</strong>.</p>
+    {% else %}
+      <p class="text-body-secondary">No single station context could be determined for this account.</p>
+    {% endif %}
+  {% else %}
+    <p class="text-body-secondary">No administrative role is currently assigned to this account.</p>
+  {% endif %}
+  {% if operational_summary %}<ul class="list-group list-group-flush" aria-label="Operational status">
+    {% for metric in operational_summary %}<li class="list-group-item px-0 d-flex justify-content-between align-items-center"><span>{{ metric.text }}</span><a href="{{ metric.url }}">Open</a></li>{% endfor %}
+  </ul>{% endif %}
+</div></section>
 {% endblock %}

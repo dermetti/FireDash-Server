@@ -7,9 +7,9 @@
     <a class="navbar-brand" href="{% url 'dashboard' %}">FireDash</a>
     {% if nav_scope_label %}<span class="navbar-text text-light-emphasis small d-none d-md-inline">{{ nav_scope_label }}</span>{% endif %}
     <div class="ms-auto d-flex align-items-center gap-3">
-      {% if nav_role == "department" or nav_role == "station" %}
-        <a class="btn btn-sm {% if nav_attention %}btn-warning{% else %}btn-outline-light{% endif %}" href="{% url 'dashboard' %}" aria-label="{% if nav_attention %}{{ nav_attention|length }} items require attention. Open Overview.{% else %}No items require attention. Open Overview.{% endif %}">
-          Attention{% if nav_attention %} <span class="badge text-bg-dark">{{ nav_attention|length }}</span>{% else %} <span class="visually-hidden">No items require attention</span>{% endif %}
+      {% if nav_role == "system" or nav_role == "department" or nav_role == "station" %}
+        <a class="btn btn-sm {% if nav_attention_total %}btn-warning{% else %}btn-outline-light{% endif %}" href="{% url 'dashboard' %}" aria-label="{% if nav_attention_total %}{{ nav_attention_total }} items require attention. Open Overview.{% else %}No items require attention. Open Overview.{% endif %}">
+          Attention{% if nav_attention_total %} <span class="badge text-bg-dark">{{ nav_attention_total }}</span>{% else %} <span class="visually-hidden">No items require attention</span>{% endif %}
         </a>
       {% endif %}
       <div class="dropdown">

@@ -73,7 +73,7 @@ from apps.portal.forms import (
     StationListFilterForm,
     VehicleForm,
 )
-from apps.portal.overview import attention_for_request, system_attention
+from apps.portal.overview import attention_for_request, attention_total, operational_summary
 
 
 @dataclass(frozen=True)
@@ -171,6 +171,7 @@ def _nav_context(request):
     user = request.user
     path = request.path
     if is_system_admin(user):
+        attention = attention_for_request(request)
         sections: list[dict[str, object]] = [
             {"label": "Overview", "url": reverse("dashboard")},
             {"label": "Departments", "url": reverse("portal-system-departments")},
@@ -192,6 +193,8 @@ def _nav_context(request):
             "nav_role": "system",
             "nav_sections": sections,
             "nav_scope_label": "FireDash Server / System",
+            "nav_attention": attention,
+            "nav_attention_total": attention_total(attention),
         }
 
     department_ids = list(active_department_ids(user))
@@ -242,6 +245,9 @@ def _nav_context(request):
             "nav_department": department,
             "nav_scope_label": department.name,
             "nav_attention": attention_for_request(request, department=department),
+            "nav_attention_total": attention_total(
+                attention_for_request(request, department=department)
+            ),
         }
 
     # Station Administrator (station-only). Resolve the single authorized
@@ -283,6 +289,9 @@ def _nav_context(request):
                 else "Station administrator (inconsistent configuration)"
             ),
             "nav_attention": attention_for_request(request, station=station) if station else [],
+            "nav_attention_total": attention_total(
+                attention_for_request(request, station=station) if station else []
+            ),
         }
 
     return {
@@ -367,12 +376,16 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     context = _nav_context(request)
     if context.get("nav_role") == "department":
         context["attention"] = attention_for_request(request, department=context["nav_department"])
+        context["operational_summary"] = operational_summary(department=context["nav_department"])
     elif context.get("nav_role") == "station" and context.get("nav_station") is not None:
         context["attention"] = attention_for_request(request, station=context["nav_station"])
+        context["operational_summary"] = operational_summary(station=context["nav_station"])
     elif context.get("nav_role") == "system":
-        context["attention"] = system_attention()
+        context["attention"] = attention_for_request(request)
+        context["operational_summary"] = operational_summary()
     else:
         context["attention"] = []
+        context["operational_summary"] = []
     return render(request, "portal/dashboard.html", context)
 
 

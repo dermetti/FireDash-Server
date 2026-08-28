@@ -130,7 +130,9 @@ def publication_scope_queryset(department, *, include_station: bool = True):
     return queryset.order_by("dataset_type_code", "id")
 
 
-def _state_publications_and_jobs(scopes: list[DatasetScopeState]):
+def _state_publications_and_jobs(
+    scopes: list[DatasetScopeState], *, include_snapshot_retention: bool = True
+):
     """Fetch the state-only publication data for a bounded collection of scopes.
 
     `DISTINCT ON` is PostgreSQL's efficient one-row-per-scope form.  The
@@ -151,18 +153,20 @@ def _state_publications_and_jobs(scopes: list[DatasetScopeState]):
         "created_at",
         "published_at",
     )
-    source_snapshot_retained = Case(
-        When(source_snapshot__isnull=False, then=Value(True)),
-        default=Value(False),
-        output_field=BooleanField(),
-    )
+    latest_publications = DatasetPublication.objects.filter(scope_state_id__in=scope_ids).order_by(
+        "scope_state_id", "-version_number"
+    ).distinct("scope_state_id").only(*publication_fields)
+    if include_snapshot_retention:
+        latest_publications = latest_publications.annotate(
+            source_snapshot_retained=Case(
+                When(source_snapshot__isnull=False, then=Value(True)),
+                default=Value(False),
+                output_field=BooleanField(),
+            )
+        )
     latest_by_scope = {
         publication.scope_state_id: publication
-        for publication in DatasetPublication.objects.filter(scope_state_id__in=scope_ids)
-        .annotate(source_snapshot_retained=source_snapshot_retained)
-        .order_by("scope_state_id", "-version_number")
-        .distinct("scope_state_id")
-        .only(*publication_fields)
+        for publication in latest_publications
     }
     active_jobs = {
         job.scope_state_id: job
@@ -192,11 +196,20 @@ def _state_publications_and_jobs(scopes: list[DatasetScopeState]):
         for job in active_jobs.values()
         if job.build_publication_id is not None
     )
+    linked_queryset = DatasetPublication.objects.filter(pk__in=linked_publication_ids).only(
+        *publication_fields
+    )
+    if include_snapshot_retention:
+        linked_queryset = linked_queryset.annotate(
+            source_snapshot_retained=Case(
+                When(source_snapshot__isnull=False, then=Value(True)),
+                default=Value(False),
+                output_field=BooleanField(),
+            )
+        )
     linked_publications = {
         publication.id: publication
-        for publication in DatasetPublication.objects.filter(pk__in=linked_publication_ids)
-        .only(*publication_fields)
-        .annotate(source_snapshot_retained=source_snapshot_retained)
+        for publication in linked_queryset
     }
     return latest_by_scope, active_jobs, linked_publications
 
@@ -321,6 +334,43 @@ def scope_operational_states_for_scopes(
             }
         )
     return rows
+
+
+def scope_states_for_attention(scopes: list[DatasetScopeState], *, now=None):
+    """Return only the state data an operational attention list needs.
+
+    Unlike detailed Publications rows, this deliberately omits presentation
+    actions, snapshots and attempt metadata.  It is safe to run across every
+    scope in a department because its database reads remain bounded.
+    """
+    now = now or timezone.now()
+    scopes = list(scopes)
+    latest_by_scope, active_jobs, linked_publications = _state_publications_and_jobs(
+        scopes, include_snapshot_retention=False
+    )
+    states = []
+    for scope in scopes:
+        latest, job, latest_built, current_published, current_fingerprint, dirty = (
+            _scope_state_inputs(
+                scope=scope,
+                latest_by_scope=latest_by_scope,
+                active_jobs=active_jobs,
+                linked_publications=linked_publications,
+            )
+        )
+        state = compute_scope_state(
+            dirty=dirty,
+            latest_status=latest.status if latest else None,
+            latest_source_fingerprint=latest.source_fingerprint if latest else None,
+            current_source_fingerprint=current_fingerprint,
+            latest_built_status=latest_built.status if latest_built else None,
+            current_published=current_published is not None,
+            active_job_status=job.status if job else None,
+            active_job_not_before=job.not_before if job else None,
+            now=now,
+        )
+        states.append((scope, state))
+    return states
 
 
 def scope_operational_states(
