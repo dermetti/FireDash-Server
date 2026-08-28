@@ -22,6 +22,7 @@ from apps.publications.builders import (
     source_fingerprint_for_payload,
     validate_built_summary,
 )
+from apps.publications.document_artifacts import release_terminal_document_artifact_references
 from apps.publications.feature_services import FeatureDisabledError, require_feature
 from apps.publications.manifests import revoke_publication_dataset_key_grants
 from apps.publications.models import (
@@ -723,6 +724,7 @@ def finalize_publication_job(
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
         publication.save(update_fields=("status", "source_fingerprint", "source_snapshot"))
+        release_terminal_document_artifact_references(publication=publication)
         job.status = PublicationJob.Status.OBSOLETE
         job.completed_at = now
         job.save(update_fields=("status", "completed_at"))
@@ -843,6 +845,7 @@ def fail_publication_job(
                 publication.artifact_status = DatasetPublication.ArtifactStatus.FAILED
                 publication.build_error = job.error_message
                 publication.save(update_fields=("status", "artifact_status", "build_error"))
+                release_terminal_document_artifact_references(publication=publication)
     record_event(
         action="publication.build_failed",
         department=job.department,
@@ -898,6 +901,7 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
                 publication.status = DatasetPublication.Status.FAILED
                 publication.build_error = "Worker heartbeat timed out."
                 publication.save(update_fields=("status", "build_error"))
+                release_terminal_document_artifact_references(publication=publication)
         if job.attempt_count >= max_attempts:
             job.status = PublicationJob.Status.FAILED
             job.completed_at = timezone.now()
@@ -1218,6 +1222,7 @@ def cancel_publication_build(*, actor, publication: DatasetPublication) -> Datas
     candidate.status = DatasetPublication.Status.CANCELLED
     candidate.build_error = "Build cancelled by an administrator."
     candidate.save(update_fields=("status", "build_error"))
+    release_terminal_document_artifact_references(publication=candidate)
     job.status = PublicationJob.Status.CANCELLED
     job.completed_at = timezone.now()
     job.error_category = "cancelled"
@@ -1368,6 +1373,7 @@ def delete_publication(*, actor, publication: DatasetPublication) -> DatasetPubl
     # leave its signed metadata intact for historical integrity and remove only
     # the ciphertext after the transaction commits.
     candidate.save(update_fields=("status", "source_snapshot"))
+    release_terminal_document_artifact_references(publication=candidate)
     if scope.latest_built_publication_id == candidate.id:
         scope.latest_built_publication = scope.current_published_publication
         scope.save(update_fields=("latest_built_publication", "updated_at"))

@@ -358,6 +358,21 @@ class PublicationFirePlanArtifactReference(models.Model):
             raise ValidationError(errors)
 
 
+class FirePlanDocumentArtifactCleanup(models.Model):
+    """Durable post-commit cleanup work for an unreachable document artifact."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    artifact_id = models.UUIDField(unique=True)
+    artifact_path = models.CharField(max_length=512, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self) -> None:
+        if self.artifact_path != document_artifact_relative_path(artifact_id=self.artifact_id):
+            raise ValidationError(
+                {"artifact_path": "Cleanup path must be a generated document path."}
+            )
+
+
 class FirePlanGenerationKey(models.Model):
     """Worker-held random key for one dormant Fire Plan v2 generation."""
 

@@ -18,6 +18,7 @@ from django.db.models.functions import RowNumber
 from django.utils import timezone
 
 from apps.audit.services import record_event
+from apps.publications.document_artifacts import release_terminal_document_artifact_references
 from apps.publications.manifests import revoke_publication_dataset_key_grants
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.services import _schedule_artifact_removal
@@ -167,6 +168,7 @@ def _process_candidate(*, publication_id: object, now: datetime, dry_run: bool) 
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
         publication.save(update_fields=("status", "source_snapshot"))
+        release_terminal_document_artifact_references(publication=publication)
         if scope.latest_built_publication_id == publication.id:
             scope.latest_built_publication = scope.current_published_publication
             scope.save(update_fields=("latest_built_publication", "updated_at"))
@@ -198,6 +200,7 @@ def _process_candidate(*, publication_id: object, now: datetime, dry_run: bool) 
         return "snapshot_purged"
     publication.source_snapshot = None
     publication.save(update_fields=("source_snapshot",))
+    release_terminal_document_artifact_references(publication=publication)
     record_event(
         action="publication.retention_snapshot_purged",
         department=publication.department,

@@ -10,6 +10,7 @@ import shutil
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID
 
 from cryptography.hazmat.primitives import keywrap
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -295,7 +296,8 @@ def cleanup_stale_artifacts() -> int:
         if path.is_dir() and path.stat().st_mtime < cutoff.timestamp():
             shutil.rmtree(path, ignore_errors=True)
             removed += 1
-    from apps.publications.models import DatasetPublication
+    from apps.publications.document_artifacts import cleanup_unreferenced_document_artifacts
+    from apps.publications.models import DatasetPublication, FirePlanDocumentArtifact
 
     for publication in DatasetPublication.objects.filter(
         status__in=("FAILED", "OBSOLETE", "REJECTED", "CANCELLED"), artifact_path__gt=""
@@ -314,4 +316,22 @@ def cleanup_stale_artifacts() -> int:
         if publication.artifact_status != DatasetPublication.ArtifactStatus.READY:
             DatasetPublication.objects.filter(pk=publication.pk).update(artifact_path="")
         removed += 1
+    document_root = settings.PUBLICATION_ARTIFACT_ROOT / "documents"
+    if document_root.exists():
+        for path in document_root.glob("*/artifact.bin"):
+            if path.stat().st_mtime >= cutoff.timestamp():
+                continue
+            try:
+                artifact_id = UUID(path.parent.name)
+            except ValueError:
+                continue
+            if FirePlanDocumentArtifact.objects.filter(pk=artifact_id).exists():
+                continue
+            try:
+                remove_artifact_path(path.relative_to(settings.PUBLICATION_ARTIFACT_ROOT).as_posix())
+            except (ArtifactError, OSError) as error:
+                logger.warning("Orphan document artifact cleanup deferred for %s: %s", path, error)
+                continue
+            removed += 1
+        removed += cleanup_unreferenced_document_artifacts()
     return removed
