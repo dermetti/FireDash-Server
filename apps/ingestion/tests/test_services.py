@@ -49,7 +49,7 @@ def context(db, settings, tmp_path):
 
 def hydrant_csv(*rows):
     current_header = (
-        "external_identifier,longitude,latitude,street,house_number,"
+        "external_identifier,longitude,latitude,street,house_number,location,"
         "hydrant_type,diameter_mm,status\n"
     )
     # Keep callers concise while ensuring every generated fixture uses the
@@ -58,7 +58,7 @@ def hydrant_csv(*rows):
     for row in rows:
         values = row.split(",")
         if len(values) == 6:
-            values[3:3] = ("", "")
+            values[3:3] = ("", "", "")
         canonical_rows.append(",".join(values))
     return (current_header + "\n".join(canonical_rows)).encode()
 
@@ -74,6 +74,7 @@ def hydrant_geojson(*identifiers):
                 "external_identifier": identifier,
                 "street": "Main Street",
                 "house_number": "1",
+                "location": "Fahrbahn",
                 "hydrant_type": "wet",
                 "diameter_mm": None,
                 "status": "ACTIVE",
@@ -227,7 +228,7 @@ def test_absent_hydrant_stays_active_on_geojson_merge(context):
     Hydrant.objects.create(
         department=department,
         external_identifier="OLD",
-        location=Point(8, 50, srid=4326),
+        geometry=Point(8, 50, srid=4326),
         status="ACTIVE",
     )
     batch = create_preview(
@@ -250,7 +251,7 @@ def test_explicit_inactive_status_deactivates_hydrant(context):
     Hydrant.objects.create(
         department=department,
         external_identifier="H-1",
-        location=Point(8, 50, srid=4326),
+        geometry=Point(8, 50, srid=4326),
         status="ACTIVE",
     )
     batch = create_preview(
@@ -277,7 +278,7 @@ def test_chunking_preserves_explicit_deactivate_and_absent_semantics(context, mo
         Hydrant.objects.create(
             department=department,
             external_identifier=identifier,
-            location=Point(8, 50, srid=4326),
+            geometry=Point(8, 50, srid=4326),
             status="ACTIVE",
         )
     rows = [
@@ -357,6 +358,7 @@ def test_manual_hydrant_uses_same_preview_apply_and_noop_rules(context):
             "latitude": 50.2,
             "street": "Main Street",
             "house_number": "1",
+            "location": "Fahrbahn",
             "hydrant_type": "wet",
             "diameter_mm": 100,
             "status": "ACTIVE",
@@ -372,8 +374,8 @@ def test_manual_hydrant_uses_same_preview_apply_and_noop_rules(context):
         import_mode=ImportBatch.Mode.MERGE,
         filename="same.csv",
         payload=(
-            b"external_identifier,longitude,latitude,street,house_number,hydrant_type,diameter_mm,status\n"
-            b"H-MANUAL,8.1,50.2,Main Street,1,wet,100,ACTIVE\n"
+            b"external_identifier,longitude,latitude,street,house_number,location,hydrant_type,diameter_mm,status\n"
+            b"H-MANUAL,8.1,50.2,Main Street,1,Fahrbahn,wet,100,ACTIVE\n"
         ),
     )
     apply_preview(actor=actor, batch_id=second.id)
@@ -474,7 +476,7 @@ def test_postgresql_stale_preview_from_another_connection_requires_repreview(con
     Hydrant.objects.create(
         department=department,
         external_identifier="H-1",
-        location=Point(8.1, 50.2, srid=4326),
+        geometry=Point(8.1, 50.2, srid=4326),
         hydrant_type="dry",
         diameter_mm=100,
         status=Hydrant.Status.ACTIVE,
@@ -1122,7 +1124,7 @@ def test_preview_bounds_update_details_and_reports_truncation(context, settings)
         Hydrant.objects.create(
             department=department,
             external_identifier=f"H-{i}",
-            location=Point(8.0, 50.0, srid=4326),
+            geometry=Point(8.0, 50.0, srid=4326),
             status="ACTIVE",
         )
     rows = [f"H-{i},{8.0 + i / 1000},50.0,wet,{100 + i},ACTIVE" for i in range(5)]

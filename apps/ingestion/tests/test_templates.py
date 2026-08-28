@@ -24,8 +24,8 @@ def test_structured_templates_are_utf8_and_parse_with_the_real_importers():
 def test_hydrant_address_columns_are_normalized_and_legacy_schema_is_rejected():
     current = parse_hydrants(
         payload=(
-            b"external_identifier,longitude,latitude,street,house_number,hydrant_type,diameter_mm,status\n"
-            b"H-1,10.1,53.5,Strasse,7,underground,100,ACTIVE\n"
+            b"external_identifier,longitude,latitude,street,house_number,location,hydrant_type,diameter_mm,status\n"
+            b"H-1,10.1,53.5,Strasse,7,Fahrbahn,underground,100,ACTIVE\n"
         ),
         import_format="csv",
     )
@@ -40,6 +40,7 @@ def test_hydrant_address_columns_are_normalized_and_legacy_schema_is_rejected():
 
     assert current[0]["street"] == "Strasse"
     assert current[0]["house_number"] == "7"
+    assert current[0]["location"] == "Fahrbahn"
 
 
 def test_legacy_personnel_four_column_schema_is_rejected():

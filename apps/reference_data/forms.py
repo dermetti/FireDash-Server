@@ -69,6 +69,7 @@ class HydrantForm(forms.Form):
     latitude = forms.FloatField(min_value=-90, max_value=90)
     street = forms.CharField(max_length=255, required=False)
     house_number = forms.CharField(max_length=32, required=False)
+    location = forms.CharField(max_length=255, required=False)
     hydrant_type = forms.CharField(max_length=128, required=False)
     diameter_mm = forms.IntegerField(min_value=1, required=False)
     status = forms.ChoiceField(
@@ -88,6 +89,7 @@ class HydrantEditForm(forms.Form):
     latitude = forms.FloatField(min_value=-90, max_value=90)
     street = forms.CharField(max_length=255, required=False)
     house_number = forms.CharField(max_length=32, required=False)
+    location = forms.CharField(max_length=255, required=False)
     hydrant_type = forms.CharField(max_length=128, required=False)
     flow_information = forms.CharField(max_length=255, required=False)
     diameter_mm = forms.IntegerField(min_value=1, required=False)

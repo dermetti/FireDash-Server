@@ -21,6 +21,7 @@ HYDRANT_FIELDS = frozenset(
         "latitude",
         "street",
         "house_number",
+        "location",
         "hydrant_type",
         "diameter_mm",
         "status",
@@ -70,6 +71,7 @@ def parse_hydrants(*, payload: bytes, import_format: str) -> list[dict[str, obje
                 "latitude": latitude,
                 "street": _optional_text(row.get("street", ""), 255, number),
                 "house_number": _optional_text(row.get("house_number", ""), 32, number),
+                "location": _optional_nullable_text(row.get("location", ""), 255, number),
                 "hydrant_type": _optional_text(row.get("hydrant_type", ""), 128, number),
                 "diameter_mm": _optional_positive_int(row.get("diameter_mm"), number),
                 "status": _optional_text(row.get("status", "ACTIVE"), 128, number) or "ACTIVE",
@@ -237,6 +239,7 @@ def _geojson_hydrants(payload: bytes) -> list[dict[str, object]]:
                 "latitude": _coordinate(row, "latitude", number, -90, 90),
                 "street": _optional_text(row.get("street", ""), 255, number),
                 "house_number": _optional_text(row.get("house_number", ""), 32, number),
+                "location": _optional_nullable_text(row.get("location", ""), 255, number),
                 "hydrant_type": _optional_text(row["hydrant_type"], 128, number),
                 "diameter_mm": _optional_positive_int(row["diameter_mm"], number),
                 "status": _optional_text(row["status"], 128, number) or "ACTIVE",
@@ -256,6 +259,12 @@ def _optional_text(value, maximum, number) -> str:
     if not isinstance(value, str) or len(value.strip()) > maximum:
         raise ImportValidationError(f"Row {number}: text field is invalid.")
     return value.strip()
+
+
+def _optional_nullable_text(value, maximum, number) -> str | None:
+    if value is None:
+        return None
+    return _optional_text(value, maximum, number)
 
 
 def _station_reference_key(value: str) -> str:

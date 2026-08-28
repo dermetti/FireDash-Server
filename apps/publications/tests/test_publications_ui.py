@@ -673,6 +673,7 @@ def test_noop_hydrant_edit_does_not_mark_scope_or_stage_a_publication(publicatio
         latitude=53.0,
         external_identifier="FB-002",
         street="Main Street",
+        location=None,
     )
     scope = DatasetScopeState.objects.get(
         department=department, dataset_type_code="department_hydrants"
@@ -688,6 +689,7 @@ def test_noop_hydrant_edit_does_not_mark_scope_or_stage_a_publication(publicatio
         external_identifier="FB-002",
         street="Main Street",
         house_number="",
+        location=None,
         hydrant_type="",
         diameter_mm=None,
         status="ACTIVE",

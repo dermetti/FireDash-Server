@@ -25,6 +25,7 @@ def create_hydrant(
     external_identifier: str = "",
     street: str = "",
     house_number: str = "",
+    location: str | None = None,
     hydrant_type: str = "",
     diameter_mm: int | None = None,
     status: str = "ACTIVE",
@@ -32,10 +33,11 @@ def create_hydrant(
     require_department_admin(actor, department)
     hydrant = Hydrant.objects.create(
         department=department,
-        location=Point(longitude, latitude, srid=4326),
+        geometry=Point(longitude, latitude, srid=4326),
         external_identifier=external_identifier.strip(),
         street=street.strip(),
         house_number=house_number.strip(),
+        location=location.strip() if location else location,
         hydrant_type=hydrant_type.strip(),
         diameter_mm=diameter_mm,
         status=status,
@@ -80,7 +82,10 @@ def confirm_hydrant_preview(*, actor, department, preview_id) -> tuple[int, int,
     created = updated = 0
     for feature in features:
         values = {
-            "location": Point(feature.longitude, feature.latitude, srid=4326),
+            "geometry": Point(feature.longitude, feature.latitude, srid=4326),
+            "street": feature.street,
+            "house_number": feature.house_number,
+            "location": feature.location,
             "hydrant_type": feature.hydrant_type,
             "diameter_mm": feature.diameter_mm,
             "status": feature.status
@@ -122,14 +127,15 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
         hydrant.external_identifier,
         hydrant.street,
         hydrant.house_number,
+        hydrant.location,
         hydrant.hydrant_type,
         hydrant.diameter_mm,
         hydrant.status,
-        hydrant.location.ewkt,
+        hydrant.geometry.ewkt,
     )
     previous_flow_information = hydrant.flow_information
     previous_active = hydrant.active
-    for field in ("external_identifier", "street", "house_number", "hydrant_type", "status"):
+    for field in ("external_identifier", "street", "house_number", "location", "hydrant_type", "status"):
         if field in values:
             setattr(hydrant, field, str(values[field]).strip())
     if "flow_information" in values:
@@ -137,15 +143,16 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
     if "diameter_mm" in values:
         hydrant.diameter_mm = values["diameter_mm"] or None
     if "longitude" in values and "latitude" in values:
-        hydrant.location = Point(float(values["longitude"]), float(values["latitude"]), srid=4326)
+        hydrant.geometry = Point(float(values["longitude"]), float(values["latitude"]), srid=4326)
     publication_changed = previous_publication_values != (
         hydrant.external_identifier,
         hydrant.street,
         hydrant.house_number,
+        hydrant.location,
         hydrant.hydrant_type,
         hydrant.diameter_mm,
         hydrant.status,
-        hydrant.location.ewkt,
+        hydrant.geometry.ewkt,
     )
     changed = publication_changed or hydrant.flow_information != previous_flow_information
     if not changed:
@@ -182,8 +189,8 @@ def delete_hydrant(*, actor, hydrant: Hydrant) -> None:
     department = hydrant.department
     metadata: dict[str, str | int | bool | None] = {
         "external_identifier": hydrant.external_identifier or None,
-        "longitude": str(hydrant.location.x),
-        "latitude": str(hydrant.location.y),
+        "longitude": str(hydrant.geometry.x),
+        "latitude": str(hydrant.geometry.y),
     }
     try:
         hydrant.delete()

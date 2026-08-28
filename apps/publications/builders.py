@@ -361,12 +361,13 @@ def _hydrant_source_payload(*, department, station) -> dict[str, object]:
                 "id": str(hydrant.id),
                 "geometry": {
                     "type": "Point",
-                    "coordinates": [hydrant.location.x, hydrant.location.y],
+                    "coordinates": [hydrant.geometry.x, hydrant.geometry.y],
                 },
                 "properties": {
                     "external_identifier": hydrant.external_identifier,
                     "street": hydrant.street or None,
                     "house_number": hydrant.house_number or None,
+                    "location": hydrant.location or None,
                     "hydrant_type": hydrant.hydrant_type,
                     "diameter_mm": hydrant.diameter_mm,
                     "status": hydrant.status,

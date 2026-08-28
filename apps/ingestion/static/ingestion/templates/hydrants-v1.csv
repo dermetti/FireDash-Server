@@ -1,2 +1,2 @@
-external_identifier,longitude,latitude,street,house_number,hydrant_type,diameter_mm,status
-HYD-DEMO-001,8.682127,50.110924,Example Street,1,underground,100,ACTIVE
+external_identifier,longitude,latitude,street,house_number,location,hydrant_type,diameter_mm,status
+HYD-DEMO-001,8.682127,50.110924,Example Street,1,Fahrbahn,underground,100,ACTIVE

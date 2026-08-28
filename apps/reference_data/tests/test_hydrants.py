@@ -35,6 +35,9 @@ def test_parse_feature_collection_normalizes_valid_properties_and_metadata():
             hydrant_feature(
                 properties={
                     "external_identifier": "  H-101  ",
+                    "street": " Main Street ",
+                    "house_number": " 1 ",
+                    "location": " Fahrbahn ",
                     "hydrant_type": "  wet barrel ",
                     "diameter_mm": 150,
                     "status": " ACTIVE ",
@@ -49,6 +52,9 @@ def test_parse_feature_collection_normalizes_valid_properties_and_metadata():
         "longitude": -73.9857,
         "latitude": 40.7484,
         "external_identifier": "H-101",
+        "street": "Main Street",
+        "house_number": "1",
+        "location": "Fahrbahn",
         "hydrant_type": "wet barrel",
         "diameter_mm": 150,
         "status": "ACTIVE",
@@ -158,8 +164,8 @@ def test_confirm_preview_is_limited_to_its_creator_and_consumes_preview(referenc
     ) == (1, 0, 0)
     hydrant = Hydrant.objects.get(external_identifier="H-101")
     assert hydrant.department == department
-    assert hydrant.location.x == pytest.approx(-73.9857)
-    assert hydrant.location.y == pytest.approx(40.7484)
+    assert hydrant.geometry.x == pytest.approx(-73.9857)
+    assert hydrant.geometry.y == pytest.approx(40.7484)
     assert hydrant.source_metadata == {"source": "GIS"}
     assert not HydrantImportPreview.objects.filter(pk=preview.id).exists()
 
@@ -232,8 +238,8 @@ def test_hydrant_forms_create_and_confirm_import_batches(
     hydrant.refresh_from_db()
     assert (
         hydrant.external_identifier,
-        hydrant.location.x,
-        hydrant.location.y,
+        hydrant.geometry.x,
+        hydrant.geometry.y,
         hydrant.active,
     ) == (
         "H-42",

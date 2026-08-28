@@ -17,7 +17,7 @@ from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
 from apps.personnel.services import create_person, offboard_person, set_retention_policy
 from apps.publications.builders import build_artifact
-from apps.publications.models import PublicationJob
+from apps.publications.models import DatasetScopeState, PublicationJob
 from apps.publications.registry import get_dataset_definition
 from apps.reference_data.models import FirePlan, Hydrant
 from apps.reference_data.services import create_hydrant, set_fire_plan_active, update_hydrant
@@ -50,6 +50,21 @@ def test_hydrant_mutations_coalesce_into_one_debounced_job(lifecycle_context):
     assert job.trigger_type == PublicationJob.TriggerType.DATA_CHANGE
     assert job.source_revision == 2
     assert job.not_before is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_hydrant_location_change_marks_publication_dirty(lifecycle_context):
+    admin, department, _, _ = lifecycle_context
+    hydrant = create_hydrant(actor=admin, department=department, longitude=10.0, latitude=53.0)
+    scope = DatasetScopeState.objects.get(
+        department=department, dataset_type_code="department_hydrants"
+    )
+    revision = scope.source_revision
+
+    update_hydrant(actor=admin, hydrant=hydrant, location="Seitenstreifen")
+
+    scope.refresh_from_db()
+    assert scope.source_revision == revision + 1
 
 
 @pytest.mark.django_db(transaction=True)

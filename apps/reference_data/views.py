@@ -162,10 +162,11 @@ def hydrant_edit_modal(request: HttpRequest, hydrant_id) -> HttpResponse:
         request.POST or None,
         initial={
             "external_identifier": hydrant.external_identifier,
-            "longitude": hydrant.location.x,
-            "latitude": hydrant.location.y,
+            "longitude": hydrant.geometry.x,
+            "latitude": hydrant.geometry.y,
             "street": hydrant.street,
             "house_number": hydrant.house_number,
+            "location": hydrant.location,
             "hydrant_type": hydrant.hydrant_type,
             "flow_information": hydrant.flow_information,
             "diameter_mm": hydrant.diameter_mm,

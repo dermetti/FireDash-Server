@@ -7,9 +7,10 @@
   <p class="text-body-secondary">{{ hydrant.status }}</p>
 </header>
 <dl class="row">
-  <dt class="col-sm-3">Longitude</dt><dd class="col-sm-9">{{ hydrant.location.x }}</dd>
-  <dt class="col-sm-3">Latitude</dt><dd class="col-sm-9">{{ hydrant.location.y }}</dd>
+  <dt class="col-sm-3">Longitude</dt><dd class="col-sm-9">{{ hydrant.geometry.x }}</dd>
+  <dt class="col-sm-3">Latitude</dt><dd class="col-sm-9">{{ hydrant.geometry.y }}</dd>
   <dt class="col-sm-3">Address</dt><dd class="col-sm-9">{% if hydrant.street or hydrant.house_number %}{{ hydrant.street }} {{ hydrant.house_number }}{% else %}&mdash;{% endif %}</dd>
+  <dt class="col-sm-3">Location</dt><dd class="col-sm-9">{{ hydrant.location|default:"&mdash;" }}</dd>
   <dt class="col-sm-3">Type</dt><dd class="col-sm-9">{{ hydrant.hydrant_type|default:"—" }}</dd>
   <dt class="col-sm-3">Flow information</dt><dd class="col-sm-9">{{ hydrant.flow_information|default:"—" }}</dd>
   <dt class="col-sm-3">Diameter</dt><dd class="col-sm-9">{{ hydrant.diameter_mm|default:"—" }}</dd>

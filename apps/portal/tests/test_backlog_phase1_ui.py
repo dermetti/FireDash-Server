@@ -30,7 +30,7 @@ def phase1_scope(client, db):
     Hydrant.objects.create(
         department=department,
         external_identifier="HYD-ALPHA",
-        location=Point(10.1, 53.5, srid=4326),
+        geometry=Point(10.1, 53.5, srid=4326),
     )
     client.force_login(admin)
     return admin, other_admin, department, other_department, station

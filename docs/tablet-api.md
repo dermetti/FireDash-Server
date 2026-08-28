@@ -568,7 +568,7 @@ production client contract.
 The plaintext is a GeoJSON FeatureCollection:
 
 ```json
-{"type":"FeatureCollection","features":[{"type":"Feature","id":"hydrant UUID","geometry":{"type":"Point","coordinates":[longitude,latitude]},"properties":{"external_identifier":"string","street":"string or null","house_number":"string or null","hydrant_type":"string","diameter_mm":100,"status":"string"}}],"schema_version":1,"source_revision":42}
+{"type":"FeatureCollection","features":[{"type":"Feature","id":"hydrant UUID","geometry":{"type":"Point","coordinates":[longitude,latitude]},"properties":{"external_identifier":"string","street":"string or null","house_number":"string or null","location":"string or null","hydrant_type":"string","diameter_mm":100,"status":"string"}}],"schema_version":1,"source_revision":42}
 ```
 
 Coordinates are `[longitude, latitude]`. `source_revision` is diagnostic

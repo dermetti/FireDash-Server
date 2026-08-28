@@ -16,7 +16,7 @@ def _hydrants(department, specs):
             Hydrant(
                 department=department,
                 external_identifier=external_identifier,
-                location=Point(10.0, 53.0, srid=4326),
+                geometry=Point(10.0, 53.0, srid=4326),
                 hydrant_type=hydrant_type,
                 diameter_mm=diameter_mm,
                 status=status,

@@ -25,8 +25,9 @@ def test_hydrant_fingerprint_uses_published_content_not_internal_metadata(finger
     hydrant = Hydrant.objects.create(
         department=department,
         external_identifier="FB-002",
-        location=Point(10.0, 53.0, srid=4326),
+        geometry=Point(10.0, 53.0, srid=4326),
         street="Station road",
+        location="Fahrbahn",
         source_metadata={"import_batch": "internal"},
     )
 
@@ -43,6 +44,22 @@ def test_hydrant_fingerprint_uses_published_content_not_internal_metadata(finger
     assert (
         source_fingerprint(definition=definition, department=department, station=None) != original
     )
+
+    original = source_fingerprint(definition=definition, department=department, station=None)
+    hydrant.location = "Fußweg"
+    hydrant.save(update_fields=("location",))
+    assert (
+        source_fingerprint(definition=definition, department=department, station=None) != original
+    )
+
+    payload = build_source_payload(definition=definition, department=department, station=None)
+    assert payload["features"][0]["properties"]["location"] == "Fußweg"
+
+    hydrant.location = ""
+    hydrant.save(update_fields=("location",))
+    payload = build_source_payload(definition=definition, department=department, station=None)
+    assert "location" in payload["features"][0]["properties"]
+    assert payload["features"][0]["properties"]["location"] is None
 
 
 @pytest.mark.django_db

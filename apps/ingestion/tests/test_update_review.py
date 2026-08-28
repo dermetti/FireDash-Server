@@ -51,7 +51,7 @@ def test_document_changed_fields_includes_pdf_evidence_and_distance():
         fsd_location="",
         bmz_location="",
         rwa_info="",
-        location=Point(10.0, 50.0, srid=4326),
+        geometry=Point(10.0, 50.0, srid=4326),
     )
     row = {
         "source_pdf_sha256": "c" * 64,
@@ -97,7 +97,7 @@ def test_document_update_detail_includes_match_explanation():
         fsd_location="",
         bmz_location="",
         rwa_info="",
-        location=Point(10.0, 50.0, srid=4326),
+        geometry=Point(10.0, 50.0, srid=4326),
     )
     row = {
         "external_identifier": "",

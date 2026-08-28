@@ -26,6 +26,7 @@ def payload(**changes):
         "latitude": 53.0,
         "street": "Harbor Road",
         "house_number": "1",
+        "location": "Fahrbahn",
         "hydrant_type": "underground",
         "diameter_mm": 100,
         "status": "ACTIVE",
@@ -91,7 +92,7 @@ def test_exact_hydrant_reimport_is_unchanged_and_confirmation_is_a_noop(context)
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     "changes",
-    [{"diameter_mm": 125}, {"longitude": 10.1}, {"hydrant_type": "wall"}, {"status": "INACTIVE"}],
+    [{"diameter_mm": 125}, {"longitude": 10.1}, {"location": "Fußweg"}, {"hydrant_type": "wall"}, {"status": "INACTIVE"}],
 )
 def test_each_hydrant_business_field_change_is_an_update(context, changes):
     actor, department = context
@@ -99,6 +100,18 @@ def test_each_hydrant_business_field_change_is_an_update(context, changes):
     changed = preview(actor, department, payload(**changes))
     assert (changed.add_count, changed.update_count, changed.unchanged_count) == (0, 1, 0)
     assert changed.validation_summary["updates"][0]["fields"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("location", ["Fahrbahn", "", None])
+def test_geojson_location_is_preserved_in_canonical_hydrant(context, location):
+    actor, department = context
+    batch = preview(actor, department, payload(location=location))
+
+    apply_preview(actor=actor, batch_id=batch.id)
+
+    hydrant = Hydrant.objects.get(department=department, external_identifier="H-1")
+    assert hydrant.location == location
 
 
 @pytest.mark.django_db

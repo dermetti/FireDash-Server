@@ -17,7 +17,7 @@ def test_unicode_canonical_data_and_json_metadata_round_trip():
     hydrant = Hydrant.objects.create(
         department=department,
         external_identifier="Straße",
-        location=Point(10.0, 53.0, srid=4326),
+        geometry=Point(10.0, 53.0, srid=4326),
         source_metadata={"name": "Müller", "place": "Österreich", "street": "Großstraße"},
     )
     hydrant.refresh_from_db()

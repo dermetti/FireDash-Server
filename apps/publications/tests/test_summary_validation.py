@@ -180,7 +180,7 @@ def test_large_hydrant_department_builds_summary(hydrant_count):
         Hydrant(
             department=department,
             external_identifier=f"H-{i}",
-            location=Point(8.0, 50.0, srid=4326),
+            geometry=Point(8.0, 50.0, srid=4326),
             status="ACTIVE",
         )
         for i in range(hydrant_count)

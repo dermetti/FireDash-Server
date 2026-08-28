@@ -125,6 +125,7 @@ def create_single_preview(
                 "latitude",
                 "street",
                 "house_number",
+                "location",
                 "hydrant_type",
                 "diameter_mm",
                 "status",
@@ -303,9 +304,10 @@ def _hydrant_baseline(*, department, identifiers) -> dict[str, str]:
             "external_identifier",
             "updated_at",
             "status",
-            "location",
+            "geometry",
             "street",
             "house_number",
+            "location",
             "hydrant_type",
             "diameter_mm",
         )
@@ -316,10 +318,11 @@ def _hydrant_business_values(hydrant_or_row) -> dict[str, object]:
     """The import's canonical business representation, never persistence metadata."""
     if isinstance(hydrant_or_row, Hydrant):
         return {
-            "longitude": hydrant_or_row.location.x,
-            "latitude": hydrant_or_row.location.y,
+            "longitude": hydrant_or_row.geometry.x,
+            "latitude": hydrant_or_row.geometry.y,
             "street": hydrant_or_row.street,
             "house_number": hydrant_or_row.house_number,
+            "location": hydrant_or_row.location,
             "hydrant_type": hydrant_or_row.hydrant_type,
             "diameter_mm": hydrant_or_row.diameter_mm,
             "status": hydrant_or_row.status,
@@ -331,6 +334,7 @@ def _hydrant_business_values(hydrant_or_row) -> dict[str, object]:
             "latitude",
             "street",
             "house_number",
+            "location",
             "hydrant_type",
             "diameter_mm",
             "status",
@@ -1019,9 +1023,10 @@ def _apply_hydrants(*, batch, rows):
     for row in rows:
         identifier = row["external_identifier"]
         values = {
-            "location": Point(row["longitude"], row["latitude"], srid=4326),
+            "geometry": Point(row["longitude"], row["latitude"], srid=4326),
             "street": row["street"],
             "house_number": row["house_number"],
+            "location": row["location"],
             "hydrant_type": row["hydrant_type"],
             "diameter_mm": row["diameter_mm"],
             "status": row["status"],
@@ -1053,9 +1058,10 @@ def _apply_hydrants(*, batch, rows):
         Hydrant.objects.bulk_update(
             to_update,
             fields=(
-                "location",
+                "geometry",
                 "street",
                 "house_number",
+                "location",
                 "hydrant_type",
                 "diameter_mm",
                 "status",

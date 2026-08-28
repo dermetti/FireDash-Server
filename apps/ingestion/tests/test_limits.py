@@ -13,7 +13,7 @@ def geojson_payload(count: int) -> bytes:
         (
             '{"type":"Feature","geometry":{"type":"Point","coordinates":[10.0,50.0]},'
             f'"properties":{{"external_identifier":"H-{i}","street":"",'
-            '"house_number":"","hydrant_type":"",'
+            '"house_number":"","location":"","hydrant_type":"",'
             '"diameter_mm":null,"status":"ACTIVE"}}'
         )
         for i in range(count)

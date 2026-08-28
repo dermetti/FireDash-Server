@@ -22,7 +22,8 @@ def hydrant_scope(client, db):
     hydrant = Hydrant.objects.create(
         department=department,
         external_identifier="H-001",
-        location=Point(10.123, 53.456, srid=4326),
+        geometry=Point(10.123, 53.456, srid=4326),
+        location="Fahrbahn",
         hydrant_type="Underground",
         diameter_mm=100,
         status=Hydrant.Status.ACTIVE,
@@ -31,7 +32,7 @@ def hydrant_scope(client, db):
     other = Hydrant.objects.create(
         department=other_department,
         external_identifier="OTHER-1",
-        location=Point(11, 54, srid=4326),
+        geometry=Point(11, 54, srid=4326),
     )
     client.force_login(admin)
     return admin, department, hydrant, other
@@ -42,6 +43,7 @@ def _payload(**overrides):
         "external_identifier": "H-001",
         "longitude": "10.123",
         "latitude": "53.456",
+        "location": "Fahrbahn",
         "hydrant_type": "Above ground",
         "flow_information": "1200 l/min",
         "diameter_mm": "150",
@@ -58,7 +60,7 @@ def test_hydrant_list_is_bounded_active_by_default_and_filterable(client, hydran
             Hydrant(
                 department=department,
                 external_identifier=f"HX-{index:03}",
-                location=Point(10 + index / 1000, 53, srid=4326),
+                geometry=Point(10 + index / 1000, 53, srid=4326),
             )
             for index in range(101)
         ]
@@ -66,7 +68,7 @@ def test_hydrant_list_is_bounded_active_by_default_and_filterable(client, hydran
     inactive = Hydrant.objects.create(
         department=department,
         external_identifier="H-INACTIVE",
-        location=Point(12, 53, srid=4326),
+        geometry=Point(12, 53, srid=4326),
         status=Hydrant.Status.INACTIVE,
     )
     response = client.get(reverse("reference-data-hydrants", args=(department.id,)))
@@ -93,6 +95,11 @@ def test_hydrant_modal_lifecycle_delete_publication_and_scope(client, hydrant_sc
     expected_actions = ("Edit Data", "Delete Data", "Mark inactive")
     assert all(label in detail.content.decode() for label in expected_actions)
     detail_body = detail.content.decode()
+    assert "Location" in detail_body
+    assert "Fahrbahn" in detail_body
+    assert "Fahrbahn" not in client.get(
+        reverse("reference-data-hydrants", args=(department.id,))
+    ).content.decode()
     assert "hydrant-action-modal-container" in detail_body
     assert 'data-bs-toggle="modal"' not in detail_body
     assert "htmx:afterSwap" in detail_body
@@ -113,7 +120,8 @@ def test_hydrant_modal_lifecycle_delete_publication_and_scope(client, hydrant_sc
     updated = client.post(edit_url, _payload())
     assert updated.status_code == 302
     hydrant.refresh_from_db()
-    assert (hydrant.hydrant_type, hydrant.flow_information, hydrant.diameter_mm) == (
+    assert (hydrant.location, hydrant.hydrant_type, hydrant.flow_information, hydrant.diameter_mm) == (
+        "Fahrbahn",
         "Above ground",
         "1200 l/min",
         150,
