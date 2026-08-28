@@ -71,9 +71,9 @@ _DEFINITIONS = (
             }
         ),
         required=True,
-        supported_schema_versions=(1,),
+        supported_schema_versions=(1, 2),
         minimum_supported_schema_version=1,
-        maximum_supported_schema_version=1,
+        maximum_supported_schema_version=2,
         feature_code="publications",
         internal_only=False,
     ),

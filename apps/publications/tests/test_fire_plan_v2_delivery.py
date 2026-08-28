@@ -276,6 +276,7 @@ def test_explicit_cutover_queues_and_builds_the_first_document_generation(v2_del
     assert job is not None and job.status == job.Status.SUCCEEDED
     publication = DatasetPublication.objects.get(pk=job.build_publication_id)
     assert publication.status == DatasetPublication.Status.PUBLISHED
+    assert publication.schema_version == 2
     assert publication.fire_plan_artifact_references.count() == 1
     assert hasattr(publication, "fire_plan_generation_manifest")
     assert cut_over_fire_plan_scope_to_document_manifest(actor=user, scope=scope).id == scope.id

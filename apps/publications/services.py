@@ -114,13 +114,19 @@ def _allocate_staged_publication(
         )["maximum"]
         or 0
     ) + 1
+    schema_version = (
+        2
+        if scope.dataset_type_code == "department_fire_plans"
+        and scope.delivery_format == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
+        else definition.current_schema_version
+    )
     return DatasetPublication.objects.create(
         department=job.department,
         station=job.station,
         dataset_type_code=job.dataset_type_code,
         scope_state=scope,
         version_number=version_number,
-        schema_version=definition.current_schema_version,
+        schema_version=schema_version,
         source_revision=job.source_revision,
         source_fingerprint=source_fingerprint_value,
         source_snapshot=source_snapshot,
@@ -145,14 +151,22 @@ def cut_over_fire_plan_scope_to_document_manifest(
             "Only department Fire Plan scopes support document-manifest cutover."
         )
     if locked.delivery_format == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2:
-        return locked
+        current = locked.current_published_publication
+        if current is not None and current.schema_version == 2:
+            return locked
+        if PublicationJob.objects.select_for_update().filter(
+            scope_state=locked,
+            status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+        ).exists():
+            return locked
     if PublicationJob.objects.select_for_update().filter(
         scope_state=locked,
         status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
     ).exists():
         raise PublicationError("A publication update is already staged or building.")
-    locked.delivery_format = DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
-    locked.save(update_fields=("delivery_format", "updated_at"))
+    if locked.delivery_format != DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2:
+        locked.delivery_format = DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
+        locked.save(update_fields=("delivery_format", "updated_at"))
     transaction.on_commit(
         lambda: enqueue_publication_job(
             department=locked.department,
@@ -779,10 +793,16 @@ def finalize_publication_job(
     publication.artifact_status = DatasetPublication.ArtifactStatus.READY
     publication.artifact_ready = True
     previous_current = scope.current_published_publication
+    delivery_transition = (
+        publication.schema_version == 2
+        and previous_current is not None
+        and previous_current.schema_version != 2
+    )
     if (
         previous_current is not None
         and previous_current.source_fingerprint
         and previous_current.source_fingerprint == source_fingerprint_value
+        and not delivery_transition
     ):
         _schedule_artifact_removal(str(artifact["artifact_path"]))
         publication.status = DatasetPublication.Status.OBSOLETE

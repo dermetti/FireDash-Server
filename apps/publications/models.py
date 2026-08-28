@@ -216,7 +216,14 @@ class DatasetPublication(models.Model):
         errors = {}
         if self.station_id and self.station and self.station.department_id != self.department_id:
             errors["station"] = "Station must belong to the publication department."
-        if self.schema_version != definition.current_schema_version:
+        document_v2 = (
+            self.dataset_type_code == "department_fire_plans"
+            and self.scope_state_id
+            and self.scope_state.delivery_format
+            == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
+            and self.schema_version == 2
+        )
+        if self.schema_version != definition.current_schema_version and not document_v2:
             errors["schema_version"] = "Schema version is not supported for this dataset."
         if self.schema_version not in definition.supported_schema_versions:
             errors["schema_version"] = "Schema version is not supported for this dataset."
