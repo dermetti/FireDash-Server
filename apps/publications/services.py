@@ -129,6 +129,52 @@ def _allocate_staged_publication(
     )
 
 
+@transaction.atomic
+def cut_over_fire_plan_scope_to_document_manifest(
+    *, actor, scope: DatasetScopeState
+) -> DatasetScopeState:
+    """Explicitly select v2 delivery and queue its first normal build."""
+    require_department_admin(actor, scope.department)
+    locked = _locked_scope(
+        department=scope.department,
+        station=scope.station,
+        dataset_type_code=scope.dataset_type_code,
+    )
+    if locked.dataset_type_code != "department_fire_plans" or locked.station_id is not None:
+        raise PublicationError(
+            "Only department Fire Plan scopes support document-manifest cutover."
+        )
+    if locked.delivery_format == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2:
+        return locked
+    if PublicationJob.objects.select_for_update().filter(
+        scope_state=locked,
+        status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+    ).exists():
+        raise PublicationError("A publication update is already staged or building.")
+    locked.delivery_format = DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
+    locked.save(update_fields=("delivery_format", "updated_at"))
+    transaction.on_commit(
+        lambda: enqueue_publication_job(
+            department=locked.department,
+            station=locked.station,
+            dataset_type_code=locked.dataset_type_code,
+            requested_by=actor,
+            trigger_type=PublicationJob.TriggerType.USER_REQUEST,
+            allow_clean_rebuild=True,
+        )
+    )
+    transaction.on_commit(wake_publication_build_worker)
+    record_event(
+        action="publication.fire_plan_document_manifest_cutover_requested",
+        actor_user=actor,
+        department=locked.department,
+        target_type="dataset_scope_state",
+        target_uuid=locked.id,
+        metadata={"dataset_type_code": locked.dataset_type_code},
+    )
+    return locked
+
+
 def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, object]:
     return build_source_payload(
         definition=get_dataset_definition(scope.dataset_type_code),
@@ -577,6 +623,24 @@ def build_claimed_job(*, job_id) -> PublicationJob:
                 source_snapshot=publication.source_snapshot,
             ),
         )
+        if (
+            publication.scope_state.delivery_format
+            == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
+        ):
+            from apps.publications.fire_plan_v2 import build_fire_plan_v2_generation
+            from apps.publications.fire_plan_v2_delivery import build_fire_plan_v2_manifest
+
+            build_fire_plan_v2_generation(publication=publication)
+            build_fire_plan_v2_manifest(publication=publication)
+            if not _build_is_still_running(job_id=job.id):
+                terminal_publication = DatasetPublication.objects.get(pk=publication.id)
+                if terminal_publication.status in (
+                    DatasetPublication.Status.FAILED,
+                    DatasetPublication.Status.CANCELLED,
+                    DatasetPublication.Status.REJECTED,
+                    DatasetPublication.Status.OBSOLETE,
+                ):
+                    release_terminal_document_artifact_references(publication=terminal_publication)
         if not _build_is_still_running(job_id=job.id):
             _compensate_artifact(artifact)
             return PublicationJob.objects.get(pk=job.id)

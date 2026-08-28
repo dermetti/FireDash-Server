@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
+from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications import artifacts
 from apps.publications.builders import build_source_payload
@@ -40,6 +41,10 @@ from apps.publications.models import (
     FirePlanGenerationKeyGrant,
 )
 from apps.publications.registry import get_dataset_definition
+from apps.publications.services import (
+    cut_over_fire_plan_scope_to_document_manifest,
+    process_next_job,
+)
 from apps.reference_data.models import FirePlan
 from apps.tablets.models import AppInstallation, Tablet
 
@@ -255,3 +260,22 @@ def test_v2_manifest_grant_and_document_delivery(v2_delivery_context):
         ).status_code
         == 404
     )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_explicit_cutover_queues_and_builds_the_first_document_generation(v2_delivery_context):
+    user, department, scope, accepted, _, _, _ = v2_delivery_context
+    DepartmentMembership.objects.create(user=user, department=department, created_by=user)
+    _plan(user, department, accepted, "Cutover", b"PDF cutover")
+
+    selected = cut_over_fire_plan_scope_to_document_manifest(actor=user, scope=scope)
+
+    selected.refresh_from_db()
+    assert selected.delivery_format == selected.DeliveryFormat.DOCUMENT_MANIFEST_V2
+    job = process_next_job()
+    assert job is not None and job.status == job.Status.SUCCEEDED
+    publication = DatasetPublication.objects.get(pk=job.build_publication_id)
+    assert publication.status == DatasetPublication.Status.PUBLISHED
+    assert publication.fire_plan_artifact_references.count() == 1
+    assert hasattr(publication, "fire_plan_generation_manifest")
+    assert cut_over_fire_plan_scope_to_document_manifest(actor=user, scope=scope).id == scope.id

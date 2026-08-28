@@ -29,6 +29,10 @@ def validate_change_summary(summary: object) -> None:
 
 
 class DatasetScopeState(models.Model):
+    class DeliveryFormat(models.TextChoices):
+        V1_ARTIFACT = "V1_ARTIFACT", "V1 artifact"
+        DOCUMENT_MANIFEST_V2 = "DOCUMENT_MANIFEST_V2", "Document manifest v2"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     department = models.ForeignKey(
         Department, on_delete=models.PROTECT, related_name="dataset_scopes"
@@ -41,6 +45,9 @@ class DatasetScopeState(models.Model):
         related_name="dataset_scopes",
     )
     dataset_type_code = models.CharField(max_length=100)
+    delivery_format = models.CharField(
+        max_length=32, choices=DeliveryFormat.choices, default=DeliveryFormat.V1_ARTIFACT
+    )
     source_revision = models.PositiveBigIntegerField(default=0)
     # The current deterministic publishable canonical source. Empty means an
     # older scope has not yet been safely initialized by a locked service path.

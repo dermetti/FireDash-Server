@@ -23,6 +23,7 @@ from apps.publications.services import (
     build_staged_publication,
     bulk_request_rebuilds,
     cancel_publication_build,
+    cut_over_fire_plan_scope_to_document_manifest,
     delete_publication,
     delete_staged_publication,
     request_rebuild,
@@ -395,6 +396,23 @@ def scope_rebuild(request: HttpRequest, scope_id) -> HttpResponse:
         messages.error(request, str(error))
     else:
         messages.success(request, "Publication rebuild requested.")
+    return redirect("publications-scope-detail", scope_id=scope.id)
+
+
+@login_required
+@require_http_methods(["POST"])
+def scope_fire_plan_document_manifest_cutover(request: HttpRequest, scope_id) -> HttpResponse:
+    scope = _scope_or_403(request, scope_id)
+    return_url = reverse("publications-scope-detail", args=(scope.id,))
+    require_recent_reauthentication(request, return_url=return_url)
+    try:
+        cut_over_fire_plan_scope_to_document_manifest(actor=request.user, scope=scope)
+    except PublicationError as error:
+        messages.error(request, str(error))
+    else:
+        messages.success(
+            request, "Document-manifest v2 cutover requested; the first build is queued."
+        )
     return redirect("publications-scope-detail", scope_id=scope.id)
 
 

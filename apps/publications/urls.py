@@ -44,6 +44,11 @@ urlpatterns = [
         name="publications-scope-rebuild",
     ),
     path(
+        "publications/<uuid:scope_id>/fire-plan-document-manifest-cutover/",
+        views.scope_fire_plan_document_manifest_cutover,
+        name="publications-scope-fire-plan-document-manifest-cutover",
+    ),
+    path(
         "publications/<uuid:scope_id>/stage-update/",
         views.scope_stage_update,
         name="publications-scope-stage-update",
