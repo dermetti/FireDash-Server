@@ -29,6 +29,7 @@ from rest_framework.views import APIView
 from apps.authorization.services import minimum_supported_app_version
 from apps.publications.fire_plan_v2_delivery import (
     _authorized_generation,
+    generation_hpke_context,
     request_fire_plan_v2_generation_key_grant,
 )
 from apps.publications.manifests import (
@@ -667,6 +668,16 @@ class DownloadView(InstallationAPIView):
         return response
 
 
+@extend_schema(
+    responses={
+        200: OpenApiTypes.OBJECT,
+        202: None,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+        (404, "application/problem+json"): ProblemResponseSerializer,
+        (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
+    },
+    parameters=_MANIFEST_CONDITIONAL_GET_PARAMETERS,
+)
 class FirePlanGenerationManifestView(InstallationAPIView):
     """Dormant v2 endpoint; it is not referenced by the live v1 manifest."""
 
@@ -698,10 +709,23 @@ class FirePlanGenerationManifestView(InstallationAPIView):
             "wrapped_generation_key": base64.b64encode(
                 bytes(grant.hpke_wrapped_generation_key)
             ).decode("ascii"),
+            "info": generation_hpke_context(
+                publication=manifest.publication, installation=self.installation
+            ).wire(),
         }
         return Response(payload)
 
 
+@extend_schema(
+    parameters=[OpenApiParameter("format", exclude=True), *_CONDITIONAL_GET_PARAMETERS],
+    responses={
+        (200, "application/octet-stream"): OpenApiTypes.BINARY,
+        304: None,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+        (404, "application/problem+json"): ProblemResponseSerializer,
+        (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
+    },
+)
 class FirePlanDocumentArtifactDownloadView(InstallationAPIView):
     renderer_classes = [renderers.JSONRenderer, OctetStreamRenderer]
 

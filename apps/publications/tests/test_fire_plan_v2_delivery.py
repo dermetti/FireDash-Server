@@ -24,12 +24,19 @@ from apps.publications.fire_plan_v2 import build_fire_plan_v2_generation
 from apps.publications.fire_plan_v2_delivery import (
     build_fire_plan_v2_manifest,
     ensure_generation_key,
+    generation_hpke_context,
     process_next_fire_plan_v2_generation_key_grant,
 )
-from apps.publications.hpke import HPKEContext, HPKEError, hpke_open, serialize_p256_public_key
+from apps.publications.hpke import (
+    FirePlanGenerationHPKEContext,
+    HPKEError,
+    hpke_open,
+    serialize_p256_public_key,
+)
 from apps.publications.models import (
     DatasetPublication,
     DatasetScopeState,
+    FirePlanGenerationKey,
     FirePlanGenerationKeyGrant,
 )
 from apps.publications.registry import get_dataset_definition
@@ -172,17 +179,7 @@ def test_v2_manifest_grant_and_document_delivery(v2_delivery_context):
     request_fire_plan_v2_generation_key_grant(publication=publication, installation=installation)
     grant = process_next_fire_plan_v2_generation_key_grant()
     assert grant is not None and grant.status == FirePlanGenerationKeyGrant.Status.READY
-    context = HPKEContext(
-        publication_id=publication.id,
-        installation_id=installation.id,
-        tablet_id=installation.tablet_id,
-        department_id=department.id,
-        station_id=None,
-        dataset_type_code="department_fire_plans",
-        version_number=1,
-        schema_version=2,
-        ciphertext_sha256=hashlib.sha256(bytes(protected_key.wrapped_key)).hexdigest(),
-    )
+    context = generation_hpke_context(publication=publication, installation=installation)
     generation_key = hpke_open(
         encapsulated_key=bytes(grant.hpke_encapsulated_key),
         ciphertext=bytes(grant.hpke_wrapped_generation_key),
@@ -194,8 +191,26 @@ def test_v2_manifest_grant_and_document_delivery(v2_delivery_context):
             encapsulated_key=bytes(grant.hpke_encapsulated_key),
             ciphertext=bytes(grant.hpke_wrapped_generation_key),
             recipient_private_key=private_key,
-            context=HPKEContext(**{**context.__dict__, "version_number": 2}),
+            context=FirePlanGenerationHPKEContext(**{**context.__dict__, "version_number": 2}),
         )
+    with pytest.raises(HPKEError):
+        hpke_open(
+            encapsulated_key=bytes(grant.hpke_encapsulated_key),
+            ciphertext=bytes(grant.hpke_wrapped_generation_key),
+            recipient_private_key=private_key,
+            context=FirePlanGenerationHPKEContext(
+                **{**context.__dict__, "installation_id": uuid.uuid4()}
+            ),
+    )
+    original_info = context.info()
+    FirePlanGenerationKey.objects.filter(pk=protected_key.pk).update(
+        wrapped_key=keywrap.aes_key_wrap(b"r" * 32, generation_key),
+        kek_version="rewrapped-test-kek",
+    )
+    assert (
+        generation_hpke_context(publication=publication, installation=installation).info()
+        == original_info
+    )
     document = manifest.payload["documents"][0]
     cek = keywrap.aes_key_unwrap(
         generation_key, base64.b64decode(document["generation_wrapped_cek"])
@@ -221,6 +236,17 @@ def test_v2_manifest_grant_and_document_delivery(v2_delivery_context):
     response = client.get(path, HTTP_AUTHORIZATION=f"Bearer {credential}")
     assert response.status_code == 200 and response["X-Accel-Redirect"].endswith(
         reference.document_artifact.artifact_path
+    )
+    manifest_response = client.get(
+        f"/api/v1/tablet/fire-plan-generations/{publication.id}/manifest",
+        HTTP_AUTHORIZATION=f"Bearer {credential}",
+    )
+    assert manifest_response.status_code == 200
+    assert (
+        FirePlanGenerationHPKEContext.from_wire(
+            manifest_response.json()["generation_key_grant"]["info"]
+        ).info()
+        == context.info()
     )
     assert (
         client.get(

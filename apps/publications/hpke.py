@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.hpke import AEAD, KDF, KEM, Suite
 
 HPKE_CIPHERSUITE = "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM"
 HPKE_PROTOCOL = "firedash-hpke-v1"
+FIRE_PLAN_GENERATION_HPKE_PROTOCOL = "firedash-fire-plan-generation-hpke-v2"
 _P256_PUBLIC_KEY_LENGTH = 65
 _DATASET_TYPE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 _SUITE = Suite(KEM.P256, KDF.HKDF_SHA256, AEAD.AES_128_GCM)
@@ -62,6 +63,66 @@ class HPKEContext:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("ascii")
+
+
+@dataclass(frozen=True)
+class FirePlanGenerationHPKEContext:
+    """Wire-reconstructible HPKE ``info`` for a v2 document generation."""
+
+    publication_id: uuid.UUID
+    installation_id: uuid.UUID
+    tablet_id: uuid.UUID
+    department_id: uuid.UUID
+    station_id: uuid.UUID | None
+    dataset_type_code: str
+    version_number: int
+    schema_version: int
+
+    def wire(self) -> dict[str, object]:
+        if not _DATASET_TYPE_CODE.fullmatch(self.dataset_type_code):
+            raise HPKEError("Dataset type code is not canonical.")
+        if self.version_number < 1 or self.schema_version < 1:
+            raise HPKEError("Publication versions must be positive.")
+        return {
+            "protocol": FIRE_PLAN_GENERATION_HPKE_PROTOCOL,
+            "publication_id": str(self.publication_id),
+            "installation_id": str(self.installation_id),
+            "tablet_id": str(self.tablet_id),
+            "scope": {
+                "dataset_type_code": self.dataset_type_code,
+                "department_id": str(self.department_id),
+                "station_id": str(self.station_id) if self.station_id else None,
+            },
+            "version_number": self.version_number,
+            "schema_version": self.schema_version,
+        }
+
+    def info(self) -> bytes:
+        return json.dumps(self.wire(), sort_keys=True, separators=(",", ":")).encode("ascii")
+
+    @classmethod
+    def from_wire(cls, value: object) -> "FirePlanGenerationHPKEContext":
+        if not isinstance(value, dict):
+            raise HPKEError("Fire Plan generation HPKE context is invalid.")
+        scope = value.get("scope")
+        if value.get("protocol") != FIRE_PLAN_GENERATION_HPKE_PROTOCOL or not isinstance(
+            scope, dict
+        ):
+            raise HPKEError("Fire Plan generation HPKE protocol is invalid.")
+        try:
+            station = scope["station_id"]
+            return cls(
+                publication_id=uuid.UUID(str(value["publication_id"])),
+                installation_id=uuid.UUID(str(value["installation_id"])),
+                tablet_id=uuid.UUID(str(value["tablet_id"])),
+                department_id=uuid.UUID(str(scope["department_id"])),
+                station_id=uuid.UUID(str(station)) if station is not None else None,
+                dataset_type_code=str(scope["dataset_type_code"]),
+                version_number=int(value["version_number"]),
+                schema_version=int(value["schema_version"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise HPKEError("Fire Plan generation HPKE context is invalid.") from error
 
 
 class HPKEInfoContext(Protocol):

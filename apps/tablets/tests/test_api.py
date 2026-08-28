@@ -37,8 +37,10 @@ from apps.publications.models import (
     DatasetKeyGrant,
     DatasetPublication,
     DatasetScopeState,
+    FirePlanGenerationManifest,
     SignedManifest,
 )
+from apps.publications.paths import publication_artifact_relative_path
 from apps.publications.worker_grants import process_next_signed_manifest
 from apps.tablets.api import DownloadView
 from apps.tablets.models import AppInstallation, Tablet
@@ -270,6 +272,92 @@ def test_inactive_tablet_syncs_signed_empty_manifest_and_reactivates_same_instal
     ]
     assert restored.json()["configuration"]["vehicle_id"] == str(restored_vehicle.id)
     assert AppInstallation.objects.get(pk=installation_id).tablet_id == tablet_id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_current_document_generation_is_discovered_without_a_v1_grant(api_context, tmp_path):
+    client, installation, credential, _ = api_context
+    department = installation.tablet.department
+    scope = DatasetScopeState.objects.create(
+        department=department, dataset_type_code="department_fire_plans", source_revision=1
+    )
+    publication_id = uuid.uuid4()
+    current = DatasetPublication.objects.create(
+        id=publication_id,
+        department=department,
+        dataset_type_code="department_fire_plans",
+        scope_state=scope,
+        version_number=7,
+        schema_version=1,
+        source_revision=1,
+        status=DatasetPublication.Status.PUBLISHED,
+        artifact_ready=True,
+        artifact_status=DatasetPublication.ArtifactStatus.READY,
+        artifact_path=publication_artifact_relative_path(
+            department_id=department.id, publication_id=publication_id
+        ),
+        artifact_size=1,
+        artifact_sha256="d" * 64,
+        artifact_nonce=b"n" * 12,
+        artifact_wrapped_cek=b"k" * 40,
+        artifact_encryption_algorithm="AES-256-GCM",
+        artifact_wrapping_algorithm="AES-KW-RFC3394",
+        artifact_kek_version="1",
+        artifact_signature=b"s" * 64,
+        artifact_signature_algorithm="Ed25519",
+        artifact_signing_key_version="1",
+    )
+    scope.current_published_publication = current
+    scope.save(update_fields=("current_published_publication",))
+    FirePlanGenerationManifest.objects.create(
+        publication=current,
+        payload={"format": "fire-plan-generation-v2", "documents": []},
+        signature=b"s" * 64,
+        signature_algorithm="Ed25519",
+        signing_key_version="1",
+    )
+    dormant_id = uuid.uuid4()
+    dormant = DatasetPublication.objects.create(
+        id=dormant_id,
+        department=department,
+        dataset_type_code="department_fire_plans",
+        scope_state=scope,
+        version_number=8,
+        schema_version=1,
+        source_revision=2,
+        status=DatasetPublication.Status.BUILDING,
+    )
+    FirePlanGenerationManifest.objects.create(
+        publication=dormant,
+        payload={"format": "fire-plan-generation-v2", "documents": []},
+        signature=b"s" * 64,
+        signature_algorithm="Ed25519",
+        signing_key_version="1",
+    )
+    signing_path = tmp_path / "signing"
+    signing_path.write_bytes(b"s" * 32)
+    request_manifest(installation=installation)
+    with override_settings(PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path):
+        assert process_next_signed_manifest() is not None
+
+    response = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+
+    assert response.status_code == 200
+    entries = response.json()["datasets"]
+    document_entry = next(entry for entry in entries if entry["publication_id"] == str(current.id))
+    assert document_entry == {
+        "publication_id": str(current.id),
+        "type": "department_fire_plans",
+        "scope": "department",
+        "version": 7,
+        "schema_version": 2,
+        "required": True,
+        "minimum_app_version": None,
+        "artifact_format": "document-manifest-v2",
+        "manifest_url": f"/api/v1/tablet/fire-plan-generations/{current.id}/manifest",
+    }
+    assert all(entry["publication_id"] != str(dormant.id) for entry in entries)
+    assert not DatasetKeyGrant.objects.filter(publication=current).exists()
 
 
 def test_manifest_pending_is_an_rfc9457_problem(api_context):

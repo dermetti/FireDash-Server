@@ -1,7 +1,6 @@
 """Worker-only signing and key delivery for dormant Fire Plan v2 generations."""
 
 import base64
-import hashlib
 import secrets
 
 from cryptography.hazmat.primitives import keywrap
@@ -10,7 +9,12 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.publications.artifacts import ArtifactError, _credential
-from apps.publications.hpke import HPKE_CIPHERSUITE, HPKEContext, hpke_seal, parse_p256_public_key
+from apps.publications.hpke import (
+    HPKE_CIPHERSUITE,
+    FirePlanGenerationHPKEContext,
+    hpke_seal,
+    parse_p256_public_key,
+)
 from apps.publications.manifests import ManifestError
 from apps.publications.models import (
     FirePlanGenerationKey,
@@ -23,6 +27,20 @@ from apps.publications.worker_grants import KeyGrantError, sign_manifest_payload
 
 class FirePlanV2DeliveryError(ValueError):
     pass
+
+
+def generation_hpke_context(*, publication, installation) -> FirePlanGenerationHPKEContext:
+    """Return the complete public binding for one generation-key grant."""
+    return FirePlanGenerationHPKEContext(
+        publication_id=publication.id,
+        installation_id=installation.id,
+        tablet_id=installation.tablet_id,
+        department_id=publication.department_id,
+        station_id=None,
+        dataset_type_code=publication.dataset_type_code,
+        version_number=publication.version_number,
+        schema_version=2,
+    )
 
 
 def _kek() -> bytes:
@@ -204,19 +222,7 @@ def build_claimed_fire_plan_v2_generation_key_grant(*, grant_id):
         )
         protected_generation_key = ensure_generation_key(publication=grant.publication)
         generation_key = unwrap_generation_key(generation_key=protected_generation_key)
-        context = HPKEContext(
-            publication_id=grant.publication_id,
-            installation_id=installation.id,
-            tablet_id=installation.tablet_id,
-            department_id=grant.publication.department_id,
-            station_id=None,
-            dataset_type_code=grant.publication.dataset_type_code,
-            version_number=grant.publication.version_number,
-            schema_version=2,
-            ciphertext_sha256=hashlib.sha256(
-                bytes(protected_generation_key.wrapped_key)
-            ).hexdigest(),
-        )
+        context = generation_hpke_context(publication=grant.publication, installation=installation)
         enc, wrapped = hpke_seal(
             plaintext=generation_key,
             recipient_public_key=parse_p256_public_key(bytes(installation.hpke_public_key)),

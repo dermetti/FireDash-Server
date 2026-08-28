@@ -13,6 +13,8 @@ from apps.publications.artifacts import ArtifactError, _credential
 from apps.publications.hpke import HPKE_CIPHERSUITE, HPKEContext, hpke_seal, parse_p256_public_key
 from apps.publications.manifests import (
     ManifestError,
+    _is_document_manifest_delivery,
+    _publication_manifest_entry,
     authorized_publications,
     canonical_manifest_payload,
     manifest_publications,
@@ -163,7 +165,12 @@ def claim_next_signed_manifest(*, exclude_ids: set[UUID] | None = None) -> Signe
 
 def _manifest_payload(*, installation, vehicle, publications, grants, generation, now):
     datasets = []
-    for publication, grant in zip(publications, grants, strict=True):
+    grants_by_publication = {grant.publication_id: grant for grant in grants}
+    for publication in publications:
+        if _is_document_manifest_delivery(publication):
+            datasets.append(_publication_manifest_entry(publication))
+            continue
+        grant = grants_by_publication[publication.id]
         definition = get_dataset_definition(publication.dataset_type_code)
         datasets.append(
             {
@@ -245,6 +252,7 @@ def build_claimed_signed_manifest(*, manifest_id) -> SignedManifest:
         grants = [
             request_dataset_key_grant(publication=publication, installation=installation)
             for publication in publications
+            if not _is_document_manifest_delivery(publication)
         ]
         state_hash = manifest_state_hash(
             installation=installation,
