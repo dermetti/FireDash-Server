@@ -4,6 +4,12 @@
 
 **Goal:** Turn the mixed bug/feature/UI backlog into a small number of coherent refactor stages, with backend semantics established before UI work where required.
 
+**Status (Phase 5 candidate):** Stages 1--4 are implemented regression
+baselines, not active feature work. Stage 5 local closure is complete; the
+remaining gate is deployment of one user-created, pushed exact SHA followed by
+recorded live acceptance. This document retains earlier scope as a decision
+record and names genuinely deferred work instead of silently deleting it.
+
 ---
 
 ## 1. Backlog review and normalization
@@ -17,7 +23,7 @@ The backlog currently mixes four categories:
 
 These should not be implemented as one flat checklist.
 
-### Already implemented / close after verification
+### Implemented / retained as regression coverage
 
 Remove these from the active backlog after live verification and retain focused regression coverage instead:
 
@@ -29,7 +35,7 @@ Remove these from the active backlog after live verification and retain focused 
 - Existing per-department Tablet authorization lease setting UI.
 - Existing personnel retention setting UI.
 
-### Open UI consistency work
+### Implemented management UI baseline
 
 - Bootstrap form styling audit across remaining forms.
 - Consistent HTMX/Bootstrap modal use for short create/edit actions.
@@ -42,32 +48,39 @@ Remove these from the active backlog after live verification and retain focused 
 - Audit-event detail pages.
 - Station status/context presentation and detail-page spacing.
 
-### Open missing capabilities
+### Implemented domain capabilities
 
-- Station + Vehicle batch import.
-- Tolerant Personnel home-station resolution by station Short Code or full name.
-- Administrator lifecycle: Active / Suspended / Revoked / Reinstate.
-- Administrator detail page and last-department-admin protection.
-- Optional concurrent-safe Tablet asset-number generation.
-- Department locale/time-display policy.
-- Publication retention policy.
-- Publication rollback and active-version deletion semantics.
-- Hydrant address fields.
-- KLGV publication-manifest metadata.
-- Personnel create modal including email and commander eligibility.
-- More precise Overview publication-attention explanations.
+- Station/Vehicle and Personnel imports with scoped station resolution and
+  atomic final Apply.
+- Administrator lifecycle, detail workflow, and last-effective-Department-
+  Administrator protection.
+- Concurrent-safe optional Tablet asset-number allocation.
+- Department locale/time presentation policy.
+- Publication rollback, active deletion, bounded retention, and scope-level
+  Overview attention.
+- Hydrant address fields and distributed metadata.
+- KLGV canonical and distributed manifest metadata.
+- Personnel create workflow with email and commander eligibility.
 
 ### Approved lifecycle visibility policy
 
 - **LOST Tablets in the default list.** The default Tablet list shows only Active and Inactive physical assets. LOST and RETIRED assets are available only through the explicit Asset State filter.
 
-### Requirements needing an explicit policy decision
+### Resolved policy and genuinely deferred work
 
-- **Revoked installations visibility.** Decide whether revoked/replaced installations belong only in Tablet detail/history or need an explicit list filter; do not mix installation state with Tablet asset state.
-- **Retired/deleted Vehicle with assigned Tablet.** Do not create a fake/invisible Vehicle workaround. Model the result explicitly as an unassigned/orphaned Tablet assignment condition while keeping the Tablet provisioned and surfacing Overview attention.
-- **Stale-installation timing.** If this becomes configurable, introduce one authoritative setting with clear semantics instead of exposing a UI control over a server-global implementation detail.
-- **Publication deletion/rollback.** This affects active distribution, grants and manifests and must be implemented transactionally in publication services before UI actions are added.
-- **Timezone/local time.** Keep protocol/security timestamps in UTC. Locale/timezone should affect administrator presentation unless a separate protocol change is explicitly approved.
+- **Revoked/replaced installations visibility (resolved).** Installation history is
+  detail-only and is not mixed with Tablet asset state.
+- **Retired Vehicle with assigned Tablet (resolved).** Retirement ends the
+  assignment, preserves Tablet/install history, revokes former distribution,
+  creates explicit unassigned attention, and supports reassignment.
+- **Publication deletion/rollback (resolved).** These are locked, transactional,
+  audited service operations; current scope state is authoritative.
+- **Timezone/local time (resolved).** Department policy is presentation-only;
+  protocol and security timestamps stay UTC.
+- **Stale-installation timing (deferred).** No per-department setting exists;
+  do not expose one without a separately approved authoritative policy.
+- **Fire Plan v2 delivery architecture (deferred).** The current monolithic
+  complete artifact remains the v1 contract; per-document sync is future work.
 
 ---
 
@@ -103,7 +116,10 @@ General rules:
 
 # 3. Recommended implementation stages
 
-## Stage 1 — Management UI and list consistency
+The following Stage 1--4 detail is retained as the implemented decision and
+regression record. It is not an active implementation checklist.
+
+## Stage 1 — Management UI and list consistency (implemented)
 
 **Purpose:** Remove remaining cross-application UI inconsistencies before adding more workflows.
 
@@ -127,7 +143,7 @@ General rules:
 
 ---
 
-## Stage 2 — Canonical data and import pipeline refactor
+## Stage 2 — Canonical data and import pipeline refactor (implemented)
 
 **Purpose:** Make canonical data entry/import coherent across Stations, Vehicles, Personnel, Hydrants and KLGV.
 
@@ -179,7 +195,7 @@ Treat optional new metadata as additive and keep deterministic artifact validati
 
 ---
 
-## Stage 3 — Administrator, Tablet assignment and policy lifecycle
+## Stage 3 — Administrator, Tablet assignment and policy lifecycle (implemented)
 
 **Purpose:** Refactor authority and lifecycle rules that currently leak through ad-hoc UI controls.
 
@@ -249,7 +265,7 @@ Use full-width settings cards, one per row, each with its own Apply action:
 
 ---
 
-## Stage 4 — Publication lifecycle, retention and operational attention
+## Stage 4 — Publication lifecycle, retention and operational attention (implemented)
 
 **Purpose:** Treat Publications as one coherent versioned lifecycle rather than disconnected lists.
 
@@ -308,11 +324,11 @@ Implement:
 
 ---
 
-## Stage 5 — Final hardening, documentation and Alpha acceptance
+## Stage 5 — Final hardening, documentation and Alpha acceptance (local closure complete; exact-SHA live gate pending)
 
 **Purpose:** Close the refactor without policy drift between code, PRD and backlog.
 
-- Reconcile PRD with approved changes:
+- Reconcile PRD/backlog/docs with approved changes:
   - desktop-first management table/page-flow rule;
   - administrator lifecycle;
   - orphaned Tablet assignment behavior;
@@ -320,12 +336,11 @@ Implement:
   - Hydrant/KLGV fields;
   - publication rollback/delete/retention;
   - locale/time-display policy.
-- Remove implemented items from the backlog.
-- Update administrator documentation for imports, admin suspension/revocation, orphaned Tablet recovery, publication rollback, retention and locale/time display.
-- Run focused subsystem tests after each stage, then one full integration/regression pass here.
-- Run deployment/static/migration checks.
-- Deploy one exact SHA to the LXC and perform role-based live acceptance.
-- Finish the deferred Tablet lifecycle Alpha acceptance using the completed administration UI.
+- Completed locally: documentation reconciliation, focused subsystem tests, one
+  final full regression pass, and deployability/static/migration checks.
+- Pending post-commit: deploy one exact pushed SHA to the LXC, record verifier
+  evidence, perform Department/Station/System Administrator acceptance, and
+  finish the deferred Tablet lifecycle Alpha exercise.
 
 **Final acceptance focus:** role isolation; import atomicity; Tablet assignment/security invariants; publication rollback/retention safety; no backend incident/intervention storage; no breaking `/api/v1` changes from additive reference metadata; audit continuity for destructive/admin actions.
 

@@ -50,8 +50,13 @@ Each build attempt receives one immutable, monotonically increasing version
 within its dataset scope. The version is cryptographically bound to that
 attempt, including failed and obsolete attempts, so successful/current
 versions may contain gaps. Scheduled, manual, and bulk-expedited origins are
-recorded separately. Rollback is an explicit recovery action to a known-good
-historical publication.
+recorded separately. `DatasetScopeState.current_published_publication` is the
+one authoritative active version. Rollback is an audited, atomic recovery
+action to a usable superseded version; active deletion first activates a safe
+predecessor and otherwise fails closed. Retention protects the current version
+and two usable rollback predecessors, marks older successful versions
+`OBSOLETE`, and only purges aged source snapshots for `FAILED`/`CANCELLED`
+attempts without changing their terminal status or permanent attempt identity.
 
 Current required production dataset types are `department_hydrants`,
 `department_fire_plans`, and `station_personnel`. The internal,

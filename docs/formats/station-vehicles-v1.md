@@ -16,6 +16,10 @@ Use **Import Stations and Vehicles** to stage a Department-scoped CSV for review
 
 Vehicle Station references resolve in the importing Department by Short Code first, or by full Station name when no Short Code is supplied. Multiple matches require an explicit review choice. A missing Station is staged for reviewer confirmation and is only created with the dependent Vehicle during final Apply. A Station row in the same CSV can satisfy a later Vehicle reference.
 
+Final Apply is atomic for the accepted batch: an unresolved reference, invalid
+review decision, stale preview, or apply failure leaves canonical Stations and
+Vehicles unchanged. The importer never guesses an ambiguous station.
+
 Blank or absent Vehicle rows never retire, transfer, unprovision, or otherwise change existing Vehicles or Tablets.
 
 ```csv

@@ -17,12 +17,27 @@ production-ready. A source implementation is not itself acceptance evidence.
 | Tablet lifecycle | Exercise adoption, ordinary lease threshold behavior, inactive empty-manifest sync, stale auto-recovery, revoke/lost/retire. |
 | Manifest/download | Verify ETag/304, protected range transfer, cryptographic ETag preservation, signature, HPKE unwrap, and AES-GCM verification. |
 | Authorisation isolation | Confirm cross-department/station access is denied for portal and tablet paths. |
+| Role-based administration | As Department, Station, and System Administrator, verify only valid navigation/destinations are available; confirm Overview is attention-first, the top-bar count matches distinct actionable problems, and an empty attention state is quiet and positive. |
+| Administrator lifecycle | Suspend, reinstate, and revoke both administrator scopes; prove suspended/revoked accounts lose access and the last effective Department Administrator cannot be removed. |
+| Imports and canonical publication state | Exercise Station/Vehicle and Personnel import review, ambiguous/missing station rejection, atomic failure, and one dirty/publication scope per affected canonical scope. |
+| Vehicle retirement recovery | Retire a Vehicle with an assigned Tablet; confirm explicit unassigned attention, preserved Tablet/install history, revoked former distribution, and supported reassignment to an active same-department Vehicle. |
+| Publication recovery | Verify rollback, active deletion with a safe predecessor, rejection without one or during conflicting live work, protected two-predecessor retention, terminal snapshot purge, and post-commit artifact cleanup. |
 | Backup/restore | Verify a backup and complete an isolated restore drill. |
 | Swift interoperability | Perform the required iOS/Swift HPKE, signature, manifest, and artifact interoperability test. |
 
 Automated tests and the deployment verifier support these checks; they do not
 replace environment-specific operator evidence. Record results in the release
 process rather than retroactively marking this checklist complete.
+
+## Alpha exact-SHA gate
+
+Create and push the final candidate commit, deploy that exact SHA with the
+release entrypoint, and record the SHA alongside the verifier output. Do not
+perform Alpha acceptance from an uncommitted tree. Complete the role-based
+administration checks above for a Department Administrator, Station
+Administrator, and System Administrator, then complete the Tablet lifecycle
+exercise (including the deferred refactor-plan acceptance) with a real or
+fake-iPad client as appropriate.
 
 ## Fake-iPad beta exercises
 

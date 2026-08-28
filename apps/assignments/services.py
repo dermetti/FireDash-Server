@@ -232,6 +232,14 @@ def _authorize_tablet_vehicle_assignment(actor, tablet: Tablet, vehicle: Vehicle
 def assign_tablet_vehicle(
     *, tablet: Tablet, vehicle: Vehicle, actor, effective_at: datetime | None = None
 ) -> TabletVehicleAssignment:
+    # Match vehicle retirement's Vehicle -> Tablet -> assignment lock order and
+    # validate persisted operational state rather than a potentially stale
+    # caller-held Vehicle instance.
+    vehicle = (
+        Vehicle.objects.select_for_update()
+        .select_related("department", "station")
+        .get(pk=vehicle.pk)
+    )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
     _authorize_tablet_vehicle_assignment(actor, tablet, vehicle)
     _validate_tablet_vehicle(tablet, vehicle)

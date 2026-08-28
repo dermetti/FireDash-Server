@@ -79,12 +79,22 @@ The broker socket is a local service boundary, not a public API.
 | `PUBLICATION_ARTIFACT_TEMP_ROOT` | `/var/lib/fire-backend/publications/.tmp` |
 | `PUBLICATION_ARTIFACT_MAX_BYTES` | 600 MiB (temporary compatibility ceiling, not the ~2,800 Fire Plan scale solution) |
 | `PUBLICATION_ARTIFACT_STALE_SECONDS` | `3600` |
+| `PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS` | `2` |
+| `PUBLICATION_TERMINAL_SNAPSHOT_RETENTION_DAYS` | `30` |
+| `PUBLICATION_RETENTION_BATCH_SIZE` | `100` |
 | `PUBLICATION_KEK_VERSION` | `1` |
 | `PUBLICATION_SIGNING_KEY_VERSION` | `1` |
 
 The artifact temporary root must be a strict descendant of the artifact root
 so final promotion is an atomic same-filesystem rename. Normal source edits
 coalesce for the nightly build rather than a sliding debounce.
+
+Retention is lifecycle-safe and bounded. The current publication and the two
+newest usable rollback predecessors are protected. Older successful
+superseded publications become `OBSOLETE`; aged `FAILED` and `CANCELLED`
+attempts retain their terminal status while only their source snapshots are
+purged. Do not lower the protected predecessor setting below the approved
+operational policy without a separately approved lifecycle change.
 
 Publication credentials are normally resolved from systemd's per-service
 `CREDENTIALS_DIRECTORY`; do not configure a unit-name-specific credential path.

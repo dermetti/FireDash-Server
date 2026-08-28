@@ -83,6 +83,22 @@ document.
 Raw uploads are private, bounded, and retained only for the configured staging
 period; their contents are never copied into audit events.
 
+## Administrator accounts
+
+Administrator authority is a lifecycle, not a profile flag. Department and
+Station Administrator authority can be **Active**, **Suspended**, or
+**Revoked**. Suspended authority has no effective access and can be
+**Reinstated**; revocation is terminal for that authority record and a new
+provisioning action is required if access is needed again. These transitions
+are server-side, require an effective Department Administrator in the owning
+department, and are audited.
+
+Before suspending, revoking, or permanently removing a Department
+Administrator, FireDash verifies that the department retains another effective
+Department Administrator. It rejects an action that would leave the department
+without one. Department Administrators are never given a Station scope; Station
+Administrator authority is a separate, station-specific assignment.
+
 ## Publications
 
 The Publications page is organised as:
@@ -104,7 +120,42 @@ immutable attempt identifiers, so gaps are expected after failed or obsolete
 attempts. **Build & publish now** promotes existing work instead of creating a
 second source change or duplicate job. The department bulk action does the
 same for affected eligible scopes. Use **Rollback** only as an explicit
-recovery action to a known-good historical publication.
+recovery action to a known-good historical publication. Only a usable
+superseded publication can be restored, and rollback is unavailable while a
+newer attempt is staged or building.
+
+The current publication is the scope's one authoritative distributed version.
+Deleting it first atomically activates a usable predecessor; FireDash rejects
+the deletion when there is no safe predecessor or newer work would make the
+operation ambiguous. Deleting a successful historical version makes it
+**Obsolete** rather than removing its permanent attempt identity. Artifact
+cleanup is scheduled only after the transaction commits.
+
+Maintenance keeps the current publication and the two newest usable rollback
+predecessors in every scope. Older successful superseded publications become
+**Obsolete** and their operational payloads can be removed. After the terminal
+snapshot retention period, **Failed** and **Cancelled** attempts have only
+their retained source snapshot purged; their terminal status and immutable
+attempt identity do not change. Do not treat a retained history row as proof
+that its artifact or source snapshot remains available.
+
+## Overview and attention
+
+Overview is an operational landing page, in this order: attention requiring
+action, a small read-only operational state, then direct management
+destinations. It is not an analytics dashboard or notification inbox. The
+top-bar Attention indicator and Overview use the same request-cached,
+authoritative result.
+
+Department attention can show unassigned Tablets, stale installations, lost
+Tablets, valid pending adoptions, and publication scopes that are not
+published, have unpublished changes, are ready to publish, or have failed.
+Each actionable publication scope counts once even if it has historical,
+current, and candidate publication attempts. Scheduled and healthy building
+work does not add attention. Station Administrators see only destinations valid
+for their fixed station context; System Administrators see only reliable
+system-level recovery signals. When there is no attention, Overview presents a
+quiet positive status rather than an empty warning block.
 
 ## Tablets
 
@@ -139,6 +190,19 @@ the authenticated refresh endpoint to top up an active, authorised tablet to
 the department maximum, then performs its existing configuration, manifest,
 and conditional-download synchronisation. Refresh cannot reactivate stale,
 expired, replaced, revoked, or inactive installations.
+
+## Vehicle retirement and unassigned Tablet recovery
+
+Retiring a Vehicle ends each open Tablet assignment with the recorded
+`vehicle retired` reason. The Tablet is not unprovisioned or replaced: its
+physical asset and installation history remain intact, while distribution
+grants for the former assignment are revoked. The Tablet becomes explicitly
+unassigned and appears in the Department Overview attention list.
+
+Open the unassigned Tablet from Overview or Tablets, choose **Assign**, and
+select an active Vehicle in the same department. This creates the new
+assignment without inventing a replacement Vehicle or discarding the existing
+installation. A retired Vehicle cannot receive a reassignment.
 
 ## Transfer a tablet
 
@@ -194,3 +258,11 @@ version for API v1 from **API Compatibility** on the system dashboard. Leave
 the value blank to permit all v1 applications. Setting a value makes older
 installed apps receive **Upgrade Required** and should be used only after the
 required release is available to affected tablets.
+
+## Locale and time display
+
+Department **Locale and time display** is an administrator presentation policy.
+It uses the supported locale and IANA timezone choices for Department pages;
+Station Administrators inherit the policy of their Department. It does not
+change stored timestamps, audit timestamps, signatures, API timestamps, lease
+calculation, or any other protocol/security meaning: those remain UTC.

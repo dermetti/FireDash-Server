@@ -568,7 +568,7 @@ production client contract.
 The plaintext is a GeoJSON FeatureCollection:
 
 ```json
-{"type":"FeatureCollection","features":[{"type":"Feature","id":"hydrant UUID","geometry":{"type":"Point","coordinates":[longitude,latitude]},"properties":{"external_identifier":"string","hydrant_type":"string","diameter_mm":100,"status":"string"}}],"schema_version":1,"source_revision":42}
+{"type":"FeatureCollection","features":[{"type":"Feature","id":"hydrant UUID","geometry":{"type":"Point","coordinates":[longitude,latitude]},"properties":{"external_identifier":"string","street":"string or null","house_number":"string or null","hydrant_type":"string","diameter_mm":100,"status":"string"}}],"schema_version":1,"source_revision":42}
 ```
 
 Coordinates are `[longitude, latitude]`. `source_revision` is diagnostic
@@ -634,20 +634,22 @@ an output path.
 ### `department_klgv_plans` (`artifact_format: zip`, optional future dataset)
 
 When this department-scoped feature is later enabled, its *single complete v1
-artifact* uses PDF document bundle schema v1. The plaintext ZIP has exactly:
+artifact* has exactly:
 
 ```text
 manifest.json
-documents/<lowercase-uuid>.pdf
+plans/<lowercase-uuid>.pdf
 ```
 
-`manifest.json` is UTF-8 JSON with exactly `schema_version:1`, a non-negative
-`source_revision`, and `documents`, sorted by document UUID. Each document has
-`id`, non-empty `title`, ID-derived `path`, lower-case 64-hex `sha256`, and a
-positive `page_count`; `category` is optional. The path must be exactly
-`documents/{id}.pdf`. Every ZIP member must be declared exactly once; reject
-duplicate members/IDs, undeclared PDFs, traversal or backslash paths, symbolic
-links, hash mismatches, malformed UUIDs, and local-limit violations.
+`manifest.json` is UTF-8 JSON with `source_revision` and `klgv_plans`, sorted
+by plan UUID. Each plan has `id`, `external_identifier`, `object_name`,
+`address`, `postal_code`, `city`, `longitude`, `latitude`, `sha256`,
+`page_count`, and an ID-derived `path`. `external_identifier` and coordinates
+may be `null`; `object_name`, address, postal code, and city are canonical
+required metadata. The path must be exactly `plans/{id}.pdf`. Every ZIP member
+must be declared exactly once; reject duplicate members/IDs, undeclared PDFs,
+traversal or backslash paths, symbolic links, hash mismatches, malformed UUIDs,
+and local-limit violations.
 
 This does **not** change `department_fire_plans`: its existing monolithic ZIP
 layout remains frozen. Nor is it an individual-PDF sync protocol. In v1 both

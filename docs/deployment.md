@@ -56,7 +56,10 @@ signing key. `fire_publication` owns the hardened publication workers:
   at 00:05; `fire-publication-build.socket` accepts an advisory local wake
   from the web process for eligible manual work.
 - `fire-publication-maintenance.service` and timer perform retention and
-  cleanup without the KEK or private signing key.
+  cleanup without the KEK or private signing key. Maintenance protects the
+  current publication and two usable rollback predecessors, obsoletes older
+  successful versions, and purges only aged source snapshots from failed or
+  cancelled attempts.
 
 The build socket is `/run/fire-backend/publication-build.sock`, group-owned
 for the web service with mode `0660`. Connecting carries no job data and gives
@@ -105,7 +108,9 @@ static directory nor an Nginx media alias.
 Use the repository deployment entrypoint and its documented required secrets;
 do not run migrations as the runtime application user. Before declaring an
 upgrade complete, run `nginx -t`, the deployment verifier, and the appropriate
-[acceptance checklist](acceptance.md).
+[acceptance checklist](acceptance.md). Production-like acceptance is always
+against one committed, pushed exact SHA: do not substitute an uncommitted tree
+or a mutable release directory for that gate.
 
 Switching `/srv/firedash/current` can roll back application code, but it does
 not reverse database migrations or publication data. Plan and test database
