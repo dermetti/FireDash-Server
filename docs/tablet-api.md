@@ -631,6 +631,98 @@ and reject ZIP traversal, duplicate entries, undeclared files, or decompression
 sizes that violate local safety limits. Never trust a ZIP member path to choose
 an output path.
 
+### `department_fire_plans` (`artifact_format: document-manifest-v2`)
+
+This is the authoritative Fire Plan v2 contract. It is selected only when the
+normal signed tablet manifest contains this complete dataset descriptor:
+
+```json
+{"publication_id":"11111111-1111-1111-1111-111111111111","type":"department_fire_plans","scope":"department","version":42,"schema_version":2,"required":true,"minimum_app_version":null,"artifact_format":"document-manifest-v2","manifest_url":"/api/v1/tablet/fire-plan-generations/11111111-1111-1111-1111-111111111111/manifest"}
+```
+
+The descriptor is emitted only for the authoritative current publication.
+Route generically by `type`, `scope`, `schema_version`, and `artifact_format`;
+KLGV does not yet have a v2 wire contract.
+
+All v2 requests require the normal `Authorization: Bearer <installation
+credential>` header:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| `GET` | `/api/v1/tablet/fire-plan-generations/{publication_id}/manifest` | Complete signed manifest plus this installation's generation-key grant. |
+| `GET` | `/api/v1/tablet/fire-plan-generations/{publication_id}/artifacts/{artifact_id}/download` | Referenced immutable ciphertext only. |
+| `GET` | `/api/v1/tablet/signing-keys/{version}` | `{"algorithm":"Ed25519","version":"1","public_key":"<base64 32-byte key>"}`. |
+
+The manifest response is:
+
+```json
+{"format":"fire-plan-generation-v2","publication_id":"11111111-1111-1111-1111-111111111111","version":42,"schema_version":2,"documents":[{"fire_plan":{"id":"22222222-2222-2222-2222-222222222222","external_identifier":"FP-17","object_name":"Example","address":"Example Street 7","postal_code":"12345","city":"Exampletown","fsd_location":null,"bmz_location":null,"rwa_info":null,"longitude":8.123,"latitude":49.456,"sha256":"<64 lowercase hex>","page_count":2,"path":"plans/22222222-2222-2222-2222-222222222222.pdf"},"artifact_id":"33333333-3333-3333-3333-333333333333","sanitized_pdf_sha256":"<64 lowercase hex>","ciphertext_sha256":"<64 lowercase hex>","ciphertext_size":123456,"nonce":"<base64 12 bytes>","encryption_algorithm":"AES-256-GCM","wrapping_algorithm":"AES-KW-RFC3394","kek_version":"1","signature":"<base64 artifact signature>","signature_algorithm":"Ed25519","signing_key_version":"1","generation_wrapped_cek":"<base64 AES-KW wrapped CEK>","generation_key_wrapping_algorithm":"AES-KW-RFC3394","download_path":"/api/v1/tablet/fire-plan-generations/11111111-1111-1111-1111-111111111111/artifacts/33333333-3333-3333-3333-333333333333/download"}],"signature":"<base64 manifest signature>","signature_algorithm":"Ed25519","signing_key_version":"1","generation_key_grant":{"scheme":"HPKE","ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM","encapsulated_key":"<base64 65-byte enc>","wrapped_generation_key":"<base64 HPKE ciphertext>","info":{"protocol":"firedash-fire-plan-generation-hpke-v2","publication_id":"11111111-1111-1111-1111-111111111111","installation_id":"44444444-4444-4444-4444-444444444444","tablet_id":"55555555-5555-5555-5555-555555555555","scope":{"dataset_type_code":"department_fire_plans","department_id":"66666666-6666-6666-6666-666666666666","station_id":null},"version_number":42,"schema_version":2}}}
+```
+
+`documents` is complete, not a delta, and ordered by canonical Fire Plan UUID.
+`fire_plan.id` is canonical identity; `artifact_id` is immutable identity.
+`fire_plan.path` is frozen legacy metadata only, never a download URL or local
+identity. SHA-256 values are lowercase hex; UUIDs are canonical strings;
+binary values use padded Base64; numeric sizes and versions are JSON numbers.
+
+Verify the manifest Ed25519 signature before using any entry. Sign/verify
+ASCII `json.dumps(payload, sort_keys=True, separators=(",", ":"))` bytes for
+the top-level object before response-only `signature`, `signature_algorithm`,
+`signing_key_version`, and `generation_key_grant` are added. The manifest
+signs the document artifact metadata including `generation_wrapped_cek`.
+
+HPKE uses RFC 9180 `DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM`.
+`generation_key_grant.info` is the complete public binding: validate it against
+the signed manifest and local authenticated installation, then ASCII
+sorted-key/compact-JSON serialize it as the HPKE `info` bytes. Its explicit
+domain separator is `firedash-fire-plan-generation-hpke-v2`. Open the grant to
+obtain a 32-byte generation key. AES Key Wrap RFC 3394 unwraps the Base64
+`generation_wrapped_cek` to the 32-byte artifact CEK.
+
+Verify ciphertext size and SHA-256 before decryption. Decrypt with AES-256-GCM
+using the decoded 12-byte `nonce` and **no AAD** (`nil`/`None`); then require
+the plaintext PDF SHA-256 to equal `sanitized_pdf_sha256`. The GCM tag is
+appended to ciphertext, not separately encoded.
+
+The document artifact's independent Ed25519 `signature` is **server-side
+immutable-artifact integrity/audit metadata**. It was created over UTF-8,
+sorted-key compact JSON bytes of exactly:
+
+```json
+{"artifact_id":"33333333-3333-3333-3333-333333333333","ciphertext_sha256":"<64 lowercase hex>","ciphertext_size":123456,"encryption_algorithm":"AES-256-GCM","fire_plan_id":"22222222-2222-2222-2222-222222222222","kek_version":"1","nonce":"<base64 12 bytes>","sanitized_pdf_sha256":"<64 lowercase hex>","wrapped_cek":"<base64 server KEK-wrapped CEK>","wrapping_algorithm":"AES-KW-RFC3394"}
+```
+
+This signature uses the artifact's server KEK-wrapped CEK (`wrapped_cek`), not
+the generation-wrapped CEK. `wrapped_cek` is deliberately not exposed to the
+Tablet, so the Tablet **must not attempt to verify this artifact signature**.
+The exposed `signature`, `signature_algorithm`, and `signing_key_version`
+fields are signed manifest metadata retained for compatibility/diagnostics;
+they are not part of the Tablet acceptance chain.
+
+The complete Tablet v2 acceptance chain is: verify the complete manifest
+Ed25519 signature; validate its artifact ID, ciphertext hash/size, nonce,
+algorithms, sanitized PDF hash, and `generation_wrapped_cek`; verify downloaded
+ciphertext size/SHA-256; HPKE-open the generation key; AES-KW unwrap the CEK;
+AES-256-GCM decrypt with no AAD; then verify the plaintext sanitized-PDF
+SHA-256. Every mandatory step uses wire-visible data plus the installation
+private key.
+
+Manifest `200` requires a READY generation-key grant. `202 Accepted` with
+`Retry-After: 5` means grant preparation is pending. Unknown generations are
+`404`; authorization, revoked/replaced/expired or cross-scope installations,
+and missing/non-ready grants are Tablet problem responses (`403`); an
+incompatible app can receive `426`. Artifact `200` is
+`application/octet-stream` with quoted `ETag` equal to ciphertext SHA-256;
+matching `If-None-Match` gives `304`. The artifact must be referenced by that
+publication and authorized for that installation; unknown/unreferenced IDs are
+`404`. No Range/resume contract exists for v2.
+
+When discovery selects `document-manifest-v2`, the legacy ZIP still created
+internally by the server is a lifecycle compatibility detail. The client must
+not fetch, decrypt, or interpret it; use only this manifest and individual
+artifact endpoints. The v1 ZIP reader remains required only when discovery
+advertises the legacy `artifact_format:"zip"` entry.
+
 ### `department_klgv_plans` (`artifact_format: zip`, optional future dataset)
 
 When this department-scoped feature is later enabled, its *single complete v1

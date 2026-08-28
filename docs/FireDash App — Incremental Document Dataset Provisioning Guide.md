@@ -494,6 +494,15 @@ bytes before Base64 encoding. `wrapping_algorithm` and `kek_version` describe
 the server-side KEK wrapping of the artifact CEK; the Tablet uses the separate
 `generation_wrapped_cek` and `generation_key_wrapping_algorithm` instead.
 
+The manifest also carries Stage A artifact `signature`, `signature_algorithm`,
+and `signing_key_version` fields. They are server-side immutable-artifact
+integrity/audit metadata, not a Tablet verification requirement: their
+canonical payload includes a server-only KEK-wrapped CEK that is deliberately
+not sent to the app. Do not attempt independent artifact-signature
+verification. The Tablet acceptance chain is the signed complete manifest,
+signed artifact metadata, ciphertext size/SHA-256, HPKE generation-key open,
+AES-KW CEK unwrap, AES-256-GCM with no AAD, and sanitized-PDF SHA-256.
+
 The HPKE grant uses RFC 9180 `DHKEM(P-256, HKDF-SHA256) / HKDF-SHA256 /
 AES-128-GCM`. `encapsulated_key` is the P-256 uncompressed-point `enc` value
 (65 bytes before Base64); `wrapped_generation_key` is the HPKE ciphertext.
@@ -654,7 +663,7 @@ Use:
 ```text
 artifact CEK
 artifact nonce
-authenticated metadata/AAD required by contract
+no AAD (`nil` / `None`)
 ```
 
 Do not implement alternative crypto behavior from assumptions. Follow the server's contract exactly.
@@ -1076,6 +1085,12 @@ This does not mean the server will publish both formats for every generation.
 
 New Fire Plan publication after cutover will use v2 only.
 
+The server may still create a legacy encrypted ZIP internally for a v2
+publication to satisfy its current lifecycle compatibility invariant. This is
+not a client artifact: when discovery advertises
+`artifact_format:"document-manifest-v2"`, fetch only the v2 manifest and its
+individual artifact endpoints. Do not fetch or interpret that internal ZIP.
+
 The v1 reader exists temporarily for compatibility with historical rollback state.
 
 Removal of the v1 reader will be a later explicit decision.
@@ -1263,11 +1278,7 @@ timeout / temporary offline
     -> retry later
     -> keep old generation active
 
-401 / invalid or missing installation credential
-    -> fail sync
-    -> preserve existing local operational data according to current app policy
-
-403 / revoked, expired, replaced, cross-scope, or otherwise unauthorized installation
+authentication/authorization failure (the API does not promise stable 401-vs-403 distinction)
     -> fail sync
     -> do not repeatedly download artifacts
     -> preserve existing local operational data according to current app policy
