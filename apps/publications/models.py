@@ -6,7 +6,10 @@ from django.db import models
 from django.db.models import Q
 
 from apps.organizations.models import Department, Station
-from apps.publications.paths import publication_artifact_relative_path
+from apps.publications.paths import (
+    document_artifact_relative_path,
+    publication_artifact_relative_path,
+)
 from apps.publications.registry import DatasetRegistryError, validate_dataset_scope
 
 MAX_CHANGE_SUMMARY_FIELDS = 20
@@ -251,6 +254,108 @@ class DatasetPublication(models.Model):
             raise ValidationError(
                 "Review-ready and published publications require a ready artifact."
             )
+
+
+class FirePlanDocumentArtifact(models.Model):
+    """Immutable, identity-addressed encrypted PDF for one canonical Fire Plan.
+
+    This is intentionally independent of ``DatasetPublication``.  Reuse is
+    scoped to its canonical source plan, never to equal bytes from another
+    plan or department.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    fire_plan = models.ForeignKey(
+        "reference_data.FirePlan", on_delete=models.PROTECT, related_name="document_artifacts"
+    )
+    sanitized_pdf_sha256 = models.CharField(max_length=64)
+    artifact_path = models.CharField(max_length=512, unique=True)
+    ciphertext_size = models.PositiveBigIntegerField()
+    ciphertext_sha256 = models.CharField(max_length=64)
+    nonce = models.BinaryField()
+    wrapped_cek = models.BinaryField()
+    encryption_algorithm = models.CharField(max_length=32)
+    wrapping_algorithm = models.CharField(max_length=32)
+    kek_version = models.CharField(max_length=64)
+    signature = models.BinaryField()
+    signature_algorithm = models.CharField(max_length=32)
+    signing_key_version = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("fire_plan", "sanitized_pdf_sha256"),
+                name="unique_fire_plan_document_artifact_content",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("fire_plan", "created_at"), name="doc_artifact_plan_created_idx")
+        ]
+
+    def clean(self) -> None:
+        if self.artifact_path != document_artifact_relative_path(artifact_id=self.id):
+            raise ValidationError(
+                {"artifact_path": "Artifact path must be a generated document path."}
+            )
+        metadata_complete = all(
+            (
+                len(self.sanitized_pdf_sha256) == 64,
+                self.ciphertext_size is not None,
+                len(self.ciphertext_sha256) == 64,
+                self.nonce and len(self.nonce) == 12,
+                self.wrapped_cek,
+                self.encryption_algorithm == "AES-256-GCM",
+                self.wrapping_algorithm == "AES-KW-RFC3394",
+                self.kek_version,
+                self.signature,
+                self.signature_algorithm == "Ed25519",
+                self.signing_key_version,
+            )
+        )
+        if not metadata_complete:
+            raise ValidationError("Document artifacts require complete cryptographic metadata.")
+
+
+class PublicationFirePlanArtifactReference(models.Model):
+    """Frozen future-generation membership of a Fire Plan document artifact."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publication = models.ForeignKey(
+        DatasetPublication, on_delete=models.PROTECT, related_name="fire_plan_artifact_references"
+    )
+    fire_plan = models.ForeignKey(
+        "reference_data.FirePlan",
+        on_delete=models.PROTECT,
+        related_name="publication_artifact_references",
+    )
+    document_artifact = models.ForeignKey(
+        FirePlanDocumentArtifact,
+        on_delete=models.PROTECT,
+        related_name="publication_references",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("publication", "fire_plan"),
+                name="unique_publication_fire_plan_artifact_reference",
+            )
+        ]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.document_artifact_id and self.document_artifact.fire_plan_id != self.fire_plan_id:
+            errors["document_artifact"] = "Artifact must belong to the referenced Fire Plan."
+        if (
+            self.publication_id
+            and self.fire_plan_id
+            and self.publication.department_id != self.fire_plan.department_id
+        ):
+            errors["fire_plan"] = "Fire Plan must belong to the publication department."
+        if errors:
+            raise ValidationError(errors)
 
 
 class PublicationJob(models.Model):

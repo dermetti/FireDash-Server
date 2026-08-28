@@ -20,3 +20,13 @@ ARTIFACT_FILENAME = "artifact.bin"
 def publication_artifact_relative_path(*, department_id: object, publication_id: object) -> str:
     """Return the canonical forward-slash relative artifact path for a publication."""
     return f"{department_id}/{publication_id}/{ARTIFACT_FILENAME}"
+
+
+def document_artifact_relative_path(*, artifact_id: object) -> str:
+    """Return the identity-addressed path for an immutable Fire Plan PDF.
+
+    This deliberately contains neither a publication version nor a source
+    filename.  A document artifact remains addressable across future
+    generations that reference it.
+    """
+    return f"documents/{artifact_id}/{ARTIFACT_FILENAME}"
