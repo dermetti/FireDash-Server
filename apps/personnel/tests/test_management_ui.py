@@ -39,7 +39,7 @@ def _payload(**overrides):
     return data
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_personnel_list_is_bounded_active_default_filtered_and_scoped(client, personnel_scope):
     admin, station_admin, department, station, other_station, person = personnel_scope
     Person.objects.bulk_create(
@@ -81,7 +81,7 @@ def test_personnel_list_is_bounded_active_default_filtered_and_scoped(client, pe
     client.force_login(admin)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_personnel_modal_edit_delete_protection_audit_and_dirtying(client, personnel_scope):
     _, _, department, station, _, person = personnel_scope
     detail_url = reverse("personnel-detail", args=(department.id, person.id))

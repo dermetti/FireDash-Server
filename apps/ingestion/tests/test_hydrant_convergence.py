@@ -24,6 +24,8 @@ def payload(**changes):
         "external_identifier": "H-1",
         "longitude": 10.0,
         "latitude": 53.0,
+        "street": "Harbor Road",
+        "house_number": "1",
         "hydrant_type": "underground",
         "diameter_mm": 100,
         "status": "ACTIVE",
@@ -57,7 +59,7 @@ def preview(actor, department, source):
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_exact_hydrant_reimport_is_unchanged_and_confirmation_is_a_noop(context):
     actor, department = context
     first = preview(actor, department, payload())
@@ -86,7 +88,7 @@ def test_exact_hydrant_reimport_is_unchanged_and_confirmation_is_a_noop(context)
     assert PublicationJob.objects.filter(department=department).count() == job_count
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "changes",
     [{"diameter_mm": 125}, {"longitude": 10.1}, {"hydrant_type": "wall"}, {"status": "INACTIVE"}],
@@ -99,7 +101,7 @@ def test_each_hydrant_business_field_change_is_an_update(context, changes):
     assert changed.validation_summary["updates"][0]["fields"]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_hydrant_preview_remains_stale_after_canonical_change(context):
     actor, department = context
     apply_preview(actor=actor, batch_id=preview(actor, department, payload()).id)

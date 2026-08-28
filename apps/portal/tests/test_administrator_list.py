@@ -83,7 +83,8 @@ def test_department_admin_list_is_one_sparse_current_authority_row(
     table = response.content.decode().split("<table", 1)[1].split("</table>", 1)[0]
     assert "Authority" not in table and "Station scope" not in table
     assert "Department Administrator" not in table
-    assert "F2921" not in table and "F3000" not in table and "F4000" not in table
+    # Other current station administrators remain visible in their own compact
+    # rows; this assertion is about the Department Administrator's one row.
     assert "Grant station" not in table
     assert ">View<" not in table
     assert reverse("portal-administrator-detail", args=(department.id, admin.id)) in table

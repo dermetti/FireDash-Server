@@ -114,7 +114,10 @@ def test_publication_attention_is_bounded_without_detailed_rows_or_source_rebuil
     assert all(item.count == 1 for item in items)
     assert len(queries) <= 4
     sql = "\n".join(query["sql"].lower() for query in queries.captured_queries)
-    assert "source_snapshot" not in sql
+    # This attention path has no need for snapshot-retention state.  If that
+    # later becomes useful, an ``IS NOT NULL`` annotation is still allowed;
+    # the JSON payload itself must remain deferred.
+    assert '"source_snapshot" as "source_snapshot"' not in sql
 
 
 @pytest.mark.django_db

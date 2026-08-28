@@ -164,6 +164,7 @@ def test_hydrant_summary_still_bounded_above_50000():
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.slow
 @pytest.mark.parametrize("hydrant_count", [38_000, 50_000])
 def test_large_hydrant_department_builds_summary(hydrant_count):
     from django.contrib.gis.geos import Point

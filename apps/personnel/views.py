@@ -7,7 +7,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Q
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
@@ -90,7 +90,6 @@ def _station_admin_station_or_403(request: HttpRequest, department: Department) 
     return station
 
 
-@require_http_methods(["GET"])
 @login_required
 def people(request: HttpRequest, department_id) -> HttpResponse:
     department = get_object_or_404(Department, pk=department_id)
@@ -98,6 +97,13 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
     selected_station = None
     if not department_admin:
         selected_station = _station_admin_station_or_403(request, department)
+    # A Station Administrator may read their fixed station view, but has no
+    # department-wide personnel mutation authority.  Check that boundary
+    # before rejecting the legacy list endpoint's unsupported POST.
+    if request.method != "GET":
+        if not department_admin:
+            raise PermissionDenied("Department administrator scope is required.")
+        return HttpResponseNotAllowed(["GET"])
     queryset = visible_to_user(user=request.user, department_id=department.id)
     if selected_station:
         queryset = queryset.filter(station_assignments__station=selected_station).distinct()

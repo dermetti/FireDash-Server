@@ -47,7 +47,7 @@ def _messages(response) -> list[str]:
     return [str(message) for message in get_messages(response.wsgi_request)]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_rejected_commander_email_has_no_side_effects(client, department_admin):
     actor, department, station = department_admin
     person = create_person(
@@ -99,7 +99,7 @@ def test_rejected_commander_email_has_no_side_effects(client, department_admin):
     assert job.status == PublicationJob.Status.PENDING
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_verify_email_rejected_for_ineligible_person_is_handled(client, department_admin):
     actor, department, station = department_admin
     person = create_person(
@@ -117,7 +117,7 @@ def test_verify_email_rejected_for_ineligible_person_is_handled(client, departme
     assert any("eligible" in message.lower() for message in _messages(response))
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_offboard_without_retention_policy_is_handled(client, department_admin):
     actor, department, station = department_admin
     person = create_person(
@@ -137,7 +137,7 @@ def test_offboard_without_retention_policy_is_handled(client, department_admin):
     assert person.lifecycle_status == Person.LifecycleStatus.ACTIVE
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_anonymize_before_retention_expiry_is_handled(client, department_admin):
     actor, department, station = department_admin
     set_retention_policy(actor=actor, department=department, retention_period=timedelta(days=30))
@@ -159,7 +159,7 @@ def test_anonymize_before_retention_expiry_is_handled(client, department_admin):
     assert person.lifecycle_status == Person.LifecycleStatus.DEPARTED
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_commander_eligibility_for_departed_person_is_handled(client, department_admin):
     actor, department, station = department_admin
     set_retention_policy(actor=actor, department=department, retention_period=timedelta(days=30))
@@ -181,7 +181,7 @@ def test_commander_eligibility_for_departed_person_is_handled(client, department
     assert any("active" in message.lower() for message in _messages(response))
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_valid_second_change_while_dirty_coalesces_and_builds_latest(department_admin):
     actor, department, station = department_admin
     person = create_person(
@@ -245,7 +245,7 @@ def test_valid_second_change_while_dirty_coalesces_and_builds_latest(department_
     assert summary["commander_eligible_count"] == 0
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_eligibility_toggle_retains_email_but_clears_verification(department_admin):
     actor, department, station = department_admin
     person = create_person(
@@ -275,7 +275,7 @@ def test_eligibility_toggle_retains_email_but_clears_verification(department_adm
     assert person.email_verified_at is None
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_permission_denied_is_not_converted_to_302(client, department_admin):
     actor, department, station = department_admin
     person = create_person(
@@ -304,7 +304,7 @@ def test_permission_denied_is_not_converted_to_302(client, department_admin):
     assert response.status_code != 302
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_offboard_success_message_only_on_success(client, department_admin):
     actor, department, station = department_admin
     person = create_person(

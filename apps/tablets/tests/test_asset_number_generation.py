@@ -167,8 +167,15 @@ def test_automatic_policy_ignores_manual_value_and_uses_department_allocator(ass
 def test_generated_identifiers_skip_manual_collisions_monotonically(asset_number_scope):
     admin, _, department, _ = asset_number_scope
     _set_policy(admin, department, width=4)
-    create_tablet(actor=admin, department=department, display_name="Manual 42", asset_number="0042")
-    create_tablet(actor=admin, department=department, display_name="Manual 43", asset_number="0043")
+    # Existing/manual rows may pre-date the automatic policy.  Create the
+    # collision directly rather than passing a manual number to an automatic
+    # registration, which intentionally ignores that request value.
+    Tablet.objects.create(
+        department=department, display_name="Manual 42", asset_number="0042", created_by=admin
+    )
+    Tablet.objects.create(
+        department=department, display_name="Manual 43", asset_number="0043", created_by=admin
+    )
     department.tablet_asset_number_sequence = 41
     department.save(update_fields=("tablet_asset_number_sequence",))
 
@@ -202,8 +209,12 @@ def test_prefix_change_collision_is_skipped_without_resetting_sequence(asset_num
 def test_allocation_exhaustion_rolls_back_the_counter(asset_number_scope):
     admin, _, department, _ = asset_number_scope
     _set_policy(admin, department, width=1)
-    create_tablet(actor=admin, department=department, display_name="Manual 1", asset_number="1")
-    create_tablet(actor=admin, department=department, display_name="Manual 2", asset_number="2")
+    Tablet.objects.create(
+        department=department, display_name="Manual 1", asset_number="1", created_by=admin
+    )
+    Tablet.objects.create(
+        department=department, display_name="Manual 2", asset_number="2", created_by=admin
+    )
     with patch.object(tablet_services, "MAX_ASSET_NUMBER_ALLOCATION_ATTEMPTS", 2):
         with pytest.raises(TabletError, match="after 2 attempts"):
             create_tablet(

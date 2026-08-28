@@ -8,7 +8,7 @@ from django.template.loader import render_to_string
 
 
 def _department():
-    return SimpleNamespace(id=uuid.uuid4())
+    return SimpleNamespace(id=uuid.uuid4(), timezone="UTC", locale="en")
 
 
 def _counts(total=1, operational=1, active=0, inactive=1, lost=0, retired=0):

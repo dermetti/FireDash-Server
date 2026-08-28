@@ -44,7 +44,7 @@ def _department_with_station_scopes(*, total: int):
     return department
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize("total", (4, 50, 400))
 def test_publication_list_query_count_is_bounded_and_only_enriches_visible_page(monkeypatch, total):
     """The list counts/pages scopes before its bounded publication batch reads."""
@@ -78,10 +78,13 @@ def test_publication_list_query_count_is_bounded_and_only_enriches_visible_page(
     # lookup; the total number must not grow with the department's scope count.
     assert len(queries) == 5
     sql = "\n".join(query["sql"].lower() for query in queries.captured_queries)
-    assert "source_snapshot" not in sql
+    # The compact read model may use ``IS NOT NULL`` to annotate retention,
+    # but it must not select the JSON payload itself.
+    assert "source_snapshot_retained" in sql
+    assert '"source_snapshot" as "source_snapshot"' not in sql
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_data_hub_summary_is_batched_without_detailed_scope_rows_or_source_rebuild(monkeypatch):
     """A 400-scope module receives one aggregate state summary, not 400 rows."""
     assert connection.vendor == "postgresql"
@@ -111,4 +114,5 @@ def test_data_hub_summary_is_batched_without_detailed_scope_rows_or_source_rebui
     # intentionally issue no extra SQL query.
     assert len(queries) == 3
     sql = "\n".join(query["sql"].lower() for query in queries.captured_queries)
-    assert "source_snapshot" not in sql
+    assert "source_snapshot_retained" in sql
+    assert '"source_snapshot" as "source_snapshot"' not in sql

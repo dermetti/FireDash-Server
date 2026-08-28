@@ -269,14 +269,15 @@ def test_recover_stale_job_requeues_then_exhausts_attempt_limit(publication_cont
 def test_ready_artifact_publications_can_be_published_after_phase7(publication_context):
     admin, _, department, _, _ = publication_context
     scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
+    # mark_dirty now records the queued attempt as permanent version 1.
     publication = ready_publication(
-        department=department, scope=scope, version_number=1, actor=admin
+        department=department, scope=scope, version_number=2, actor=admin
     )
     published = publish_publication(actor=admin, publication=publication)
     rejected = reject_publication(
         actor=admin,
         publication=ready_publication(
-            department=department, scope=scope, version_number=2, actor=admin
+            department=department, scope=scope, version_number=3, actor=admin
         ),
     )
     scope.refresh_from_db()
@@ -292,7 +293,7 @@ def test_publication_actions_require_department_admin(publication_context):
     admin, outsider, department, _, _ = publication_context
     scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
     publication = ready_publication(
-        department=department, scope=scope, version_number=1, actor=admin
+        department=department, scope=scope, version_number=2, actor=admin
     )
 
     with pytest.raises(PermissionDenied, match="Department administrator scope"):

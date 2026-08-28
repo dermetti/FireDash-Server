@@ -26,6 +26,9 @@ def test_fire_plan_add_form_exposes_only_the_canonical_identity_fields(client):
         "city",
         "longitude",
         "latitude",
+        "fsd_location",
+        "bmz_location",
+        "rwa_info",
     }
     content = response.content.decode()
     assert "Object reference" not in content

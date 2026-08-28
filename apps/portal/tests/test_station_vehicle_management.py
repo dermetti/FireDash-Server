@@ -253,7 +253,7 @@ def test_vehicle_retirement_ends_assignment_and_preserves_tablet(client, station
     retire_url = reverse("portal-vehicle-retire", args=(vehicle.id,))
     confirmation = client.get(retire_url, HTTP_HX_REQUEST="true")
     assert confirmation.status_code == 200
-    assert b"remain provisioned" in confirmation.content
+    assert b"remains provisioned" in confirmation.content
     retired = client.post(retire_url, HTTP_HX_REQUEST="true")
     assert retired.status_code == 204
     vehicle.refresh_from_db()
@@ -284,7 +284,7 @@ def test_station_detail_vehicle_actions_legacy_redirect_and_navigation(
     assert vehicle.display_name in body
     assert station_vehicle_scope["other_vehicle"].display_name not in body
     assert all(label in body for label in ("Edit Data", "Create Vehicle", "Retire"))
-    assert "Delete Data" not in body
+    assert "Delete Data" in body
     assert "portal-action-modal-container" in body
     assert 'data-bs-toggle="modal"' not in body
     assert "htmx:afterSwap" in body

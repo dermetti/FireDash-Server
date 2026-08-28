@@ -25,6 +25,8 @@ def _geojson(identifier, **changes):
         "external_identifier": identifier,
         "longitude": 10.0,
         "latitude": 53.0,
+        "street": "Harbor Road",
+        "house_number": "1",
         "hydrant_type": "underground",
         "diameter_mm": 100,
         "status": "ACTIVE",
@@ -87,7 +89,7 @@ def _single_preview(actor, department, identifier, **changes):
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_single_preview_baseline_is_scoped_to_imported_identifier(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     batch = _single_preview(actor, department, "H-00001", diameter_mm=125)
@@ -99,7 +101,7 @@ def test_single_preview_baseline_is_scoped_to_imported_identifier(hydrant_scalin
     assert batch.validation_summary["updates"][0]["external_identifier"] == "H-00001"
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_single_preview_query_count_is_bounded(
     hydrant_scaling_context, django_assert_max_num_queries
 ):
@@ -111,7 +113,7 @@ def test_single_preview_query_count_is_bounded(
     assert batch.update_count == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_unchanged_row_remains_unchanged(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     batch = _single_preview(actor, department, "H-00001")
@@ -119,7 +121,7 @@ def test_unchanged_row_remains_unchanged(hydrant_scaling_context):
     assert (batch.add_count, batch.update_count, batch.unchanged_count) == (0, 0, 1)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_new_row_remains_add(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     batch = _single_preview(actor, department, "H-NEW")
@@ -128,7 +130,7 @@ def test_new_row_remains_add(hydrant_scaling_context):
     assert batch.baseline == {}
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_explicit_inactive_is_update_not_deactivate(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     batch = _single_preview(actor, department, "H-00001", status="INACTIVE")
@@ -136,7 +138,7 @@ def test_explicit_inactive_is_update_not_deactivate(hydrant_scaling_context):
     assert (batch.add_count, batch.update_count, batch.deactivate_count) == (0, 1, 0)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_stale_canonical_mutation_after_preview_is_rejected(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     batch = _single_preview(actor, department, "H-00001", diameter_mm=125)
@@ -149,7 +151,7 @@ def test_stale_canonical_mutation_after_preview_is_rejected(hydrant_scaling_cont
         apply_preview(actor=actor, batch_id=batch.id)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_unrelated_hydrant_change_does_not_invalidate_preview(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     batch = _single_preview(actor, department, "H-00001", diameter_mm=125)
@@ -165,7 +167,7 @@ def test_unrelated_hydrant_change_does_not_invalidate_preview(hydrant_scaling_co
     assert Hydrant.objects.get(external_identifier="H-00001").diameter_mm == 125
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_preview_creates_no_publication_dirty_scope(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     _single_preview(actor, department, "H-00001", diameter_mm=125)
@@ -176,7 +178,7 @@ def test_preview_creates_no_publication_dirty_scope(hydrant_scaling_context):
     assert not PublicationJob.objects.filter(department=department).exists()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_confirmed_change_marks_correct_scope_dirty(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     batch = _single_preview(actor, department, "H-00001", diameter_mm=125)
@@ -189,7 +191,7 @@ def test_confirmed_change_marks_correct_scope_dirty(hydrant_scaling_context):
     assert PublicationJob.objects.filter(department=department).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_identical_reimport_converges_with_population(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     first = _single_preview(actor, department, "H-00001", diameter_mm=125)
@@ -206,7 +208,7 @@ def test_identical_reimport_converges_with_population(hydrant_scaling_context):
     assert scope.source_revision == revision
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_large_batch_preview_loads_only_relevant_identifiers(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     # A small batch only touches the identifiers it names, never the whole table.

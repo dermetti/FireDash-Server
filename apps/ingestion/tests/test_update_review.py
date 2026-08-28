@@ -41,12 +41,16 @@ def test_document_changed_fields_includes_pdf_evidence_and_distance():
     current = SimpleNamespace(
         source_pdf_sha256="a" * 64,
         sanitized_pdf_sha256="b" * 64,
+        sha256="b" * 64,
         file_size=1 * 1024 * 1024,
         page_count=4,
         object_name="Old",
         address="Road",
         postal_code="",
         city="",
+        fsd_location="",
+        bmz_location="",
+        rwa_info="",
         location=Point(10.0, 50.0, srid=4326),
     )
     row = {
@@ -58,6 +62,9 @@ def test_document_changed_fields_includes_pdf_evidence_and_distance():
         "address": "Road",
         "postal_code": "22041",
         "city": "Hamburg",
+        "fsd_location": "FSD",
+        "bmz_location": "BMZ",
+        "rwa_info": "RWA",
         "longitude": 10.08110276,
         "latitude": 53.5768409,
     }
@@ -80,12 +87,16 @@ def test_document_update_detail_includes_match_explanation():
         id="11111111-1111-1111-1111-111111111111",
         source_pdf_sha256="a" * 64,
         sanitized_pdf_sha256="b" * 64,
+        sha256="b" * 64,
         file_size=1,
         page_count=1,
         object_name="Old",
         address="Road",
         postal_code="",
         city="",
+        fsd_location="",
+        bmz_location="",
+        rwa_info="",
         location=Point(10.0, 50.0, srid=4326),
     )
     row = {
@@ -94,6 +105,9 @@ def test_document_update_detail_includes_match_explanation():
         "title": "New",
         "postal_code": "22041",
         "city": "Hamburg",
+        "fsd_location": "",
+        "bmz_location": "",
+        "rwa_info": "",
         "longitude": 10.08110276,
         "latitude": 53.5768409,
         "source_pdf_sha256": "a" * 64,

@@ -50,7 +50,7 @@ def _payload(**overrides):
     return values
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_hydrant_list_is_bounded_active_by_default_and_filterable(client, hydrant_scope):
     _, department, hydrant, other = hydrant_scope
     Hydrant.objects.bulk_create(
@@ -84,7 +84,7 @@ def test_hydrant_list_is_bounded_active_by_default_and_filterable(client, hydran
     assert list(inactive_response.context["hydrants"]) == [inactive]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_hydrant_modal_lifecycle_delete_publication_and_scope(client, hydrant_scope):
     _, department, hydrant, other = hydrant_scope
     detail_url = reverse("reference-data-hydrant-manage", args=(hydrant.id,))

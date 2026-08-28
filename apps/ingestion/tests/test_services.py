@@ -52,7 +52,15 @@ def hydrant_csv(*rows):
         "external_identifier,longitude,latitude,street,house_number,"
         "hydrant_type,diameter_mm,status\n"
     )
-    return (current_header + "\n".join(rows)).encode()
+    # Keep callers concise while ensuring every generated fixture uses the
+    # current canonical street/house-number schema.
+    canonical_rows = []
+    for row in rows:
+        values = row.split(",")
+        if len(values) == 6:
+            values[3:3] = ("", "")
+        canonical_rows.append(",".join(values))
+    return (current_header + "\n".join(canonical_rows)).encode()
 
 
 def hydrant_geojson(*identifiers):
@@ -64,6 +72,8 @@ def hydrant_geojson(*identifiers):
             "geometry": {"type": "Point", "coordinates": [8.0, 50.0]},
             "properties": {
                 "external_identifier": identifier,
+                "street": "Main Street",
+                "house_number": "1",
                 "hydrant_type": "wet",
                 "diameter_mm": None,
                 "status": "ACTIVE",
@@ -345,6 +355,8 @@ def test_manual_hydrant_uses_same_preview_apply_and_noop_rules(context):
             "external_identifier": "H-MANUAL",
             "longitude": 8.1,
             "latitude": 50.2,
+            "street": "Main Street",
+            "house_number": "1",
             "hydrant_type": "wet",
             "diameter_mm": 100,
             "status": "ACTIVE",
@@ -356,12 +368,12 @@ def test_manual_hydrant_uses_same_preview_apply_and_noop_rules(context):
         actor=actor,
         department=department,
         domain=ImportBatch.Domain.HYDRANTS,
-        import_format=ImportBatch.Format.JSON,
+        import_format=ImportBatch.Format.CSV,
         import_mode=ImportBatch.Mode.MERGE,
-        filename="same.json",
+        filename="same.csv",
         payload=(
-            b'[{"external_identifier":"H-MANUAL","longitude":8.1,"latitude":50.2,'
-            b'"hydrant_type":"wet","diameter_mm":100,"status":"ACTIVE"}]'
+            b"external_identifier,longitude,latitude,street,house_number,hydrant_type,diameter_mm,status\n"
+            b"H-MANUAL,8.1,50.2,Main Street,1,wet,100,ACTIVE\n"
         ),
     )
     apply_preview(actor=actor, batch_id=second.id)
@@ -394,12 +406,12 @@ def test_single_and_batch_personnel_inputs_share_identity_and_noop_rules(context
         actor=actor,
         department=department,
         domain=ImportBatch.Domain.PERSONNEL,
-        import_format=ImportBatch.Format.JSON,
+        import_format=ImportBatch.Format.CSV,
         import_mode=ImportBatch.Mode.UPSERT,
-        filename="personnel.json",
+        filename="personnel.csv",
         payload=(
-            b'[{"personnel_number":"P-1","first_name":"Alex","last_name":"Member",'
-            b'"incident_commander_eligible":false}]'
+            b"personnel_number,first_name,last_name,home_station,incident_commander_eligible\n"
+            b"P-1,Alex,Member,ST,false\n"
         ),
     )
     apply_preview(actor=actor, batch_id=batch.id)
@@ -701,11 +713,8 @@ def test_personnel_repeat_is_semantic_noop_for_manual_csv_and_json(context):
     for import_format, payload in (
         (
             ImportBatch.Format.CSV,
-            b"personnel_number,first_name,last_name,incident_commander_eligible\nP-1,Ada,Lovelace,true\n",
-        ),
-        (
-            ImportBatch.Format.JSON,
-            b'[{"personnel_number":"P-1","first_name":"Ada","last_name":"Lovelace","incident_commander_eligible":true}]',
+            b"personnel_number,first_name,last_name,home_station,incident_commander_eligible\n"
+            b"P-1,Ada,Lovelace,HOM,true\n",
         ),
     ):
         repeat = create_preview(

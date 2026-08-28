@@ -13,8 +13,10 @@ from apps.accounts.models import User
 from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
+from apps.publications.builders import build_source_payload, source_fingerprint_for_payload
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.paths import publication_artifact_relative_path
+from apps.publications.registry import get_dataset_definition
 from apps.publications.services import bulk_request_rebuilds, mark_dirty
 
 
@@ -30,6 +32,13 @@ def bulk_context(db):
 
 def _published(department, scope, station=None, version_number=1):
     publication_id = uuid.uuid4()
+    source_fingerprint = source_fingerprint_for_payload(
+        build_source_payload(
+            definition=get_dataset_definition(scope.dataset_type_code),
+            department=department,
+            station=station,
+        )
+    )
     return DatasetPublication.objects.create(
         id=publication_id,
         department=department,
@@ -39,6 +48,7 @@ def _published(department, scope, station=None, version_number=1):
         version_number=version_number,
         schema_version=1,
         source_revision=1,
+        source_fingerprint=source_fingerprint,
         status=DatasetPublication.Status.PUBLISHED,
         artifact_ready=True,
         artifact_status=DatasetPublication.ArtifactStatus.READY,
@@ -55,6 +65,19 @@ def _published(department, scope, station=None, version_number=1):
         artifact_signature=b"s" * 64,
         artifact_signature_algorithm="Ed25519",
         artifact_signing_key_version="1",
+    )
+
+
+def _set_current(scope, publication):
+    scope.latest_built_publication = publication
+    scope.current_published_publication = publication
+    scope.current_source_fingerprint = publication.source_fingerprint
+    scope.save(
+        update_fields=(
+            "latest_built_publication",
+            "current_published_publication",
+            "current_source_fingerprint",
+        )
     )
 
 
@@ -94,9 +117,7 @@ def test_bulk_rebuild_requests_only_affected_scopes(bulk_context):
         department=department, station=station, dataset_type_code="station_personnel"
     )
     current = _published(department, current_scope, station=station)
-    current_scope.latest_built_publication = current
-    current_scope.current_published_publication = current
-    current_scope.save(update_fields=("latest_built_publication", "current_published_publication"))
+    _set_current(current_scope, current)
 
     # An active pending job must be left untouched and counted as already queued.
     mark_dirty(
@@ -126,9 +147,7 @@ def test_bulk_rebuild_does_not_request_current_scopes(bulk_context):
         department=department, station=station, dataset_type_code="station_personnel"
     )
     current = _published(department, current_scope, station=station)
-    current_scope.latest_built_publication = current
-    current_scope.current_published_publication = current
-    current_scope.save(update_fields=("latest_built_publication", "current_published_publication"))
+    _set_current(current_scope, current)
 
     result = bulk_request_rebuilds(actor=admin, department=department)
 
@@ -157,7 +176,7 @@ def test_bulk_promotes_scheduled_intent_and_records_one_summary_audit_event(bulk
 
     job = PublicationJob.objects.get(department=department)
     assert job.trigger_type == PublicationJob.TriggerType.BULK_REQUEST
-    assert job.not_before is None
+    assert job.not_before is not None
     assert result["promoted"] == 1
     events = AuditEvent.objects.filter(
         department=department, action="publication.bulk_rebuild_requested"
