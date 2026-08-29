@@ -1165,6 +1165,9 @@ Discovery uses `artifact_format: "document-manifest-v2"` and the generic
 `/api/v1/tablet/document-generations/{publication_id}/manifest` endpoint. Each
 manifest document supplies the frozen KLGV metadata as `klgv_plan`; all grant,
 artifact, hash and cryptographic processing is the existing generic contract.
+KLGV grants use the public `firedash-document-generation-hpke-v2` HPKE-info
+protocol discriminator; Fire Plan retains its existing Fire-Plan-specific
+discriminator.
 
 Desired future structure:
 

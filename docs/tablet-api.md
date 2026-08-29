@@ -751,6 +751,10 @@ and `documents` whose canonical metadata object is `klgv_plan` (the existing
 `id`, `external_identifier`, `object_name`, address, postal/city, coordinates,
 `sha256`, `page_count`, and `path` fields). Apply the document-v2 acceptance
 chain above unchanged. This is additive: Fire Plan v1 ZIP behavior is frozen.
+Its generation-key grant uses the same canonical JSON HPKE `info` members as
+the document contract, with protocol discriminator
+`firedash-document-generation-hpke-v2` (Fire Plan retains its frozen
+`firedash-fire-plan-generation-hpke-v2` discriminator).
 
 ### `station_personnel` (`artifact_format: json`)
 

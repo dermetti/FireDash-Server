@@ -21,10 +21,11 @@ from apps.publications.artifacts import (
     build_encrypted_generic_document_artifact,
 )
 from apps.publications.builders import PublicationBuildError
+from apps.publications.document_dataset_adapters import document_dataset_adapter
 from apps.publications.fire_plan_v2_delivery import _authorized_generation
 from apps.publications.hpke import (
     HPKE_CIPHERSUITE,
-    FirePlanGenerationHPKEContext,
+    DocumentGenerationHPKEContext,
     hpke_seal,
     parse_p256_public_key,
 )
@@ -38,7 +39,6 @@ from apps.publications.models import (
 )
 from apps.publications.pdf_bundles import PdfBundleError, read_accepted_pdf
 from apps.publications.worker_grants import KeyGrantError, sign_manifest_payload
-from apps.reference_data.models import KlgvPlan
 
 
 class DocumentV2Error(ValueError):
@@ -52,8 +52,8 @@ def _kek() -> bytes:
     return key
 
 
-def generation_hpke_context(*, publication, installation) -> FirePlanGenerationHPKEContext:
-    return FirePlanGenerationHPKEContext(
+def generation_hpke_context(*, publication, installation) -> DocumentGenerationHPKEContext:
+    return DocumentGenerationHPKEContext(
         publication_id=publication.id,
         installation_id=installation.id,
         tablet_id=installation.tablet_id,
@@ -63,32 +63,6 @@ def generation_hpke_context(*, publication, installation) -> FirePlanGenerationH
         version_number=publication.version_number,
         schema_version=2,
     )
-
-
-def _klgv_entries(publication):
-    snapshot = publication.source_snapshot
-    if publication.dataset_type_code != "department_klgv_plans" or publication.station_id:
-        raise PublicationBuildError("Document v2 adapter is unavailable for this scope.")
-    entries = snapshot.get("klgv_plans") if isinstance(snapshot, dict) else None
-    if not isinstance(entries, list):
-        raise PublicationBuildError("Frozen KLGV source is unavailable.")
-    ids = [(entry.get("id"), entry.get("sha256")) for entry in entries if isinstance(entry, dict)]
-    if len(ids) != len(entries) or any(
-        not isinstance(pk, str) or not isinstance(sha, str) or len(sha) != 64 for pk, sha in ids
-    ):
-        raise PublicationBuildError("Frozen KLGV source is invalid.")
-    if len({pk for pk, _ in ids}) != len(ids):
-        raise PublicationBuildError("Frozen KLGV source contains duplicate plans.")
-    plans = {
-        str(plan.id): plan
-        for plan in KlgvPlan.objects.filter(
-            department_id=publication.department_id, id__in=[pk for pk, _ in ids]
-        )
-    }
-    if len(plans) != len(ids) or any(plans[pk].sha256 != sha for pk, sha in ids):
-        raise PublicationBuildError("Accepted KLGV document hash does not match frozen metadata.")
-    by_id = {str(entry["id"]): entry for entry in entries}
-    return [(plans[pk], sha, by_id[pk]) for pk, sha in ids]
 
 
 def get_or_create_document_artifact(*, dataset_type_code, canonical_document_id, sanitized_pdf):
@@ -133,8 +107,9 @@ def get_or_create_document_artifact(*, dataset_type_code, canonical_document_id,
 def build_document_v2_generation(*, publication):
     if publication.status != publication.Status.BUILDING:
         raise PublicationBuildError("Document v2 generation requires a building publication.")
-    entries = _klgv_entries(publication)
-    expected = {plan.id: sha for plan, sha, _ in entries}
+    adapter = document_dataset_adapter(dataset_type_code=publication.dataset_type_code)
+    entries = adapter.frozen_documents(publication)
+    expected = {entry.canonical_document_id: entry.sanitized_pdf_sha256 for entry in entries}
     existing = list(
         PublicationDocumentArtifactReference.objects.filter(publication=publication).select_related(
             "document_artifact"
@@ -148,26 +123,27 @@ def build_document_v2_generation(*, publication):
         return tuple(existing)
     with transaction.atomic():
         refs = []
-        for plan, sha, _ in entries:
+        for entry in entries:
             try:
                 pdf = read_accepted_pdf(
-                    document_key=plan.path, accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT
+                    document_key=entry.accepted_document_key,
+                    accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT,
                 )
             except PdfBundleError as error:
                 raise PublicationBuildError("Accepted KLGV document is unavailable.") from error
-            if hashlib.sha256(pdf).hexdigest() != sha:
+            if hashlib.sha256(pdf).hexdigest() != entry.sanitized_pdf_sha256:
                 raise PublicationBuildError(
                     "Accepted KLGV document hash does not match frozen metadata."
                 )
             artifact, _ = get_or_create_document_artifact(
                 dataset_type_code=publication.dataset_type_code,
-                canonical_document_id=plan.id,
+                canonical_document_id=entry.canonical_document_id,
                 sanitized_pdf=pdf,
             )
             refs.append(
                 PublicationDocumentArtifactReference.objects.create(
                     publication=publication,
-                    canonical_document_id=plan.id,
+                    canonical_document_id=entry.canonical_document_id,
                     document_artifact=artifact,
                 )
             )
@@ -196,7 +172,10 @@ def _unwrap_generation_key(key):
 
 
 def build_document_v2_manifest(*, publication):
-    entries = {str(plan.id): entry for plan, _, entry in _klgv_entries(publication)}
+    adapter = document_dataset_adapter(dataset_type_code=publication.dataset_type_code)
+    entries = {
+        str(entry.canonical_document_id): entry for entry in adapter.frozen_documents(publication)
+    }
     refs = list(
         PublicationDocumentArtifactReference.objects.filter(publication=publication)
         .select_related("document_artifact")
@@ -210,12 +189,12 @@ def build_document_v2_manifest(*, publication):
     documents = []
     for ref in refs:
         artifact, entry = ref.document_artifact, entries[str(ref.canonical_document_id)]
-        if artifact.sanitized_pdf_sha256 != entry.get("sha256"):
+        if artifact.sanitized_pdf_sha256 != entry.sanitized_pdf_sha256:
             raise DocumentV2Error("Artifact does not match frozen document content.")
         cek = keywrap.aes_key_unwrap(_kek(), bytes(artifact.wrapped_cek))
         documents.append(
             {
-                "klgv_plan": entry,
+                adapter.manifest_metadata_key: entry.metadata,
                 "artifact_id": str(artifact.id),
                 "sanitized_pdf_sha256": artifact.sanitized_pdf_sha256,
                 "ciphertext_sha256": artifact.ciphertext_sha256,

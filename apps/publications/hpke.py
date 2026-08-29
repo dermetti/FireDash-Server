@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.hpke import AEAD, KDF, KEM, Suite
 HPKE_CIPHERSUITE = "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM"
 HPKE_PROTOCOL = "firedash-hpke-v1"
 FIRE_PLAN_GENERATION_HPKE_PROTOCOL = "firedash-fire-plan-generation-hpke-v2"
+DOCUMENT_GENERATION_HPKE_PROTOCOL = "firedash-document-generation-hpke-v2"
 _P256_PUBLIC_KEY_LENGTH = 65
 _DATASET_TYPE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 _SUITE = Suite(KEM.P256, KDF.HKDF_SHA256, AEAD.AES_128_GCM)
@@ -123,6 +124,15 @@ class FirePlanGenerationHPKEContext:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise HPKEError("Fire Plan generation HPKE context is invalid.") from error
+
+
+class DocumentGenerationHPKEContext(FirePlanGenerationHPKEContext):
+    """The generic v2 HPKE binding for adapter-backed document datasets."""
+
+    def wire(self) -> dict[str, object]:
+        value = super().wire()
+        value["protocol"] = DOCUMENT_GENERATION_HPKE_PROTOCOL
+        return value
 
 
 class HPKEInfoContext(Protocol):
