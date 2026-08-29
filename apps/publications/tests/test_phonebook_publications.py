@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from django.db import DatabaseError
 
 from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership
@@ -8,6 +9,7 @@ from apps.organizations.models import Department, Station
 from apps.publications.builders import build_artifact, build_source_payload, source_fingerprint
 from apps.publications.models import DatasetScopeState, PublicationJob
 from apps.publications.registry import get_dataset_definition
+from apps.publications.services import mark_dirty
 from apps.reference_data.services import (
     create_phonebook_entry,
     delete_phonebook_entry,
@@ -95,3 +97,42 @@ def test_phonebook_mutations_dirty_only_old_and_new_pure_scopes(phonebook_scope)
     assert PublicationJob.objects.filter(
         dataset_type_code__in=("department_phonebook", "station_phonebook"), department=department
     ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_postgres_scope_guard_accepts_phonebook_and_rejects_invalid_scope(phonebook_scope):
+    actor, department, first, _ = phonebook_scope
+    department_scope = mark_dirty(
+        department=department, dataset_type_code="department_phonebook", actor=actor
+    )
+    station_scope = mark_dirty(
+        department=department, station=first, dataset_type_code="station_phonebook", actor=actor
+    )
+    assert department_scope.station_id is None
+    assert station_scope.station_id == first.id
+    with pytest.raises(DatabaseError, match="Dataset type station scope is invalid"):
+        DatasetScopeState.objects.create(
+            department=department, station=first, dataset_type_code="department_phonebook"
+        )
+    with pytest.raises(DatabaseError, match="Dataset type station scope is invalid"):
+        DatasetScopeState.objects.create(
+            department=department, dataset_type_code="station_phonebook"
+        )
+    foreign_department = Department.objects.create(
+        name="Foreign", short_code="FOR", created_by=actor
+    )
+    foreign_station = Station.objects.create(
+        department=foreign_department, name="Foreign station", short_code="FS"
+    )
+    with pytest.raises(DatabaseError, match="Station must belong to the scope department"):
+        DatasetScopeState.objects.create(
+            department=department, station=foreign_station, dataset_type_code="station_phonebook"
+        )
+    with pytest.raises(DatabaseError, match="Unknown dataset type code"):
+        DatasetScopeState.objects.create(department=department, dataset_type_code="unknown")
+    assert (
+        mark_dirty(
+            department=department, dataset_type_code="department_hydrants", actor=actor
+        ).dataset_type_code
+        == "department_hydrants"
+    )
