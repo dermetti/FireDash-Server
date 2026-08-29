@@ -1,6 +1,6 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% load static %}
 {% block title %}Import Phonebook{% endblock %}
 {% block content %}
-<p><a href="{% url 'reference-data-phonebook' department.id %}">Back to Phonebook</a></p><h1>Import Phonebook</h1><p class="text-body-secondary">CSV columns: first_name, last_name, organization_unit, function, phone_number, scope. Scope accepts department, a Station Short Code, or full Station name.</p>
+<p><a href="{% url 'reference-data-phonebook' department.id %}">Back to Phonebook</a></p><h1>Import Phonebook</h1><p class="text-body-secondary">CSV columns: first_name, last_name, organization_unit, function, phone_number, scope. Scope accepts department, a Station Short Code, or full Station name.</p><p><a href="{% static 'ingestion/templates/phonebook-v1.csv' %}" download>Download CSV template</a></p>
 {% include "ingestion/partials/_domain_import_form.html" with show_format_select=False fixed_format="CSV" show_mode_select=False fixed_mode="Upsert" %}{% include "ingestion/partials/_recent_batches.html" %}
 {% endblock %}

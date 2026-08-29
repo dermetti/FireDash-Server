@@ -1,6 +1,8 @@
 from pathlib import Path
 
 import pytest
+from django.contrib.staticfiles import finders
+from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership
@@ -12,6 +14,7 @@ from apps.ingestion.services import (
     phonebook_review_context,
     set_phonebook_reconciliation,
 )
+from apps.ingestion.views import _review_region_context
 from apps.organizations.models import Department, Station
 from apps.reference_data.models import PhonebookEntry
 from apps.reference_data.services import create_phonebook_entry, update_phonebook_entry
@@ -180,3 +183,46 @@ def test_phonebook_headers_and_scope_errors_are_rejected(scope):
         ],
     )
     assert bad_scope.status == ImportBatch.Status.INVALID
+
+
+@pytest.mark.django_db
+def test_phonebook_preview_has_no_coordinate_requirement_and_template_asset(client, scope):
+    actor, department, station, _ = scope
+    create_phonebook_entry(
+        actor=actor,
+        department=department,
+        station=station,
+        organization_unit="Control",
+        function="Duty",
+        phone_number="040 428512300",
+    )
+    batch = preview(
+        actor,
+        department,
+        [
+            {
+                "first_name": "",
+                "last_name": "",
+                "organization_unit": "Control",
+                "function": "Duty",
+                "phone_number": "040 428512300",
+                "scope": "F2921",
+            }
+        ],
+    )
+    client.force_login(actor)
+    response = client.get(reverse("ingestion-preview", args=[department.id, batch.id]))
+    assert response.status_code == 200 and b"Review possible duplicate" in response.content
+    context = _review_region_context(
+        batch,
+        review={
+            "current": None,
+            "coordinate_items": [{"index": 1, "longitude": None, "latitude": None}],
+        },
+    )
+    assert context["coordinate_item"]["index"] == 1
+    template = finders.find("ingestion/templates/phonebook-v1.csv")
+    assert template is not None
+    assert Path(template).read_text(encoding="utf-8") == (
+        "first_name,last_name,organization_unit,function,phone_number,scope\n"
+    )

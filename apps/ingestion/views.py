@@ -290,7 +290,9 @@ def _review_region_context(
 ) -> dict[str, object]:
     """Prepare the shared review fragment, including any staged coordinate form."""
     review = review or review_context(batch)
-    coordinate_items = review["coordinate_items"]
+    # Coordinate review is a capability of spatial/document imports, not a
+    # universal wizard requirement. Phonebook reconciliation has no such data.
+    coordinate_items = review.get("coordinate_items", [])
     current_key = review["current"].get("key") if review["current"] else None
     coordinate_item = next(
         (

@@ -1054,7 +1054,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
             description="Canonical department and station contact entries.",
             count=PhonebookEntry.objects.filter(department=department).count(),
             count_label="entries",
-            icon="people",
+            icon="phone",
             url=reverse("reference-data-phonebook", args=(department.id,)),
         ),
         module(
