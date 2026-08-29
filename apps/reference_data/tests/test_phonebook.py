@@ -222,7 +222,9 @@ def test_phonebook_manual_station_binding_and_list_filters(client, phonebook_sco
         "function": "Duty officer",
         "phone_number": "040 428512300",
     }
-    assert client.post(create_url, values).status_code == 302
+    created = client.post(create_url, values)
+    assert created.status_code == 302
+    assert created.url == reverse("reference-data-phonebook", args=[department.id])
     entry = PhonebookEntry.objects.get(department=department, first_name="Ada")
     assert entry.station_id == first_station.id
     edit_url = reverse("reference-data-phonebook-edit", args=[entry.id])
@@ -258,6 +260,14 @@ def test_phonebook_manual_station_binding_and_list_filters(client, phonebook_sco
     list_url = reverse("reference-data-phonebook", args=[department.id])
     response = client.get(list_url, {"q": "Grace", "scope": "station", "station": first_station.id})
     assert response.status_code == 200 and list(response.context["entries"]) == [station_entry]
+    live_response = client.get(
+        list_url,
+        {"q": "Grace", "scope": "station", "station": first_station.id},
+        HTTP_HX_REQUEST="true",
+    )
+    assert live_response.status_code == 200
+    assert "phonebook-results" in live_response.content.decode()
+    assert "Grace Hopper" in live_response.content.decode()
     assert foreign_station.name not in response.content.decode()
     assert first_station.name in response.content.decode()
     assert client.get(list_url, {"scope": "department"}).context["total_count"] == 1
@@ -268,7 +278,6 @@ def test_phonebook_manual_station_binding_and_list_filters(client, phonebook_sco
         "Existing Phonebook entries",
         "Add entry",
         "Import CSV",
-        "Download CSV template",
         "Review duplicates",
         "Name",
         "Function",
@@ -276,3 +285,31 @@ def test_phonebook_manual_station_binding_and_list_filters(client, phonebook_sco
         "Scope",
     ):
         assert label in body
+    assert "Download CSV template" not in body
+    assert "hx-trigger" in body
+    assert "input changed delay:1s" in body
+
+
+@pytest.mark.django_db
+def test_phonebook_modal_create_redirects_to_list_with_success_feedback(client, phonebook_scope):
+    actor, department, station, _ = phonebook_scope
+    client.force_login(actor)
+    create_url = reverse("reference-data-phonebook-create", args=[department.id])
+    list_url = reverse("reference-data-phonebook", args=[department.id])
+    response = client.post(
+        create_url,
+        {
+            "station": station.id,
+            "first_name": "Grace",
+            "last_name": "Hopper",
+            "organization_unit": "Operations",
+            "function": "Dispatch",
+            "phone_number": "555 100",
+        },
+        HTTP_HX_REQUEST="true",
+    )
+    assert response.status_code == 204
+    assert response["HX-Redirect"] == list_url
+    response = client.get(list_url)
+    assert "Phonebook entry added." in response.content.decode()
+    assert "Grace Hopper" in response.content.decode()

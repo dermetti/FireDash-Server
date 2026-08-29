@@ -1,6 +1,7 @@
 from typing import cast
 from urllib.parse import urlencode
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
@@ -114,10 +115,13 @@ def phonebook_create(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
     form = PhonebookEntryForm(request.POST or None, department=department)
     if request.method == "POST" and form.is_valid():
-        entry = create_phonebook_entry(
+        create_phonebook_entry(
             actor=request.user, department=department, **form.cleaned_data
         )
-        return _modal_redirect(request, reverse("reference-data-phonebook-detail", args=[entry.id]))
+        messages.success(request, "Phonebook entry added.")
+        # The list owns creation. An HTMX redirect replaces the list page,
+        # closing the modal and refreshing its status and results together.
+        return _modal_redirect(request, reverse("reference-data-phonebook", args=[department.id]))
     return _modal(
         request,
         "reference_data/_phonebook_form_modal.html",

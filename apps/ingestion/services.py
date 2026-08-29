@@ -539,6 +539,7 @@ def _phonebook_intent(*, rows, department):
             station = matches[0]
         row["phone_number"] = normalize_phone_number(str(row["phone_number"]))
         row["station_id"] = str(station.id) if station else None
+        row["scope_label"] = station.name if station else "Department"
         row["row_index"] = index
         staged = PhonebookEntry(
             department=department,
@@ -584,6 +585,7 @@ def _phonebook_intent(*, rows, department):
 def phonebook_review_context(batch: ImportBatch) -> dict[str, object]:
     rows = [dict(row) for row in batch.normalized_intent.get("rows", []) if isinstance(row, dict)]
     current = next((row for row in rows if row.get("resolution") == "pending"), None)
+    review_rows = [row for row in rows if row.get("candidates")]
     summary = {
         "create": sum(row.get("resolution") == "create" for row in rows),
         "update": sum(row.get("resolution") == "update" for row in rows),
@@ -596,7 +598,17 @@ def phonebook_review_context(batch: ImportBatch) -> dict[str, object]:
         candidates = current.get("candidates", [])
         current["candidate"] = candidates[position] if position < len(candidates) else None
         current["has_next"] = position + 1 < len(candidates)
-    return {"current": current, "summary": summary}
+    progress = None
+    if current is not None:
+        progress = {
+            "current": next(
+                index
+                for index, row in enumerate(review_rows, start=1)
+                if row.get("row_index") == current.get("row_index")
+            ),
+            "total": len(review_rows),
+        }
+    return {"current": current, "summary": summary, "progress": progress}
 
 
 @transaction.atomic
