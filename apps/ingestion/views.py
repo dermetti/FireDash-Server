@@ -22,8 +22,10 @@ from apps.ingestion.services import (
     approve_all_review_decisions,
     cancel_preview,
     create_preview,
+    phonebook_review_context,
     review_context,
     set_personnel_home_station_resolution,
+    set_phonebook_reconciliation,
     set_review_coordinates,
     set_review_decision,
     set_station_vehicle_resolution,
@@ -50,6 +52,7 @@ def _imports_url(*, department: Department, domain: str) -> str:
         ImportBatch.Domain.FIRE_PLANS: "ingestion-import-fire-plans",
         ImportBatch.Domain.KLGV_PLANS: "ingestion-import-klgv-plans",
         ImportBatch.Domain.STATION_VEHICLES: "ingestion-import-station-vehicles",
+        ImportBatch.Domain.PHONEBOOK: "ingestion-import-phonebook",
     }
     return reverse(names[domain], args=(department.id,))
 
@@ -92,6 +95,12 @@ def import_klgv_plans(request: HttpRequest, department_id) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def import_station_vehicles(request: HttpRequest, department_id) -> HttpResponse:
     return _domain_import(request, department_id, ImportBatch.Domain.STATION_VEHICLES)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def import_phonebook(request: HttpRequest, department_id) -> HttpResponse:
+    return _domain_import(request, department_id, ImportBatch.Domain.PHONEBOOK)
 
 
 @login_required
@@ -149,6 +158,15 @@ def imports(request: HttpRequest, department_id) -> HttpResponse:
                 "before final Apply. Omitting a Vehicle never retires it."
             ),
             "template": "ingestion/station_vehicles_import.html",
+        },
+        ImportBatch.Domain.PHONEBOOK: {
+            "formats": ((ImportBatch.Format.CSV, "CSV"),),
+            "mode": ImportBatch.Mode.UPSERT,
+            "help": (
+                "CSV rows are staged for sequential duplicate reconciliation. Scope accepts "
+                "department, Station Short Code, or full Station name."
+            ),
+            "template": "ingestion/phonebook_import.html",
         },
     }
     target_domain = requested_domain if requested_domain in domain_configs else None
@@ -229,11 +247,21 @@ def preview(request: HttpRequest, department_id, batch_id) -> HttpResponse:
             else:
                 messages.success(request, "Import applied; publication is scheduled separately.")
             return redirect(_imports_url(department=department, domain=batch.domain))
-    review = _review_context(request, batch)
+    review = (
+        phonebook_review_context(batch)
+        if batch.domain == ImportBatch.Domain.PHONEBOOK
+        else _review_context(request, batch)
+    )
     context = {"department": department, "batch": batch, "review": review}
     if review is not None:
         context.update(_review_region_context(batch, review=review))
-    return render(request, "ingestion/preview.html", context)
+    return render(
+        request,
+        "ingestion/phonebook_preview.html"
+        if batch.domain == ImportBatch.Domain.PHONEBOOK
+        else "ingestion/preview.html",
+        context,
+    )
 
 
 def _review_context(request: HttpRequest, batch: ImportBatch) -> dict[str, object] | None:
@@ -242,6 +270,7 @@ def _review_context(request: HttpRequest, batch: ImportBatch) -> dict[str, objec
         ImportBatch.Domain.KLGV_PLANS,
         ImportBatch.Domain.STATION_VEHICLES,
         ImportBatch.Domain.PERSONNEL,
+        ImportBatch.Domain.PHONEBOOK,
     }:
         return None
     requested_index = request.GET.get("review")
@@ -412,6 +441,23 @@ def review_approve(request: HttpRequest, department_id, batch_id, key) -> HttpRe
 @require_http_methods(["POST"])
 def review_skip(request: HttpRequest, department_id, batch_id, key) -> HttpResponse:
     return _review_decide(request, department_id, batch_id, key, "skipped")
+
+
+@login_required
+@require_http_methods(["POST"])
+def review_phonebook(request: HttpRequest, department_id, batch_id, row_index: int) -> HttpResponse:
+    department = _department(request, department_id)
+    batch = get_object_or_404(ImportBatch, pk=batch_id, department=department)
+    try:
+        set_phonebook_reconciliation(
+            actor=request.user,
+            batch_id=batch.id,
+            row_index=row_index,
+            action=request.POST.get("action", ""),
+        )
+    except ImportError as error:
+        messages.error(request, str(error))
+    return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
 
 
 @login_required

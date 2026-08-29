@@ -368,7 +368,11 @@ def cleanup_stale_artifacts() -> int:
             shutil.rmtree(path, ignore_errors=True)
             removed += 1
     from apps.publications.document_artifacts import cleanup_unreferenced_document_artifacts
-    from apps.publications.models import DatasetPublication, FirePlanDocumentArtifact
+    from apps.publications.models import (
+        DatasetPublication,
+        DocumentArtifact,
+        FirePlanDocumentArtifact,
+    )
 
     for publication in DatasetPublication.objects.filter(
         status__in=("FAILED", "OBSOLETE", "REJECTED", "CANCELLED"), artifact_path__gt=""
@@ -396,7 +400,10 @@ def cleanup_stale_artifacts() -> int:
                 artifact_id = UUID(path.parent.name)
             except ValueError:
                 continue
-            if FirePlanDocumentArtifact.objects.filter(pk=artifact_id).exists():
+            if (
+                FirePlanDocumentArtifact.objects.filter(pk=artifact_id).exists()
+                or DocumentArtifact.objects.filter(pk=artifact_id).exists()
+            ):
                 continue
             try:
                 remove_artifact_path(

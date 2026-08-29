@@ -134,6 +134,31 @@ class DocumentGenerationHPKEContext(FirePlanGenerationHPKEContext):
         value["protocol"] = DOCUMENT_GENERATION_HPKE_PROTOCOL
         return value
 
+    @classmethod
+    def from_wire(cls, value: object) -> "DocumentGenerationHPKEContext":
+        """Parse the public generic-document binding without Fire Plan coupling."""
+        if not isinstance(value, dict):
+            raise HPKEError("Document generation HPKE context is invalid.")
+        scope = value.get("scope")
+        if value.get("protocol") != DOCUMENT_GENERATION_HPKE_PROTOCOL or not isinstance(
+            scope, dict
+        ):
+            raise HPKEError("Document generation HPKE protocol is invalid.")
+        try:
+            station = scope["station_id"]
+            return cls(
+                publication_id=uuid.UUID(str(value["publication_id"])),
+                installation_id=uuid.UUID(str(value["installation_id"])),
+                tablet_id=uuid.UUID(str(value["tablet_id"])),
+                department_id=uuid.UUID(str(scope["department_id"])),
+                station_id=uuid.UUID(str(station)) if station is not None else None,
+                dataset_type_code=str(scope["dataset_type_code"]),
+                version_number=int(value["version_number"]),
+                schema_version=int(value["schema_version"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise HPKEError("Document generation HPKE context is invalid.") from error
+
 
 class HPKEInfoContext(Protocol):
     def info(self) -> bytes: ...

@@ -28,6 +28,11 @@ urlpatterns = [
         views.import_station_vehicles,
         name="ingestion-import-station-vehicles",
     ),
+    path(
+        "departments/<uuid:department_id>/imports/phonebook/",
+        views.import_phonebook,
+        name="ingestion-import-phonebook",
+    ),
     path("departments/<uuid:department_id>/imports/", views.imports, name="ingestion-imports"),
     path(
         "departments/<uuid:department_id>/imports/<uuid:batch_id>/",
@@ -48,6 +53,11 @@ urlpatterns = [
         "departments/<uuid:department_id>/imports/<uuid:batch_id>/review/<str:key>/skip/",
         views.review_skip,
         name="ingestion-review-skip",
+    ),
+    path(
+        "departments/<uuid:department_id>/imports/<uuid:batch_id>/review/phonebook/<int:row_index>/",
+        views.review_phonebook,
+        name="ingestion-review-phonebook",
     ),
     path(
         "departments/<uuid:department_id>/imports/<uuid:batch_id>/review/<str:key>/station-resolution/",

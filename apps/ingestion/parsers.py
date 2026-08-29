@@ -51,6 +51,9 @@ STATION_VEHICLE_FIELDS = frozenset(
         "vehicle_asset_identifier",
     }
 )
+PHONEBOOK_FIELDS = frozenset(
+    {"first_name", "last_name", "organization_unit", "function", "phone_number", "scope"}
+)
 
 
 def parse_hydrants(*, payload: bytes, import_format: str) -> list[dict[str, object]]:
@@ -157,6 +160,36 @@ def parse_station_vehicles(*, payload: bytes, import_format: str) -> list[dict[s
     return result
 
 
+def parse_phonebook(*, payload: bytes, import_format: str) -> list[dict[str, str]]:
+    if import_format != "csv":
+        raise ImportValidationError("Phonebook imports use CSV only.")
+    rows = _rows(payload, import_format, PHONEBOOK_FIELDS)
+    result: list[dict[str, str]] = []
+    for number, row in enumerate(rows, 2):
+        # A completely blank CSV line is an intentional no-op.
+        if not any(str(value or "").strip() for value in row.values()):
+            continue
+        normalized = {
+            field: _optional_text(
+                row.get(field, ""), 255 if field != "phone_number" else 64, number
+            )
+            for field in PHONEBOOK_FIELDS
+        }
+        if not normalized["phone_number"] or not normalized["scope"]:
+            raise ImportValidationError(f"Row {number}: phone_number and scope are required.")
+        if bool(normalized["first_name"]) != bool(normalized["last_name"]):
+            raise ImportValidationError(f"Row {number}: provide both first_name and last_name.")
+        if (
+            not (normalized["first_name"] and normalized["last_name"])
+            and not normalized["organization_unit"]
+        ):
+            raise ImportValidationError(
+                f"Row {number}: provide a complete name or organization_unit."
+            )
+        result.append(normalized)
+    return result
+
+
 def _rows(
     payload: bytes,
     import_format: str,
@@ -172,7 +205,11 @@ def _rows(
     rows: list[Mapping[str, object]]
     if import_format == "csv":
         reader = csv.DictReader(io.StringIO(text))
-        if not reader.fieldnames or frozenset(reader.fieldnames) not in accepted_schemas:
+        if (
+            not reader.fieldnames
+            or len(reader.fieldnames) != len(set(reader.fieldnames))
+            or frozenset(reader.fieldnames) not in accepted_schemas
+        ):
             raise ImportValidationError("CSV columns do not match the documented schema.")
         rows = list(reader)
     elif import_format == "json":

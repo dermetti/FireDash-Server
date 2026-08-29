@@ -4,7 +4,7 @@ from django.conf import settings
 from django.contrib.gis.db import models
 from django.core.exceptions import ValidationError
 
-from apps.organizations.models import Department
+from apps.organizations.models import Department, Station
 
 
 class Hydrant(models.Model):
@@ -41,6 +41,77 @@ class Hydrant(models.Model):
     @property
     def active(self) -> bool:
         return self.status == self.Status.ACTIVE
+
+
+class PhonebookEntry(models.Model):
+    """A canonical, department-owned operational telephone directory entry."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    department = models.ForeignKey(
+        Department, on_delete=models.PROTECT, related_name="phonebook_entries"
+    )
+    station = models.ForeignKey(
+        Station, null=True, blank=True, on_delete=models.PROTECT, related_name="phonebook_entries"
+    )
+    first_name = models.CharField(max_length=255, blank=True)
+    last_name = models.CharField(max_length=255, blank=True)
+    organization_unit = models.CharField(max_length=255, blank=True)
+    function = models.CharField(max_length=255, blank=True)
+    phone_number = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("department", "station"))]
+
+    def clean(self) -> None:
+        super().clean()
+        for field in ("first_name", "last_name", "organization_unit", "function", "phone_number"):
+            setattr(self, field, (getattr(self, field) or "").strip())
+        if bool(self.first_name) != bool(self.last_name):
+            raise ValidationError({"last_name": "Provide both first and last name."})
+        if not (self.first_name and self.last_name) and not self.organization_unit:
+            raise ValidationError(
+                {"organization_unit": "Provide a complete name or an organization unit."}
+            )
+        if self.station_id and self.station.department_id != self.department_id:
+            raise ValidationError({"station": "Station must belong to the selected department."})
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.first_name} {self.last_name}".strip() or self.organization_unit
+
+    @property
+    def scope_label(self) -> str:
+        return self.station.name if self.station_id else "Department"
+
+
+class PhonebookDuplicateDecision(models.Model):
+    """A keep-both decision is valid only for the exact reviewed entry revisions."""
+
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE, related_name="phonebook_duplicate_decisions"
+    )
+    first_entry = models.ForeignKey(
+        PhonebookEntry, on_delete=models.CASCADE, related_name="duplicate_decisions_as_first"
+    )
+    second_entry = models.ForeignKey(
+        PhonebookEntry, on_delete=models.CASCADE, related_name="duplicate_decisions_as_second"
+    )
+    first_fingerprint = models.CharField(max_length=64)
+    second_fingerprint = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("first_entry", "second_entry"), name="unique_phonebook_duplicate_pair"
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(first_entry=models.F("second_entry")),
+                name="phonebook_duplicate_entries_differ",
+            ),
+        ]
 
 
 class FirePlan(models.Model):

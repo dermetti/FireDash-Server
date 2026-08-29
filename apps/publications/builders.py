@@ -13,7 +13,7 @@ from django.utils import timezone
 from apps.assignments.models import PersonnelStationAssignment
 from apps.publications.pdf_bundles import PdfBundleError, read_accepted_pdf
 from apps.publications.registry import DatasetTypeDefinition
-from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
+from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +183,11 @@ def _build_klgv_plans(*, department, station, source_revision: int) -> dict[str,
     }
 
 
+def _build_phonebook(*, department, station, source_revision: int) -> dict[str, object]:
+    entries = _phonebook_source_payload(department=department, station=station)["entries"]
+    return {"entry_count": len(entries), "source_revision": source_revision}
+
+
 def _artifact_klgv_plans(
     *, department, station, source_revision: int, source_snapshot=None
 ) -> bytes:
@@ -341,6 +346,8 @@ BUILDERS.update(
         "department_fire_plans": _build_fire_plans,
         "station_personnel": _build_personnel,
         "department_klgv_plans": _build_klgv_plans,
+        "department_phonebook": _build_phonebook,
+        "station_phonebook": _build_phonebook,
         "test_department_incidents": lambda *, department, station, source_revision: {
             "incident_count": 0,
             "source_revision": source_revision,
@@ -464,12 +471,45 @@ def _klgv_source_payload(*, department, station) -> dict[str, object]:
     return {"klgv_plans": _klgv_source_manifest(department=department, station=station)}
 
 
+def _phonebook_source_payload(*, department, station) -> dict[str, object]:
+    if station is not None and station.department_id != department.id:
+        raise PublicationBuildError("Phonebook source requires a station in the department.")
+    entries = PhonebookEntry.objects.filter(department=department)
+    entries = (
+        entries.filter(station=station)
+        if station is not None
+        else entries.filter(station__isnull=True)
+    )
+    return {
+        "entries": [
+            {
+                "id": str(entry.id),
+                "first_name": entry.first_name or None,
+                "last_name": entry.last_name or None,
+                "organization_unit": entry.organization_unit or None,
+                "function": entry.function or None,
+                "phone_number": entry.phone_number,
+            }
+            for entry in entries.order_by("id")
+        ]
+    }
+
+
+def _artifact_phonebook(
+    *, department, station, source_revision: int, source_snapshot=None
+) -> bytes:
+    payload = source_snapshot or _phonebook_source_payload(department=department, station=station)
+    return _json_bytes(payload | {"source_revision": source_revision})
+
+
 SOURCE_BUILDERS.update(
     {
         "department_hydrants": _hydrant_source_payload,
         "department_fire_plans": _fire_plan_source_payload,
         "station_personnel": _personnel_source_payload,
         "department_klgv_plans": _klgv_source_payload,
+        "department_phonebook": _phonebook_source_payload,
+        "station_phonebook": _phonebook_source_payload,
         "test_department_incidents": lambda **_: {"incidents": []},
     }
 )
@@ -478,6 +518,8 @@ ARTIFACT_BUILDERS.update(
         "department_hydrants": _artifact_hydrants,
         "department_fire_plans": _artifact_fire_plans,
         "station_personnel": _artifact_personnel,
+        "department_phonebook": _artifact_phonebook,
+        "station_phonebook": _artifact_phonebook,
         "test_department_incidents": lambda **_: _json_bytes({"incidents": []}),
     }
 )
@@ -503,6 +545,8 @@ def build_change_summary(
             "verified_commander_email_count",
         ),
         "department_klgv_plans": ("document_count", "total_accepted_bytes", "total_pages"),
+        "department_phonebook": ("entry_count",),
+        "station_phonebook": ("entry_count",),
     }
     fields = fields_by_type.get(definition.code, ("item_count",))
     source_revision = current.get("source_revision")

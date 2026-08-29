@@ -340,6 +340,23 @@ Representative complete 200 body (names are exact):
 `version` is an immutable publication-attempt version. Failed/obsolete attempts
 consume numbers, so clients must not assume `vN+1` exists.
 
+### Phonebook datasets
+
+Phonebook delivery is additive JSON dataset delivery using the same encrypted artifact,
+signature, and HPKE key-grant contract shown above. A manifest for an assigned Tablet can
+contain both `department_phonebook` (department scope) and `station_phonebook` (only the
+currently assigned Station scope). It never contains another Station's Phonebook.
+
+Each decrypted JSON artifact has this stable shape:
+
+```json
+{"entries":[{"id":"<canonical UUID>","first_name":"Ada","last_name":"Lovelace","organization_unit":"Operations","function":"Duty officer","phone_number":"040 42851 2300"}],"source_revision":1}
+```
+
+`department_phonebook` contains only department-wide entries; `station_phonebook` contains
+only entries owned by that exact Station. Clients present these two complete datasets together
+as one logical Phonebook. They must not assume either dataset includes the other scope.
+
 ### Manifest Ed25519 verification
 
 Fetch the raw 32-byte public key named by `signing_key_version`. The endpoint

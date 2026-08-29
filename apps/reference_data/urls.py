@@ -7,6 +7,34 @@ urlpatterns = [
         "departments/<uuid:department_id>/hydrants/", views.hydrants, name="reference-data-hydrants"
     ),
     path(
+        "departments/<uuid:department_id>/phonebook/",
+        views.phonebook,
+        name="reference-data-phonebook",
+    ),
+    path(
+        "departments/<uuid:department_id>/phonebook/duplicates/",
+        views.phonebook_duplicate_review,
+        name="reference-data-phonebook-duplicates",
+    ),
+    path(
+        "departments/<uuid:department_id>/phonebook/create/",
+        views.phonebook_create,
+        name="reference-data-phonebook-create",
+    ),
+    path(
+        "phonebook/<uuid:entry_id>/", views.phonebook_detail, name="reference-data-phonebook-detail"
+    ),
+    path(
+        "phonebook/<uuid:entry_id>/edit/",
+        views.phonebook_edit_modal,
+        name="reference-data-phonebook-edit",
+    ),
+    path(
+        "phonebook/<uuid:entry_id>/delete/",
+        views.phonebook_delete_modal,
+        name="reference-data-phonebook-delete",
+    ),
+    path(
         "departments/<uuid:department_id>/hydrants/create/",
         views.hydrant_create,
         name="reference-data-hydrant-create",

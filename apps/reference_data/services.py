@@ -12,7 +12,157 @@ from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
 from apps.publications.services import mark_dirty
 from apps.reference_data.hydrants import NormalizedHydrant, parse_feature_collection
-from apps.reference_data.models import FirePlan, Hydrant, HydrantImportPreview, KlgvPlan
+from apps.reference_data.models import (
+    FirePlan,
+    Hydrant,
+    HydrantImportPreview,
+    KlgvPlan,
+    PhonebookDuplicateDecision,
+    PhonebookEntry,
+)
+from apps.reference_data.phonebook import entry_fingerprint, normalize_phone_number
+
+
+def _mark_phonebook_scope_dirty(*, department, station, actor) -> None:
+    mark_dirty(
+        department=department,
+        station=station,
+        dataset_type_code="station_phonebook" if station is not None else "department_phonebook",
+        actor=actor,
+    )
+
+
+@transaction.atomic
+def create_phonebook_entry(*, actor, department, **values) -> PhonebookEntry:
+    require_department_admin(actor, department)
+    station = values.get("station")
+    if station is not None and station.department_id != department.id:
+        raise PermissionDenied("Station is outside this department.")
+    entry = PhonebookEntry(department=department, **values)
+    entry.phone_number = normalize_phone_number(entry.phone_number)
+    entry.full_clean()
+    entry.save()
+    record_event(
+        action="reference_data.phonebook_created",
+        actor_user=actor,
+        department=department,
+        station=station,
+        target_type="phonebook_entry",
+        target_uuid=entry.id,
+    )
+    _mark_phonebook_scope_dirty(department=department, station=station, actor=actor)
+    return entry
+
+
+@transaction.atomic
+def update_phonebook_entry(*, actor, entry: PhonebookEntry, **values) -> PhonebookEntry:
+    entry = PhonebookEntry.objects.select_for_update().get(pk=entry.pk)
+    require_department_admin(actor, entry.department)
+    old_department, old_station = (
+        entry.department,
+        entry.station,
+    )  # retained for later publication dirtying.
+    for field in (
+        "station",
+        "first_name",
+        "last_name",
+        "organization_unit",
+        "function",
+        "phone_number",
+    ):
+        if field in values:
+            setattr(entry, field, values[field])
+    if entry.station_id and entry.station.department_id != entry.department_id:
+        raise PermissionDenied("Station is outside this department.")
+    entry.phone_number = normalize_phone_number(entry.phone_number)
+    entry.full_clean()
+    entry.save()
+    record_event(
+        action="reference_data.phonebook_updated",
+        actor_user=actor,
+        department=entry.department,
+        station=entry.station,
+        target_type="phonebook_entry",
+        target_uuid=entry.id,
+        metadata={
+            "old_department": str(old_department.id),
+            "old_station": str(old_station.id) if old_station else None,
+        },
+    )
+    _mark_phonebook_scope_dirty(department=old_department, station=old_station, actor=actor)
+    if old_department.id != entry.department_id or old_station != entry.station:
+        _mark_phonebook_scope_dirty(department=entry.department, station=entry.station, actor=actor)
+    return entry
+
+
+@transaction.atomic
+def delete_phonebook_entry(*, actor, entry: PhonebookEntry) -> None:
+    entry = PhonebookEntry.objects.select_for_update().get(pk=entry.pk)
+    require_department_admin(actor, entry.department)
+    entry_id, department, station = entry.id, entry.department, entry.station
+    entry.delete()
+    record_event(
+        action="reference_data.phonebook_deleted",
+        actor_user=actor,
+        department=department,
+        station=station,
+        target_type="phonebook_entry",
+        target_uuid=entry_id,
+    )
+    _mark_phonebook_scope_dirty(department=department, station=station, actor=actor)
+
+
+@transaction.atomic
+def resolve_phonebook_duplicate(
+    *,
+    actor,
+    department,
+    first_id,
+    second_id,
+    first_fingerprint: str,
+    second_fingerprint: str,
+    action: str,
+) -> None:
+    require_department_admin(actor, department)
+    entries = {
+        str(entry.id): entry
+        for entry in PhonebookEntry.objects.select_for_update().filter(
+            department=department, id__in=(first_id, second_id)
+        )
+    }
+    first, second = entries.get(str(first_id)), entries.get(str(second_id))
+    if first is None or second is None or first.id == second.id:
+        raise ValueError("This review pair is no longer available.")
+    # Candidates are always persisted in UUID order by the scanner.
+    if (
+        entry_fingerprint(first) != first_fingerprint
+        or entry_fingerprint(second) != second_fingerprint
+    ):
+        raise ValueError("This review pair changed; refresh duplicate review before resolving it.")
+    if action == "keep_both":
+        PhonebookDuplicateDecision.objects.update_or_create(
+            first_entry=first,
+            second_entry=second,
+            defaults={
+                "department": department,
+                "first_fingerprint": first_fingerprint,
+                "second_fingerprint": second_fingerprint,
+            },
+        )
+        record_event(
+            action="reference_data.phonebook_duplicate_kept_both",
+            actor_user=actor,
+            department=department,
+            target_type="phonebook_duplicate_pair",
+            metadata={"first_entry": str(first.id), "second_entry": str(second.id)},
+        )
+        return
+    if action == "keep_first":
+        delete_phonebook_entry(actor=actor, entry=second)
+    elif action == "keep_second":
+        delete_phonebook_entry(actor=actor, entry=first)
+    else:
+        raise ValueError("Unknown duplicate-review action.")
 
 
 @transaction.atomic
@@ -135,7 +285,14 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
     )
     previous_flow_information = hydrant.flow_information
     previous_active = hydrant.active
-    for field in ("external_identifier", "street", "house_number", "location", "hydrant_type", "status"):
+    for field in (
+        "external_identifier",
+        "street",
+        "house_number",
+        "location",
+        "hydrant_type",
+        "status",
+    ):
         if field in values:
             setattr(hydrant, field, str(values[field]).strip())
     if "flow_information" in values:

@@ -103,6 +103,46 @@ _DEFINITIONS = (
         feature_code="publications",
         internal_only=False,
     ),
+    DatasetTypeDefinition(
+        code="department_phonebook",
+        display_name="Department phonebook",
+        scope="department",
+        artifact_format="json",
+        current_schema_version=1,
+        encryption_required=True,
+        minimum_app_version=None,
+        builder_service="department_phonebook",
+        validator_service="summary",
+        summary_schema=MappingProxyType(
+            {"entry_count": "item_count", "source_revision": "non_negative_integer"}
+        ),
+        required=False,
+        supported_schema_versions=(1,),
+        minimum_supported_schema_version=1,
+        maximum_supported_schema_version=1,
+        feature_code="publications",
+        internal_only=False,
+    ),
+    DatasetTypeDefinition(
+        code="station_phonebook",
+        display_name="Station phonebook",
+        scope="station",
+        artifact_format="json",
+        current_schema_version=1,
+        encryption_required=True,
+        minimum_app_version=None,
+        builder_service="station_phonebook",
+        validator_service="summary",
+        summary_schema=MappingProxyType(
+            {"entry_count": "item_count", "source_revision": "non_negative_integer"}
+        ),
+        required=False,
+        supported_schema_versions=(1,),
+        minimum_supported_schema_version=1,
+        maximum_supported_schema_version=1,
+        feature_code="publications",
+        internal_only=False,
+    ),
     # A future document collection. It is deliberately internal and behind its
     # own disabled-by-default feature until an approved KLGV source model/UI
     # exists; its inclusion here proves additive optional v1 dataset evolution.

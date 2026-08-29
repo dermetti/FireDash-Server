@@ -31,6 +31,7 @@ from apps.ingestion.parsers import (
     ImportValidationError,
     parse_hydrants,
     parse_personnel,
+    parse_phonebook,
     parse_station_vehicles,
 )
 from apps.ingestion.pdf_packages import manifest_member_name, parse_pdf_package
@@ -40,9 +41,15 @@ from apps.organizations.services import create_station, create_vehicle
 from apps.personnel.models import Person
 from apps.personnel.services import create_person, set_commander_eligibility, update_person
 from apps.publications.services import mark_dirty
-from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
+from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitizerError, sanitize
 from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
+from apps.reference_data.phonebook import (
+    compare_phonebook_entries,
+    entry_fingerprint,
+    normalize_phone_number,
+)
+from apps.reference_data.services import create_phonebook_entry, update_phonebook_entry
 from apps.reference_data.storage import (
     StorageError as ReferenceDataStorageError,
 )
@@ -496,6 +503,153 @@ def _station_matches(*, department, short_code: str, name: str) -> list[Station]
     return [station for station in stations if _station_reference_key(station.name) == name_key]
 
 
+def _phonebook_baseline(*, department) -> dict[str, str]:
+    return {
+        str(entry.id): entry_fingerprint(entry)
+        for entry in PhonebookEntry.objects.filter(department=department).only(
+            "id",
+            "department_id",
+            "station_id",
+            "first_name",
+            "last_name",
+            "organization_unit",
+            "function",
+            "phone_number",
+        )
+    }
+
+
+def _phonebook_intent(*, rows, department):
+    existing = list(
+        PhonebookEntry.objects.filter(department=department)
+        .select_related("station")
+        .order_by("id")
+    )
+    intent, review_items = [], []
+    for index, source in enumerate(rows):
+        row = dict(source)
+        scope = row.pop("scope")
+        if _station_reference_key(scope) == "department":
+            station = None
+        else:
+            matches = _station_matches(department=department, short_code=scope, name=scope)
+            if len(matches) != 1:
+                reason = "ambiguous" if matches else "unknown"
+                raise ImportError(f"Row {index + 2}: {reason} Phonebook scope.")
+            station = matches[0]
+        row["phone_number"] = normalize_phone_number(str(row["phone_number"]))
+        row["station_id"] = str(station.id) if station else None
+        row["row_index"] = index
+        staged = PhonebookEntry(
+            department=department,
+            station=station,
+            **{
+                field: row[field]
+                for field in (
+                    "first_name",
+                    "last_name",
+                    "organization_unit",
+                    "function",
+                    "phone_number",
+                )
+            },
+        )
+        candidates = [compare_phonebook_entries(staged, entry) for entry in existing]
+        candidates = [candidate for candidate in candidates if candidate is not None]
+        candidates.sort(
+            key=lambda c: (not c.exact, -len(c.reasons), len(c.conflicts), str(c.second.id))
+        )
+        row["candidates"] = [
+            {
+                "id": str(candidate.second.id),
+                "fingerprint": candidate.second_fingerprint,
+                "reasons": list(candidate.reasons),
+                "conflicts": list(candidate.conflicts),
+                "name": candidate.second.display_name,
+                "function": candidate.second.function,
+                "phone_number": candidate.second.phone_number,
+                "scope": candidate.second.scope_label,
+            }
+            for candidate in candidates
+        ]
+        row["key"] = f"phonebook:{index}"
+        row["candidate_index"] = 0
+        row["resolution"] = "create" if not candidates else "pending"
+        intent.append(row)
+        if candidates:
+            review_items.append({"key": row["key"], "row_index": index})
+    return intent, review_items
+
+
+def phonebook_review_context(batch: ImportBatch) -> dict[str, object]:
+    rows = [dict(row) for row in batch.normalized_intent.get("rows", []) if isinstance(row, dict)]
+    current = next((row for row in rows if row.get("resolution") == "pending"), None)
+    summary = {
+        "create": sum(row.get("resolution") == "create" for row in rows),
+        "update": sum(row.get("resolution") == "update" for row in rows),
+        "skip": sum(row.get("resolution") == "skip" for row in rows),
+        "errors": len(batch.validation_errors),
+        "pending": sum(row.get("resolution") == "pending" for row in rows),
+    }
+    if current is not None:
+        position = int(current.get("candidate_index", 0))
+        candidates = current.get("candidates", [])
+        current["candidate"] = candidates[position] if position < len(candidates) else None
+        current["has_next"] = position + 1 < len(candidates)
+    return {"current": current, "summary": summary}
+
+
+@transaction.atomic
+def set_phonebook_reconciliation(*, actor, batch_id, row_index: int, action: str) -> ImportBatch:
+    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    require_department_admin(actor, batch.department)
+    if (
+        batch.status != ImportBatch.Status.PREVIEW_READY
+        or batch.domain != ImportBatch.Domain.PHONEBOOK
+    ):
+        raise ImportError("Phonebook review is unavailable.")
+    rows = [dict(row) for row in batch.normalized_intent.get("rows", []) if isinstance(row, dict)]
+    if row_index < 0 or row_index >= len(rows) or rows[row_index].get("resolution") != "pending":
+        raise ImportError("Phonebook review target is unavailable.")
+    row = rows[row_index]
+    candidates = row.get("candidates", [])
+    index = int(row.get("candidate_index", 0))
+    if action == "next":
+        if index + 1 >= len(candidates):
+            raise ImportError("No further candidate is available; create or skip this row.")
+        row["candidate_index"] = index + 1
+    elif action in {"create", "skip"}:
+        row["resolution"] = action
+    elif action == "update":
+        if index >= len(candidates):
+            raise ImportError("Select a valid Phonebook candidate.")
+        target_id = str(candidates[index]["id"])
+        if any(
+            other.get("resolution") == "update" and other.get("target_id") == target_id
+            for other in rows
+        ):
+            raise ImportError("This Phonebook entry is already selected by another imported row.")
+        row["resolution"], row["target_id"], row["target_fingerprint"] = (
+            "update",
+            target_id,
+            candidates[index]["fingerprint"],
+        )
+    else:
+        raise ImportError("Invalid Phonebook review action.")
+    rows[row_index] = row
+    batch.normalized_intent["rows"] = rows
+    batch.save(update_fields=("normalized_intent",))
+    record_event(
+        action="ingestion.phonebook_review",
+        actor_user=actor,
+        department=batch.department,
+        target_type="import_batch",
+        target_uuid=batch.id,
+        metadata={"row": row_index, "action": action},
+    )
+    return batch
+
+
 def _station_vehicle_intent(
     *, rows, department
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -663,6 +817,16 @@ def create_preview(
             baseline = _station_vehicle_baseline(department=department)
             counts, updates = _preview_station_vehicles(intent=intent)
             updates_truncated = False
+        elif domain == ImportBatch.Domain.PHONEBOOK:
+            if import_format != ImportBatch.Format.CSV or import_mode != ImportBatch.Mode.UPSERT:
+                raise ImportError("Phonebook imports require CSV upsert mode.")
+            intent, review_items = _phonebook_intent(
+                rows=parse_phonebook(payload=payload, import_format=import_format),
+                department=department,
+            )
+            baseline = _phonebook_baseline(department=department)
+            counts = (sum(row["resolution"] == "create" for row in intent), 0, 0, 0)
+            updates, updates_truncated = [], False
         elif domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
             if import_format != ImportBatch.Format.ZIP or import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("PDF package imports require ZIP upsert mode.")
@@ -734,6 +898,8 @@ def create_preview(
         batch.validation_summary["review_items"] = review_items
         batch.validation_summary["review_decisions"] = {}
         batch.validation_summary["skipped_update_count"] = 0
+    if domain == ImportBatch.Domain.PHONEBOOK:
+        batch.validation_summary["review_items"] = review_items
     if domain == ImportBatch.Domain.FIRE_PLANS:
         batch.validation_summary["coordinate_conflicts"] = _coordinate_conflicts(
             department=department, intent=intent
@@ -900,6 +1066,11 @@ def apply_preview(*, actor, batch_id) -> ImportBatch:
             if _station_vehicle_baseline(department=batch.department) != batch.baseline:
                 raise ImportError("Canonical Stations or Vehicles changed; re-preview is required.")
             scopes, counts = _apply_station_vehicles(batch=batch, actor=actor)
+        elif batch.domain == ImportBatch.Domain.PHONEBOOK:
+            parse_phonebook(payload=payload, import_format=batch.import_format)
+            if _phonebook_baseline(department=batch.department) != batch.baseline:
+                raise ImportError("Canonical Phonebook entries changed; re-preview is required.")
+            scopes, counts = _apply_phonebook(batch=batch, actor=actor)
         elif batch.domain in {ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS}:
             # Reconstructing package structure proves that stored preview bytes
             # still match the staged source; accepted PDF outputs are separately
@@ -963,6 +1134,54 @@ def apply_preview(*, actor, batch_id) -> ImportBatch:
         },
     )
     return batch
+
+
+def _apply_phonebook(*, batch, actor):
+    rows = [dict(row) for row in batch.normalized_intent.get("rows", []) if isinstance(row, dict)]
+    if any(row.get("resolution") == "pending" for row in rows):
+        raise ImportError("Resolve each Phonebook duplicate before applying this import.")
+    add = update = unchanged = 0
+    for row in rows:
+        resolution = row.get("resolution")
+        if resolution == "skip":
+            unchanged += 1
+            continue
+        station = None
+        if row.get("station_id"):
+            station = (
+                Station.objects.select_for_update()
+                .filter(id=row["station_id"], department=batch.department)
+                .first()
+            )
+            if station is None:
+                raise ImportError("A Phonebook scope changed; re-preview is required.")
+        values = {
+            field: row.get(field, "")
+            for field in (
+                "first_name",
+                "last_name",
+                "organization_unit",
+                "function",
+                "phone_number",
+            )
+        }
+        values["station"] = station
+        if resolution == "create":
+            create_phonebook_entry(actor=actor, department=batch.department, **values)
+            add += 1
+        elif resolution == "update":
+            entry = (
+                PhonebookEntry.objects.select_for_update()
+                .filter(id=row.get("target_id"), department=batch.department)
+                .first()
+            )
+            if entry is None or entry_fingerprint(entry) != row.get("target_fingerprint"):
+                raise ImportError("A selected Phonebook entry changed; re-preview is required.")
+            update_phonebook_entry(actor=actor, entry=entry, **values)
+            update += 1
+        else:
+            raise ImportError("Phonebook reconciliation is incomplete.")
+    return [], (add, update, 0, unchanged)
 
 
 def _fail_batch(batch, code):

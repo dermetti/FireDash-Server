@@ -1022,7 +1022,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     # administrator choose a module without duplicating CRUD controls here.
     from apps.personnel.models import Person
     from apps.publications.state import dataset_publication_summaries
-    from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
+    from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 
     publication_states = dataset_publication_summaries(
         department,
@@ -1048,6 +1048,15 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
         return values
 
     modules = (
+        module(
+            dataset_type_code="department_phonebook",
+            name="Phonebook",
+            description="Canonical department and station contact entries.",
+            count=PhonebookEntry.objects.filter(department=department).count(),
+            count_label="entries",
+            icon="people",
+            url=reverse("reference-data-phonebook", args=(department.id,)),
+        ),
         module(
             dataset_type_code="department_hydrants",
             name="Hydrants",

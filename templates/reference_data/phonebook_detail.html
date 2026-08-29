@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Phonebook entry{% endblock %}
+{% block content %}
+<header class="mb-3"><p><a href="{% url 'reference-data-phonebook' entry.department_id %}">Phonebook</a></p><h1>{{ entry.display_name }}</h1><p class="text-body-secondary">{{ entry.scope_label }}</p></header>
+<dl class="row"><dt class="col-sm-3">Name</dt><dd class="col-sm-9">{{ entry.display_name }}</dd><dt class="col-sm-3">Organization unit</dt><dd class="col-sm-9">{{ entry.organization_unit|default:"—" }}</dd><dt class="col-sm-3">Function</dt><dd class="col-sm-9">{{ entry.function|default:"—" }}</dd><dt class="col-sm-3">Phone number</dt><dd class="col-sm-9">{{ entry.phone_number }}</dd><dt class="col-sm-3">Scope</dt><dd class="col-sm-9">{{ entry.scope_label }}</dd></dl>
+<section><button class="btn btn-outline-primary" hx-get="{% url 'reference-data-phonebook-edit' entry.id %}" hx-target="#phonebook-action-modal-container">Edit</button><button class="btn btn-outline-danger" hx-get="{% url 'reference-data-phonebook-delete' entry.id %}" hx-target="#phonebook-action-modal-container">Delete</button></section>
+{% include "components/_htmx_action_modal.html" with modal_container_id="phonebook-action-modal-container" %}
+{% endblock %}

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ department.name }} Phonebook{% endblock %}
+{% block content %}
+{% include "components/_page_header.html" with breadcrumb=department.name title="Phonebook" description="Manage canonical department and station contacts." %}
+<section class="mb-4"><div class="d-flex gap-2 flex-wrap"><button class="btn btn-primary" hx-get="{% url 'reference-data-phonebook-create' department.id %}" hx-target="#phonebook-action-modal-container">Add entry</button><a class="btn btn-outline-primary" href="{% url 'ingestion-import-phonebook' department.id %}">Import CSV</a><a class="btn btn-outline-primary" href="{% url 'reference-data-phonebook-duplicates' department.id %}">Review duplicates</a></div></section>
+<section><h2 class="h5">Entries</h2><div class="list-group">{% for entry in entries %}<a class="list-group-item list-group-item-action" href="{% url 'reference-data-phonebook-detail' entry.id %}"><div class="row"><span class="col-md-4"><strong>{{ entry.display_name }}</strong></span><span class="col-md-3">{{ entry.function|default:"—" }}</span><span class="col-md-3">{{ entry.phone_number }}</span><span class="col-md-2">{{ entry.scope_label }}</span></div></a>{% empty %}<p class="text-body-secondary">No phonebook entries yet.</p>{% endfor %}</div><div class="row small text-body-secondary mt-2"><span class="col-md-4">Name</span><span class="col-md-3">Function</span><span class="col-md-3">Phone number</span><span class="col-md-2">Scope</span></div></section>
+{% include "components/_htmx_action_modal.html" with modal_container_id="phonebook-action-modal-container" %}
+{% endblock %}

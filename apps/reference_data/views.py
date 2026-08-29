@@ -26,21 +26,157 @@ from apps.reference_data.forms import (
     HydrantForm,
     KlgvPlanEditForm,
     KlgvPlanUploadForm,
+    PhonebookEntryForm,
 )
-from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
+from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
+from apps.reference_data.phonebook import find_duplicate_candidates
 from apps.reference_data.services import (
+    create_phonebook_entry,
     delete_fire_plan,
     delete_hydrant,
     delete_klgv_plan,
+    delete_phonebook_entry,
+    resolve_phonebook_duplicate,
     set_fire_plan_active,
     set_klgv_plan_active,
     update_fire_plan,
     update_hydrant,
     update_klgv_plan,
+    update_phonebook_entry,
 )
 
 HYDRANT_LIST_PAGE_SIZE = 100
 DOCUMENT_LIST_PAGE_SIZE = 100
+
+
+def _phonebook_entry_or_404(request: HttpRequest, entry_id) -> PhonebookEntry:
+    entry = get_object_or_404(
+        PhonebookEntry.objects.select_related("department", "station"),
+        pk=entry_id,
+        department_id__in=active_department_ids(request.user),
+    )
+    require_department_admin(request.user, entry.department)
+    return entry
+
+
+@login_required
+@require_http_methods(["GET"])
+def phonebook(request: HttpRequest, department_id) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    entries = (
+        PhonebookEntry.objects.filter(department=department)
+        .select_related("station")
+        .order_by("last_name", "first_name", "organization_unit", "id")
+    )
+    return render(
+        request, "reference_data/phonebook.html", {"department": department, "entries": entries}
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def phonebook_create(request: HttpRequest, department_id) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    form = PhonebookEntryForm(request.POST or None, department=department)
+    if request.method == "POST" and form.is_valid():
+        entry = create_phonebook_entry(
+            actor=request.user, department=department, **form.cleaned_data
+        )
+        return _modal_redirect(request, reverse("reference-data-phonebook-detail", args=[entry.id]))
+    return _modal(
+        request,
+        "reference_data/_phonebook_form_modal.html",
+        {
+            "form": form,
+            "title": "Add phonebook entry",
+            "modal_container_id": "phonebook-action-modal-container",
+        },
+    )
+
+
+@login_required
+@require_http_methods(["GET"])
+def phonebook_detail(request: HttpRequest, entry_id) -> HttpResponse:
+    return render(
+        request,
+        "reference_data/phonebook_detail.html",
+        {"entry": _phonebook_entry_or_404(request, entry_id)},
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def phonebook_edit_modal(request: HttpRequest, entry_id) -> HttpResponse:
+    entry = _phonebook_entry_or_404(request, entry_id)
+    form = PhonebookEntryForm(request.POST or None, instance=entry, department=entry.department)
+    if request.method == "POST" and form.is_valid():
+        update_phonebook_entry(actor=request.user, entry=entry, **form.cleaned_data)
+        return _modal_redirect(request, reverse("reference-data-phonebook-detail", args=[entry.id]))
+    return _modal(
+        request,
+        "reference_data/_phonebook_form_modal.html",
+        {
+            "form": form,
+            "title": "Edit phonebook entry",
+            "modal_container_id": "phonebook-action-modal-container",
+        },
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def phonebook_delete_modal(request: HttpRequest, entry_id) -> HttpResponse:
+    entry = _phonebook_entry_or_404(request, entry_id)
+    if request.method == "POST":
+        delete_phonebook_entry(actor=request.user, entry=entry)
+        return _modal_redirect(
+            request, reverse("reference-data-phonebook", args=[entry.department_id])
+        )
+    return _modal(
+        request,
+        "portal/_delete_modal.html",
+        {
+            "object": entry,
+            "action_url": request.path,
+            "modal_container_id": "phonebook-action-modal-container",
+        },
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def phonebook_duplicate_review(request: HttpRequest, department_id) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    if request.method == "POST":
+        try:
+            resolve_phonebook_duplicate(
+                actor=request.user,
+                department=department,
+                first_id=request.POST["first_id"],
+                second_id=request.POST["second_id"],
+                first_fingerprint=request.POST["first_fingerprint"],
+                second_fingerprint=request.POST["second_fingerprint"],
+                action=request.POST["action"],
+            )
+        except (KeyError, ValueError) as error:
+            candidates = find_duplicate_candidates(department=department)
+            return render(
+                request,
+                "reference_data/phonebook_duplicate_review.html",
+                {
+                    "department": department,
+                    "candidate": candidates[0] if candidates else None,
+                    "error": str(error),
+                },
+                status=409,
+            )
+        return redirect("reference-data-phonebook-duplicates", department_id=department.id)
+    candidates = find_duplicate_candidates(department=department)
+    return render(
+        request,
+        "reference_data/phonebook_duplicate_review.html",
+        {"department": department, "candidate": candidates[0] if candidates else None},
+    )
 
 
 def _modal(request: HttpRequest, template: str, context: dict[str, object]) -> HttpResponse:

@@ -12,6 +12,7 @@ class ImportUploadForm(forms.Form):
             (ImportBatch.Domain.FIRE_PLANS, "Fire-plan ZIP package"),
             (ImportBatch.Domain.KLGV_PLANS, "KLGV ZIP package"),
             (ImportBatch.Domain.STATION_VEHICLES, "Stations and vehicles"),
+            (ImportBatch.Domain.PHONEBOOK, "Phonebook"),
         ),
         widget=forms.Select(attrs={"class": "form-select"}),
     )
@@ -65,6 +66,10 @@ class ImportUploadForm(forms.Form):
                 "modes": {ImportBatch.Mode.UPSERT},
             },
             ImportBatch.Domain.STATION_VEHICLES: {
+                "formats": {ImportBatch.Format.CSV},
+                "modes": {ImportBatch.Mode.UPSERT},
+            },
+            ImportBatch.Domain.PHONEBOOK: {
                 "formats": {ImportBatch.Format.CSV},
                 "modes": {ImportBatch.Mode.UPSERT},
             },

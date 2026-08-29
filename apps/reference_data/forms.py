@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 from django import forms
 
-from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan
+from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 
 
 def _bootstrap_fields(form: forms.BaseForm) -> None:
@@ -238,3 +238,22 @@ class KlgvPlanEditForm(_KlgvPlanModelForm):
 
 class ActiveForm(forms.Form):
     active = forms.BooleanField(required=False)
+
+
+class PhonebookEntryForm(forms.ModelForm):
+    class Meta:
+        model = PhonebookEntry
+        fields = (
+            "station",
+            "first_name",
+            "last_name",
+            "organization_unit",
+            "function",
+            "phone_number",
+        )
+
+    def __init__(self, *args, department, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["station"].queryset = department.stations.order_by("short_code", "name")
+        self.fields["station"].required = False
+        _bootstrap_fields(self)
