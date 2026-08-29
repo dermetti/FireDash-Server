@@ -96,6 +96,23 @@ def update_phonebook_entry(*, actor, entry: PhonebookEntry, **values) -> Phonebo
 
 
 @transaction.atomic
+def require_current_phonebook_reconciliation_candidate(
+    *, actor, department, entry_id, fingerprint: str
+) -> PhonebookEntry:
+    """Lock and verify the candidate selected by a reconciliation dialog."""
+    require_department_admin(actor, department)
+    try:
+        entry = PhonebookEntry.objects.select_for_update().get(pk=entry_id)
+    except (PhonebookEntry.DoesNotExist, ValueError) as error:
+        raise ValueError("Selected Phonebook entry is no longer available.") from error
+    if entry.department_id != department.id:
+        raise ValueError("Selected Phonebook entry is outside this department.")
+    if entry_fingerprint(entry) != fingerprint:
+        raise ValueError("Selected Phonebook entry changed; review it again.")
+    return entry
+
+
+@transaction.atomic
 def delete_phonebook_entry(*, actor, entry: PhonebookEntry) -> None:
     entry = PhonebookEntry.objects.select_for_update().get(pk=entry.pk)
     require_department_admin(actor, entry.department)

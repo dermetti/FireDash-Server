@@ -93,6 +93,35 @@ def find_duplicate_candidates(*, department) -> list[DuplicateCandidate]:
     )
 
 
+def find_entry_duplicate_candidates(
+    *, entry: PhonebookEntry, department
+) -> list[DuplicateCandidate]:
+    """Rank a proposed entry against one department's canonical entries.
+
+    Import reconciliation and manual creation both use this adapter around the
+    canonical comparison rule so their candidate ordering cannot drift.
+    """
+    candidates = [
+        candidate
+        for candidate in (
+            compare_phonebook_entries(entry, existing)
+            for existing in PhonebookEntry.objects.filter(department=department)
+            .select_related("station")
+            .order_by("id")
+        )
+        if candidate is not None
+    ]
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            not candidate.exact,
+            -len(candidate.reasons),
+            len(candidate.conflicts),
+            str(candidate.second.id),
+        ),
+    )
+
+
 def compare_phonebook_entries(
     first: PhonebookEntry, second: PhonebookEntry
 ) -> DuplicateCandidate | None:

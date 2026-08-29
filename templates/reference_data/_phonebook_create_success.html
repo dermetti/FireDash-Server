@@ -1,0 +1,4 @@
+<div data-phonebook-create-success></div>
+<div id="phonebook-feedback" hx-swap-oob="true"><div class="alert alert-success alert-dismissible fade show" role="alert">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div></div>
+{% include "reference_data/_phonebook_status.html" with total_count=total_count oob=True %}
+{% include "reference_data/_phonebook_results.html" with entries=entries page=page total_count=total_count page_query=page_query phonebook_list_path=phonebook_list_path oob=True %}

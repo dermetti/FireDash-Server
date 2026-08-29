@@ -22,6 +22,11 @@ urlpatterns = [
         name="reference-data-phonebook-create",
     ),
     path(
+        "departments/<uuid:department_id>/phonebook/create/review/",
+        views.phonebook_create_duplicate_review,
+        name="reference-data-phonebook-create-review",
+    ),
+    path(
         "phonebook/<uuid:entry_id>/", views.phonebook_detail, name="reference-data-phonebook-detail"
     ),
     path(

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.urls import reverse
@@ -291,25 +293,234 @@ def test_phonebook_manual_station_binding_and_list_filters(client, phonebook_sco
 
 
 @pytest.mark.django_db
-def test_phonebook_modal_create_redirects_to_list_with_success_feedback(client, phonebook_scope):
+def test_phonebook_modal_create_uses_fragment_success_and_non_htmx_fallback(
+    client, phonebook_scope
+):
     actor, department, station, _ = phonebook_scope
     client.force_login(actor)
     create_url = reverse("reference-data-phonebook-create", args=[department.id])
-    list_url = reverse("reference-data-phonebook", args=[department.id])
-    response = client.post(
+    values = {
+        "station": station.id,
+        "first_name": "Grace",
+        "last_name": "Hopper",
+        "organization_unit": "Operations",
+        "function": "Dispatch",
+        "phone_number": "555 100",
+    }
+    response = client.post(create_url, values, HTTP_HX_REQUEST="true")
+    body = response.content.decode()
+    assert response.status_code == 200
+    assert "HX-Redirect" not in response
+    assert response["HX-Trigger"] == '{"phonebook-modal-close": {}}'
+    assert "phonebook-feedback" in body
+    assert 'id="phonebook-status"' in body
+    assert 'id="phonebook-results"' in body
+    assert body.count('hx-swap-oob="true"') == 3
+    assert PhonebookEntry.objects.filter(department=department, first_name="Grace").exists()
+
+    fallback = client.post(
         create_url,
-        {
-            "station": station.id,
-            "first_name": "Grace",
-            "last_name": "Hopper",
-            "organization_unit": "Operations",
-            "function": "Dispatch",
-            "phone_number": "555 100",
+        values
+        | {
+            "first_name": "Katherine",
+            "last_name": "Johnson",
+            "organization_unit": "Analytics",
+            "function": "Lead",
+            "phone_number": "555 101",
         },
+    )
+    assert fallback.status_code == 302
+    assert fallback.url == reverse("reference-data-phonebook", args=[department.id])
+
+
+@pytest.mark.django_db
+def test_phonebook_invalid_htmx_create_stays_in_bound_modal(client, phonebook_scope):
+    actor, department, _, _ = phonebook_scope
+    client.force_login(actor)
+    response = client.post(
+        reverse("reference-data-phonebook-create", args=[department.id]),
+        {"first_name": "Only", "last_name": "", "organization_unit": "", "phone_number": ""},
         HTTP_HX_REQUEST="true",
     )
-    assert response.status_code == 204
-    assert response["HX-Redirect"] == list_url
-    response = client.get(list_url)
-    assert "Phonebook entry added." in response.content.decode()
-    assert "Grace Hopper" in response.content.decode()
+    assert response.status_code == 200
+    assert "modal" in response.content.decode()
+    assert "This field is required" in response.content.decode()
+    assert "Only" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_manual_phonebook_duplicate_create_transitions_to_dedicated_review_and_updates(
+    client, phonebook_scope
+):
+    actor, department, station, _ = phonebook_scope
+    client.force_login(actor)
+    existing = make_entry(
+        actor, department, station=station, organization_unit="Operations", function="Chief"
+    )
+    original_id = existing.id
+    create_url = reverse("reference-data-phonebook-create", args=[department.id])
+    review_url = reverse("reference-data-phonebook-create-review", args=[department.id])
+    values = {
+        "station": station.id,
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "organization_unit": "Operations",
+        "function": "Deputy",
+        "phone_number": "040 428512300",
+    }
+    response = client.post(create_url, values, HTTP_HX_REQUEST="true")
+    assert response.status_code == 204 and response["HX-Redirect"] == review_url
+    assert PhonebookEntry.objects.filter(department=department).count() == 1
+    review = client.get(review_url)
+    candidate = review.context["candidate"]
+    assert review.status_code == 200 and review.context["candidate_index"] == 0
+    assert "Proposed entry" in review.content.decode()
+    response = client.post(
+        review_url,
+        {
+            "action": "update",
+            "candidate_id": str(candidate.second.id),
+            "candidate_fingerprint": candidate.second_fingerprint,
+        },
+    )
+    assert response.status_code == 302
+    existing.refresh_from_db()
+    assert existing.id == original_id and existing.function == "Deputy"
+
+
+@pytest.mark.django_db
+def test_manual_phonebook_review_next_create_cancel_and_stale_safety(client, phonebook_scope):
+    actor, department, station, other_department = phonebook_scope
+    client.force_login(actor)
+    strongest = make_entry(
+        actor, department, station=station, organization_unit="Operations", function="Chief"
+    )
+    weaker = make_entry(
+        actor, department, station=station, organization_unit="Dispatch", function=""
+    )
+    create_url = reverse("reference-data-phonebook-create", args=[department.id])
+    review_url = reverse("reference-data-phonebook-create-review", args=[department.id])
+    values = {
+        "station": station.id,
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "organization_unit": "Operations",
+        "function": "Chief",
+        "phone_number": "040 428512300",
+    }
+    client.post(create_url, values)
+    first = client.get(review_url).context["candidate"]
+    assert first.second.id == strongest.id
+    response = client.post(
+        review_url,
+        {
+            "action": "next",
+            "candidate_id": str(first.second.id),
+            "candidate_fingerprint": first.second_fingerprint,
+        },
+    )
+    assert response.status_code == 302
+    second = client.get(review_url).context["candidate"]
+    assert second.second.id == weaker.id
+    response = client.post(
+        review_url,
+        {
+            "action": "create",
+            "candidate_id": str(second.second.id),
+            "candidate_fingerprint": second.second_fingerprint,
+        },
+    )
+    assert response.status_code == 302
+    assert PhonebookEntry.objects.filter(department=department).count() == 3
+
+    client.post(create_url, values)
+    stale = client.get(review_url).context["candidate"]
+    update_phonebook_entry(actor=actor, entry=stale.second, function="Changed")
+    response = client.post(
+        review_url,
+        {
+            "action": "create",
+            "candidate_id": str(stale.second.id),
+            "candidate_fingerprint": stale.second_fingerprint,
+        },
+    )
+    assert response.status_code == 409
+    foreign = PhonebookEntry.objects.create(
+        department=other_department,
+        first_name="Ada",
+        last_name="Lovelace",
+        phone_number="040 428512300",
+    )
+    response = client.post(
+        review_url,
+        {"action": "update", "candidate_id": str(foreign.id), "candidate_fingerprint": "forged"},
+    )
+    assert response.status_code == 409
+    assert PhonebookEntry.objects.filter(department=other_department).count() == 1
+
+    client.post(create_url, values)
+    candidate = client.get(review_url).context["candidate"]
+    response = client.post(
+        review_url,
+        {
+            "action": "cancel",
+            "candidate_id": str(candidate.second.id),
+            "candidate_fingerprint": candidate.second_fingerprint,
+        },
+    )
+    assert response.status_code == 302
+    assert PhonebookEntry.objects.filter(department=department).count() == 3
+
+
+@pytest.mark.django_db
+def test_phonebook_pagination_preserves_filters_and_resets_for_live_filtering(
+    client, phonebook_scope
+):
+    actor, department, station, _ = phonebook_scope
+    client.force_login(actor)
+    PhonebookEntry.objects.bulk_create(
+        [
+            PhonebookEntry(
+                department=department,
+                station=station,
+                organization_unit="Dispatch",
+                phone_number=f"555 {number:03}",
+            )
+            for number in range(101)
+        ]
+    )
+    list_url = reverse("reference-data-phonebook", args=[department.id])
+    response = client.get(
+        list_url,
+        {"q": "Dispatch", "scope": "station", "station": station.id, "page": 2},
+        HTTP_HX_REQUEST="true",
+    )
+    assert response.status_code == 200
+    assert response.context["page"].number == 2
+    assert response.context["page_query"] == (f"q=Dispatch&scope=station&station={station.id}")
+    assert 'hx-target="#phonebook-results"' in response.content.decode()
+    reset_response = client.get(
+        list_url,
+        {"q": "Dispatch", "scope": "station", "station": station.id},
+        HTTP_HX_REQUEST="true",
+    )
+    assert reset_response.context["page"].number == 1
+    ids = [entry.id for entry in reset_response.context["entries"]]
+    assert ids == sorted(ids, key=str)
+
+
+@pytest.mark.parametrize(
+    "template",
+    (
+        "templates/personnel/list.html",
+        "templates/reference_data/hydrants.html",
+        "templates/reference_data/fire_plans.html",
+        "templates/reference_data/klgv_plans.html",
+        "templates/reference_data/phonebook.html",
+        "templates/portal/stations.html",
+        "templates/tablets/list.html",
+    ),
+)
+def test_data_hub_text_searches_use_the_personnel_live_search_trigger(template):
+    content = (Path.cwd() / template).read_text(encoding="utf-8")
+    assert "input changed delay:1s" in content

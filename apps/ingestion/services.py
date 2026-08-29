@@ -45,8 +45,8 @@ from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEnt
 from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitizerError, sanitize
 from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
 from apps.reference_data.phonebook import (
-    compare_phonebook_entries,
     entry_fingerprint,
+    find_entry_duplicate_candidates,
     normalize_phone_number,
 )
 from apps.reference_data.services import create_phonebook_entry, update_phonebook_entry
@@ -520,11 +520,6 @@ def _phonebook_baseline(*, department) -> dict[str, str]:
 
 
 def _phonebook_intent(*, rows, department):
-    existing = list(
-        PhonebookEntry.objects.filter(department=department)
-        .select_related("station")
-        .order_by("id")
-    )
     intent, review_items = [], []
     for index, source in enumerate(rows):
         row = dict(source)
@@ -555,11 +550,7 @@ def _phonebook_intent(*, rows, department):
                 )
             },
         )
-        candidates = [compare_phonebook_entries(staged, entry) for entry in existing]
-        candidates = [candidate for candidate in candidates if candidate is not None]
-        candidates.sort(
-            key=lambda c: (not c.exact, -len(c.reasons), len(c.conflicts), str(c.second.id))
-        )
+        candidates = find_entry_duplicate_candidates(entry=staged, department=department)
         row["candidates"] = [
             {
                 "id": str(candidate.second.id),

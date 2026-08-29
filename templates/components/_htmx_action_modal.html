@@ -4,6 +4,7 @@
     var container = document.getElementById("{{ modal_container_id }}");
     if (!container || container.dataset.modalController) return;
     container.dataset.modalController = "true";
+    var activeModal = null;
 
     function showModal() {
       var modalEl = container.querySelector(".modal");
@@ -13,14 +14,21 @@
       document.querySelectorAll(".modal-backdrop").forEach(function (backdrop) {
         backdrop.remove();
       });
-      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+      activeModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+      activeModal.show();
     }
 
     document.body.addEventListener("htmx:afterSwap", function (event) {
       if (event.target === container) showModal();
     });
     document.body.addEventListener("hidden.bs.modal", function (event) {
-      if (container.contains(event.target)) container.innerHTML = "";
+      if (container.contains(event.target)) {
+        activeModal = null;
+        container.innerHTML = "";
+      }
+    });
+    document.body.addEventListener("phonebook-modal-close", function () {
+      if (activeModal) activeModal.hide();
     });
   })();
 </script>
