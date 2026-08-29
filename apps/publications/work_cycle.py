@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Bounded worker lanes for publication builds and tablet delivery."""
 
 from dataclasses import dataclass
@@ -7,6 +8,7 @@ from uuid import UUID
 
 from django.conf import settings
 
+from apps.publications.document_v2 import process_next_generation_key_grant
 from apps.publications.fire_plan_v2_delivery import process_next_fire_plan_v2_generation_key_grant
 from apps.publications.models import SignedManifest
 from apps.publications.services import process_next_job, recover_stale_jobs
@@ -63,8 +65,11 @@ def process_delivery_cycle(*, batch_size: int | None = None) -> DeliveryCycleRes
     for _ in range(limit):
         grant = process_next_dataset_key_grant()
         v2_grant = process_next_fire_plan_v2_generation_key_grant()
+        document_grant = process_next_generation_key_grant()
         manifest = process_next_signed_manifest(exclude_ids=deferred_manifest_ids)
-        grants += int(grant is not None) + int(v2_grant is not None)
+        grants += (
+            int(grant is not None) + int(v2_grant is not None) + int(document_grant is not None)
+        )
         manifests += int(manifest is not None)
         if (
             manifest is not None
@@ -72,7 +77,7 @@ def process_delivery_cycle(*, batch_size: int | None = None) -> DeliveryCycleRes
         ):
             deferred_manifests += 1
             deferred_manifest_ids.add(manifest.id)
-        if grant is None and v2_grant is None and manifest is None:
+        if grant is None and v2_grant is None and document_grant is None and manifest is None:
             break
     return DeliveryCycleResult(
         key_grants=grants,

@@ -1133,7 +1133,7 @@ The exact metadata fields must follow the server's actual Fire Plan API contract
 
 # 28. KLGV support
 
-KLGV should reuse the same generic engine.
+KLGV uses the same generic document-manifest-v2 engine.
 
 Today it should be treated as a separate dataset capability.
 
@@ -1143,7 +1143,7 @@ Conceptually:
 department_klgv_plans
 ```
 
-When the server eventually introduces KLGV document manifest v2, the app should need only:
+For the implemented `department_klgv_plans` schema-2 contract, the app needs only:
 
 ```text
 KLGV metadata decoder
@@ -1160,6 +1160,11 @@ hash verification
 activation
 garbage collection
 ```
+
+Discovery uses `artifact_format: "document-manifest-v2"` and the generic
+`/api/v1/tablet/document-generations/{publication_id}/manifest` endpoint. Each
+manifest document supplies the frozen KLGV metadata as `klgv_plan`; all grant,
+artifact, hash and cryptographic processing is the existing generic contract.
 
 Desired future structure:
 

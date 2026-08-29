@@ -234,7 +234,6 @@ def _eligible_predecessor(
             version_number__lt=before_version,
             artifact_status=DatasetPublication.ArtifactStatus.READY,
             artifact_ready=True,
-            artifact_path__gt="",
         )
         .order_by("-version_number")
         .first()
@@ -627,25 +626,38 @@ def build_claimed_job(*, job_id) -> PublicationJob:
         # after this read and before publication activation.
         if not _build_is_still_running(job_id=job.id):
             return PublicationJob.objects.get(pk=job.id)
-        artifact = build_encrypted_artifact(
-            publication=publication,
-            plaintext=build_artifact(
-                definition=definition,
-                department=job.department,
-                station=job.station,
-                source_revision=job.source_revision,
-                source_snapshot=publication.source_snapshot,
-            ),
-        )
-        if (
-            publication.scope_state.delivery_format
-            == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
-        ):
+        is_document_v2 = publication.schema_version == 2 and publication.dataset_type_code in {
+            "department_fire_plans", "department_klgv_plans"
+        }
+        if is_document_v2 and publication.dataset_type_code == "department_klgv_plans":
+            # KLGV starts on v2: a legacy ZIP has no lifecycle or protocol purpose.
+            artifact = {}
+        else:
+            artifact = build_encrypted_artifact(
+                publication=publication,
+                plaintext=build_artifact(
+                    definition=definition,
+                    department=job.department,
+                    station=job.station,
+                    source_revision=job.source_revision,
+                    source_snapshot=publication.source_snapshot,
+                ),
+            )
+        if is_document_v2:
             from apps.publications.fire_plan_v2 import build_fire_plan_v2_generation
             from apps.publications.fire_plan_v2_delivery import build_fire_plan_v2_manifest
 
-            build_fire_plan_v2_generation(publication=publication)
-            build_fire_plan_v2_manifest(publication=publication)
+            if publication.dataset_type_code == "department_fire_plans":
+                build_fire_plan_v2_generation(publication=publication)
+                build_fire_plan_v2_manifest(publication=publication)
+            else:
+                from apps.publications.document_v2 import (
+                    build_document_v2_generation,
+                    build_document_v2_manifest,
+                )
+
+                build_document_v2_generation(publication=publication)
+                build_document_v2_manifest(publication=publication)
             if not _build_is_still_running(job_id=job.id):
                 terminal_publication = DatasetPublication.objects.get(pk=publication.id)
                 if terminal_publication.status in (
@@ -702,7 +714,7 @@ def _compensate_artifact(artifact: dict[str, object] | None) -> None:
     if artifact is None:
         return
     try:
-        remove_artifact_path(artifact["artifact_path"])
+        remove_artifact_path(artifact.get("artifact_path"))
     except ArtifactError:
         pass
 
@@ -804,7 +816,7 @@ def finalize_publication_job(
         and previous_current.source_fingerprint == source_fingerprint_value
         and not delivery_transition
     ):
-        _schedule_artifact_removal(str(artifact["artifact_path"]))
+        _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
         publication.save(update_fields=("status", "source_fingerprint", "source_snapshot"))
@@ -1374,9 +1386,12 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
         or publication.status != DatasetPublication.Status.SUPERSEDED
     ):
         raise PublicationError("Only a superseded publication can be restored.")
-    if (
-        publication.artifact_status != DatasetPublication.ArtifactStatus.READY
-        or not publication.artifact_path
+    if publication.artifact_status != DatasetPublication.ArtifactStatus.READY or (
+        not publication.artifact_path
+        and not (
+            publication.schema_version == 2
+            and publication.dataset_type_code in {"department_fire_plans", "department_klgv_plans"}
+        )
     ):
         raise PublicationError("Rollback target has no usable artifact.")
     previous = scope.current_published_publication

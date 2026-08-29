@@ -478,7 +478,6 @@ ARTIFACT_BUILDERS.update(
         "department_hydrants": _artifact_hydrants,
         "department_fire_plans": _artifact_fire_plans,
         "station_personnel": _artifact_personnel,
-        "department_klgv_plans": _artifact_klgv_plans,
         "test_department_incidents": lambda **_: _json_bytes({"incidents": []}),
     }
 )

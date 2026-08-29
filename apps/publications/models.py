@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 import uuid
 
 from django.conf import settings
@@ -216,13 +217,10 @@ class DatasetPublication(models.Model):
         errors = {}
         if self.station_id and self.station and self.station.department_id != self.department_id:
             errors["station"] = "Station must belong to the publication department."
-        document_v2 = (
-            self.dataset_type_code == "department_fire_plans"
-            and self.scope_state_id
-            and self.scope_state.delivery_format
-            == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
-            and self.schema_version == 2
-        )
+        document_v2 = self.schema_version == 2 and self.dataset_type_code in {
+            "department_fire_plans",
+            "department_klgv_plans",
+        }
         if self.schema_version != definition.current_schema_version and not document_v2:
             errors["schema_version"] = "Schema version is not supported for this dataset."
         if self.schema_version not in definition.supported_schema_versions:
@@ -260,10 +258,15 @@ class DatasetPublication(models.Model):
                 self.artifact_signing_key_version,
             )
         )
-        if self.artifact_status == self.ArtifactStatus.READY and not metadata_complete:
+        if (
+            self.artifact_status == self.ArtifactStatus.READY
+            and not metadata_complete
+            and not document_v2
+        ):
             raise ValidationError("Ready artifacts require complete cryptographic metadata.")
         if self.status in (self.Status.READY_FOR_REVIEW, self.Status.PUBLISHED) and (
-            self.artifact_status != self.ArtifactStatus.READY or not metadata_complete
+            self.artifact_status != self.ArtifactStatus.READY
+            or (not metadata_complete and not document_v2)
         ):
             raise ValidationError(
                 "Review-ready and published publications require a ready artifact."
@@ -467,6 +470,124 @@ class FirePlanGenerationManifest(models.Model):
             or not self.signature
         ):
             raise ValidationError("Generation manifests require a signature.")
+
+
+# These records are deliberately not tied to a particular canonical-model
+# table.  A document dataset adapter supplies the stable canonical UUID and
+# frozen metadata; the publication layer owns all cryptographic material.
+class DocumentArtifact(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dataset_type_code = models.CharField(max_length=100)
+    canonical_document_id = models.UUIDField()
+    sanitized_pdf_sha256 = models.CharField(max_length=64)
+    artifact_path = models.CharField(max_length=512, unique=True)
+    ciphertext_size = models.PositiveBigIntegerField()
+    ciphertext_sha256 = models.CharField(max_length=64)
+    nonce = models.BinaryField()
+    wrapped_cek = models.BinaryField()
+    encryption_algorithm = models.CharField(max_length=32)
+    wrapping_algorithm = models.CharField(max_length=32)
+    kek_version = models.CharField(max_length=64)
+    signature = models.BinaryField()
+    signature_algorithm = models.CharField(max_length=32)
+    signing_key_version = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("dataset_type_code", "canonical_document_id", "sanitized_pdf_sha256"),
+                name="unique_document_artifact_canonical_content",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=("dataset_type_code", "canonical_document_id", "created_at"),
+                name="doc_artifact_canon_created_idx",
+            )
+        ]
+
+
+class PublicationDocumentArtifactReference(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publication = models.ForeignKey(
+        DatasetPublication, on_delete=models.PROTECT, related_name="document_artifact_references"
+    )
+    canonical_document_id = models.UUIDField()
+    document_artifact = models.ForeignKey(
+        DocumentArtifact, on_delete=models.PROTECT, related_name="publication_references"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("publication", "canonical_document_id"),
+                name="unique_publication_document_artifact_reference",
+            )
+        ]
+
+
+class DocumentGenerationKey(models.Model):
+    publication = models.OneToOneField(
+        DatasetPublication,
+        primary_key=True,
+        on_delete=models.PROTECT,
+        related_name="document_generation_key",
+    )
+    wrapped_key = models.BinaryField()
+    wrapping_algorithm = models.CharField(max_length=32)
+    kek_version = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class DocumentGenerationKeyGrant(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RUNNING = "RUNNING", "Running"
+        READY = "READY", "Ready"
+        FAILED = "FAILED", "Failed"
+        REVOKED = "REVOKED", "Revoked"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    publication = models.ForeignKey(
+        DatasetPublication, on_delete=models.PROTECT, related_name="document_generation_key_grants"
+    )
+    app_installation = models.ForeignKey(
+        "tablets.AppInstallation",
+        on_delete=models.PROTECT,
+        related_name="document_generation_key_grants",
+    )
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    hpke_ciphersuite = models.CharField(max_length=128, blank=True)
+    hpke_encapsulated_key = models.BinaryField(null=True, blank=True)
+    hpke_wrapped_generation_key = models.BinaryField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.CharField(max_length=512, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("publication", "app_installation"),
+                name="unique_document_generation_key_grant",
+            )
+        ]
+
+
+class DocumentGenerationManifest(models.Model):
+    publication = models.OneToOneField(
+        DatasetPublication,
+        primary_key=True,
+        on_delete=models.PROTECT,
+        related_name="document_generation_manifest",
+    )
+    payload = models.JSONField(default=dict)
+    signature = models.BinaryField()
+    signature_algorithm = models.CharField(max_length=32)
+    signing_key_version = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
 
 
 class PublicationJob(models.Model):

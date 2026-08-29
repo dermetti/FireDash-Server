@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Versioned tablet provisioning API views and installation authentication."""
 
 import base64
@@ -27,6 +28,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authorization.services import minimum_supported_app_version
+from apps.publications.document_v2 import (
+    generation_hpke_context as document_generation_hpke_context,
+)
+from apps.publications.document_v2 import (
+    request_generation_key_grant,
+)
 from apps.publications.fire_plan_v2_delivery import (
     _authorized_generation,
     generation_hpke_context,
@@ -41,6 +48,8 @@ from apps.publications.manifests import (
     request_manifest,
 )
 from apps.publications.models import (
+    DocumentGenerationKeyGrant,
+    DocumentGenerationManifest,
     FirePlanGenerationKeyGrant,
     FirePlanGenerationManifest,
     PublicationFirePlanArtifactReference,
@@ -747,6 +756,92 @@ class FirePlanDocumentArtifactDownloadView(InstallationAPIView):
         except FirePlanGenerationKeyGrant.DoesNotExist as error:
             raise exceptions.PermissionDenied(
                 "Fire Plan generation key is not available."
+            ) from error
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
+        artifact = reference.document_artifact
+        etag = f'"{artifact.ciphertext_sha256}"'
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+        response = HttpResponse(content_type="application/octet-stream")
+        response["ETag"] = etag
+        response["X-Accel-Redirect"] = f"/internal-protected-datasets/{artifact.artifact_path}"
+        return response
+
+
+@extend_schema(
+    responses={200: OpenApiTypes.OBJECT, 202: None, 403: ProblemResponseSerializer, 404: ProblemResponseSerializer},
+    parameters=_MANIFEST_CONDITIONAL_GET_PARAMETERS,
+)
+class DocumentGenerationManifestView(InstallationAPIView):
+    """Generic schema-v2 manifest endpoint for adapter-backed datasets."""
+
+    def get(self, request, publication_id: UUID):
+        try:
+            manifest = DocumentGenerationManifest.objects.select_related("publication").get(
+                publication_id=publication_id
+            )
+            _authorized_generation(publication=manifest.publication, installation=self.installation)
+            grant = request_generation_key_grant(
+                publication=manifest.publication, installation=self.installation
+            )
+        except DocumentGenerationManifest.DoesNotExist as error:
+            raise exceptions.NotFound("Document generation is not available.") from error
+        except ManifestError as error:
+            raise _problem_from_service(error) from error
+        if grant.status != DocumentGenerationKeyGrant.Status.READY:
+            return Response(status=status.HTTP_202_ACCEPTED, headers={"Retry-After": "5"})
+        payload = dict(manifest.payload)
+        payload.update(
+            {
+                "signature": base64.b64encode(bytes(manifest.signature)).decode("ascii"),
+                "signature_algorithm": manifest.signature_algorithm,
+                "signing_key_version": manifest.signing_key_version,
+                "generation_key_grant": {
+                    "scheme": "HPKE",
+                    "ciphersuite": grant.hpke_ciphersuite,
+                    "encapsulated_key": base64.b64encode(bytes(grant.hpke_encapsulated_key)).decode(
+                        "ascii"
+                    ),
+                    "wrapped_generation_key": base64.b64encode(
+                        bytes(grant.hpke_wrapped_generation_key)
+                    ).decode("ascii"),
+                    "info": document_generation_hpke_context(
+                        publication=manifest.publication, installation=self.installation
+                    ).wire(),
+                },
+            }
+        )
+        return Response(payload)
+
+
+@extend_schema(
+    parameters=[OpenApiParameter("format", exclude=True), *_CONDITIONAL_GET_PARAMETERS],
+    responses={(200, "application/octet-stream"): OpenApiTypes.BINARY, 304: None, 403: ProblemResponseSerializer, 404: ProblemResponseSerializer},
+)
+class DocumentArtifactDownloadView(InstallationAPIView):
+    renderer_classes = [renderers.JSONRenderer, OctetStreamRenderer]
+
+    def get(self, request, publication_id: UUID, artifact_id: UUID):
+        from apps.publications.models import PublicationDocumentArtifactReference
+
+        try:
+            reference = PublicationDocumentArtifactReference.objects.select_related(
+                "publication", "document_artifact"
+            ).get(publication_id=publication_id, document_artifact_id=artifact_id)
+            _authorized_generation(
+                publication=reference.publication, installation=self.installation
+            )
+            DocumentGenerationKeyGrant.objects.get(
+                publication_id=publication_id,
+                app_installation=self.installation,
+                status=DocumentGenerationKeyGrant.Status.READY,
+            )
+        except PublicationDocumentArtifactReference.DoesNotExist as error:
+            raise exceptions.NotFound("Document is not available.") from error
+        except DocumentGenerationKeyGrant.DoesNotExist as error:
+            raise exceptions.PermissionDenied(
+                "Document generation key is not available."
             ) from error
         except ManifestError as error:
             raise _problem_from_service(error) from error

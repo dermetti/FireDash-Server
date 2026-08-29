@@ -43,7 +43,6 @@ def _retained_predecessor_ids() -> Iterable[object]:
             status=DatasetPublication.Status.SUPERSEDED,
             artifact_status=DatasetPublication.ArtifactStatus.READY,
             artifact_ready=True,
-            artifact_path__gt="",
         )
         .annotate(
             predecessor_rank=Window(
@@ -106,7 +105,6 @@ def _is_retained_predecessor(*, scope: DatasetScopeState, publication: DatasetPu
             status=DatasetPublication.Status.SUPERSEDED,
             artifact_status=DatasetPublication.ArtifactStatus.READY,
             artifact_ready=True,
-            artifact_path__gt="",
         )
         .order_by("-version_number")
         .values_list("pk", flat=True)[: settings.PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS]

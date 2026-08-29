@@ -54,8 +54,8 @@ def test_klgv_registry_is_department_scoped_optional_and_internal():
 
     assert definition.scope == "department"
     assert definition.required is False
-    assert definition.current_schema_version == 1
-    assert definition.artifact_format == "zip"
+    assert definition.current_schema_version == 2
+    assert definition.artifact_format == "document-manifest-v2"
     assert definition.internal_only is True
     assert definition.feature_code == "klgv_plans"
     assert get_feature_definition("klgv_plans").default_enabled is False

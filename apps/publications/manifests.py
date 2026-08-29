@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Credential-free manifest selection, grant requests, and canonical serialization."""
 
 import base64
@@ -17,6 +18,7 @@ from apps.publications.feature_services import is_feature_enabled
 from apps.publications.models import (
     DatasetKeyGrant,
     DatasetPublication,
+    DocumentGenerationManifest,
     FirePlanGenerationManifest,
     SignedManifest,
 )
@@ -111,7 +113,10 @@ def manifest_state_hash(
 
 def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, object]:
     definition = get_dataset_definition(publication.dataset_type_code)
-    if FirePlanGenerationManifest.objects.filter(publication=publication).exists():
+    if (
+        FirePlanGenerationManifest.objects.filter(publication=publication).exists()
+        or DocumentGenerationManifest.objects.filter(publication=publication).exists()
+    ):
         return {
             "publication_id": str(publication.id),
             "type": publication.dataset_type_code,
@@ -121,7 +126,11 @@ def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, ob
             "required": definition.required,
             "minimum_app_version": definition.minimum_app_version,
             "artifact_format": "document-manifest-v2",
-            "manifest_url": f"/api/v1/tablet/fire-plan-generations/{publication.id}/manifest",
+            "manifest_url": (
+                f"/api/v1/tablet/fire-plan-generations/{publication.id}/manifest"
+                if publication.dataset_type_code == "department_fire_plans"
+                else f"/api/v1/tablet/document-generations/{publication.id}/manifest"
+            ),
         }
     nonce = publication.artifact_nonce
     wrapped_cek = publication.artifact_wrapped_cek
@@ -147,7 +156,10 @@ def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, ob
 
 
 def _is_document_manifest_delivery(publication: DatasetPublication) -> bool:
-    return FirePlanGenerationManifest.objects.filter(publication=publication).exists()
+    return (
+        FirePlanGenerationManifest.objects.filter(publication=publication).exists()
+        or DocumentGenerationManifest.objects.filter(publication=publication).exists()
+    )
 
 
 def control_plane_context(*, installation: AppInstallation, now):

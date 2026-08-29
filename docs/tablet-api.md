@@ -642,7 +642,26 @@ normal signed tablet manifest contains this complete dataset descriptor:
 
 The descriptor is emitted only for the authoritative current publication.
 Route generically by `type`, `scope`, `schema_version`, and `artifact_format`;
-KLGV does not yet have a v2 wire contract.
+`department_klgv_plans` is also a schema-2 `document-manifest-v2` dataset.
+Its discovery descriptor has the same fields as Fire Plans but uses
+`/api/v1/tablet/document-generations/{publication_id}/manifest`. Its complete
+manifest uses `format: "document-generation-v2"`, `dataset_type:
+"department_klgv_plans"`, and each document has a `klgv_plan` object containing
+the frozen canonical KLGV metadata. Artifact, grant, signature, HPKE, AES-KW,
+AES-GCM/no-AAD, hash, and authorization rules are identical to the Fire Plan
+contract; only the metadata adapter and endpoint prefix differ.
+
+### Future PDF-backed datasets
+
+The generic document-generation service owns immutable artifact encryption,
+membership references, generation keys, HPKE grants, manifest signing,
+artifact authorization, and reference-aware cleanup. A new adapter must
+register its dataset type/scope and schema 2 support, supply stable canonical
+document UUIDs, frozen metadata, accepted sanitized PDF bytes/SHA-256, complete
+membership validation, manifest metadata key, and authorization scope. New PDF
+datasets should start on `document-manifest-v2` unless real historical clients
+require a legacy format. This is an extension contract, not a claim that any
+other dataset has a wire protocol.
 
 All v2 requests require the normal `Authorization: Bearer <installation
 credential>` header:
@@ -717,39 +736,21 @@ matching `If-None-Match` gives `304`. The artifact must be referenced by that
 publication and authorized for that installation; unknown/unreferenced IDs are
 `404`. No Range/resume contract exists for v2.
 
-When discovery selects `document-manifest-v2`, the legacy ZIP still created
-internally by the server is a lifecycle compatibility detail. The client must
-not fetch, decrypt, or interpret it; use only this manifest and individual
-artifact endpoints. The v1 ZIP reader remains required only when discovery
+For Fire Plan v2 only, the legacy ZIP still created internally by the server is
+a lifecycle compatibility detail. The client must not fetch, decrypt, or
+interpret it; use only this manifest and individual artifact endpoints. KLGV
+has no legacy ZIP. The v1 ZIP reader remains required only when discovery
 advertises the legacy `artifact_format:"zip"` entry.
 
-### `department_klgv_plans` (`artifact_format: zip`, optional future dataset)
+### `department_klgv_plans` (`artifact_format: document-manifest-v2`)
 
-When this department-scoped feature is later enabled, its *single complete v1
-artifact* has exactly:
-
-```text
-manifest.json
-plans/<lowercase-uuid>.pdf
-```
-
-`manifest.json` is UTF-8 JSON with `source_revision` and `klgv_plans`, sorted
-by plan UUID. Each plan has `id`, `external_identifier`, `object_name`,
-`address`, `postal_code`, `city`, `longitude`, `latitude`, `sha256`,
-`page_count`, and an ID-derived `path`. `external_identifier` and coordinates
-may be `null`; `object_name`, address, postal code, and city are canonical
-required metadata. The path must be exactly `plans/{id}.pdf`. Every ZIP member
-must be declared exactly once; reject duplicate members/IDs, undeclared PDFs,
-traversal or backslash paths, symbolic links, hash mismatches, malformed UUIDs,
-and local-limit violations.
-
-This does **not** change `department_fire_plans`: its existing monolithic ZIP
-layout remains frozen. Nor is it an individual-PDF sync protocol. In v1 both
-document collections are whole encrypted artifacts and use normal 200/304
-whole-object verification; Range/206 is not application-level incremental
-synchronisation. A future v2 may introduce an authoritative document catalog
-and independently encrypted immutable PDFs, but v1 adds no speculative fields
-for that work.
+KLGV begins directly on schema 2 and has no ZIP/v1 compatibility contract.
+Its descriptor uses the generic document-generation manifest URL. The manifest
+has `format:"document-generation-v2"`, `dataset_type:"department_klgv_plans"`,
+and `documents` whose canonical metadata object is `klgv_plan` (the existing
+`id`, `external_identifier`, `object_name`, address, postal/city, coordinates,
+`sha256`, `page_count`, and `path` fields). Apply the document-v2 acceptance
+chain above unchanged. This is additive: Fire Plan v1 ZIP behavior is frozen.
 
 ### `station_personnel` (`artifact_format: json`)
 
