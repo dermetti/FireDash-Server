@@ -201,3 +201,78 @@ def test_phonebook_list_and_crud_presentation(client, phonebook_scope):
         client.post(reverse("reference-data-phonebook-delete", args=[entry.id])).status_code == 302
     )
     assert not PhonebookEntry.objects.filter(pk=entry.id).exists()
+
+
+@pytest.mark.django_db
+def test_phonebook_manual_station_binding_and_list_filters(client, phonebook_scope):
+    actor, department, first_station, other_department = phonebook_scope
+    second_station = Station.objects.create(
+        department=department, name="Second station", short_code="S2"
+    )
+    foreign_station = Station.objects.create(
+        department=other_department, name="Foreign station", short_code="FS"
+    )
+    client.force_login(actor)
+    create_url = reverse("reference-data-phonebook-create", args=[department.id])
+    values = {
+        "station": str(first_station.id),
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "organization_unit": "Control",
+        "function": "Duty officer",
+        "phone_number": "040 428512300",
+    }
+    assert client.post(create_url, values).status_code == 302
+    entry = PhonebookEntry.objects.get(department=department, first_name="Ada")
+    assert entry.station_id == first_station.id
+    edit_url = reverse("reference-data-phonebook-edit", args=[entry.id])
+    values["station"] = str(second_station.id)
+    assert client.post(edit_url, values).status_code == 302
+    entry.refresh_from_db()
+    assert entry.station_id == second_station.id
+    values["station"] = ""
+    assert client.post(edit_url, values).status_code == 302
+    entry.refresh_from_db()
+    assert entry.station_id is None
+    values["station"] = str(foreign_station.id)
+    assert client.post(create_url, values).status_code == 200
+    assert (
+        PhonebookEntry.objects.filter(department=department, station=foreign_station).count() == 0
+    )
+    station_entry = make_entry(
+        actor,
+        department,
+        station=first_station,
+        first_name="Grace",
+        last_name="Hopper",
+        organization_unit="Operations",
+        function="Dispatch",
+        phone_number="555 100",
+    )
+    PhonebookEntry.objects.create(
+        department=other_department,
+        first_name="Foreign",
+        last_name="Entry",
+        phone_number="555 100",
+    )
+    list_url = reverse("reference-data-phonebook", args=[department.id])
+    response = client.get(list_url, {"q": "Grace", "scope": "station", "station": first_station.id})
+    assert response.status_code == 200 and list(response.context["entries"]) == [station_entry]
+    assert foreign_station.name not in response.content.decode()
+    assert first_station.name in response.content.decode()
+    assert client.get(list_url, {"scope": "department"}).context["total_count"] == 1
+    body = client.get(list_url).content.decode()
+    for label in (
+        "Status",
+        "Actions",
+        "Existing Phonebook entries",
+        "Add entry",
+        "Import CSV",
+        "Download CSV template",
+        "Review duplicates",
+        "Name",
+        "Function",
+        "Phone number",
+        "Scope",
+    ):
+        assert label in body

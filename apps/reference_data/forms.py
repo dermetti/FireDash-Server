@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 from django import forms
 
+from apps.organizations.models import Station
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 
 
@@ -253,7 +254,31 @@ class PhonebookEntryForm(forms.ModelForm):
         )
 
     def __init__(self, *args, department, **kwargs):
+        # ModelForm calls PhonebookEntry.clean() during is_valid(). Bind the
+        # tenant before that validation so a valid selected Station is compared
+        # with this department, never with an unsaved None department.
+        kwargs.setdefault("instance", PhonebookEntry(department=department))
         super().__init__(*args, **kwargs)
         self.fields["station"].queryset = department.stations.order_by("short_code", "name")
         self.fields["station"].required = False
+        _bootstrap_fields(self)
+
+
+class PhonebookFilterForm(forms.Form):
+    q = forms.CharField(max_length=255, required=False, label="Search")
+    scope = forms.ChoiceField(
+        required=False,
+        choices=(
+            ("", "All scopes"),
+            ("department", "Department-wide"),
+            ("station", "Station-specific"),
+        ),
+    )
+    station = forms.ModelChoiceField(
+        queryset=Station.objects.none(), required=False, label="Station"
+    )
+
+    def __init__(self, *args, department, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["station"].queryset = department.stations.order_by("short_code", "name")
         _bootstrap_fields(self)

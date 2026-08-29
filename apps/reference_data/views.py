@@ -27,6 +27,7 @@ from apps.reference_data.forms import (
     KlgvPlanEditForm,
     KlgvPlanUploadForm,
     PhonebookEntryForm,
+    PhonebookFilterForm,
 )
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 from apps.reference_data.phonebook import find_duplicate_candidates
@@ -47,6 +48,7 @@ from apps.reference_data.services import (
 
 HYDRANT_LIST_PAGE_SIZE = 100
 DOCUMENT_LIST_PAGE_SIZE = 100
+PHONEBOOK_LIST_PAGE_SIZE = 100
 
 
 def _phonebook_entry_or_404(request: HttpRequest, entry_id) -> PhonebookEntry:
@@ -63,13 +65,46 @@ def _phonebook_entry_or_404(request: HttpRequest, entry_id) -> PhonebookEntry:
 @require_http_methods(["GET"])
 def phonebook(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
+    form = PhonebookFilterForm(request.GET or None, department=department)
     entries = (
         PhonebookEntry.objects.filter(department=department)
         .select_related("station")
         .order_by("last_name", "first_name", "organization_unit", "id")
     )
+    if form.is_valid():
+        data = form.cleaned_data
+        if data.get("q"):
+            entries = entries.filter(
+                Q(first_name__icontains=data["q"])
+                | Q(last_name__icontains=data["q"])
+                | Q(organization_unit__icontains=data["q"])
+                | Q(function__icontains=data["q"])
+                | Q(phone_number__icontains=data["q"])
+            )
+        if data.get("scope") == "department":
+            entries = entries.filter(station__isnull=True)
+        elif data.get("scope") == "station":
+            entries = entries.filter(station__isnull=False)
+        if data.get("station"):
+            entries = entries.filter(station=data["station"])
+    paginator = Paginator(entries, PHONEBOOK_LIST_PAGE_SIZE)
+    page = paginator.get_page(request.GET.get("page", 1))
+    page_query = urlencode(
+        [(key, value) for key, values in request.GET.lists() if key != "page" for value in values]
+    )
     return render(
-        request, "reference_data/phonebook.html", {"department": department, "entries": entries}
+        request,
+        "reference_data/_phonebook_results.html"
+        if request.headers.get("HX-Request") == "true"
+        else "reference_data/phonebook.html",
+        {
+            "department": department,
+            "form": form,
+            "entries": page.object_list,
+            "page": page,
+            "total_count": paginator.count,
+            "page_query": page_query,
+        },
     )
 
 
