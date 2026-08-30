@@ -1,4 +1,5 @@
 from datetime import timedelta
+from pathlib import Path
 from time import time
 
 import pytest
@@ -278,3 +279,26 @@ def test_htmx_administrator_revoke_uses_the_shared_reauthentication_redirect(cli
     assert response["HX-Redirect"].startswith(reverse("accounts-reauthenticate"))
     membership.refresh_from_db()
     assert membership.status == DepartmentMembership.Status.ACTIVE
+
+
+@pytest.mark.django_db
+def test_department_search_lists_use_personnel_live_contract_and_results_fragments(
+    client, stage4_scope
+):
+    department = stage4_scope["department"]
+    for template, result_id in (
+        ("templates/portal/department_manage.html", "department-administrator-results"),
+        ("templates/portal/department_audit.html", "department-audit-results"),
+    ):
+        content = (Path.cwd() / template).read_text(encoding="utf-8")
+        assert "input changed delay:1s" in content
+        assert f"#{result_id}" in content
+        assert "hx-include" in content and "hx-push-url" in content
+
+    response = client.get(
+        reverse("portal-department-manage", args=(department.id,)),
+        {"q": stage4_scope["admin"].email},
+        HTTP_HX_REQUEST="true",
+    )
+    assert response.status_code == 200
+    assert 'id="department-administrator-results"' in response.content.decode()

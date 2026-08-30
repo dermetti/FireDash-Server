@@ -494,22 +494,34 @@ Filtering happens server-side.
 
 HTMX is preferred for fast result refresh.
 
-Recommended interaction:
+Canonical Personnel pattern:
 
 ```html
 <input
   type="search"
   hx-get="..."
-  hx-trigger="keyup changed delay:1s"
-  hx-target="#results">
+  hx-trigger="input changed delay:1s"
+  hx-target="#person-results"
+  hx-include="#person-filter-form"
+  hx-push-url="true">
 ```
 
 Use approximately 1–2 seconds of debounce for free-text search.
+
+The actual Personnel implementation applies this behavior to every `input` and
+`select` in the normal GET filter form: search fields use `input changed
+delay:1s`; selects use `change`; each request includes the whole form and
+replaces only the results region. This makes typing, pasting, and clearing text
+live without requiring Enter, while preserving ordinary GET form submission
+when HTMX is unavailable. Criteria changes omit `page`, returning to page 1;
+pagination links preserve active query/filter parameters and target that same
+results region.
 
 Rules:
 
 - filters should reflect meaningful visible columns/domain fields;
 - preserve selected filters during pagination;
+- typing, paste, and clearing must all refresh the server-side result set;
 - preserve filters after relevant mutations where practical;
 - Reset remains available;
 - a separate Filter/Submit button is usually unnecessary when HTMX live filtering is used;

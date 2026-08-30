@@ -418,10 +418,7 @@ def system_departments(request: HttpRequest) -> HttpResponse:
     page = paginator.get_page(request.GET.get("page", 1))
     page_query = request.GET.copy()
     page_query.pop("page", None)
-    return render(
-        request,
-        "portal/system_departments.html",
-        {
+    context = {
             "departments": page.object_list,
             "form": form,
             "page": page,
@@ -430,8 +427,10 @@ def system_departments(request: HttpRequest) -> HttpResponse:
             "selected_status": status,
             "page_query": page_query.urlencode(),
             "department_statuses": Department.Status.choices,
-        },
-    )
+    }
+    if request.headers.get("HX-Request") == "true":
+        return render(request, "portal/_system_department_results.html", context)
+    return render(request, "portal/system_departments.html", context)
 
 
 @login_required
@@ -547,10 +546,7 @@ def system_audit(request: HttpRequest) -> HttpResponse:
     actions = (
         AuditEvent.objects.order_by("action").values_list("action", flat=True).distinct()[:100]
     )
-    return render(
-        request,
-        "portal/system_audit.html",
-        {
+    context = {
             "events": page.object_list,
             "page": page,
             "total_count": paginator.count,
@@ -560,8 +556,10 @@ def system_audit(request: HttpRequest) -> HttpResponse:
             "selected_department": department_id or "__all__",
             "selected_action": action,
             "page_query": page_query.urlencode(),
-        },
-    )
+    }
+    if request.headers.get("HX-Request") == "true":
+        return render(request, "portal/_system_audit_results.html", context)
+    return render(request, "portal/system_audit.html", context)
 
 
 @login_required
@@ -743,10 +741,7 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
     page_query = request.GET.copy()
     page_query.pop("page", None)
     current_user_id = request.user.id
-    return render(
-        request,
-        "portal/department_manage.html",
-        {
+    context = {
             "department": department,
             "administrators": _current_administrator_rows(
                 users=page.object_list,
@@ -759,8 +754,10 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
             "scope_filter": scope_filter,
             "current_user_id": current_user_id,
             "page_query": page_query.urlencode(),
-        },
-    )
+    }
+    if request.headers.get("HX-Request") == "true":
+        return render(request, "portal/_department_administrator_results.html", context)
+    return render(request, "portal/department_manage.html", context)
 
 
 @login_required
@@ -1447,10 +1444,7 @@ def department_audit(request: HttpRequest, department_id) -> HttpResponse:
     stations = Station.objects.filter(department=department).order_by("name", "id")
     page_query = request.GET.copy()
     page_query.pop("page", None)
-    return render(
-        request,
-        "portal/department_audit.html",
-        {
+    context = {
             "department": department,
             "events": page.object_list,
             "page": page,
@@ -1459,8 +1453,10 @@ def department_audit(request: HttpRequest, department_id) -> HttpResponse:
             "selected_station": station_id or "__all__",
             "query": query,
             "page_query": page_query.urlencode(),
-        },
-    )
+    }
+    if request.headers.get("HX-Request") == "true":
+        return render(request, "portal/_department_audit_results.html", context)
+    return render(request, "portal/department_audit.html", context)
 
 
 @login_required

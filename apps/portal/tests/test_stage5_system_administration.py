@@ -1,4 +1,5 @@
 import uuid
+from pathlib import Path
 
 import pytest
 from django.test import Client
@@ -63,6 +64,29 @@ def test_system_navigation_is_isolated_and_all_roles_keep_their_scoped_entries(
     content = client.get(reverse("dashboard")).content.decode()
     assert "Personnel" in content and "Tablets" in content
     assert "Data Hub" not in content and "Administrator Accounts" not in content
+
+
+@pytest.mark.django_db
+def test_system_search_lists_use_personnel_live_contract_and_return_only_results(
+    client, system_scope
+):
+    system_admin, _, _, department, _ = system_scope
+    client.force_login(system_admin)
+    for template, target in (
+        ("templates/portal/system_departments.html", "#system-department-results"),
+        ("templates/portal/system_audit.html", "#system-audit-results"),
+    ):
+        content = (Path.cwd() / template).read_text(encoding="utf-8")
+        assert "input changed delay:1s" in content
+        assert target in content
+        assert "hx-include" in content and "hx-push-url" in content
+
+    response = client.get(
+        reverse("portal-system-departments"), {"q": department.name}, HTTP_HX_REQUEST="true"
+    )
+    assert response.status_code == 200
+    assert 'id="system-department-results"' in response.content.decode()
+    assert "<!DOCTYPE" not in response.content.decode()
 
 
 @pytest.mark.django_db
