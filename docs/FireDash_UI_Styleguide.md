@@ -502,6 +502,7 @@ Canonical Personnel pattern:
   hx-get="..."
   hx-trigger="input changed delay:1s"
   hx-target="#person-results"
+  hx-swap="outerHTML"
   hx-include="#person-filter-form"
   hx-push-url="true">
 ```
@@ -516,6 +517,10 @@ live without requiring Enter, while preserving ordinary GET form submission
 when HTMX is unavailable. Criteria changes omit `page`, returning to page 1;
 pagination links preserve active query/filter parameters and target that same
 results region.
+
+The debounce is driven by the text input event while the field remains focused.
+Search must execute after the idle delay without requiring blur, clicking
+elsewhere, Enter, or form submission.
 
 Rules:
 

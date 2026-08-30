@@ -14,7 +14,6 @@
     <div class="col-md-1"><label class="form-label" for="{{ form.diameter_mm.id_for_label }}">{{ form.diameter_mm.label }}</label>{{ form.diameter_mm }}</div>
     <div class="col-md-2"><a class="btn btn-outline-secondary" href="{% url 'reference-data-hydrants' department.id %}">Reset</a></div>
   </form>
-  <script>(function(){var form=document.getElementById('hydrant-filter-form');if(!form)return;form.querySelectorAll('input,select').forEach(function(field){field.setAttribute('hx-get',form.action||window.location.pathname);field.setAttribute('hx-trigger',field.type==='search'?'input changed delay:1s':'change');field.setAttribute('hx-target','#hydrant-results');field.setAttribute('hx-swap','outerHTML');field.setAttribute('hx-include','#hydrant-filter-form');field.setAttribute('hx-push-url','true');});})();</script>
   {% include "reference_data/_hydrant_results.html" %}
 </section>
 {% endblock %}

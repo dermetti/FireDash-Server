@@ -58,6 +58,25 @@ def _modal_redirect(request: HttpRequest, url: str) -> HttpResponse:
 PERSONNEL_LIST_PAGE_SIZE = 100
 
 
+def _configure_live_list_filters(form: PersonnelFilterForm, *, request: HttpRequest) -> None:
+    """Render the Personnel live-search contract directly on its controls."""
+    for name, field in form.fields.items():
+        if name == "q":
+            field.widget.input_type = "search"
+        field.widget.attrs.update(
+            {
+                "hx-get": request.path,
+                "hx-trigger": "input changed delay:1s"
+                if name == "q"
+                else "change",
+                "hx-target": "#person-results",
+                "hx-swap": "outerHTML",
+                "hx-include": "#person-filter-form",
+                "hx-push-url": "true",
+            }
+        )
+
+
 def _person_or_404(request: HttpRequest, department_id, person_id) -> Person:
     return cast(
         Person,
@@ -108,6 +127,7 @@ def people(request: HttpRequest, department_id) -> HttpResponse:
     if selected_station:
         queryset = queryset.filter(station_assignments__station=selected_station).distinct()
     filter_form = PersonnelFilterForm(request.GET or None)
+    _configure_live_list_filters(filter_form, request=request)
     if filter_form.is_valid():
         filters = filter_form.cleaned_data
         if filters.get("q"):

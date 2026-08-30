@@ -67,6 +67,25 @@ PHONEBOOK_ENTRY_FIELDS = (
 PHONEBOOK_MANUAL_REVIEW_SESSION_KEY = "phonebook_manual_duplicate_review"
 
 
+def _configure_live_list_filters(form, *, request: HttpRequest, target: str, form_id: str) -> None:
+    """Put the established input-event HTMX contract on rendered filter controls."""
+    for name, field in form.fields.items():
+        if name == "q":
+            field.widget.input_type = "search"
+        field.widget.attrs.update(
+            {
+                "hx-get": request.path,
+                "hx-trigger": "input changed delay:1s"
+                if name == "q"
+                else "change",
+                "hx-target": target,
+                "hx-swap": "outerHTML",
+                "hx-include": f"#{form_id}",
+                "hx-push-url": "true",
+            }
+        )
+
+
 def _phonebook_entry_or_404(request: HttpRequest, entry_id) -> PhonebookEntry:
     entry = get_object_or_404(
         PhonebookEntry.objects.select_related("department", "station"),
@@ -93,6 +112,9 @@ def phonebook(request: HttpRequest, department_id) -> HttpResponse:
 
 def _phonebook_list_context(*, request: HttpRequest, department: Department) -> dict[str, object]:
     form = PhonebookFilterForm(request.GET or None, department=department)
+    _configure_live_list_filters(
+        form, request=request, target="#phonebook-results", form_id="phonebook-filter-form"
+    )
     entries = (
         PhonebookEntry.objects.filter(department=department)
         .select_related("station")
@@ -483,6 +505,9 @@ def _department_or_403(request: HttpRequest, department_id) -> Department:
 def hydrants(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
     form = HydrantFilterForm(request.GET or None)
+    _configure_live_list_filters(
+        form, request=request, target="#hydrant-results", form_id="hydrant-filter-form"
+    )
     queryset = Hydrant.objects.filter(department=department).order_by("external_identifier", "id")
     if form.is_valid():
         data = form.cleaned_data
@@ -667,6 +692,9 @@ def fire_plans(request: HttpRequest, department_id) -> HttpResponse:
         else:
             return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
     filters = FirePlanFilterForm(request.GET or None)
+    _configure_live_list_filters(
+        filters, request=request, target="#fire-plan-results", form_id="fire-plan-filter-form"
+    )
     queryset = FirePlan.objects.filter(department=department)
     if filters.is_valid():
         if filters.cleaned_data["q"]:
@@ -760,6 +788,9 @@ def klgv_plans(request: HttpRequest, department_id) -> HttpResponse:
         else:
             return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
     filters = DocumentFilterForm(request.GET or None)
+    _configure_live_list_filters(
+        filters, request=request, target="#klgv-plan-results", form_id="klgv-filter-form"
+    )
     queryset = KlgvPlan.objects.filter(department=department)
     if filters.is_valid():
         if filters.cleaned_data["q"]:

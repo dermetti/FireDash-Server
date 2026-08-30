@@ -1,4 +1,4 @@
-from pathlib import Path
+from html.parser import HTMLParser
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -509,18 +509,37 @@ def test_phonebook_pagination_preserves_filters_and_resets_for_live_filtering(
     assert ids == sorted(ids, key=str)
 
 
-@pytest.mark.parametrize(
-    "template",
-    (
-        "templates/personnel/list.html",
-        "templates/reference_data/hydrants.html",
-        "templates/reference_data/fire_plans.html",
-        "templates/reference_data/klgv_plans.html",
-        "templates/reference_data/phonebook.html",
-        "templates/portal/stations.html",
-        "templates/tablets/list.html",
-    ),
-)
-def test_data_hub_text_searches_use_the_personnel_live_search_trigger(template):
-    content = (Path.cwd() / template).read_text(encoding="utf-8")
-    assert "input changed delay:1s" in content
+class _SearchInputParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.inputs = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "input":
+            self.inputs.append(dict(attrs))
+
+
+@pytest.mark.django_db
+def test_data_hub_search_inputs_render_the_personnel_live_search_contract(client, phonebook_scope):
+    actor, department, _, _ = phonebook_scope
+    client.force_login(actor)
+    expected = {
+        "personnel-list": ("q", "#person-results", "#person-filter-form"),
+        "reference-data-hydrants": ("q", "#hydrant-results", "#hydrant-filter-form"),
+        "reference-data-fire-plans": ("q", "#fire-plan-results", "#fire-plan-filter-form"),
+        "reference-data-klgv-plans": ("q", "#klgv-plan-results", "#klgv-filter-form"),
+        "reference-data-phonebook": ("q", "#phonebook-results", "#phonebook-filter-form"),
+    }
+    for name, (field_name, target, include) in expected.items():
+        response = client.get(reverse(name, args=[department.id]))
+        assert response.status_code == 200
+        parser = _SearchInputParser()
+        parser.feed(response.content.decode())
+        field = next(input_ for input_ in parser.inputs if input_.get("name") == field_name)
+        assert field["type"] == "search"
+        assert field["hx-trigger"] == "input changed delay:1s"
+        assert field["hx-target"] == target
+        assert field["hx-swap"] == "outerHTML"
+        assert field["hx-include"] == include
+        assert field["hx-push-url"] == "true"
+        assert field["hx-get"] == reverse(name, args=[department.id])
