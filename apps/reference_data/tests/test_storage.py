@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -55,6 +56,37 @@ def test_accepted_promotion_does_not_replace_after_mode_failure(
 
     assert source.exists()
     assert not destination.exists()
+
+
+def test_accepted_promotion_assigns_configured_reader_group(private_roots: Path) -> None:
+    source = private_roots / "source.pdf"
+    source.write_bytes(b"safe")
+    with override_settings(REFERENCE_DATA_ACCEPTED_GROUP="fire_document_readers"):
+        with patch(
+            "apps.reference_data.storage.grp",
+            SimpleNamespace(getgrnam=lambda _name: SimpleNamespace(gr_gid=4242)),
+        ):
+            with patch("apps.reference_data.storage.os.chown", create=True) as chown:
+                accepted = promote_to_accepted(
+                    source, "123e4567-e89b-12d3-a456-426614174000.pdf"
+                )
+
+    assert accepted.read_bytes() == b"safe"
+    chown.assert_called_once_with(accepted, -1, 4242)
+
+
+def test_accepted_promotion_refuses_missing_configured_reader_group(private_roots: Path) -> None:
+    source = private_roots / "source.pdf"
+    source.write_bytes(b"safe")
+    with override_settings(REFERENCE_DATA_ACCEPTED_GROUP="fire_document_readers"):
+        with patch(
+            "apps.reference_data.storage.grp",
+            SimpleNamespace(getgrnam=lambda _name: (_ for _ in ()).throw(KeyError)),
+        ):
+            with pytest.raises(StorageError, match="reader group"):
+                promote_to_accepted(source, "123e4567-e89b-12d3-a456-426614174000.pdf")
+
+    assert source.exists()
 
 
 def test_accepted_storage_rejects_traversal_keys(private_roots: Path) -> None:

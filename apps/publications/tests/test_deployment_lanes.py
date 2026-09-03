@@ -43,6 +43,7 @@ def test_build_service_socket_and_timer_have_narrow_nightly_contract():
     assert "Type=oneshot" in build
     assert "[Install]" not in build
     assert "process_publication_jobs --build" in build
+    assert "SupplementaryGroups=fire_document_readers" in build
     assert "--delivery" not in build
     assert "LoadCredential=publication-kek:" in build
     assert "LoadCredential=publication-signing-key:" in build
@@ -85,6 +86,26 @@ def test_verifier_checks_lane_commands_socket_security_and_credential_separation
     assert "private/public pair matches the retained public-key ring" in verifier
     assert "maintenance service does not load KEK/private signing key" in verifier
     assert "fire_backend has no passwordless sudo privilege" in verifier
+    assert "fire_publication is outside broad fire_backend group" in verifier
+    assert "fire_publication can read accepted source" in verifier
+    assert "fire_publication cannot modify/delete accepted source" in verifier
+    assert "www-data cannot read accepted source" in verifier
+
+
+def test_accepted_document_source_uses_its_own_reader_group():
+    users = (ROOT / "deploy" / "scripts" / "create-service-users.sh").read_text(encoding="utf-8")
+    tmpfiles = (ROOT / "deploy" / "systemd" / "fire-backend.tmpfiles.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "groupadd --system fire_document_readers" in users
+    assert "usermod -a -G fire_document_readers fire_backend" in users
+    assert "usermod -a -G fire_document_readers fire_publication" in users
+    assert "gpasswd -d fire_publication fire_backend" in users
+    assert "fire_backend:fire_document_readers" in users
+    assert "chmod 2750" in users and "chmod 0640" in users
+    assert "2750 fire_backend fire_document_readers" in tmpfiles
+    release = (ROOT / "deploy" / "lib" / "release.sh").read_text(encoding="utf-8")
+    assert '"$root/deploy/scripts/create-service-users.sh"' in release
 
 
 def test_root_rotation_helper_uses_two_phase_atomic_public_ring_workflow():

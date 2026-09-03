@@ -407,8 +407,71 @@ fi
 [[ $(stat -c '%U:%G:%a' "$ENV_FILE") == "root:fire_backend:640" ]] && ok "fire-backend.env root:fire_backend 0640" || fail "fire-backend.env ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/publications) == "fire_publication:fire_nginx:2750" ]] && ok "publications 2750" || fail "publications ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/publications/.tmp) == "fire_publication:fire_publication:700" ]] && ok "publications/.tmp 0700" || fail "publications/.tmp ownership/mode unexpected"
-[[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/fire-plans) == "fire_backend:fire_backend:750" ]] && ok "fire-plans 0750" || fail "fire-plans ownership/mode unexpected"
+[[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/fire-plans) == "fire_backend:fire_document_readers:2750" ]] && ok "accepted document root 2750" || fail "accepted document root ownership/mode unexpected"
+[[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/fire-plans/plans) == "fire_backend:fire_document_readers:2750" ]] && ok "accepted KLGV directory 2750" || fail "accepted KLGV directory ownership/mode unexpected"
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend/import-staging) == "fire_backend:fire_backend:750" ]] && ok "import staging 0750" || fail "import staging ownership/mode unexpected"
+
+if id -nG fire_backend | tr ' ' '\n' | grep -qx fire_document_readers; then
+    ok "fire_backend belongs to accepted-document reader group"
+else
+    fail "fire_backend is missing accepted-document reader group"
+fi
+if id -nG fire_publication | tr ' ' '\n' | grep -qx fire_document_readers; then
+    ok "fire_publication belongs to accepted-document reader group"
+else
+    fail "fire_publication is missing accepted-document reader group"
+fi
+if id -nG fire_publication | tr ' ' '\n' | grep -qx fire_backend; then
+    fail "fire_publication still belongs to broad fire_backend group"
+else
+    ok "fire_publication is outside broad fire_backend group"
+fi
+
+accepted_bad=$(find /var/lib/fire-backend/fire-plans -xdev -type f -name '*.pdf' \
+    \( ! -user fire_backend -o ! -group fire_document_readers -o ! -perm 0640 \) \
+    -print -quit)
+if [[ -z $accepted_bad ]]; then
+    ok "existing accepted PDFs have narrow reader-group permissions"
+else
+    fail "accepted PDF ownership/mode unexpected: $accepted_bad"
+fi
+
+# Exercise setgid inheritance with a throwaway accepted-source document. It is
+# created by the backend identity and never grants publication write/delete.
+accepted_probe=/var/lib/fire-backend/fire-plans/.permission-probe-$$
+if runuser -u fire_backend -- sh -c '
+    umask 027
+    mkdir -m 750 "$1"
+    printf "probe" > "$1/new.pdf"
+    chmod 640 "$1/new.pdf"
+' sh "$accepted_probe"; then
+    if [[ $(stat -c '%U:%G:%a' "$accepted_probe") == "fire_backend:fire_document_readers:2750" \
+        && $(stat -c '%U:%G:%a' "$accepted_probe/new.pdf") == "fire_backend:fire_document_readers:640" ]]; then
+        ok "new accepted documents inherit reader group and narrow modes"
+    else
+        fail "new accepted document inheritance is unexpected"
+    fi
+    runuser -u fire_backend -- test -r "$accepted_probe/new.pdf" \
+        && ok "fire_backend can read accepted source" \
+        || fail "fire_backend cannot read accepted source"
+    runuser -u fire_publication -- test -r "$accepted_probe/new.pdf" \
+        && ok "fire_publication can read accepted source" \
+        || fail "fire_publication cannot read accepted source"
+    if runuser -u fire_publication -- test -w "$accepted_probe/new.pdf" 2>/dev/null \
+        || runuser -u fire_publication -- rm "$accepted_probe/new.pdf" 2>/dev/null; then
+        fail "fire_publication can modify accepted source"
+    else
+        ok "fire_publication cannot modify/delete accepted source"
+    fi
+    if runuser -u www-data -- test -r "$accepted_probe/new.pdf" 2>/dev/null; then
+        fail "www-data can read accepted source"
+    else
+        ok "www-data cannot read accepted source"
+    fi
+else
+    fail "fire_backend could not create accepted-source permission probe"
+fi
+rm -rf -- "$accepted_probe"
 
 neg_read() { # user path description
     local user=$1 path=$2 desc=$3

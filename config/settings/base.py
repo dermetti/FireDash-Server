@@ -134,6 +134,9 @@ REFERENCE_DATA_SANITIZER_OUTPUT_ROOT = Path(
 REFERENCE_DATA_ACCEPTED_ROOT = Path(
     get_env("REFERENCE_DATA_ACCEPTED_ROOT", default="/var/lib/fire-backend/fire-plans")
 )
+# Production config sets this to the narrow publication-source reader group.
+# Empty keeps local development and isolated tests free of host account setup.
+REFERENCE_DATA_ACCEPTED_GROUP = get_env("REFERENCE_DATA_ACCEPTED_GROUP", default="")
 INGESTION_STAGING_ROOT = Path(
     get_env("INGESTION_STAGING_ROOT", default="/var/lib/fire-backend/import-staging")
 )

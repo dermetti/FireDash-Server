@@ -2521,7 +2521,7 @@ def _create_document(*, batch, row, model, sanitized_path):
     key = f"plans/{document_id}.pdf" if model is KlgvPlan else f"{document_id}.pdf"
     if model is KlgvPlan:
         (settings.REFERENCE_DATA_ACCEPTED_ROOT / "plans").mkdir(
-            mode=0o700, parents=True, exist_ok=True
+            mode=0o750, parents=True, exist_ok=True
         )
     promote_to_accepted(sanitized_path, key)
     common = {

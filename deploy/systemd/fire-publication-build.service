@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=oneshot
 User=fire_publication
 Group=fire_publication
+SupplementaryGroups=fire_document_readers
 WorkingDirectory=/srv/firedash/current
 Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env

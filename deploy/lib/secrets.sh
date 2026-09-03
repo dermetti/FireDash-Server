@@ -86,6 +86,7 @@ TRUSTED_PROXY_IPS=127.0.0.1,::1
 REFERENCE_DATA_QUARANTINE_ROOT=/var/lib/fire-backend/quarantine
 REFERENCE_DATA_SANITIZER_OUTPUT_ROOT=/var/lib/fire-backend/sanitizer-output
 REFERENCE_DATA_ACCEPTED_ROOT=/var/lib/fire-backend/fire-plans
+REFERENCE_DATA_ACCEPTED_GROUP=fire_document_readers
 INGESTION_STAGING_ROOT=/var/lib/fire-backend/import-staging
 IMPORT_PREVIEW_RETENTION_DAYS=7
 IMPORT_APPLIED_SOURCE_RETENTION_DAYS=30

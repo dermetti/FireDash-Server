@@ -94,6 +94,9 @@ activate_release() {
     local release=${FIREDASH_RELEASE:?} root=${FIREDASH_REPO_ROOT:?}
     local sql="$root/deploy/postgresql/roles.sql"
 
+    log "converging service identities and accepted document-source permissions"
+    "$root/deploy/scripts/create-service-users.sh"
+
     log "running migrations as database_owner"
     (
         export DJANGO_SETTINGS_MODULE=config.settings.production

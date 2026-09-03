@@ -3,6 +3,11 @@ import shutil
 import uuid
 from pathlib import Path
 
+try:  # pragma: no cover - Windows has no Unix group database.
+    import grp
+except ModuleNotFoundError:  # pragma: no cover - exercised through configured-group tests.
+    grp = None
+
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 
@@ -44,12 +49,17 @@ def promote_to_accepted(source: Path, document_key: str, *, replace: bool = Fals
     ):
         raise StorageError("Invalid generated document key.")
     _ensure_private_roots()
+    accepted_group_id = _accepted_group_id()
     destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / relative
-    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # The deployed accepted root is setgid and group-readable by the dedicated
+    # publication-source reader group. New nested directories must retain group
+    # traverse/read permission; the parent supplies their group and SGID bit.
+    destination.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     if destination.exists() and not replace:
         raise StorageError("Generated document key already exists.")
     os.chmod(source, 0o640)
     os.replace(source, destination)
+    _apply_accepted_group(destination, accepted_group_id=accepted_group_id)
     return destination
 
 
@@ -87,3 +97,29 @@ def _ensure_private_roots() -> None:
         settings.REFERENCE_DATA_ACCEPTED_ROOT,
     ):
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
+def _accepted_group_id() -> int | None:
+    group_name = settings.REFERENCE_DATA_ACCEPTED_GROUP
+    if not group_name:
+        return None
+    if grp is None:
+        raise StorageError("Accepted document reader group is unavailable.")
+    try:
+        return grp.getgrnam(group_name).gr_gid
+    except KeyError as error:
+        raise StorageError("Accepted document reader group is unavailable.") from error
+
+
+def _apply_accepted_group(path: Path, *, accepted_group_id: int | None) -> None:
+    """Apply the dedicated reader group after cross-directory promotion.
+
+    ``os.replace`` preserves the source file group, so setgid inheritance of
+    the accepted directory alone is insufficient for sanitized output moved
+    into it. The backend owner may change its own file to this supplementary
+    group; publication receives read-only access through mode 0640.
+    """
+    if accepted_group_id is None:
+        return
+    os.chown(path, -1, accepted_group_id)
+    os.chmod(path, 0o640)
