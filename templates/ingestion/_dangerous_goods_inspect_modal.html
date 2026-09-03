@@ -1,0 +1,23 @@
+<div class="modal fade" id="dangerousGoodsInspectModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable modal-xl modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header"><h2 class="modal-title fs-5">Inspect Data</h2><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input class="form-control mb-3" name="q" value="{{ query }}" placeholder="UN-Nummer, Bezeichnung oder Alias" hx-get="{% url 'ingestion-dangerous-goods-inspect' department.id %}" hx-trigger="input changed delay:300ms" hx-target="#dangerous-goods-modal-container" hx-swap="innerHTML">
+        {% for good in results %}
+          <article class="border rounded p-3 mb-3">
+            <h3 class="h6">UN {{ good.un_number }} · {{ good.inspection_title }}</h3>
+            <p class="mb-1">{% for language, name in good.names.official.items %}<strong>{{ language|upper }}:</strong> {{ name }} {% endfor %}</p>
+            {% if good.inspection_aliases %}<p class="mb-1"><strong>ERICards-Aliase:</strong> {{ good.inspection_aliases|join:", " }}</p>{% endif %}
+            <p class="mb-1"><strong>Gefahrnummer:</strong> {{ good.adr.hazard_identification_number|default:"—" }} · <strong>Klasse:</strong> {{ good.adr.class|default:"—" }} · <strong>Verpackungsgruppe:</strong> {{ good.adr.packing_group|default:"—" }} · {{ good.adr.classification_code|default:"—" }}</p>
+            <p class="mb-1"><strong>Gefahrzettel:</strong> {{ good.inspection_placards|join:", "|default:"—" }}</p>
+            <p class="mb-1"><strong>ERI:</strong> {{ good.eri|join:", "|default:"—" }}{% if not good.eri %} · Standard: {{ good.inspection_eri_default|default:"—" }}{% endif %}</p>
+            {% for code, card in good.inspection_eri_cards %}<div class="mt-2"><strong>ERI {{ code }}</strong>{% for line in card %}<div class="{% if line.0 == 'title' %}fw-semibold{% endif %}">{{ line.1 }}</div>{% endfor %}</div>{% endfor %}
+          </article>
+        {% empty %}
+          {% if query %}<p class="text-body-secondary">Keine Treffer.</p>{% else %}<p class="text-body-secondary">Suchen Sie nach UN-Nummer, offizieller Bezeichnung oder ERICards-Alias.</p>{% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>

@@ -29,6 +29,30 @@ class DatasetTypeDefinition:
 
 _DEFINITIONS = (
     DatasetTypeDefinition(
+        code="dangerous_goods",
+        display_name="Dangerous goods",
+        scope="department",
+        artifact_format="json",
+        current_schema_version=1,
+        encryption_required=True,
+        minimum_app_version=None,
+        builder_service="dangerous_goods",
+        validator_service="summary",
+        summary_schema=MappingProxyType(
+            {
+                "goods_count": "item_count",
+                "eri_card_count": "item_count",
+                "source_revision": "non_negative_integer",
+            }
+        ),
+        required=True,
+        supported_schema_versions=(1,),
+        minimum_supported_schema_version=1,
+        maximum_supported_schema_version=1,
+        feature_code="publications",
+        internal_only=False,
+    ),
+    DatasetTypeDefinition(
         code="department_hydrants",
         display_name="Department hydrants",
         scope="department",

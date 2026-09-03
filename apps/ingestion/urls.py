@@ -1,8 +1,25 @@
+# ruff: noqa: E501
 from django.urls import path
 
 from apps.ingestion import views
 
 urlpatterns = [
+    path(
+        "departments/<uuid:department_id>/dangerous-goods/",
+        views.dangerous_goods,
+        name="ingestion-dangerous-goods",
+    ),
+    path(
+        "departments/<uuid:department_id>/dangerous-goods/edit/",
+        views.dangerous_goods_modal,
+        name="ingestion-dangerous-goods-modal",
+    ),
+    path("departments/<uuid:department_id>/dangerous-goods/inspect/", views.dangerous_goods_inspect, name="ingestion-dangerous-goods-inspect"),
+    path(
+        "departments/<uuid:department_id>/dangerous-goods/imports/<uuid:batch_id>/apply/",
+        views.dangerous_goods_apply,
+        name="ingestion-dangerous-goods-apply",
+    ),
     path(
         "departments/<uuid:department_id>/imports/hydrants/",
         views.import_hydrants,

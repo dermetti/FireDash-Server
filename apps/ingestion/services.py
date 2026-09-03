@@ -19,13 +19,14 @@ from typing import cast
 from django.conf import settings
 from django.contrib.gis.geos import Point
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
 from apps.assignments.services import transfer_home
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
+from apps.ingestion.dangerous_goods import DangerousGoodsValidationError, validate_dangerous_goods
 from apps.ingestion.models import ImportBatch
 from apps.ingestion.parsers import (
     ImportValidationError,
@@ -40,6 +41,7 @@ from apps.organizations.models import Station, Vehicle
 from apps.organizations.services import create_station, create_vehicle
 from apps.personnel.models import Person
 from apps.personnel.services import create_person, set_commander_eligibility, update_person
+from apps.publications.models import DatasetScopeState, DatasetSourceRevision
 from apps.publications.services import mark_dirty
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitizerError, sanitize
@@ -71,6 +73,152 @@ class ImportError(ValueError):
 _INGESTION_BULK_BATCH_SIZE = 1_000
 
 logger = logging.getLogger(__name__)
+
+
+def _locked_dangerous_goods_scope(*, department) -> DatasetScopeState:
+    """Get the department source scope under the same lock used by publication."""
+    scope = (
+        DatasetScopeState.objects.select_for_update()
+        .filter(department=department, station__isnull=True, dataset_type_code="dangerous_goods")
+        .first()
+    )
+    if scope is not None:
+        return scope
+    candidate = DatasetScopeState(
+        department=department, station=None, dataset_type_code="dangerous_goods"
+    )
+    candidate.full_clean()
+    try:
+        with transaction.atomic():
+            candidate.save()
+    except IntegrityError:
+        pass
+    return DatasetScopeState.objects.select_for_update().get(
+        department=department, station__isnull=True, dataset_type_code="dangerous_goods"
+    )
+
+
+def create_dangerous_goods_preview(
+    *, actor, department, filename: str, payload: bytes
+) -> ImportBatch:
+    """Validate and stage one curated file without changing the active source."""
+    require_department_admin(actor, department)
+    batch = ImportBatch(
+        domain=ImportBatch.Domain.DANGEROUS_GOODS,
+        department=department,
+        import_format=ImportBatch.Format.JSON,
+        import_mode=ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT,
+        original_filename=filename[:255],
+        actor=actor,
+        staging_key=f"pending-{uuid.uuid4()}.source",
+    )
+    try:
+        _, summary = validate_dangerous_goods(payload)
+        if len(payload) > settings.MAX_STRUCTURED_IMPORT_BYTES:
+            raise ImportError("Import exceeds the configured source size limit.")
+    except (DangerousGoodsValidationError, ImportError) as error:
+        batch.status = ImportBatch.Status.INVALID
+        batch.upload_sha256 = hashlib.sha256(payload).hexdigest()
+        batch.validation_errors = [{"code": "invalid_dangerous_goods", "message": str(error)}]
+        batch.validation_summary = {"error_count": 1}
+        batch.save()
+        return batch
+    with transaction.atomic():
+        scope = _locked_dangerous_goods_scope(department=department)
+        key, digest = stage_upload(batch_id=batch.id, payload=payload)
+        batch.staging_key, batch.upload_sha256 = key, digest
+        batch.baseline = {"source_revision": scope.source_revision}
+        batch.normalized_intent = {"summary": summary}
+        batch.validation_summary = {"error_count": 0, **summary, "byte_size": len(payload)}
+        batch.status, batch.previewed_at = ImportBatch.Status.PREVIEW_READY, timezone.now()
+        batch.add_count = 1
+        batch.save()
+    record_event(
+        action="ingestion.dangerous_goods_preview_created",
+        actor_user=actor,
+        department=department,
+        target_type="import_batch",
+        target_uuid=batch.id,
+        metadata={"source_sha256": batch.upload_sha256, "byte_size": len(payload), **summary},
+    )
+    return batch
+
+
+@transaction.atomic
+def apply_dangerous_goods_preview(*, actor, batch_id) -> ImportBatch:
+    """Atomically install a still-current curated source, retaining exact bytes."""
+    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    require_department_admin(actor, batch.department)
+    if (
+        batch.domain != ImportBatch.Domain.DANGEROUS_GOODS
+        or batch.status != ImportBatch.Status.PREVIEW_READY
+    ):
+        raise ImportError("Dangerous-goods import batch is not confirmable.")
+    try:
+        payload = read_staged(key=batch.staging_key)
+    except ImportStorageError as error:
+        _fail_batch(batch, "staging_unavailable")
+        raise ImportError("Preview source is unavailable; create a new preview.") from error
+    if hashlib.sha256(payload).hexdigest() != batch.upload_sha256:
+        _fail_batch(batch, "staging_hash_mismatch")
+        raise ImportError("Preview source changed; create a new preview.")
+    try:
+        _, summary = validate_dangerous_goods(payload)
+    except DangerousGoodsValidationError as error:
+        raise ImportError(str(error)) from error
+    scope = _locked_dangerous_goods_scope(department=batch.department)
+    if batch.baseline.get("source_revision") != scope.source_revision:
+        raise ImportError("Dangerous-goods source changed; re-preview is required.")
+    current = DatasetSourceRevision.objects.filter(
+        scope_state=scope, source_revision=scope.source_revision
+    ).first()
+    if current is not None and current.sha256 == batch.upload_sha256:
+        batch.status, batch.applied_at, batch.unchanged_count = (
+            ImportBatch.Status.APPLIED,
+            timezone.now(),
+            1,
+        )
+        batch.validation_summary = {
+            "error_count": 0,
+            "no_op": True,
+            **summary,
+            "byte_size": len(payload),
+        }
+        batch.save(update_fields=("status", "applied_at", "unchanged_count", "validation_summary"))
+        record_event(
+            action="ingestion.dangerous_goods_noop",
+            actor_user=actor,
+            department=batch.department,
+            target_type="import_batch",
+            target_uuid=batch.id,
+            metadata={"source_sha256": batch.upload_sha256, "byte_size": len(payload), **summary},
+        )
+        return batch
+    DatasetSourceRevision.objects.create(
+        scope_state=scope,
+        source_revision=scope.source_revision + 1,
+        sha256=batch.upload_sha256,
+        byte_size=len(payload),
+        import_summary=summary,
+        plaintext=payload,
+        created_by=actor,
+    )
+    mark_dirty(department=batch.department, dataset_type_code="dangerous_goods", actor=actor)
+    batch.status, batch.applied_at, batch.add_count = ImportBatch.Status.APPLIED, timezone.now(), 1
+    batch.affected_scopes = [{"dataset_type_code": "dangerous_goods", "station_id": None}]
+    batch.validation_summary = {"error_count": 0, **summary, "byte_size": len(payload)}
+    batch.save(
+        update_fields=("status", "applied_at", "add_count", "affected_scopes", "validation_summary")
+    )
+    record_event(
+        action="ingestion.dangerous_goods_applied",
+        actor_user=actor,
+        department=batch.department,
+        target_type="import_batch",
+        target_uuid=batch.id,
+        metadata={"source_sha256": batch.upload_sha256, "byte_size": len(payload), **summary},
+    )
+    return batch
 
 
 def _sanitize_log_filename(filename: str) -> str:

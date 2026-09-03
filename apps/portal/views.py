@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 from dataclasses import dataclass
 
 from django.contrib import messages
@@ -419,14 +420,14 @@ def system_departments(request: HttpRequest) -> HttpResponse:
     page_query = request.GET.copy()
     page_query.pop("page", None)
     context = {
-            "departments": page.object_list,
-            "form": form,
-            "page": page,
-            "total_count": paginator.count,
-            "query": query,
-            "selected_status": status,
-            "page_query": page_query.urlencode(),
-            "department_statuses": Department.Status.choices,
+        "departments": page.object_list,
+        "form": form,
+        "page": page,
+        "total_count": paginator.count,
+        "query": query,
+        "selected_status": status,
+        "page_query": page_query.urlencode(),
+        "department_statuses": Department.Status.choices,
     }
     if request.headers.get("HX-Request") == "true":
         return render(request, "portal/_system_department_results.html", context)
@@ -547,15 +548,15 @@ def system_audit(request: HttpRequest) -> HttpResponse:
         AuditEvent.objects.order_by("action").values_list("action", flat=True).distinct()[:100]
     )
     context = {
-            "events": page.object_list,
-            "page": page,
-            "total_count": paginator.count,
-            "departments": Department.objects.order_by("name", "id"),
-            "actions": actions,
-            "query": query,
-            "selected_department": department_id or "__all__",
-            "selected_action": action,
-            "page_query": page_query.urlencode(),
+        "events": page.object_list,
+        "page": page,
+        "total_count": paginator.count,
+        "departments": Department.objects.order_by("name", "id"),
+        "actions": actions,
+        "query": query,
+        "selected_department": department_id or "__all__",
+        "selected_action": action,
+        "page_query": page_query.urlencode(),
     }
     if request.headers.get("HX-Request") == "true":
         return render(request, "portal/_system_audit_results.html", context)
@@ -742,18 +743,18 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
     page_query.pop("page", None)
     current_user_id = request.user.id
     context = {
-            "department": department,
-            "administrators": _current_administrator_rows(
-                users=page.object_list,
-                department_admin_actions_allowed=effective_memberships.count() > 1,
-            ),
-            "page": page,
-            "total_count": paginator.count,
-            "stations": department.stations.filter(active=True).order_by("name"),
-            "query": query,
-            "scope_filter": scope_filter,
-            "current_user_id": current_user_id,
-            "page_query": page_query.urlencode(),
+        "department": department,
+        "administrators": _current_administrator_rows(
+            users=page.object_list,
+            department_admin_actions_allowed=effective_memberships.count() > 1,
+        ),
+        "page": page,
+        "total_count": paginator.count,
+        "stations": department.stations.filter(active=True).order_by("name"),
+        "query": query,
+        "scope_filter": scope_filter,
+        "current_user_id": current_user_id,
+        "page_query": page_query.urlencode(),
     }
     if request.headers.get("HX-Request") == "true":
         return render(request, "portal/_department_administrator_results.html", context)
@@ -1018,6 +1019,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     # Keep this gateway read-only: the cheap authoritative counts help an
     # administrator choose a module without duplicating CRUD controls here.
     from apps.personnel.models import Person
+    from apps.publications.models import DatasetScopeState
     from apps.publications.state import dataset_publication_summaries
     from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 
@@ -1028,6 +1030,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
             "station_personnel",
             "department_fire_plans",
             "department_klgv_plans",
+            "dangerous_goods",
         },
     )
 
@@ -1045,6 +1048,20 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
         return values
 
     modules = (
+        module(
+            dataset_type_code="dangerous_goods",
+            name="Dangerous Goods",
+            description="Curated ADR dangerous-goods and ERI card reference data.",
+            count=DatasetScopeState.objects.filter(
+                department=department, dataset_type_code="dangerous_goods"
+            )
+            .values_list("source_revision", flat=True)
+            .first()
+            or 0,
+            count_label="source revision",
+            icon="warning",
+            url=reverse("ingestion-dangerous-goods", args=(department.id,)),
+        ),
         module(
             dataset_type_code="department_phonebook",
             name="Phonebook",
@@ -1445,14 +1462,14 @@ def department_audit(request: HttpRequest, department_id) -> HttpResponse:
     page_query = request.GET.copy()
     page_query.pop("page", None)
     context = {
-            "department": department,
-            "events": page.object_list,
-            "page": page,
-            "total_count": paginator.count,
-            "stations": stations,
-            "selected_station": station_id or "__all__",
-            "query": query,
-            "page_query": page_query.urlencode(),
+        "department": department,
+        "events": page.object_list,
+        "page": page,
+        "total_count": paginator.count,
+        "stations": stations,
+        "selected_station": station_id or "__all__",
+        "query": query,
+        "page_query": page_query.urlencode(),
     }
     if request.headers.get("HX-Request") == "true":
         return render(request, "portal/_department_audit_results.html", context)
