@@ -23,7 +23,6 @@ from apps.publications.builders import (
     validate_built_summary,
 )
 from apps.publications.document_artifacts import release_terminal_document_artifact_references
-from apps.publications.feature_services import FeatureDisabledError, require_feature
 from apps.publications.manifests import revoke_publication_dataset_key_grants
 from apps.publications.models import (
     DatasetPublication,
@@ -77,11 +76,6 @@ def _validate_scope(*, department, station, dataset_type_code: str) -> None:
         raise PublicationError(str(error)) from error
     if station is not None and station.department_id != department.id:
         raise PublicationError("Station must belong to the scope department.")
-    try:
-        definition = get_dataset_definition(dataset_type_code)
-        require_feature(department=department, feature_code=definition.feature_code)
-    except (DatasetRegistryError, FeatureDisabledError) as error:
-        raise PublicationError(str(error)) from error
 
 
 def _locked_scope(*, department, station, dataset_type_code: str) -> DatasetScopeState:

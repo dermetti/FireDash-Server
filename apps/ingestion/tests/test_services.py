@@ -9,6 +9,8 @@ import pytest
 from django.conf import settings
 from django.contrib.gis.geos import Point
 from django.db import close_old_connections, connection
+from django.test import Client
+from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.assignments.models import PersonnelStationAssignment
@@ -659,11 +661,8 @@ def test_fire_plan_external_identifier_address_change_is_update_but_address_iden
 
 
 @pytest.mark.django_db(transaction=True)
-def test_single_and_batch_klgv_inputs_share_normal_publication_scope(context, sanitizer_stub):
+def test_disabled_klgv_feature_still_prepares_normal_publication_scope(context, sanitizer_stub):
     actor, department = context
-    set_department_feature(
-        actor=actor, department=department, feature_code="klgv_plans", enabled=True
-    )
     source_pdf = b"test-klgv-pdf"
     single = create_single_preview(
         actor=actor,
@@ -687,6 +686,38 @@ def test_single_and_batch_klgv_inputs_share_normal_publication_scope(context, sa
         ).source_revision
         == 1
     )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_disabled_klgv_apply_preview_completes_without_server_error(context, sanitizer_stub):
+    actor, department = context
+    batch = create_single_preview(
+        actor=actor,
+        department=department,
+        domain=ImportBatch.Domain.KLGV_PLANS,
+        values={
+            "external_identifier": "KLGV-disabled",
+            "object_name": "Prepared plan",
+            "address": "Garden 1",
+            "postal_code": "22041",
+            "city": "Hamburg",
+        },
+        pdf_bytes=b"test-klgv-disabled-pdf",
+    )
+
+    client = Client()
+    client.force_login(actor)
+    response = client.post(reverse("ingestion-preview", args=(department.id, batch.id)))
+
+    assert response.status_code == 302
+    batch.refresh_from_db()
+    assert batch.status == batch.Status.APPLIED
+    assert KlgvPlan.objects.filter(
+        department=department, external_identifier="KLGV-disabled"
+    ).count() == 1
+    assert DatasetScopeState.objects.get(
+        department=department, dataset_type_code="department_klgv_plans"
+    ).source_revision == 1
 
 
 @pytest.mark.django_db(transaction=True)

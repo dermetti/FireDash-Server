@@ -83,6 +83,21 @@ fi
 pg_as database_owner "$OWNER_PW" "SELECT 1 FROM pg_extension WHERE extname='postgis'" | grep -q 1 && ok "postgis installed" || fail "postgis missing"
 pg_as database_owner "$OWNER_PW" "SELECT 1 FROM pg_extension WHERE extname='btree_gist'" | grep -q 1 && ok "btree_gist installed" || fail "btree_gist missing"
 
+# roles.sql reapplies table privileges only for database_owner-owned FireDash
+# relations. The PostGIS compatibility relations must stay extension-owned so
+# that reapplying grants does not attempt an invalid ownership-crossing GRANT.
+for relation in spatial_ref_sys geometry_columns geography_columns; do
+    relation_owner=$(pg_as database_owner "$OWNER_PW" "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'public.$relation'::regclass")
+    [[ $relation_owner != database_owner && -n $relation_owner ]] \
+        && ok "PostGIS relation $relation remains extension-owned" \
+        || fail "PostGIS relation $relation unexpectedly owned by database_owner"
+done
+
+runtime_data_access=$(pg_as database_owner "$OWNER_PW" "SELECT has_table_privilege('application_runtime', 'public.organizations_department', 'SELECT') AND has_table_privilege('application_runtime', 'public.organizations_department', 'INSERT') AND has_table_privilege('application_runtime', 'public.organizations_department', 'UPDATE') AND has_table_privilege('application_runtime', 'public.organizations_department', 'DELETE')")
+[[ $runtime_data_access == t ]] && ok "runtime retains application-table DML" || fail "runtime lost application-table DML"
+backup_data_access=$(pg_as database_owner "$OWNER_PW" "SELECT has_table_privilege('backup_role', 'public.organizations_department', 'SELECT')")
+[[ $backup_data_access == t ]] && ok "backup retains application-table SELECT" || fail "backup lost application-table SELECT"
+
 # HBA verification needs cluster-level visibility (pg_hba_file_rules), which
 # database_owner lacks by design. Use the postgres OS identity, and report an
 # introspection failure distinctly from a bad-auth failure.

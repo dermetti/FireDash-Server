@@ -291,6 +291,14 @@ def test_klgv_v2_delivery_is_discoverable_and_client_decryptable(klgv_delivery_c
     with pytest.raises(InvalidTag):
         AESGCM(cek).decrypt(base64.b64decode(document["nonce"]), ciphertext[:-1] + b"x", None)
 
+    # A previously-ready grant is not a capability that outlives feature
+    # disablement; both generation and individual artifact endpoints stay
+    # behind the current delivery authorization decision.
+    set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=False)
+    assert client.get(f"/api/v1/tablet/document-generations/{publication.id}/manifest", **auth).status_code == 403
+    assert client.get(download, **auth).status_code == 403
+    set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=True)
+
     request_manifest(installation=installation)
     assert process_next_signed_manifest() is not None
     discovered = client.get("/api/v1/tablet/manifest", **auth)
@@ -348,6 +356,9 @@ def test_klgv_v2_delivery_is_discoverable_and_client_decryptable(klgv_delivery_c
 def test_klgv_normal_lifecycle_rollback_and_feature_gate(klgv_delivery_context):
     user, department, accepted, installation, _, credential = klgv_delivery_context
     DepartmentMembership.objects.create(user=user, department=department, created_by=user)
+    # Preparation is deliberately independent from rollout exposure. KLGV is
+    # required when enabled, but starts disabled for this department.
+    set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=False)
     _klgv_plan(user=user, department=department, accepted=accepted, identifier="A", pdf=b"PDF A")
     mark_dirty(
         actor=user, department=department, dataset_type_code="department_klgv_plans"
@@ -365,10 +376,29 @@ def test_klgv_normal_lifecycle_rollback_and_feature_gate(klgv_delivery_context):
     assert first.status == first.Status.PUBLISHED
     assert first.schema_version == 2
 
-    request_manifest(installation=installation)
-    assert process_next_signed_manifest() is not None
     client = Client()
     auth = {"HTTP_AUTHORIZATION": f"Bearer {credential}"}
+    request_manifest(installation=installation)
+    assert process_next_signed_manifest() is not None
+    assert all(
+        entry["type"] != "department_klgv_plans"
+        for entry in client.get("/api/v1/tablet/manifest", **auth).json()["datasets"]
+    )
+    # A CURRENT publication is not a delivery authorization while its feature
+    # is disabled, including the document-generation grant endpoint.
+    assert client.get(
+        f"/api/v1/tablet/document-generations/{first.id}/manifest", **auth
+    ).status_code == 403
+
+    publication_count = DatasetPublication.objects.filter(
+        department=department, dataset_type_code="department_klgv_plans"
+    ).count()
+    set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=True)
+    request_manifest(installation=installation)
+    assert process_next_signed_manifest() is not None
+    assert DatasetPublication.objects.filter(
+        department=department, dataset_type_code="department_klgv_plans"
+    ).count() == publication_count
     first_entry = next(
         entry
         for entry in client.get("/api/v1/tablet/manifest", **auth).json()["datasets"]
@@ -414,7 +444,9 @@ def test_klgv_normal_lifecycle_rollback_and_feature_gate(klgv_delivery_context):
 
     set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=False)
     request_manifest(installation=installation)
-    assert process_next_signed_manifest() is not None
+    # This may reuse the previously signed empty state; no build or delivery
+    # grant is needed to hide a disabled dataset.
+    process_next_signed_manifest()
     assert all(
         entry["type"] != "department_klgv_plans"
         for entry in client.get("/api/v1/tablet/manifest", **auth).json()["datasets"]

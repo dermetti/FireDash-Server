@@ -168,12 +168,17 @@ def _authorized_generation(*, publication, installation):
     """Reuse existing installation/assignment validation without v1 activation."""
     from apps.publications.manifests import authorized_publications
 
-    active_installation, vehicle, _ = authorized_publications(installation=installation)
+    active_installation, vehicle, publications = authorized_publications(installation=installation)
     if publication.dataset_type_code not in {
         "department_fire_plans", "department_klgv_plans"
     } or publication.station_id:
         raise ManifestError("Publication is not an eligible document generation.")
     if publication.department_id != active_installation.tablet.department_id or vehicle is None:
+        raise ManifestError("Installation is not authorized for this publication.")
+    # ``authorized_publications`` is the delivery boundary: it filters both
+    # scope and the department feature gate. A guessed document-generation URL
+    # must not bypass an otherwise hidden disabled dataset.
+    if publication.pk not in {candidate.pk for candidate in publications}:
         raise ManifestError("Installation is not authorized for this publication.")
     return active_installation
 

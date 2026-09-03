@@ -425,7 +425,7 @@ def test_registry_projection_trigger_enforces_scope_and_station_ownership(public
 
 
 @pytest.mark.django_db(transaction=True)
-def test_department_feature_gate_is_audited(publication_context):
+def test_department_feature_gate_is_audited_but_does_not_block_preparation(publication_context):
     admin, _, department, _, _ = publication_context
     feature = set_department_feature(
         actor=admin, department=department, feature_code="publications", enabled=False
@@ -434,8 +434,10 @@ def test_department_feature_gate_is_audited(publication_context):
     assert AuditEvent.objects.filter(
         action="publication.feature_updated", department=department
     ).exists()
-    with pytest.raises(PublicationError, match="has not enabled"):
-        mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
+    scope = mark_dirty(
+        department=department, dataset_type_code="department_hydrants", actor=admin
+    )
+    assert scope.source_revision == 1
 
 
 @pytest.mark.django_db(transaction=True)
