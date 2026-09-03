@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 from django import forms
 
 from apps.ingestion.models import ImportBatch
@@ -78,6 +79,23 @@ class ImportUploadForm(forms.Form):
         if rule is None or import_format not in rule["formats"] or mode not in rule["modes"]:
             raise forms.ValidationError("Selected domain, format, and mode are not compatible.")
         return cleaned
+
+
+class DangerousGoodsUploadForm(forms.Form):
+    """One curated JSON source; its contents are validated by the import service."""
+
+    source = forms.FileField(
+        label="Curated dangerous-goods JSON",
+        widget=forms.ClearableFileInput(
+            attrs={"class": "form-control", "accept": ".json,application/json"}
+        ),
+    )
+
+    def clean_source(self):
+        source = self.cleaned_data["source"]
+        if not source.name.lower().endswith(".json"):
+            raise forms.ValidationError("Upload the curated dangerous_goods_v1.json file.")
+        return source
 
 
 class FirePlanCoordinateReviewForm(forms.Form):

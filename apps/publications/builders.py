@@ -11,6 +11,7 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
+from apps.publications.models import DatasetSourceRevision
 from apps.publications.pdf_bundles import PdfBundleError, read_accepted_pdf
 from apps.publications.registry import DatasetTypeDefinition
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
@@ -42,6 +43,10 @@ def source_fingerprint(*, definition: DatasetTypeDefinition, department, station
 
 
 def source_fingerprint_for_payload(payload: dict[str, object]) -> str:
+    if set(payload) == {"_exact_source_sha256"} and isinstance(
+        payload["_exact_source_sha256"], str
+    ):
+        return payload["_exact_source_sha256"]
     return hashlib.sha256(_json_bytes(payload)).hexdigest()
 
 
@@ -502,6 +507,70 @@ def _artifact_phonebook(
     return _json_bytes(payload | {"source_revision": source_revision})
 
 
+def _dangerous_goods_source_payload(*, department, station) -> dict[str, object]:
+    if station is not None:
+        raise PublicationBuildError("Dangerous-goods source requires a department scope.")
+    source = (
+        DatasetSourceRevision.objects.filter(
+            scope_state__department=department,
+            scope_state__station__isnull=True,
+            scope_state__dataset_type_code="dangerous_goods",
+        )
+        .order_by("-source_revision")
+        .first()
+    )
+    if source is None:
+        raise PublicationBuildError("Dangerous-goods source is unavailable.")
+    return {"_exact_source_sha256": source.sha256}
+
+
+def _dangerous_goods_source(
+    *, department, source_revision: int, source_snapshot
+) -> DatasetSourceRevision:
+    source = DatasetSourceRevision.objects.filter(
+        scope_state__department=department,
+        scope_state__station__isnull=True,
+        scope_state__dataset_type_code="dangerous_goods",
+        source_revision=source_revision,
+        sha256=source_snapshot.get("_exact_source_sha256")
+        if isinstance(source_snapshot, dict)
+        else None,
+    ).first()
+    if source is None:
+        raise PublicationBuildError("Frozen dangerous-goods source is unavailable.")
+    return source
+
+
+def _build_dangerous_goods(*, department, station, source_revision: int) -> dict[str, object]:
+    if station is not None:
+        raise PublicationBuildError("Dangerous-goods builder requires a department scope.")
+    source = DatasetSourceRevision.objects.filter(
+        scope_state__department=department,
+        scope_state__station__isnull=True,
+        scope_state__dataset_type_code="dangerous_goods",
+        source_revision=source_revision,
+    ).first()
+    if source is None:
+        raise PublicationBuildError("Frozen dangerous-goods source is unavailable.")
+    return {
+        "goods_count": int(source.import_summary["goods_count"]),
+        "eri_card_count": int(source.import_summary["eri_card_count"]),
+        "source_revision": source_revision,
+    }
+
+
+def _artifact_dangerous_goods(
+    *, department, station, source_revision: int, source_snapshot=None
+) -> bytes:
+    if station is not None:
+        raise PublicationBuildError("Dangerous-goods artifact requires a department scope.")
+    return bytes(
+        _dangerous_goods_source(
+            department=department, source_revision=source_revision, source_snapshot=source_snapshot
+        ).plaintext
+    )
+
+
 SOURCE_BUILDERS.update(
     {
         "department_hydrants": _hydrant_source_payload,
@@ -523,6 +592,12 @@ ARTIFACT_BUILDERS.update(
         "test_department_incidents": lambda **_: _json_bytes({"incidents": []}),
     }
 )
+
+# Defined after the ordinary JSON builders because this source is raw retained
+# bytes rather than a canonical ORM projection.
+BUILDERS["dangerous_goods"] = _build_dangerous_goods
+SOURCE_BUILDERS["dangerous_goods"] = _dangerous_goods_source_payload
+ARTIFACT_BUILDERS["dangerous_goods"] = _artifact_dangerous_goods
 
 
 def validate_built_summary(*, definition: DatasetTypeDefinition, summary: Any) -> None:
@@ -547,6 +622,7 @@ def build_change_summary(
         "department_klgv_plans": ("document_count", "total_accepted_bytes", "total_pages"),
         "department_phonebook": ("entry_count",),
         "station_phonebook": ("entry_count",),
+        "dangerous_goods": ("goods_count", "eri_card_count"),
     }
     fields = fields_by_type.get(definition.code, ("item_count",))
     source_revision = current.get("source_revision")

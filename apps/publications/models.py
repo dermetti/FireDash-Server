@@ -88,6 +88,36 @@ class DatasetScopeState(models.Model):
             raise ValidationError({"station": "Station must belong to the scope department."})
 
 
+class DatasetSourceRevision(models.Model):
+    """Immutable raw source retained for datasets authored outside FireDash."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    scope_state = models.ForeignKey(
+        DatasetScopeState, on_delete=models.PROTECT, related_name="source_revisions"
+    )
+    source_revision = models.PositiveBigIntegerField()
+    sha256 = models.CharField(max_length=64)
+    byte_size = models.PositiveBigIntegerField()
+    import_summary = models.JSONField(default=dict)
+    plaintext = models.BinaryField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="created_dataset_source_revisions",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("scope_state", "source_revision"), name="unique_dataset_source_revision"
+            )
+        ]
+        indexes = [models.Index(fields=("scope_state", "-source_revision"))]
+
+
 class DatasetPublication(models.Model):
     class ArtifactStatus(models.TextChoices):
         PENDING = "PENDING", "Pending"

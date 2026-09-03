@@ -14,6 +14,7 @@ class ImportBatch(models.Model):
         KLGV_PLANS = "klgv_plans", "KLGV plans"
         STATION_VEHICLES = "station_vehicles", "Stations and vehicles"
         PHONEBOOK = "phonebook", "Phonebook"
+        DANGEROUS_GOODS = "dangerous_goods", "Dangerous goods"
 
     class Format(models.TextChoices):
         CSV = "csv", "CSV"

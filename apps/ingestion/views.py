@@ -1,4 +1,7 @@
-from typing import cast
+# ruff: noqa: E501
+import json
+import unicodedata
+from typing import Any, cast
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -11,6 +14,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.authorization.services import require_department_admin
 from apps.ingestion.forms import (
+    DangerousGoodsUploadForm,
     FirePlanCoordinateReviewForm,
     ImportUploadForm,
     StationVehicleResolutionForm,
@@ -18,9 +22,11 @@ from apps.ingestion.forms import (
 from apps.ingestion.models import ImportBatch
 from apps.ingestion.services import (
     ImportError,
+    apply_dangerous_goods_preview,
     apply_preview,
     approve_all_review_decisions,
     cancel_preview,
+    create_dangerous_goods_preview,
     create_preview,
     phonebook_review_context,
     review_context,
@@ -31,12 +37,237 @@ from apps.ingestion.services import (
     set_station_vehicle_resolution,
 )
 from apps.organizations.models import Department, Station
+from apps.publications.models import DatasetScopeState, DatasetSourceRevision
 
 
 def _department(request: HttpRequest, department_id) -> Department:
     department = get_object_or_404(Department, pk=department_id)
     require_department_admin(request.user, department)
     return department
+
+
+def _dangerous_goods_context(*, department: Department) -> dict[str, object]:
+    scope = (
+        DatasetScopeState.objects.filter(
+            department=department, station__isnull=True, dataset_type_code="dangerous_goods"
+        )
+        .select_related("current_published_publication", "latest_built_publication")
+        .first()
+    )
+    source = None
+    document: dict[str, Any] = {}
+    if scope is not None and scope.source_revision:
+        source = DatasetSourceRevision.objects.filter(
+            scope_state=scope, source_revision=scope.source_revision
+        ).first()
+    if source is not None:
+        try:
+            document = json.loads(bytes(source.plaintext).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):  # Retained sources were validated.
+            document = {}
+    metadata = document.get("metadata", {}) if isinstance(document.get("metadata"), dict) else {}
+    goods = document.get("goods", []) if isinstance(document.get("goods"), list) else []
+    languages = sorted(
+        {
+            language
+            for good in goods
+            if isinstance(good, dict) and isinstance(good.get("names"), dict)
+            for language in good["names"].get("official", {})
+            if isinstance(language, str)
+        }
+    )
+    sources = document.get("sources", []) if isinstance(document.get("sources"), list) else []
+    source_by_id = {item.get("id"): item for item in sources if isinstance(item, dict)}
+    bam, ericards = source_by_id.get("bam", {}), source_by_id.get("ericards", {})
+    return {
+        "scope": scope,
+        "source": source,
+        "dangerous_goods_document": document,
+        "dangerous_goods": {
+            "adr_edition": metadata.get("adr_edition") or bam.get("edition") or "—",
+            "goods_count": len(goods),
+            "eri_card_count": len(document.get("eri_cards", {}))
+            if isinstance(document.get("eri_cards"), dict)
+            else 0,
+            "eri_default_count": len(document.get("eri_defaults", {}))
+            if isinstance(document.get("eri_defaults"), dict)
+            else 0,
+            "languages": languages,
+            "ericards_version": metadata.get("ericards_version") or ericards.get("version") or "—",
+            "ericards_date": metadata.get("ericards_database_date")
+            or ericards.get("database_date")
+            or "—",
+        },
+    }
+
+
+def _dangerous_goods_preview_details(document: dict[str, Any]) -> dict[str, object]:
+    metadata = document.get("metadata", {}) if isinstance(document.get("metadata"), dict) else {}
+    goods = document.get("goods", []) if isinstance(document.get("goods"), list) else []
+    sources = document.get("sources", []) if isinstance(document.get("sources"), list) else []
+    source_by_id = {item.get("id"): item for item in sources if isinstance(item, dict)}
+    bam, ericards = source_by_id.get("bam", {}), source_by_id.get("ericards", {})
+    return {
+        "languages": sorted(
+            {
+                language
+                for good in goods
+                if isinstance(good, dict) and isinstance(good.get("names"), dict)
+                for language in good["names"].get("official", {})
+                if isinstance(language, str)
+            }
+        ),
+        "eri_default_count": len(document.get("eri_defaults", {}))
+        if isinstance(document.get("eri_defaults"), dict)
+        else 0,
+        "adr_edition": metadata.get("adr_edition") or bam.get("edition") or "—",
+        "ericards_version": metadata.get("ericards_version") or ericards.get("version") or "—",
+        "ericards_date": metadata.get("ericards_database_date")
+        or ericards.get("database_date")
+        or "—",
+    }
+
+
+@login_required
+@require_http_methods(["GET"])
+def dangerous_goods(request: HttpRequest, department_id) -> HttpResponse:
+    department = _department(request, department_id)
+    return render(
+        request,
+        "ingestion/dangerous_goods.html",
+        {"department": department} | _dangerous_goods_context(department=department),
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def dangerous_goods_modal(request: HttpRequest, department_id) -> HttpResponse:
+    department = _department(request, department_id)
+    context = {"department": department} | _dangerous_goods_context(department=department)
+    if request.method == "GET":
+        return render(
+            request,
+            "ingestion/_dangerous_goods_modal.html",
+            context | {"form": DangerousGoodsUploadForm()},
+        )
+    form = DangerousGoodsUploadForm(request.POST, request.FILES)
+    if not form.is_valid():
+        return render(
+            request, "ingestion/_dangerous_goods_modal.html", context | {"form": form}, status=400
+        )
+    uploaded = form.cleaned_data["source"]
+    payload = uploaded.read()
+    batch = create_dangerous_goods_preview(
+        actor=request.user, department=department, filename=uploaded.name, payload=payload
+    )
+    current = context["source"]
+    return render(
+        request,
+        "ingestion/_dangerous_goods_modal.html",
+        context
+        | {
+            "form": form,
+            "batch": batch,
+            "is_noop": bool(current and current.sha256 == batch.upload_sha256),
+            "preview_details": _dangerous_goods_preview_details(json.loads(payload.decode("utf-8")))
+            if batch.status == ImportBatch.Status.PREVIEW_READY
+            else {},
+        },
+        status=400 if batch.status == ImportBatch.Status.INVALID else 200,
+    )
+
+
+@login_required
+@require_http_methods(["POST"])
+def dangerous_goods_apply(request: HttpRequest, department_id, batch_id) -> HttpResponse:
+    department = _department(request, department_id)
+    try:
+        batch = apply_dangerous_goods_preview(actor=request.user, batch_id=batch_id)
+    except ImportError as error:
+        batch = get_object_or_404(ImportBatch, pk=batch_id, department=department)
+        context = {"department": department} | _dangerous_goods_context(department=department)
+        return render(
+            request,
+            "ingestion/_dangerous_goods_modal.html",
+            context | {"batch": batch, "modal_error": str(error)},
+            status=409,
+        )
+    messages.success(request, "Dangerous-goods source applied. Publication has been scheduled.")
+    if request.headers.get("HX-Request") == "true":
+        response = HttpResponse("")
+        response["HX-Trigger"] = (
+            '{"dangerous-goods-modal-close": {}, "dangerous-goods-status-refresh": {}}'
+        )
+        return response
+    return redirect("ingestion-dangerous-goods", department_id=department.id)
+
+
+def _dg_normalize(value: str) -> str:
+    value = "".join(ch for ch in unicodedata.normalize("NFKD", value) if not unicodedata.combining(ch))
+    return " ".join("".join(ch if ch.isalnum() else " " for ch in value.casefold()).split())
+
+
+def _dg_placards(placards: list[Any]) -> list[str]:
+    rendered = []
+    for placard in placards:
+        if isinstance(placard, str):
+            rendered.append(placard)
+        elif isinstance(placard, dict) and placard.get("kind") == "conditional":
+            rendered.append(f"bedingt: {placard.get('code')}")
+        elif isinstance(placard, dict) and placard.get("kind") == "variable":
+            rendered.append(
+                "variabel: "
+                + ", ".join(placard["candidate_codes"])
+                + f" ({placard['selection_basis']})"
+            )
+        elif isinstance(placard, dict) and placard.get("kind") == "none":
+            rendered.append("keine")
+        elif isinstance(placard, dict) and placard.get("kind") == "reference":
+            rendered.append(f"Verweis: {placard['reference']}")
+    return rendered
+
+
+def _dg_matches(document: dict[str, Any], query: str) -> list[dict[str, Any]]:
+    normalized = _dg_normalize(query)
+    digits = "".join(ch for ch in query if ch.isdigit())
+    results = []
+    for good in document.get("goods", []):
+        names = good.get("names", {}) if isinstance(good, dict) else {}
+        official = names.get("official", {}) if isinstance(names, dict) else {}
+        aliases = names.get("aliases", {}) if isinstance(names, dict) else {}
+        values = list(official.values()) + [item for items in aliases.values() for item in items]
+        un_number = str(good.get("un_number", ""))
+        if not (
+            (digits and un_number == digits.zfill(4))
+            or any(normalized in _dg_normalize(str(value)) for value in values)
+        ):
+            continue
+        result = dict(good)
+        eri_default = document.get("eri_defaults", {}).get(un_number)
+        eri_codes = good.get("eri", []) or ([eri_default] if eri_default else [])
+        result["inspection_eri_default"] = eri_default
+        result["inspection_eri_cards"] = [
+            (code, document.get("eri_cards", {}).get(code, [])) for code in eri_codes
+        ]
+        result["inspection_placards"] = _dg_placards((good.get("adr", {}) or {}).get("placards", []))
+        result["inspection_aliases"] = [
+            alias for items in aliases.values() for alias in items
+        ]
+        result["inspection_title"] = official.get("de") or official.get("en") or next(
+            iter(official.values()), "—"
+        )
+        results.append(result)
+    return results[:50]
+
+
+@login_required
+@require_http_methods(["GET"])
+def dangerous_goods_inspect(request: HttpRequest, department_id) -> HttpResponse:
+    department = _department(request, department_id)
+    context = {"department": department} | _dangerous_goods_context(department=department)
+    query = request.GET.get("q", "").strip()
+    context |= {"query": query, "results": _dg_matches(context["dangerous_goods_document"], query) if query else []}
+    return render(request, "ingestion/_dangerous_goods_inspect_modal.html", context)
 
 
 def _imports_url(*, department: Department, domain: str) -> str:

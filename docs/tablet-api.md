@@ -357,6 +357,65 @@ Each decrypted JSON artifact has this stable shape:
 only entries owned by that exact Station. Clients present these two complete datasets together
 as one logical Phonebook. They must not assume either dataset includes the other scope.
 
+### Dangerous goods (`dangerous_goods`, `artifact_format: json`)
+
+`dangerous_goods` is a required, department-scoped schema-1 dataset. Its manifest
+entry uses `scope:"department"`, `schema_version:1`, `required:true`, and
+`artifact_format:"json"`; the HPKE scope binding has the owning `department_id`
+and `station_id:null`. It uses the normal encrypted artifact and generic download
+URL shown above—there is no dangerous-goods-specific Tablet endpoint.
+
+The decrypted plaintext is the exact UTF-8 JSON byte sequence validated and
+retained from the curated source file. It is not reserialized, normalized, or
+compressed by FireDash. A representative compact document is:
+
+```json
+{
+  "dataset_type":"dangerous_goods",
+  "schema_version":1,
+  "metadata":{"publication_profile":"compact","record_count":1,"eri_card_count":1,"default_name_language":"de","placard_catalog":{"scheme":"adr","delivery":"bundled_with_tablet_app","available_assets":{"3":"...","7A":"...","7B":"...","7C":"..."},"special_values":{"7X":{"kind":"variable","candidate_codes":["7A","7B","7C"],"selection_basis":"transport_index_and_dose_rate"}}}},
+  "goods":[{"id":"bam-example-1","un_number":"1203","names":{"official":{"de":"BENZIN","en":"GASOLINE","fr":"ESSENCE"},"aliases":{"de":["MOTORBENZIN"]}},"adr":{"hazard_identification_number":"33","class":"3","classification_code":"F1","packing_group":"II","placards":["3",{"kind":"conditional","code":"6.1"}]},"eri":["3-01"]}],
+  "eri_defaults":{"1203":"3-01"},
+  "eri_cards":{"3-01":[["title","BENZIN"],["heading","Gefahr"],["item","Geeignete Maßnahmen treffen."]]},
+  "sources":[{"id":"bam","provider":"BAM","dataset":"ADR","source_file":"...","sha256":"...","source_url":"...","legal":{"legal_url":"...","license":{},"attribution":{},"processing":{}}},{"id":"ericards","provider":"Cefic","dataset":"ERI","source_file":"...","sha256":"...","source_url":"...","legal":{"terms_url":"...","guidance_url":"...","disclaimer_url":"...","attribution":{},"reproduction":{}}}]
+}
+```
+
+`metadata.publication_profile` is `"compact"`. `record_count` and
+`eri_card_count` describe the complete `goods` list and `eri_cards` map.
+Metadata/source provenance is supplied for interpretation and audit; a client
+uses the document's `dataset_type` and `schema_version` to select this parser.
+
+Each good has a stable source `id`, a four-digit string `un_number`, and
+`names.official`, a non-empty language-keyed map of source strings.
+`names.aliases`, when present, is a language-keyed map of string arrays. Language
+keys are not limited to `de`, `en`, or `fr`; clients must preserve all supplied
+keys and source spelling/content. Search normalization is a client-side concern
+and must not mutate stored or displayed source text.
+
+`adr` may contain string fields `hazard_identification_number` (Gefahrnummer),
+`class`, `classification_code`, and `packing_group`, plus `placards`. `eri` is
+either absent/null/empty or a list of keys in `eri_cards`. `eri_defaults` maps a
+four-digit UN number to an ERI card key and is the fallback when the relevant
+Gefahrnummer/ERI selection is unavailable. Each `eri_cards` value is an ordered
+list of `[kind, text]` pairs: the first pair is `['title', text]`; remaining
+kinds are only `title`, `heading`, or `item`. Preserve both order and text.
+
+Placards are semantic data, not server-hosted artwork. An ordinary fixed
+placard is a string code such as `"3"` or `"6.1"`. A conditional placard is
+`{"kind":"conditional","code":"6.1"}`. The variable `7X` form is exactly
+`{"kind":"variable","candidate_codes":["7A","7B","7C"],"selection_basis":"transport_index_and_dose_rate"}`:
+select only among those candidates and never interpret or infer `7D`. A
+`{"kind":"none"}` placard specifies no placard. A
+`{"kind":"reference","reference":"ADR 5.2.2.1.12"}` placard carries ADR
+reference text rather than an invented label. Placard SVG assets are
+Tablet-bundled presentation resources; catalog asset filenames are not a
+required runtime server contract.
+
+Because this entry is `required:true`, a client that cannot understand
+`dangerous_goods` schema version 1 must reject the candidate manifest and must
+not activate it.
+
 ### Manifest Ed25519 verification
 
 Fetch the raw 32-byte public key named by `signing_key_version`. The endpoint

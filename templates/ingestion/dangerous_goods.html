@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Dangerous Goods{% endblock %}
+{% block content %}
+{% include "components/_page_header.html" with breadcrumb=department.name title="Dangerous Goods" description="Department-curated ADR dangerous-goods and ERI card reference data." %}
+<div class="d-flex justify-content-end gap-2 mb-3">{% if source %}<button class="btn btn-outline-primary" type="button" hx-get="{% url 'ingestion-dangerous-goods-inspect' department.id %}" hx-target="#dangerous-goods-modal-container">Inspect Data</button>{% endif %}<button class="btn btn-primary" type="button" hx-get="{% url 'ingestion-dangerous-goods-modal' department.id %}" hx-target="#dangerous-goods-modal-container">Edit Data</button></div>
+<section id="dangerous-goods-status" hx-get="{% url 'ingestion-dangerous-goods' department.id %}" hx-trigger="dangerous-goods-status-refresh from:body" hx-select="#dangerous-goods-status" hx-target="this" hx-swap="outerHTML">
+  {% include "ingestion/_dangerous_goods_status.html" %}
+</section>
+{% include "components/_htmx_action_modal.html" with modal_container_id="dangerous-goods-modal-container" %}
+<script>(function(){document.body.addEventListener("dangerous-goods-modal-close",function(){var el=document.querySelector("#dangerous-goods-modal-container .modal");var modal=el&&bootstrap.Modal.getInstance(el);if(modal)modal.hide();});})();</script>
+{% endblock %}
