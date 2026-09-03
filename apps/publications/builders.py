@@ -193,42 +193,6 @@ def _build_phonebook(*, department, station, source_revision: int) -> dict[str, 
     return {"entry_count": len(entries), "source_revision": source_revision}
 
 
-def _artifact_klgv_plans(
-    *, department, station, source_revision: int, source_snapshot=None
-) -> bytes:
-    if station is not None:
-        raise PublicationBuildError("KLGV plan artifact requires a department scope.")
-    output = BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        plans = (
-            source_snapshot
-            if source_snapshot is not None
-            else _klgv_source_payload(department=department, station=station)
-        ).get("klgv_plans", [])
-        for entry in plans:
-            try:
-                plan = KlgvPlan.objects.get(pk=entry["id"], department=department)
-            except KlgvPlan.DoesNotExist as error:
-                raise PublicationBuildError(
-                    "Accepted KLGV document is no longer available."
-                ) from error
-            try:
-                document = read_accepted_pdf(
-                    document_key=plan.path, accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT
-                )
-            except PdfBundleError as error:
-                raise PublicationBuildError("Accepted KLGV document is unavailable.") from error
-            if hashlib.sha256(document).hexdigest() != entry["sha256"]:
-                raise PublicationBuildError("Accepted KLGV document hash does not match metadata.")
-            archive_path = f"plans/{plan.id}.pdf"
-            archive.writestr(_zip_info(archive_path), document)
-        archive.writestr(
-            _zip_info("manifest.json"),
-            _json_bytes({"source_revision": source_revision, "klgv_plans": plans}),
-        )
-    return output.getvalue()
-
-
 def build_artifact(
     *,
     definition: DatasetTypeDefinition,
@@ -466,7 +430,6 @@ def _klgv_source_manifest(*, department, station) -> list[dict[str, object]]:
             "latitude": plan.location.y if plan.location is not None else None,
             "sha256": plan.sha256,
             "page_count": plan.page_count,
-            "path": f"plans/{plan.id}.pdf",
         }
         for plan in KlgvPlan.objects.filter(department=department, active=True).order_by("id")
     ]

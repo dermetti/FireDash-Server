@@ -167,9 +167,9 @@ _DEFINITIONS = (
         feature_code="publications",
         internal_only=False,
     ),
-    # A future document collection. It is deliberately internal and behind its
-    # own disabled-by-default feature until an approved KLGV source model/UI
-    # exists; its inclusion here proves additive optional v1 dataset evolution.
+    # Production KLGV document collection. Department-level feature control
+    # remains disabled by default so it is exposed only after a department has
+    # uploaded plans and explicitly enabled the rollout.
     DatasetTypeDefinition(
         code="department_klgv_plans",
         display_name="Department KLGV plans",
@@ -188,12 +188,12 @@ _DEFINITIONS = (
                 "source_revision": "non_negative_integer",
             }
         ),
-        required=False,
+        required=True,
         supported_schema_versions=(2,),
         minimum_supported_schema_version=2,
         maximum_supported_schema_version=2,
         feature_code="klgv_plans",
-        internal_only=True,
+        internal_only=False,
     ),
     # This deliberately has no production source data. It proves that a new
     # department-scoped type is carried by the registry projection, not SQL checks.

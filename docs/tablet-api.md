@@ -265,8 +265,12 @@ One iOS **Refresh tablet** action is this orchestration, not a combined API:
 4. On 202, retain verified cache; wait **at least** the supplied `Retry-After`
    duration and never retry earlier, then retry manifest.
 5. On 304, retain verified manifest/datasets.
-6. On 200, verify manifest, reconcile changed/missing artifacts, then commit
-   the complete verified candidate atomically.
+6. On 200, verify the manifest and reconcile its complete authoritative
+   dataset set: retain already-verified identical artifact identities; download
+   new, missing, or changed artifacts; and remove locally committed documents
+   absent from the new manifest only when the complete verified candidate
+   commits atomically. Any failed or incomplete reconciliation preserves the
+   previously committed generation.
 
 At app start/foreground, use normal check-in, configuration, then conditional
 manifest retrieval. Do not make automatic check-in an explicit lease top-up.
@@ -634,12 +638,11 @@ marks that entry `required:false`; retain existing verified data rather than
 activating an unverified replacement. The current production datasets
 `department_hydrants`, `department_fire_plans`, and `station_personnel` are all
 `required:true`, schema version 1, with no minimum app version.
-`department_klgv_plans` is a registered future-style department dataset with
-`required:false`, schema version 1, and `artifact_format:"zip"`; it is
-server-feature-disabled and not yet an iOS rendering requirement. It
-demonstrates the deliberately additive v1 rule: an older client verifies the
-complete manifest, ignores that unsupported optional entry, and continues with
-all supported required entries. The internal test-only dataset is not a
+`department_klgv_plans` is a department-scoped schema-2
+`document-manifest-v2` dataset. It is `required:true` whenever its department
+feature is enabled and the authoritative current publication is discoverable.
+The feature is disabled by default, so a department without an enabled KLGV
+rollout does not advertise the dataset. The internal test-only dataset is not a
 production client contract.
 
 ### `department_hydrants` (`artifact_format: geojson`)
@@ -720,15 +723,9 @@ normal signed tablet manifest contains this complete dataset descriptor:
 ```
 
 The descriptor is emitted only for the authoritative current publication.
-Route generically by `type`, `scope`, `schema_version`, and `artifact_format`;
-`department_klgv_plans` is also a schema-2 `document-manifest-v2` dataset.
-Its discovery descriptor has the same fields as Fire Plans but uses
-`/api/v1/tablet/document-generations/{publication_id}/manifest`. Its complete
-manifest uses `format: "document-generation-v2"`, `dataset_type:
-"department_klgv_plans"`, and each document has a `klgv_plan` object containing
-the frozen canonical KLGV metadata. Artifact, grant, signature, HPKE, AES-KW,
-AES-GCM/no-AAD, hash, and authorization rules are identical to the Fire Plan
-contract; only the metadata adapter and endpoint prefix differ.
+Route generically by `type`, `scope`, `schema_version`, and `artifact_format`.
+KLGV uses the same schema-2 document-generation security model but its own
+descriptor and endpoint prefix are specified below.
 
 ### Future PDF-backed datasets
 
@@ -749,6 +746,8 @@ credential>` header:
 | --- | --- | --- |
 | `GET` | `/api/v1/tablet/fire-plan-generations/{publication_id}/manifest` | Complete signed manifest plus this installation's generation-key grant. |
 | `GET` | `/api/v1/tablet/fire-plan-generations/{publication_id}/artifacts/{artifact_id}/download` | Referenced immutable ciphertext only. |
+| `GET` | `/api/v1/tablet/document-generations/{publication_id}/manifest` | Complete signed KLGV generation manifest plus this installation's generation-key grant. |
+| `GET` | `/api/v1/tablet/document-generations/{publication_id}/artifacts/{artifact_id}/download` | Referenced immutable KLGV ciphertext only. |
 | `GET` | `/api/v1/tablet/signing-keys/{version}` | `{"algorithm":"Ed25519","version":"1","public_key":"<base64 32-byte key>"}`. |
 
 The manifest response is:
@@ -818,22 +817,26 @@ publication and authorized for that installation; unknown/unreferenced IDs are
 For Fire Plan v2 only, the legacy ZIP still created internally by the server is
 a lifecycle compatibility detail. The client must not fetch, decrypt, or
 interpret it; use only this manifest and individual artifact endpoints. KLGV
-has no legacy ZIP. The v1 ZIP reader remains required only when discovery
-advertises the legacy `artifact_format:"zip"` entry.
+has no tablet ZIP format.
 
 ### `department_klgv_plans` (`artifact_format: document-manifest-v2`)
 
-KLGV begins directly on schema 2 and has no ZIP/v1 compatibility contract.
-Its descriptor uses the generic document-generation manifest URL. The manifest
-has `format:"document-generation-v2"`, `dataset_type:"department_klgv_plans"`,
-and `documents` whose canonical metadata object is `klgv_plan` (the existing
-`id`, `external_identifier`, `object_name`, address, postal/city, coordinates,
-`sha256`, `page_count`, and `path` fields). Apply the document-v2 acceptance
-chain above unchanged. This is additive: Fire Plan v1 ZIP behavior is frozen.
-Its generation-key grant uses the same canonical JSON HPKE `info` members as
-the document contract, with protocol discriminator
-`firedash-document-generation-hpke-v2` (Fire Plan retains its frozen
-`firedash-fire-plan-generation-hpke-v2` discriminator).
+KLGV begins directly on schema 2 and has no tablet ZIP/v1 compatibility
+contract. Its top-level signed-manifest descriptor is:
+
+```json
+{"publication_id":"11111111-1111-1111-1111-111111111111","type":"department_klgv_plans","scope":"department","version":42,"schema_version":2,"required":true,"minimum_app_version":null,"artifact_format":"document-manifest-v2","manifest_url":"/api/v1/tablet/document-generations/11111111-1111-1111-1111-111111111111/manifest"}
+```
+
+The complete generation manifest has `format:"document-generation-v2"` and
+`dataset_type:"department_klgv_plans"`. Each document has a `klgv_plan` object
+with exactly `id`, `external_identifier`, `object_name`, `address`,
+`postal_code`, `city`, `longitude`, `latitude`, `sha256`, and `page_count`.
+`sha256` is the sanitized plaintext PDF SHA-256. Apply the shared document-v2
+acceptance chain above unchanged. Its generation-key grant uses the generic
+document canonical JSON HPKE context and protocol discriminator
+`firedash-document-generation-hpke-v2`; Fire Plan retains its separate frozen
+discriminator.
 
 ### `station_personnel` (`artifact_format: json`)
 

@@ -343,6 +343,7 @@ def test_internal_dataset_is_not_a_production_rebuild_choice():
     choices = {value for value, _label in cast(Iterable[tuple[str, str]], field.choices)}
 
     assert "test_department_incidents" not in choices
+    assert "department_klgv_plans" in choices
 
 
 @pytest.mark.django_db(transaction=True)
@@ -350,6 +351,18 @@ def test_flush_restores_dataset_type_registry_projection():
     call_command("flush", interactive=False)
 
     assert set(DatasetTypeRegistry.objects.values_list("code", flat=True)) == set(DATASET_REGISTRY)
+    klgv = DatasetTypeRegistry.objects.get(code="department_klgv_plans")
+    assert (
+        klgv.scope,
+        klgv.current_schema_version,
+        klgv.supported_schema_versions,
+        klgv.required,
+    ) == (
+        "department",
+        2,
+        [2],
+        True,
+    )
 
 
 @pytest.mark.django_db(transaction=True)

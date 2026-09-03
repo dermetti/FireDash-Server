@@ -49,14 +49,14 @@ def _write_bundle_source(root: Path, *, document_id: uuid.UUID | None = None):
     return _document(document_id=document_id, key=key, pdf=pdf), pdf
 
 
-def test_klgv_registry_is_department_scoped_optional_and_internal():
+def test_klgv_registry_is_department_scoped_required_and_production_visible():
     definition = get_dataset_definition("department_klgv_plans")
 
     assert definition.scope == "department"
-    assert definition.required is False
+    assert definition.required is True
     assert definition.current_schema_version == 2
     assert definition.artifact_format == "document-manifest-v2"
-    assert definition.internal_only is True
+    assert definition.internal_only is False
     assert definition.feature_code == "klgv_plans"
     assert get_feature_definition("klgv_plans").default_enabled is False
 

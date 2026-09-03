@@ -20,6 +20,7 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
+from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.builders import build_source_payload
 from apps.publications.document_artifacts import release_terminal_document_artifact_references
@@ -45,6 +46,12 @@ from apps.publications.models import (
     PublicationDocumentArtifactReference,
 )
 from apps.publications.registry import get_dataset_definition
+from apps.publications.services import (
+    enqueue_publication_job,
+    mark_dirty,
+    process_next_job,
+    rollback_publication,
+)
 from apps.publications.worker_grants import process_next_signed_manifest
 from apps.reference_data.models import KlgvPlan
 from apps.tablets.models import AppInstallation, Tablet
@@ -95,7 +102,6 @@ def test_klgv_snapshot_uses_canonical_metadata(settings, tmp_path):
             "latitude": 53.551323,
             "sha256": digest,
             "page_count": 1,
-            "path": f"plans/{plan.id}.pdf",
     }
 
 
@@ -155,6 +161,18 @@ def test_klgv_v2_generation_is_complete_and_reuses_its_immutable_pdf(settings, t
     assert PublicationDocumentArtifactReference.objects.filter(publication=first).count() == 1
     assert DocumentArtifact.objects.count() == 1
     assert manifest.payload["dataset_type"] == "department_klgv_plans"
+    assert set(manifest.payload["documents"][0]["klgv_plan"]) == {
+        "id",
+        "external_identifier",
+        "object_name",
+        "address",
+        "postal_code",
+        "city",
+        "longitude",
+        "latitude",
+        "sha256",
+        "page_count",
+    }
     assert manifest.payload["documents"][0]["klgv_plan"]["id"] == str(plan.id)
 
 
@@ -279,7 +297,7 @@ def test_klgv_v2_delivery_is_discoverable_and_client_decryptable(klgv_delivery_c
     assert discovered.status_code == 200
     assert any(entry == {
         "publication_id": str(publication.id), "type": "department_klgv_plans", "scope": "department",
-        "version": 1, "schema_version": 2, "required": False, "minimum_app_version": None,
+        "version": 1, "schema_version": 2, "required": True, "minimum_app_version": None,
         "artifact_format": "document-manifest-v2",
         "manifest_url": f"/api/v1/tablet/document-generations/{publication.id}/manifest",
     } for entry in discovered.json()["datasets"])
@@ -324,6 +342,83 @@ def test_klgv_v2_delivery_is_discoverable_and_client_decryptable(klgv_delivery_c
         tablet=outsider_tablet, vehicle=outsider_vehicle, valid_from=timezone.now(), created_by=user
     )
     assert client.get(download, HTTP_AUTHORIZATION=f"Bearer {outsider_credential}").status_code == 403
+
+
+@pytest.mark.django_db(transaction=True)
+def test_klgv_normal_lifecycle_rollback_and_feature_gate(klgv_delivery_context):
+    user, department, accepted, installation, _, credential = klgv_delivery_context
+    DepartmentMembership.objects.create(user=user, department=department, created_by=user)
+    _klgv_plan(user=user, department=department, accepted=accepted, identifier="A", pdf=b"PDF A")
+    mark_dirty(
+        actor=user, department=department, dataset_type_code="department_klgv_plans"
+    )
+    enqueue_publication_job(
+        department=department,
+        dataset_type_code="department_klgv_plans",
+        requested_by=user,
+        trigger_type="USER_REQUEST",
+        allow_clean_rebuild=True,
+    )
+    first_job = process_next_job()
+    assert first_job is not None and first_job.status == first_job.Status.SUCCEEDED
+    first = DatasetPublication.objects.get(pk=first_job.build_publication_id)
+    assert first.status == first.Status.PUBLISHED
+    assert first.schema_version == 2
+
+    request_manifest(installation=installation)
+    assert process_next_signed_manifest() is not None
+    client = Client()
+    auth = {"HTTP_AUTHORIZATION": f"Bearer {credential}"}
+    first_entry = next(
+        entry
+        for entry in client.get("/api/v1/tablet/manifest", **auth).json()["datasets"]
+        if entry["type"] == "department_klgv_plans"
+    )
+    assert first_entry == {
+        "publication_id": str(first.id),
+        "type": "department_klgv_plans",
+        "scope": "department",
+        "version": 1,
+        "schema_version": 2,
+        "required": True,
+        "minimum_app_version": None,
+        "artifact_format": "document-manifest-v2",
+        "manifest_url": f"/api/v1/tablet/document-generations/{first.id}/manifest",
+    }
+
+    _klgv_plan(user=user, department=department, accepted=accepted, identifier="B", pdf=b"PDF B")
+    mark_dirty(
+        actor=user, department=department, dataset_type_code="department_klgv_plans"
+    )
+    enqueue_publication_job(
+        department=department,
+        dataset_type_code="department_klgv_plans",
+        requested_by=user,
+        trigger_type="USER_REQUEST",
+        allow_clean_rebuild=True,
+    )
+    second_job = process_next_job()
+    assert second_job is not None and second_job.status == second_job.Status.SUCCEEDED
+    second = DatasetPublication.objects.get(pk=second_job.build_publication_id)
+    first.refresh_from_db()
+    assert (first.status, second.status) == (first.Status.SUPERSEDED, second.Status.PUBLISHED)
+
+    rollback_publication(actor=user, publication=first)
+    request_manifest(installation=installation)
+    restored = next(
+        entry
+        for entry in client.get("/api/v1/tablet/manifest", **auth).json()["datasets"]
+        if entry["type"] == "department_klgv_plans"
+    )
+    assert restored["publication_id"] == str(first.id)
+
+    set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=False)
+    request_manifest(installation=installation)
+    assert process_next_signed_manifest() is not None
+    assert all(
+        entry["type"] != "department_klgv_plans"
+        for entry in client.get("/api/v1/tablet/manifest", **auth).json()["datasets"]
+    )
 
 
 @pytest.mark.django_db(transaction=True)

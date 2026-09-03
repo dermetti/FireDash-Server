@@ -115,7 +115,12 @@ class DatasetSourceRevision(models.Model):
                 fields=("scope_state", "source_revision"), name="unique_dataset_source_revision"
             )
         ]
-        indexes = [models.Index(fields=("scope_state", "-source_revision"))]
+        indexes = [
+            models.Index(
+                fields=("scope_state", "-source_revision"),
+                name="pub_src_scope_rev_idx",
+            )
+        ]
 
 
 class DatasetPublication(models.Model):

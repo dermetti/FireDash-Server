@@ -19,6 +19,7 @@ class DocumentDatasetAdapter:
     dataset_type_code: str
     snapshot_key: str
     manifest_metadata_key: str
+    manifest_metadata_fields: tuple[str, ...]
 
     def frozen_documents(self, publication) -> tuple[FrozenDocument, ...]:
         if publication.station_id:
@@ -51,11 +52,16 @@ class DocumentDatasetAdapter:
                 "Accepted KLGV document hash does not match frozen metadata."
             )
         metadata = {str(entry["id"]): entry for entry in entries}
+        if any(set(entry) != set(self.manifest_metadata_fields) for entry in metadata.values()):
+            raise PublicationBuildError("Frozen document metadata is invalid.")
         return tuple(
             FrozenDocument(
                 canonical_document_id=plans[document_id].id,
                 sanitized_pdf_sha256=digest,
-                metadata=metadata[document_id],
+                metadata={
+                    field: metadata[document_id][field]
+                    for field in self.manifest_metadata_fields
+                },
                 accepted_document_key=plans[document_id].path,
             )
             for document_id, digest in identities
@@ -66,6 +72,18 @@ _KLGV_ADAPTER = DocumentDatasetAdapter(
     dataset_type_code="department_klgv_plans",
     snapshot_key="klgv_plans",
     manifest_metadata_key="klgv_plan",
+    manifest_metadata_fields=(
+        "id",
+        "external_identifier",
+        "object_name",
+        "address",
+        "postal_code",
+        "city",
+        "longitude",
+        "latitude",
+        "sha256",
+        "page_count",
+    ),
 )
 
 
