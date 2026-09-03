@@ -597,27 +597,50 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
         raise TabletError("Invitation has been revoked.", code="invitation_invalid")
     tablet = invitation.tablet
     _require_operational_tablet(tablet)
+    # A client that lost its locally persisted credential must replay its
+    # original completed request.  It must not be able to use a new invitation
+    # and preview to create another installation with an already-adopted local
+    # identity.  Apart from being outside the recovery contract, that path used
+    # to fall through to AppInstallation's unique installation_uuid constraint
+    # and escape as an HTTP 500.
+    if AppInstallation.objects.filter(installation_uuid=request.installation_uuid).exists():
+        raise TabletError(
+            "Installation UUID is already provisioned; replay the original completion request.",
+            code="invalid_request",
+        )
     credential = generate_credential()
     AppInstallation.objects.filter(
         tablet=tablet, status__in=(AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE)
     ).update(status=AppInstallation.Status.REPLACED)
-    installation = AppInstallation.objects.create(
-        tablet=tablet,
-        installation_uuid=request.installation_uuid,
-        credential_hash=_secret_digest(credential),
-        status=AppInstallation.Status.ACTIVE,
-        app_version=request.app_version,
-        adopted_app_version=request.app_version,
-        app_build=request.app_build,
-        app_version_seen_at=now,
-        hpke_public_key=request.hpke_public_key,
-        hpke_ciphersuite=request.hpke_ciphersuite,
-        hpke_key_fingerprint=request.hpke_public_key_fingerprint,
-        hpke_key_verified_at=now,
-        adopted_at=now,
-        adopted_by=invitation.created_by,
-        authorization_valid_until=lease_target(department=tablet.department, now=now),
-    )
+    try:
+        # Keep an inner savepoint so a concurrent direct writer which claims
+        # this UUID can be translated without leaving the outer completion
+        # transaction unusable.
+        with transaction.atomic():
+            installation = AppInstallation.objects.create(
+                tablet=tablet,
+                installation_uuid=request.installation_uuid,
+                credential_hash=_secret_digest(credential),
+                status=AppInstallation.Status.ACTIVE,
+                app_version=request.app_version,
+                adopted_app_version=request.app_version,
+                app_build=request.app_build,
+                app_version_seen_at=now,
+                hpke_public_key=request.hpke_public_key,
+                hpke_ciphersuite=request.hpke_ciphersuite,
+                hpke_key_fingerprint=request.hpke_public_key_fingerprint,
+                hpke_key_verified_at=now,
+                adopted_at=now,
+                adopted_by=invitation.created_by,
+                authorization_valid_until=lease_target(department=tablet.department, now=now),
+            )
+    except IntegrityError as error:
+        if AppInstallation.objects.filter(installation_uuid=request.installation_uuid).exists():
+            raise TabletError(
+                "Installation UUID is already provisioned; replay the original completion request.",
+                code="invalid_request",
+            ) from error
+        raise
     from apps.publications.manifests import revoke_dataset_key_grants
 
     for replaced_installation in AppInstallation.objects.filter(

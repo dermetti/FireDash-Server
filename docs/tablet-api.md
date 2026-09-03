@@ -100,12 +100,14 @@ Persist the origin and resolve API paths below `<origin>/api/v1/`; manual entry
 uses the same origin/token pair. Resolve relative downloads only against that
 same origin and never forward bearer credentials cross-origin.
 
-For a lost successful completion response, the exact completed request and
-cryptographic proof can be retried for a fixed 10-minute window. Each valid
-retry rotates a fresh credential for the same installation, never creates a
-second installation, and never extends the window. This recovery remains valid
-despite the invitation being consumed by the original successful request, but
-fails for wrong proof, mode, binding, expiry, or administrative invalidation.
+If a successful completion response is lost, or its returned credential cannot
+be safely committed during client-local Keychain, vault, or sync finalization,
+the exact completed request and cryptographic proof can be retried for a fixed
+10-minute window. Each valid retry rotates a fresh credential for the same
+installation, never creates a second installation, and never extends the
+window. This recovery remains valid despite the invitation being consumed by
+the original successful request, but fails for wrong proof, mode, binding,
+expiry, or administrative invalidation.
 
 ## Credential lifecycle and installation states
 
@@ -210,12 +212,13 @@ server-time anchor:
 ```
 
 Persist UUID, private-key reference, credential, deadline, and server-time
-anchor atomically. If the successful completion response is lost, replay the
-**exact same** completion request and proof within the fixed ten-minute
-recovery window. Do not create a new preview or alter the proof. Each accepted
-recovery replay rotates the unknown credential and returns a fresh one; persist
-only that returned credential. The window starts with the first successful
-completion and never extends.
+anchor atomically. If the successful completion response is lost, or the
+returned credential cannot be safely committed during client-local credential,
+vault, or sync finalization, replay the **exact same** completion request and
+proof within the fixed ten-minute recovery window. Do not create a new preview
+or alter the proof. Each accepted recovery replay rotates the unknown
+credential and returns a fresh one; persist only that returned credential. The
+window starts with the first successful completion and never extends.
 
 `confirmed:false` fails completion without incrementing proof counters. An
 invalid HMAC increments both the request and invitation counters; on the fifth

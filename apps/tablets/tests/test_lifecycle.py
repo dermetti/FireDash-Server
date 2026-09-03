@@ -175,42 +175,56 @@ def test_adoption_completion_replay_rejects_expiry_invalidation_and_changed_proo
             hpke_public_key=_p256_public_key(),
             hpke_ciphersuite=HPKE_CIPHERSUITE,
         )
-        complete_adoption(
+        installation, credential = complete_adoption(
             request_id=challenge.request.id,
             challenge_response=challenge.request.expected_hmac_digest,
             confirmed=True,
         )
-        return challenge
+        return challenge, installation, credential
 
-    expired = completed_request()
+    expired, expired_installation, expired_credential = completed_request()
     AdoptionRequest.objects.filter(pk=expired.request.id).update(
         completion_replay_valid_until=timezone.now() - timedelta(seconds=1)
     )
+    original_count = AppInstallation.objects.count()
     with pytest.raises(TabletError, match="not available"):
         complete_adoption(
             request_id=expired.request.id,
             challenge_response=expired.request.expected_hmac_digest,
             confirmed=True,
         )
+    expired_installation.refresh_from_db()
+    assert AppInstallation.objects.count() == original_count
+    assert verify_credential(installation=expired_installation, credential=expired_credential)
 
-    invalidated = completed_request()
+    invalidated, invalidated_installation, invalidated_credential = completed_request()
     AdoptionRequest.objects.filter(pk=invalidated.request.id).update(
         completion_replay_invalidated_at=timezone.now()
     )
+    original_count = AppInstallation.objects.count()
     with pytest.raises(TabletError, match="not available"):
         complete_adoption(
             request_id=invalidated.request.id,
             challenge_response=invalidated.request.expected_hmac_digest,
             confirmed=True,
         )
+    invalidated_installation.refresh_from_db()
+    assert AppInstallation.objects.count() == original_count
+    assert verify_credential(
+        installation=invalidated_installation, credential=invalidated_credential
+    )
 
-    changed_proof = completed_request()
+    changed_proof, proof_installation, proof_credential = completed_request()
+    original_count = AppInstallation.objects.count()
     with pytest.raises(TabletError, match="not available"):
         complete_adoption(
             request_id=changed_proof.request.id,
             challenge_response=b"not-the-original-proof",
             confirmed=True,
         )
+    proof_installation.refresh_from_db()
+    assert AppInstallation.objects.count() == original_count
+    assert verify_credential(installation=proof_installation, credential=proof_credential)
 
 
 def test_version_only_telemetry_preserves_build_when_version_is_unchanged(operational_tablet):
