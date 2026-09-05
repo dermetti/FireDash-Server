@@ -2,7 +2,10 @@
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py", "*_tests.py"]
 testpaths = ["apps", "config"]
-addopts = "--strict-markers"
+# Use the repository's fixed, guarded scratch base instead of pytest's
+# per-user default under %TEMP%.  The latter can be left with sandbox-only
+# ACLs on Windows.  conftest.py removes this base at session start/finish.
+addopts = "--strict-markers --basetemp=.test-tmp"
 tmp_path_retention_policy = "none"
 markers = [
     "slow: large-scale coverage run separately from routine focused tests",

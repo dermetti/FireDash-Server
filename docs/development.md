@@ -21,7 +21,7 @@ Create a PostGIS-enabled development database, apply migrations, then run:
 ```powershell
 python manage.py migrate
 python manage.py runserver
-pytest
+pytest -p no:cacheprovider
 ```
 
 The normal test settings need a PostgreSQL role that may create a test
@@ -38,13 +38,33 @@ ruff check .
 mypy apps/publications apps/tablets apps/portal
 python manage.py check
 python manage.py makemigrations --check --dry-run
-pytest
+pytest -p no:cacheprovider
 ```
 
 Use focused tests while iterating, then run the affected PostgreSQL-backed
 suite. Publication changes normally need publication, tablet manifest/API, and
 portal tests. API changes should also run `python manage.py spectacular
 --validate`.
+
+## Windows pytest scratch space
+
+Pytest is configured to use the fixed repository-local `.test-tmp` scratch
+base. The project hook removes only that guarded directory at session start and
+finish, so successful runs leave no repository test data and later runs reuse
+the same location. Do not supply a feature-named `--basetemp` path (for
+example, `.pytest-tmp-foo`): explicit bases are retained by pytest and sandbox
+created directories can be inaccessible to a later host process.
+
+On Windows always disable pytest's cache provider:
+
+```powershell
+$env:DJANGO_SETTINGS_MODULE = 'config.settings.test'
+pytest -p no:cacheprovider apps/publications/tests/test_artifacts.py
+```
+
+If a test run is interrupted and `.test-tmp` cannot be removed by its owner,
+leave it in place for the owning environment/administrator rather than
+changing ACLs. It is ignored by Git and contains disposable test data only.
 
 ## Boundaries to preserve
 

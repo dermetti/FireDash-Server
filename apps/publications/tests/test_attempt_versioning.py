@@ -101,7 +101,14 @@ def _context(*, station_scoped: bool = False):
     )
     dataset_type_code = "station_personnel" if station_scoped else "department_hydrants"
     scope = DatasetScopeState.objects.create(
-        department=department, station=station, dataset_type_code=dataset_type_code
+        scope_type=(
+            DatasetScopeState.ScopeType.STATION
+            if station_scoped
+            else DatasetScopeState.ScopeType.DEPARTMENT
+        ),
+        department=department,
+        station=station,
+        dataset_type_code=dataset_type_code,
     )
     return admin, department, scope, dataset_type_code
 
@@ -218,6 +225,7 @@ def test_department_scope_null_station_rejects_duplicate_attempt_number():
 def test_station_scope_rejects_duplicate_attempt_number():
     _, department, scope, dataset_type_code = _context(station_scoped=True)
     DatasetPublication.objects.create(
+        scope_type=DatasetScopeState.ScopeType.STATION,
         department=department,
         station=scope.station,
         dataset_type_code=dataset_type_code,
@@ -229,6 +237,7 @@ def test_station_scope_rejects_duplicate_attempt_number():
     )
     with transaction.atomic(), pytest.raises(IntegrityError):
         DatasetPublication.objects.create(
+            scope_type=DatasetScopeState.ScopeType.STATION,
             department=department,
             station=scope.station,
             dataset_type_code=dataset_type_code,

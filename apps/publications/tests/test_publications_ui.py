@@ -10,7 +10,7 @@ from django.db import close_old_connections
 from django.urls import reverse
 
 from apps.accounts.models import User
-from apps.authorization.models import DepartmentMembership
+from apps.authorization.models import DepartmentMembership, SystemRole
 from apps.organizations.models import Department, Station
 from apps.publications import services
 from apps.publications.builders import build_source_payload, source_fingerprint
@@ -141,6 +141,19 @@ def test_primary_list_is_one_row_per_scope_with_current_version_and_detail_link(
     assert reverse("publications-scope-detail", args=(scope.id,)) in content
     assert "View details" not in content
     assert "Previous versions" not in content
+    assert "System-provided publications" not in content
+
+
+@pytest.mark.django_db
+def test_system_publications_is_system_admin_only(client, publication_ui_context):
+    admin, outsider, _, _, _ = publication_ui_context
+    SystemRole.objects.create(user=admin)
+
+    client.force_login(admin)
+    assert client.get(reverse("system-publications-list")).status_code == 200
+
+    client.force_login(outsider)
+    assert client.get(reverse("system-publications-list")).status_code == 403
 
 
 @pytest.mark.django_db(transaction=True)
