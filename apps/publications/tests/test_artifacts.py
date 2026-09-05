@@ -43,6 +43,7 @@ def test_artifact_is_aes_gcm_wrapped_and_signed(tmp_path, encoded, monkeypatch):
     signing_path.write_bytes(base64.b64encode(signing_seed) if encoded else signing_seed)
     publication = SimpleNamespace(
         id="artifact-id",
+        scope_type="DEPARTMENT",
         department_id="department-id",
         station_id=None,
         dataset_type_code="department_hydrants",
@@ -166,6 +167,7 @@ def test_artifacts_use_distinct_cek_and_nonce(tmp_path, monkeypatch):
     (tmp_path / "signing").write_bytes(b"s" * 32)
     publication = SimpleNamespace(
         id="artifact-id",
+        scope_type="DEPARTMENT",
         department_id="department-id",
         station_id=None,
         dataset_type_code="department_hydrants",
@@ -241,6 +243,7 @@ def test_credential_decodes_base64_text(tmp_path):
 
 def _publication(**overrides) -> SimpleNamespace:
     values = {
+        "scope_type": "DEPARTMENT",
         "id": "artifact-id",
         "department_id": "department-id",
         "station_id": None,

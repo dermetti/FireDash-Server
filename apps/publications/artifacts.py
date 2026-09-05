@@ -337,6 +337,42 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
     }
 
 
+def upgrade_legacy_scope_signature(*, publication) -> bool:
+    """Re-sign a pre-scope artifact without moving or re-encrypting it.
+
+    Migration code cannot access worker credentials.  The delivery worker does
+    this before issuing a new signed manifest, so a migrated CURRENT artifact
+    remains at its historical path while its envelope adopts the explicit
+    scope contract.
+    """
+    if publication.artifact_signature_algorithm != "Ed25519-legacy-scope":
+        return False
+    root = settings.PUBLICATION_ARTIFACT_ROOT.resolve()
+    path = (root / publication.artifact_path).resolve()
+    try:
+        path.relative_to(root)
+        ciphertext = path.read_bytes()
+    except (OSError, ValueError) as error:
+        raise ArtifactError("Migrated publication artifact is unavailable for signature upgrade.") from error
+    if hashlib.sha256(ciphertext).hexdigest() != publication.artifact_sha256:
+        raise ArtifactError("Migrated publication artifact integrity check failed.")
+    signing_key = _credential(settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH, "signing")
+    if len(signing_key) != 32 or publication.artifact_wrapped_cek is None or publication.artifact_nonce is None:
+        raise ArtifactError("Migrated publication cryptographic metadata is unavailable.")
+    publication.artifact_signature = Ed25519PrivateKey.from_private_bytes(signing_key).sign(
+        _signature_payload(
+            publication=publication,
+            wrapped_cek=bytes(publication.artifact_wrapped_cek),
+            nonce=bytes(publication.artifact_nonce),
+            ciphertext=ciphertext,
+        )
+    )
+    publication.artifact_signature_algorithm = "Ed25519"
+    publication.artifact_signing_key_version = settings.PUBLICATION_SIGNING_KEY_VERSION
+    publication.save(update_fields=("artifact_signature", "artifact_signature_algorithm", "artifact_signing_key_version"))
+    return True
+
+
 def remove_artifact(publication) -> None:
     remove_artifact_path(publication.artifact_path)
 

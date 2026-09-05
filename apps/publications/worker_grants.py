@@ -9,7 +9,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from apps.publications.artifacts import ArtifactError, _credential
+from apps.publications.artifacts import ArtifactError, _credential, upgrade_legacy_scope_signature
 from apps.publications.hpke import HPKE_CIPHERSUITE, HPKEContext, hpke_seal, parse_p256_public_key
 from apps.publications.manifests import (
     ManifestError,
@@ -289,6 +289,9 @@ def build_claimed_signed_manifest(*, manifest_id) -> SignedManifest:
             manifest.error_message = "A required dataset key grant is no longer usable."
             manifest.save(update_fields=("status", "completed_at", "error_message"))
             return manifest
+        for publication in publications:
+            if not _is_document_manifest_delivery(publication):
+                upgrade_legacy_scope_signature(publication=publication)
         payload = _manifest_payload(
             installation=installation,
             vehicle=vehicle,
