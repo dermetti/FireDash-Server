@@ -1,0 +1,11 @@
+[Unit]
+Description=Run FireDash import staging maintenance daily
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1d
+Persistent=true
+Unit=fire-import-staging-maintenance.service
+
+[Install]
+WantedBy=timers.target

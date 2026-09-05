@@ -57,21 +57,33 @@ def test_build_service_socket_and_timer_have_narrow_nightly_contract():
     assert "Unit=fire-publication-build.service" in timer
 
 
-def test_maintenance_is_credential_free_and_legacy_worker_is_retired_by_installer():
+def test_maintenance_units_are_separated_by_service_identity_and_legacy_worker_is_retired():
     maintenance = _unit("fire-publication-maintenance.service")
+    staging_maintenance = _unit("fire-import-staging-maintenance.service")
+    staging_timer = _unit("fire-import-staging-maintenance.timer")
     installer = (ROOT / "deploy" / "lib" / "systemd.sh").read_text(encoding="utf-8")
     assert "publication-kek" not in maintenance
     assert "publication-signing-key" not in maintenance
     assert "[Install]" not in maintenance
     assert "cleanup_signed_manifests" in maintenance
     assert "cleanup_orphan_artifacts" in maintenance
-    assert "cleanup_import_staging" in maintenance
-    assert "/var/lib/fire-backend/import-staging" in maintenance
+    assert "cleanup_import_staging" not in maintenance
+    assert "ReadWritePaths=/var/lib/fire-backend/import-staging" not in maintenance
+    assert "User=fire_backend" in staging_maintenance
+    assert "Group=fire_backend" in staging_maintenance
+    assert "cleanup_import_staging" in staging_maintenance
+    assert "ReadWritePaths=/var/lib/fire-backend/import-staging" in staging_maintenance
+    assert "ReadWritePaths=/var/lib/fire-backend/publications" not in staging_maintenance
+    assert "OnBootSec=10min" in staging_timer
+    assert "OnUnitActiveSec=1d" in staging_timer
+    assert "Unit=fire-import-staging-maintenance.service" in staging_timer
     assert "disable --now fire-publication-worker.timer" in installer
     assert "stop fire-publication-worker.service" in installer
     assert "enable --now fire-publication-delivery.service" in installer
     assert "enable --now fire-publication-build.socket" in installer
     assert 'enable --now "$timer"' in installer
+    assert "fire-import-staging-maintenance.timer" in installer
+    assert "fire-import-staging-maintenance.service" in installer
 
 
 def test_verifier_checks_lane_commands_socket_security_and_credential_separation():
@@ -85,6 +97,9 @@ def test_verifier_checks_lane_commands_socket_security_and_credential_separation
     assert "publication-signing-public-key-ring.json" in verifier
     assert "private/public pair matches the retained public-key ring" in verifier
     assert "maintenance service does not load KEK/private signing key" in verifier
+    assert "import staging maintenance runs as fire_backend with narrow staging access" in verifier
+    assert "publication maintenance has no import staging access" in verifier
+    assert "fire_publication cannot modify import staging" in verifier
     assert "fire_backend has no passwordless sudo privilege" in verifier
     assert "fire_publication is outside broad fire_backend group" in verifier
     assert "fire_publication can read accepted source" in verifier

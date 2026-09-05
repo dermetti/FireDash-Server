@@ -24,6 +24,7 @@ Confirm these units have the intended state:
 - `fire-publication-delivery.service` — persistent low-latency grants and manifests;
 - `fire-publication-build.socket` and `fire-publication-build.timer` — manual wake and nightly 00:05 builds;
 - `fire-publication-maintenance.timer` — artifact and manifest housekeeping;
+- `fire-import-staging-maintenance.timer` — expiration of private import staging;
 - `fire-stale-installation.timer` — expiration/stale processing;
 - `fire-temporary-assignment-expiry.timer` — assignment expiry;
 - `fire-backup.timer` — backup schedule.
@@ -113,11 +114,12 @@ as part of an investigation.
 
 Import sources and temporary sanitized PDF outputs live under the private
 `INGESTION_STAGING_ROOT`, never under the release tree or an Nginx location.
-`fire-publication-maintenance.service` runs `python manage.py
-cleanup_import_staging` without publication credentials to expire unapplied
-previews after seven days and applied source material after 30 days (or the
-configured retention). This cleanup does not change canonical records,
-publication artifacts, audit history, or keys.
+`fire-import-staging-maintenance.service` runs `python manage.py
+cleanup_import_staging` as `fire_backend` to expire unapplied previews after
+seven days and applied source material after 30 days (or the configured
+retention). This cleanup does not change canonical records, publication
+artifacts, audit history, or keys. `fire_publication` has no access to this
+directory.
 
 ## Safe troubleshooting
 

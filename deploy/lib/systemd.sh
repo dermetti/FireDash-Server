@@ -22,16 +22,16 @@ quiesce() {
         systemctl stop fire-backup.service 2>/dev/null || true
     fi
     local timer svc
-    for timer in fire-publication-worker.timer fire-publication-build.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+    for timer in fire-publication-worker.timer fire-publication-build.timer fire-publication-maintenance.timer fire-import-staging-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
         systemctl stop "$timer" 2>/dev/null || true
     done
-    for svc in fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
+    for svc in fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-publication-maintenance.service fire-import-staging-maintenance.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
         systemctl stop "$svc" 2>/dev/null || true
     done
     systemctl stop fire-backend.socket 2>/dev/null || true
     systemctl stop fire-backend.service 2>/dev/null || true
 
-    for svc in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
+    for svc in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-publication-maintenance.service fire-import-staging-maintenance.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
         if systemctl is-active --quiet "$svc"; then
             die "unit $svc is still active; cannot proceed with migration"
         fi
@@ -50,7 +50,7 @@ activate_timers() {
     local timer
     systemctl disable --now fire-publication-worker.timer 2>/dev/null || true
     systemctl stop fire-publication-worker.service 2>/dev/null || true
-    for timer in fire-publication-build.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+    for timer in fire-publication-build.timer fire-publication-maintenance.timer fire-import-staging-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
         systemctl enable --now "$timer"
     done
     systemctl enable --now fire-publication-delivery.service

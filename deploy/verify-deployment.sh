@@ -228,14 +228,14 @@ fi
 
 # -------- systemd --------
 log "=== systemd ==="
-for unit in fire-backend.socket fire-backend.service fire-publication-delivery.service fire-publication-build.service fire-publication-build.socket fire-publication-build.timer fire-publication-maintenance.service fire-publication-maintenance.timer fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-pdf-sanitizer-broker.socket fire-pdf-sanitizer-broker@.service fire-backup.service fire-backup.timer fire-restore.service; do
+for unit in fire-backend.socket fire-backend.service fire-publication-delivery.service fire-publication-build.service fire-publication-build.socket fire-publication-build.timer fire-publication-maintenance.service fire-publication-maintenance.timer fire-import-staging-maintenance.service fire-import-staging-maintenance.timer fire-temporary-assignment-expiry.service fire-temporary-assignment-expiry.timer fire-stale-installation.service fire-stale-installation.timer fire-pdf-sanitizer@.service fire-pdf-sanitizer-broker.socket fire-pdf-sanitizer-broker@.service fire-backup.service fire-backup.timer fire-restore.service; do
     [[ -f /etc/systemd/system/$unit ]] && ok "unit $unit installed" || fail "unit $unit missing"
 done
 [[ $(systemctl is-enabled fire-backend.socket 2>/dev/null) == enabled ]] && ok "fire-backend.socket enabled" || fail "fire-backend.socket not enabled"
 [[ $(systemctl is-enabled fire-pdf-sanitizer-broker.socket 2>/dev/null) == enabled ]] && ok "fire-pdf-sanitizer-broker.socket enabled" || fail "fire-pdf-sanitizer-broker.socket not enabled"
 [[ $(systemctl is-active fire-pdf-sanitizer-broker.socket 2>/dev/null) == active ]] && ok "fire-pdf-sanitizer-broker.socket active" || fail "fire-pdf-sanitizer-broker.socket not active"
 [[ $(systemctl is-enabled fire-backend.service 2>/dev/null) != enabled ]] && ok "fire-backend.service not directly enabled" || fail "fire-backend.service should not be enabled"
-for t in fire-publication-build.timer fire-publication-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+for t in fire-publication-build.timer fire-publication-maintenance.timer fire-import-staging-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
     [[ $(systemctl is-enabled "$t" 2>/dev/null) == enabled ]] && ok "$t enabled" || fail "$t not enabled"
 done
 [[ $(systemctl is-enabled fire-publication-delivery.service 2>/dev/null) == enabled ]] && ok "fire-publication-delivery.service enabled" || fail "fire-publication-delivery.service not enabled"
@@ -305,6 +305,19 @@ if systemctl cat fire-publication-maintenance.service 2>/dev/null | grep -Eq 'pu
     fail "maintenance service must not load KEK/private signing key"
 else
     ok "maintenance service does not load KEK/private signing key"
+fi
+if [[ $(systemctl show --property=User --value fire-import-staging-maintenance.service 2>/dev/null) == fire_backend ]] \
+    && [[ $(systemctl show --property=Group --value fire-import-staging-maintenance.service 2>/dev/null) == fire_backend ]] \
+    && systemctl cat fire-import-staging-maintenance.service 2>/dev/null | grep -qx 'ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_import_staging' \
+    && systemctl cat fire-import-staging-maintenance.service 2>/dev/null | grep -qx 'ReadWritePaths=/var/lib/fire-backend/import-staging'; then
+    ok "import staging maintenance runs as fire_backend with narrow staging access"
+else
+    fail "import staging maintenance identity or staging access unexpected"
+fi
+if systemctl cat fire-publication-maintenance.service 2>/dev/null | grep -Eq 'cleanup_import_staging|ReadWritePaths=/var/lib/fire-backend/import-staging'; then
+    fail "publication maintenance claims import staging access"
+else
+    ok "publication maintenance has no import staging access"
 fi
 if runuser -u fire_backend -- sudo -n -l >/dev/null 2>&1; then
     fail "fire_backend has passwordless sudo privileges"
@@ -425,6 +438,14 @@ if id -nG fire_publication | tr ' ' '\n' | grep -qx fire_backend; then
     fail "fire_publication still belongs to broad fire_backend group"
 else
     ok "fire_publication is outside broad fire_backend group"
+fi
+
+staging_probe=/var/lib/fire-backend/import-staging/.publication-permission-probe-$$
+if runuser -u fire_publication -- sh -c 'printf probe > "$1"' sh "$staging_probe" 2>/dev/null; then
+    fail "fire_publication can modify import staging"
+    rm -f -- "$staging_probe"
+else
+    ok "fire_publication cannot modify import staging"
 fi
 
 accepted_bad=$(find /var/lib/fire-backend/fire-plans -xdev -type f -name '*.pdf' \

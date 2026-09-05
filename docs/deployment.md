@@ -60,6 +60,9 @@ signing key. `fire_publication` owns the hardened publication workers:
   current publication and two usable rollback predecessors, obsoletes older
   successful versions, and purges only aged source snapshots from failed or
   cancelled attempts.
+- `fire-import-staging-maintenance.service` runs as `fire_backend` daily to
+  expire private import staging. Its only writable filesystem exception is
+  `/var/lib/fire-backend/import-staging`.
 
 The build socket is `/run/fire-backend/publication-build.sock`, group-owned
 for the web service with mode `0660`. Connecting carries no job data and gives
