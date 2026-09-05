@@ -5,6 +5,12 @@ from apps.portal import views
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("departments/<uuid:department_id>/data/", views.data_hub, name="portal-data-hub"),
+    path("system/data/", views.system_data_hub, name="portal-system-data-hub"),
+    path(
+        "system/data/vehicle-rescue-guides/",
+        views.system_vehicle_rescue_guides,
+        name="portal-system-vehicle-rescue-guides",
+    ),
     path("system/departments/", views.system_departments, name="portal-system-departments"),
     path(
         "system/api-compatibility/",

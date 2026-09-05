@@ -1,11 +1,36 @@
 import uuid
+from urllib.parse import urlsplit
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
 from apps.organizations.models import Department, Station
 from apps.tablets.versions import validate_app_version
+
+VEHICLE_RESCUE_GUIDES_DEFAULT_WEB_URL = "https://rescue.euroncap.com/"
+
+
+def validate_vehicle_rescue_guides_web_url(value: str) -> None:
+    """Accept only a canonicalizable, credential-free HTTPS web application URL."""
+    if not value or value != value.strip() or not value.isascii():
+        raise ValidationError("Vehicle Rescue Guides URL must be a non-empty ASCII HTTPS URL.")
+    try:
+        parsed = urlsplit(value)
+        # Accessing port deliberately rejects malformed port syntax as well.
+        _ = parsed.port
+    except ValueError as error:
+        raise ValidationError("Vehicle Rescue Guides URL is invalid.") from error
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValidationError(
+            "Vehicle Rescue Guides URL must be absolute HTTPS without credentials."
+        )
 
 
 class ApiVersionCompatibilityPolicy(models.Model):
@@ -25,6 +50,47 @@ class ApiVersionCompatibilityPolicy(models.Model):
     class Meta:
         constraints = [
             models.CheckConstraint(condition=Q(api_major__gt=0), name="api_policy_positive_major")
+        ]
+
+
+class VehicleRescueGuidesConfiguration(models.Model):
+    """The one system-owned Euro RESCUE web capability configuration."""
+
+    class Provider(models.TextChoices):
+        EURO_RESCUE = "euro_rescue", "Euro RESCUE"
+
+    class Mode(models.TextChoices):
+        WEB = "web", "Web"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    singleton = models.BooleanField(default=True, unique=True, editable=False)
+    provider = models.CharField(
+        max_length=32, choices=Provider.choices, default=Provider.EURO_RESCUE
+    )
+    mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.WEB)
+    web_url = models.CharField(
+        max_length=2048,
+        default=VEHICLE_RESCUE_GUIDES_DEFAULT_WEB_URL,
+        validators=[validate_vehicle_rescue_guides_web_url],
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="updated_vehicle_rescue_guides_configurations",
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(singleton=True), name="vehicle_rescue_guides_singleton"
+            ),
+            models.CheckConstraint(
+                condition=Q(provider="euro_rescue"), name="vehicle_rescue_guides_provider"
+            ),
+            models.CheckConstraint(condition=Q(mode="web"), name="vehicle_rescue_guides_mode"),
         ]
 
 

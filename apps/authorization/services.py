@@ -10,6 +10,7 @@ from apps.authorization.models import (
     ApiVersionCompatibilityPolicy,
     DepartmentMembership,
     StationAdminAssignment,
+    VehicleRescueGuidesConfiguration,
 )
 from apps.authorization.scopes import (
     active_department_ids,
@@ -73,6 +74,50 @@ def set_api_version_compatibility_policy(
             metadata={"api_major": api_major, "old_minimum": old_value, "new_minimum": normalized},
         )
     return policy
+
+
+def vehicle_rescue_guides_capability() -> dict[str, str]:
+    """Return the required current tablet capability from the singleton configuration."""
+    configuration, _ = VehicleRescueGuidesConfiguration.objects.get_or_create(singleton=True)
+    # Database checks fix provider/mode, while model validation also fails
+    # closed if a persisted URL was written outside this service boundary.
+    configuration.full_clean()
+    return {
+        "provider": configuration.provider,
+        "mode": configuration.mode,
+        "web_url": configuration.web_url,
+    }
+
+
+@transaction.atomic
+def set_vehicle_rescue_guides_web_url(*, actor, web_url: str) -> VehicleRescueGuidesConfiguration:
+    """Set the global Euro RESCUE URL and invalidate tablet manifests only."""
+    require_system_admin(actor)
+    configuration, _ = VehicleRescueGuidesConfiguration.objects.select_for_update().get_or_create(
+        singleton=True
+    )
+    configuration.full_clean()
+    old_url = configuration.web_url
+    if old_url == web_url:
+        return configuration
+    configuration.web_url = web_url
+    configuration.updated_by = actor
+    configuration.full_clean()
+    configuration.save(update_fields=("web_url", "updated_by", "updated_at"))
+
+    # This is configuration delivery, not publication lifecycle work.  The
+    # next authenticated manifest request coalesces the replacement per installation.
+    from apps.publications.manifests import invalidate_signed_manifests
+
+    invalidate_signed_manifests(reason="Vehicle Rescue Guides configuration changed.")
+    record_event(
+        action="vehicle_rescue_guides_configuration.updated",
+        actor_user=actor,
+        target_type="vehicle_rescue_guides_configuration",
+        target_uuid=configuration.id,
+        metadata={"old_web_url": old_url, "new_web_url": web_url},
+    )
+    return configuration
 
 
 def classify_system_admin_state(roles: list[Any]) -> str:

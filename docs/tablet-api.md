@@ -311,7 +311,17 @@ public keys while signed material referring to them remains available.
 
 ### Publication scope identity
 
-Every dataset manifest entry has an explicit `scope` object: `{"type":"SYSTEM"}`, `{"type":"DEPARTMENT","department_id":"..."}`, or `{"type":"STATION","department_id":"...","station_id":"..."}`. The same explicit object is part of artifact and HPKE canonical identity. Missing tenant IDs never mean SYSTEM. SYSTEM ownership alone does not authorize delivery; exposure and installation authorization remain separate. There are no SYSTEM datasets, premium entitlement fields, or Vehicle Rescue Guides wire format in this stage.
+Every dataset manifest entry has an explicit `scope` object: `{"type":"SYSTEM"}`, `{"type":"DEPARTMENT","department_id":"..."}`, or `{"type":"STATION","department_id":"...","station_id":"..."}`. The same explicit object is part of artifact and HPKE canonical identity. Missing tenant IDs never mean SYSTEM. SYSTEM ownership alone does not authorize delivery; exposure and installation authorization remain separate.
+
+### Vehicle Rescue Guides capability
+
+Every current manifest has this required signed capability. It is system-managed configuration, not a dataset publication:
+
+```json
+{"capabilities":{"vehicle_rescue_guides":{"provider":"euro_rescue","mode":"web","web_url":"https://rescue.euroncap.com/"}}}
+```
+
+Clients require `provider == "euro_rescue"`, `mode == "web"`, and an absolute credential-free HTTPS `web_url`, then open that URL in the Euro RESCUE web experience. The whole `capabilities` member participates in both the canonical Ed25519 payload and ETag. There is no missing-capability fallback, provider selection, offline mode, licensing, or entitlement behavior in the current contract.
 
 `GET /api/v1/tablet/manifest` only reads/coalesces database work in the web process;
 it never loads the KEK or signing private key. A ready manifest returns 200 and
@@ -340,6 +350,7 @@ Representative complete 200 body (names are exact):
   "generated_at":"2026-08-15T00:00:00+00:00",
   "authorization_valid_until":"2026-08-22T00:00:00+00:00",
   "configuration":{"installation_id":"11111111-1111-1111-1111-111111111111","tablet_id":"22222222-2222-2222-2222-222222222222","department_id":"33333333-3333-3333-3333-333333333333","station_id":"44444444-4444-4444-4444-444444444444","vehicle_id":"55555555-5555-5555-5555-555555555555"},
+  "capabilities":{"vehicle_rescue_guides":{"provider":"euro_rescue","mode":"web","web_url":"https://rescue.euroncap.com/"}},
   "datasets":[{
     "publication_id":"66666666-6666-6666-6666-666666666666","type":"station_personnel","scope":"station","version":7,"schema_version":1,"required":true,"minimum_app_version":null,"artifact_format":"json","encrypted_size":1234,"ciphertext_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","content_encryption_algorithm":"AES-256-GCM","content_encryption_nonce":"Base64(12 bytes)","content_key_wrapped_for_kek":"Base64(AES-KW wrapped CEK)","content_key_wrapping_algorithm":"AES-KW-RFC3394","content_key_kek_version":"1","artifact_signature":"Base64(64-byte Ed25519 signature)","artifact_signature_algorithm":"Ed25519","artifact_signing_key_version":"1","download_url":"/api/v1/tablet/datasets/66666666-6666-6666-6666-666666666666/download",
     "key_grant":{"scheme":"HPKE","ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM","encapsulated_key":"Base64(65-byte enc)","wrapped_content_key":"Base64(HPKE ciphertext)"}

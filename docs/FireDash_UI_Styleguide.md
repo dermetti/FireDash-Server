@@ -206,7 +206,8 @@ Avoid:
 
 # 7. Data Hub style
 
-The Data Hub is the visual gateway to distributed/reference data.
+The Data Hub is the visual gateway to distributed/reference data and, for
+system administrators, global system-managed configuration.
 
 It is **not a CRUD dashboard**.
 
@@ -297,7 +298,34 @@ must never be presented as current. Use readable states such as:
 - `v17 · Update failed`;
 - `Not published` when there is no active publication.
 
-## 7.3 Data Hub icons
+## 7.3 System-managed configuration cards
+
+SYSTEM-managed configuration is not a SYSTEM publication. It has no source
+revision, publication version, staging/build state, rollback, dirty state, or
+publication attention. It is administered once globally and inherited by
+departments without department-specific configuration rows.
+
+The System Data Hub uses the same card layout as the Department Data Hub. A
+system card may link to a dedicated configuration page; that page owns the
+single focused form. Do not place multi-field CRUD controls inside the gateway
+card.
+
+Department Data Hub shows inherited system configuration in a separate
+**System-provided configuration** section. These cards are static/read-only:
+they show the effective values and no activation, editing, publication, build,
+or rollback control. Use explicit labels such as **Enabled**, **Web**, and
+**System managed**.
+
+Vehicle Rescue Guides is the current example: System Data Hub may edit only
+the Euro RESCUE web application URL. Provider and delivery mode are displayed,
+not editable. Department Data Hub displays the same effective URL read-only.
+
+SYSTEM publications remain different: system administrators publish a dataset
+once globally, and eligible departments consume the authoritative publication
+read-only. Ownership scope remains distinct from delivery mode and from any
+future entitlement decision.
+
+## 7.4 Data Hub icons
 
 Icons should improve recognition, not decorate the page.
 
@@ -319,7 +347,7 @@ Suggested conceptual mapping:
 
 For KLGV, the visual should communicate **Kleingartenverein / allotment-garden plans**, not a generic unknown-file icon.
 
-## 7.4 Data Hub grid
+## 7.5 Data Hub grid
 
 Desktop recommendation:
 
@@ -852,6 +880,8 @@ Overview
 Departments
 
 System Administration
+    System Data Hub
+        Vehicle Rescue Guides
     API Compatibility
     System Settings
     Audit / System Events
@@ -1052,4 +1082,4 @@ A new page or module is FireDash-consistent when:
 Publication ownership is explicit and must be shown independently from delivery and licensing.
 `SYSTEM` publications are authored and published once by system administration and appear to eligible departments as read-only **System managed** content. `DEPARTMENT` publications are **Department managed**. `STATION` publications are department-managed and labelled **Station scoped**. “Web” and future “Offline” describe delivery, not ownership; eligibility/entitlement is a separate authorization decision.
 
-System-managed configuration is global configuration inherited by departments, but is not publication data. Vehicle Rescue Guides provider/URL is a future example only; it is not implemented here. CBRN/ADR is intended to be the first SYSTEM publication, but is not part of this stage. No premium licensing model exists in this stage.
+System-managed configuration is global configuration inherited by departments, but is not publication data. Vehicle Rescue Guides is implemented as one system-managed Euro RESCUE **Web** URL: system administrators edit it from System Data Hub and departments see it read-only as **System managed**. It has no publication lifecycle or department-specific copy. CBRN/ADR is intended to be the first SYSTEM publication, but is not part of this stage. No premium licensing model exists in this stage.

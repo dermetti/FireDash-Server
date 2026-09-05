@@ -13,8 +13,11 @@ from apps.authorization.models import (
     DepartmentMembership,
     StationAdminAssignment,
     SystemRole,
+    VehicleRescueGuidesConfiguration,
 )
 from apps.organizations.models import Department, Station
+from apps.portal.overview import department_attention
+from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 
 
 @pytest.fixture
@@ -52,9 +55,15 @@ def test_system_navigation_is_isolated_and_all_roles_keep_their_scoped_entries(
     client.force_login(system_admin)
     response = client.get(reverse("dashboard"))
     content = response.content.decode()
-    for label in ("Departments", "API Compatibility", "System Settings", "Audit / System Events"):
+    for label in (
+        "Departments",
+        "System Data Hub",
+        "API Compatibility",
+        "System Settings",
+        "Audit / System Events",
+    ):
         assert label in content
-    for forbidden in ("Data Hub", "Publications", "Hydrants", "Fire Plans", "KLGV", "Tablets"):
+    for forbidden in ("Hydrants", "Fire Plans", "KLGV", "Tablets"):
         assert forbidden not in content
     client.force_login(department_admin)
     content = client.get(reverse("tablet-list", args=(department.id,))).content.decode()
@@ -216,3 +225,65 @@ def test_api_compatibility_mutation_requires_post_and_csrf(system_scope):
     client.force_login(system_admin)
     assert client.get(url).status_code == 200
     assert client.post(url, {"minimum_app_version": "1.2.3"}).status_code == 403
+
+
+@pytest.mark.django_db
+def test_system_data_hub_vehicle_rescue_guides_is_system_only_and_uses_audited_service(
+    client, system_scope
+):
+    system_admin, department_admin, _, department, _ = system_scope
+    hub_url = reverse("portal-system-data-hub")
+    configuration_url = reverse("portal-system-vehicle-rescue-guides")
+
+    client.force_login(system_admin)
+    hub = client.get(hub_url)
+    content = hub.content.decode()
+    assert hub.status_code == 200
+    assert "Vehicle Rescue Guides" in content
+    assert "Enabled" in content and "Euro RESCUE" in content and "Web" in content
+    assert "https://rescue.euroncap.com/" in content
+    assert configuration_url in content
+
+    invalid = client.post(configuration_url, {"web_url": "http://example.test"})
+    assert invalid.status_code == 200
+    assert "absolute HTTPS" in invalid.content.decode()
+    assert VehicleRescueGuidesConfiguration.objects.count() == 1
+
+    _reauthenticate(client)
+    saved = client.post(configuration_url, {"web_url": "https://rescue.euroncap.com/app?locale=de"})
+    assert saved.status_code == 302
+    assert saved.url == configuration_url
+    assert VehicleRescueGuidesConfiguration.objects.get().web_url.endswith("locale=de")
+    assert AuditEvent.objects.filter(action="vehicle_rescue_guides_configuration.updated").exists()
+    assert DatasetPublication.objects.count() == 0
+    assert DatasetScopeState.objects.filter(department=department).count() == 0
+    assert PublicationJob.objects.count() == 0
+    assert department_attention(department) == []
+
+    client.force_login(department_admin)
+    assert client.get(hub_url).status_code == 403
+    assert client.get(configuration_url).status_code == 403
+
+
+@pytest.mark.django_db
+def test_department_data_hub_renders_vehicle_rescue_guides_as_read_only_system_configuration(
+    client, system_scope
+):
+    _, department_admin, _, department, _ = system_scope
+    client.force_login(department_admin)
+
+    response = client.get(reverse("portal-data-hub", args=(department.id,)))
+    content = response.content.decode()
+
+    assert response.status_code == 200
+    assert "System-provided configuration" in content
+    assert "Vehicle Rescue Guides" in content
+    assert "Enabled" in content and "Euro RESCUE" in content and "Web" in content
+    assert "System managed" in content
+    assert "https://rescue.euroncap.com/" in content
+    assert "Save web application URL" not in content
+    assert "Publish" not in content and "Rollback" not in content and "Build" not in content
+    assert VehicleRescueGuidesConfiguration.objects.count() == 1
+    assert DatasetPublication.objects.count() == 0
+    assert DatasetScopeState.objects.filter(department=department).count() == 0
+    assert PublicationJob.objects.count() == 0

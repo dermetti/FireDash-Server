@@ -25,6 +25,7 @@ def test_complete_manifest_contract_freezes_canonical_signature_bytes_and_etag()
     assert isinstance(manifest, dict)
     assert set(manifest) == {
         "authorization_valid_until",
+        "capabilities",
         "configuration",
         "datasets",
         "generated_at",
@@ -57,6 +58,13 @@ def test_complete_manifest_contract_freezes_canonical_signature_bytes_and_etag()
         "download_url",
         "key_grant",
     } == set(dataset[0])
+    assert manifest["capabilities"] == {
+        "vehicle_rescue_guides": {
+            "provider": "euro_rescue",
+            "mode": "web",
+            "web_url": "https://rescue.euroncap.com/",
+        }
+    }
 
     unsigned = {key: value for key, value in manifest.items() if key != "signature"}
     canonical = canonical_manifest_payload(unsigned)

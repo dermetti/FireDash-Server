@@ -46,6 +46,7 @@ from apps.authorization.services import (
     set_department_tablet_asset_number_policy,
     set_department_tablet_lease,
     set_system_department_tablet_lease,
+    set_vehicle_rescue_guides_web_url,
     suspend_department_admin,
     suspend_station_admin,
 )
@@ -73,6 +74,7 @@ from apps.portal.forms import (
     StationForm,
     StationListFilterForm,
     VehicleForm,
+    VehicleRescueGuidesWebUrlForm,
 )
 from apps.portal.overview import attention_for_request, attention_total, operational_summary
 
@@ -179,6 +181,7 @@ def _nav_context(request):
             {
                 "label": "System Administration",
                 "children": [
+                    {"label": "System Data Hub", "url": reverse("portal-system-data-hub")},
                     {"label": "System Publications", "url": reverse("system-publications-list")},
                     {
                         "label": "API Compatibility",
@@ -516,6 +519,53 @@ def system_settings(request: HttpRequest) -> HttpResponse:
     if not is_system_admin(request.user):
         raise PermissionDenied("System administrator role is required.")
     return render(request, "portal/system_settings.html")
+
+
+@login_required
+@require_http_methods(["GET"])
+def system_data_hub(request: HttpRequest) -> HttpResponse:
+    """Gateway for global configuration and globally owned data modules."""
+    if not is_system_admin(request.user):
+        raise PermissionDenied("System administrator role is required.")
+    from apps.authorization.services import vehicle_rescue_guides_capability
+
+    capability = vehicle_rescue_guides_capability()
+    modules = (
+        {
+            "name": "Vehicle Rescue Guides",
+            "description": "System-managed Euro RESCUE web application configuration.",
+            "icon": "rescue",
+            "url": reverse("portal-system-vehicle-rescue-guides"),
+            "web_url": capability["web_url"],
+        },
+    )
+    return render(request, "portal/system_data_hub.html", {"modules": modules})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def system_vehicle_rescue_guides(request: HttpRequest) -> HttpResponse:
+    """Edit the one global Euro RESCUE web URL through its service boundary."""
+    if not is_system_admin(request.user):
+        raise PermissionDenied("System administrator role is required.")
+    from apps.authorization.services import vehicle_rescue_guides_capability
+
+    capability = vehicle_rescue_guides_capability()
+    form = VehicleRescueGuidesWebUrlForm(
+        request.POST or None, initial={"web_url": capability["web_url"]}
+    )
+    if request.method == "POST" and form.is_valid():
+        require_recent_reauthentication(
+            request, return_url=reverse("portal-system-vehicle-rescue-guides")
+        )
+        set_vehicle_rescue_guides_web_url(actor=request.user, web_url=form.cleaned_data["web_url"])
+        messages.success(request, "Vehicle Rescue Guides web application URL was updated.")
+        return redirect("portal-system-vehicle-rescue-guides")
+    return render(
+        request,
+        "portal/system_vehicle_rescue_guides.html",
+        {"capability": capability, "form": form},
+    )
 
 
 @login_required
@@ -1019,6 +1069,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
     # Keep this gateway read-only: the cheap authoritative counts help an
     # administrator choose a module without duplicating CRUD controls here.
+    from apps.authorization.services import vehicle_rescue_guides_capability
     from apps.personnel.models import Person
     from apps.publications.models import DatasetScopeState
     from apps.publications.state import dataset_publication_summaries
@@ -1113,7 +1164,22 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
             url=reverse("reference-data-klgv-plans", args=(department.id,)),
         ),
     )
-    return render(request, "portal/data_hub.html", {"department": department, "modules": modules})
+    return render(
+        request,
+        "portal/data_hub.html",
+        {
+            "department": department,
+            "modules": modules,
+            "inherited_system_configurations": (
+                {
+                    "name": "Vehicle Rescue Guides",
+                    "description": "Euro RESCUE web application available through system-managed configuration.",
+                    "icon": "rescue",
+                    "web_url": vehicle_rescue_guides_capability()["web_url"],
+                },
+            ),
+        },
+    )
 
 
 @login_required

@@ -32,7 +32,7 @@ and do not replace the HOME assignment.
 
 Publication scopes are first-class persisted identity: `SYSTEM` has no department or station, `DEPARTMENT` has a department only, and `STATION` has both a department and station. A SYSTEM publication has one global lifecycle and is never copied per department. Scope ownership is deliberately separate from tablet exposure: a usable publication still requires the dataset exposure policy and installation/department authorization before it enters a manifest.
 
-Stage 1 provides no SYSTEM dataset. CBRN/Dangerous Goods is planned as the first one; Vehicle Rescue Guides web configuration, licences, and offline rescue artifacts are not implemented by this architecture change.
+SYSTEM-managed configuration is distinct from SYSTEM-published datasets. Vehicle Rescue Guides is the first such configuration: one system-administered Euro RESCUE HTTPS web URL is delivered as a signed tablet capability to every authorized installation. It has no publication, artifact, build, or per-department copy. SYSTEM datasets retain their own globally authored publication lifecycle; CBRN/Dangerous Goods is planned separately. Licensing and offline rescue artifacts are not implemented.
 
 Publication work is split into three operational lanes:
 

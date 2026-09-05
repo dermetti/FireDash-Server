@@ -18,6 +18,7 @@ from apps.publications.manifests import (
     _publication_scope_payload,
     authorized_publications,
     canonical_manifest_payload,
+    manifest_capabilities,
     manifest_publications,
     manifest_state_hash,
     request_dataset_key_grant,
@@ -164,7 +165,9 @@ def claim_next_signed_manifest(*, exclude_ids: set[UUID] | None = None) -> Signe
     return manifest
 
 
-def _manifest_payload(*, installation, vehicle, publications, grants, generation, now):
+def _manifest_payload(
+    *, installation, vehicle, publications, grants, generation, now, capabilities
+):
     datasets = []
     grants_by_publication = {grant.publication_id: grant for grant in grants}
     for publication in publications:
@@ -226,6 +229,7 @@ def _manifest_payload(*, installation, vehicle, publications, grants, generation
             "vehicle_id": str(vehicle.id) if vehicle is not None else None,
         },
         "datasets": datasets,
+        "capabilities": capabilities,
     }
 
 
@@ -255,11 +259,13 @@ def build_claimed_signed_manifest(*, manifest_id) -> SignedManifest:
             for publication in publications
             if not _is_document_manifest_delivery(publication)
         ]
+        capabilities = manifest_capabilities()
         state_hash = manifest_state_hash(
             installation=installation,
             vehicle=vehicle,
             publications=publications,
             generation=manifest.generation,
+            capabilities=capabilities,
         )
         if state_hash != manifest.state_hash:
             manifest.status = SignedManifest.Status.OBSOLETE
@@ -299,6 +305,7 @@ def build_claimed_signed_manifest(*, manifest_id) -> SignedManifest:
             grants=grants,
             generation=manifest.generation,
             now=now,
+            capabilities=capabilities,
         )
         signature = sign_manifest_payload(payload=payload)
     except ManifestError as error:

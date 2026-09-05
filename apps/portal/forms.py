@@ -1,5 +1,6 @@
 from django import forms
 
+from apps.authorization.models import validate_vehicle_rescue_guides_web_url
 from apps.organizations.presentation import DEPARTMENT_LOCALE_CHOICES, DEPARTMENT_TIMEZONE_CHOICES
 from apps.tablets.models import Tablet
 from apps.tablets.versions import AppVersionError, parse_app_version
@@ -210,3 +211,19 @@ class ApiVersionCompatibilityPolicyForm(forms.Form):
             return str(parse_app_version(value))
         except AppVersionError as error:
             raise forms.ValidationError(str(error)) from error
+
+
+class VehicleRescueGuidesWebUrlForm(forms.Form):
+    """The only editable field in the system-owned Euro RESCUE setting."""
+
+    web_url = forms.CharField(
+        max_length=2048,
+        label="Web application URL",
+        help_text="Must be an absolute HTTPS URL without embedded credentials.",
+        widget=forms.URLInput(attrs={"class": "form-control", "inputmode": "url"}),
+    )
+
+    def clean_web_url(self):
+        value = self.cleaned_data["web_url"]
+        validate_vehicle_rescue_guides_web_url(value)
+        return value

@@ -13,9 +13,16 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
+from apps.audit.models import AuditEvent
+from apps.authorization.models import SystemRole
+from apps.authorization.services import set_vehicle_rescue_guides_web_url
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKEContext, HPKEError, hpke_open, serialize_p256_public_key
-from apps.publications.manifests import canonical_manifest_payload, request_manifest
+from apps.publications.manifests import (
+    canonical_manifest_payload,
+    manifest_response_etag,
+    request_manifest,
+)
 from apps.publications.models import (
     DatasetKeyGrant,
     DatasetPublication,
@@ -143,6 +150,13 @@ def test_web_manifest_queues_grant_without_reading_kek_and_worker_fulfills_it(
     assert not result.unavailable and result.payload is not None
     assert result.payload["signature_algorithm"] == "Ed25519"
     assert result.payload["signing_key_version"] == "1"
+    assert result.payload["capabilities"] == {
+        "vehicle_rescue_guides": {
+            "provider": "euro_rescue",
+            "mode": "web",
+            "web_url": "https://rescue.euroncap.com/",
+        }
+    }
     datasets = result.payload["datasets"]
     assert isinstance(datasets, list) and len(datasets) == 1
     dataset = datasets[0]
@@ -212,6 +226,59 @@ def test_manifest_requests_coalesce_by_installation_and_current_state(grant_cont
     assert first.unavailable and second.unavailable
     assert first.request_id == second.request_id
     assert SignedManifest.objects.count() == 1
+
+
+def test_vehicle_rescue_guides_capability_is_signed_and_url_change_obsoletes_manifest_work(
+    grant_context, tmp_path
+):
+    installation, publication, _, _, _ = grant_context
+    admin = User.objects.create_user("rescue-admin@example.test", "Rescue", "safe-password")
+    SystemRole.objects.create(user=admin)
+    first = request_manifest(installation=installation)
+    assert first.request_id is not None
+    before_publications = DatasetPublication.objects.count()
+
+    set_vehicle_rescue_guides_web_url(
+        actor=admin, web_url="https://rescue.euroncap.com/guides?locale=de"
+    )
+    stale = SignedManifest.objects.get(pk=first.request_id)
+    assert stale.status == SignedManifest.Status.OBSOLETE
+    replacement = request_manifest(installation=installation)
+    assert replacement.request_id is not None and replacement.request_id != first.request_id
+    assert SignedManifest.objects.filter(status=SignedManifest.Status.PENDING).count() == 1
+    assert DatasetPublication.objects.count() == before_publications
+    assert not AuditEvent.objects.filter(action__startswith="publication.").exists()
+
+
+def test_vehicle_rescue_guides_url_changes_manifest_etag(grant_context):
+    installation, publication, _, _, _ = grant_context
+    first_etag = manifest_response_etag(
+        {
+            "configuration": {"installation_id": str(installation.id)},
+            "datasets": [{"publication_id": str(publication.id)}],
+            "capabilities": {
+                "vehicle_rescue_guides": {
+                    "provider": "euro_rescue",
+                    "mode": "web",
+                    "web_url": "https://rescue.euroncap.com/",
+                }
+            },
+        }
+    )
+    changed_etag = manifest_response_etag(
+        {
+            "configuration": {"installation_id": str(installation.id)},
+            "datasets": [{"publication_id": str(publication.id)}],
+            "capabilities": {
+                "vehicle_rescue_guides": {
+                    "provider": "euro_rescue",
+                    "mode": "web",
+                    "web_url": "https://rescue.euroncap.com/guides?locale=de",
+                }
+            },
+        }
+    )
+    assert changed_etag != first_etag
 
 
 def test_worker_manifest_signature_covers_canonical_payload(tmp_path):

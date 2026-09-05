@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Vehicle Rescue Guides{% endblock %}
+{% block content %}
+{% include "components/_page_header.html" with breadcrumb="System Data Hub" title="Vehicle Rescue Guides" description="Configure the system-managed Euro RESCUE web application used by authorized tablets." %}
+<section class="card mt-4" aria-labelledby="vehicle-rescue-guides-heading">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between gap-3 mb-4">
+      <div><h2 id="vehicle-rescue-guides-heading" class="h5 mb-1">Euro RESCUE web delivery</h2><p class="text-body-secondary mb-0">This global configuration is delivered in signed tablet manifests. It is not a publication.</p></div>
+      <span class="badge text-bg-success align-self-start">Enabled</span>
+    </div>
+    <dl class="row small mb-4"><dt class="col-sm-3">Provider</dt><dd class="col-sm-9">Euro RESCUE</dd><dt class="col-sm-3">Delivery</dt><dd class="col-sm-9">Web</dd><dt class="col-sm-3">Ownership</dt><dd class="col-sm-9">System managed</dd></dl>
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="mb-3">
+        <label class="form-label" for="{{ form.web_url.id_for_label }}">{{ form.web_url.label }}</label>
+        {{ form.web_url }}
+        {% if form.web_url.help_text %}<div class="form-text">{{ form.web_url.help_text }}</div>{% endif %}
+        {% for error in form.web_url.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+      </div>
+      <button class="btn btn-primary" type="submit">Save web application URL</button>
+      <a class="btn btn-outline-secondary" href="{% url 'portal-system-data-hub' %}">Back to System Data Hub</a>
+    </form>
+  </div>
+</section>
+{% endblock %}

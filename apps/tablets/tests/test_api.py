@@ -348,7 +348,7 @@ def test_current_document_generation_is_discovered_without_a_v1_grant(api_contex
     assert document_entry == {
         "publication_id": str(current.id),
         "type": "department_fire_plans",
-        "scope": "department",
+            "scope": {"type": "DEPARTMENT", "department_id": str(department.id)},
         "version": 7,
         "schema_version": 2,
         "required": True,

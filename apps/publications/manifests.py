@@ -14,6 +14,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.assignments.models import TabletVehicleAssignment
+from apps.authorization.services import vehicle_rescue_guides_capability
 from apps.publications.feature_services import is_feature_enabled
 from apps.publications.models import (
     DatasetKeyGrant,
@@ -90,6 +91,7 @@ def manifest_state_hash(
     vehicle,
     publications: list[DatasetPublication],
     generation: int,
+    capabilities: dict[str, object] | None = None,
 ) -> str:
     """Hash the authorization and publication state that coalesces manifest work."""
     state = {
@@ -107,8 +109,27 @@ def manifest_state_hash(
             "vehicle_id": str(vehicle.id) if vehicle is not None else None,
         },
         "datasets": [_publication_manifest_entry(publication) for publication in publications],
+        "capabilities": capabilities
+        if capabilities is not None
+        else {"vehicle_rescue_guides": vehicle_rescue_guides_capability()},
     }
     return hashlib.sha256(canonical_manifest_payload(state)).hexdigest()
+
+
+def manifest_capabilities() -> dict[str, object]:
+    """The required, global capabilities block for every authorized tablet manifest."""
+    return {"vehicle_rescue_guides": vehicle_rescue_guides_capability()}
+
+
+def invalidate_signed_manifests(*, reason: str) -> int:
+    """Invalidate deliverable manifests without affecting publications or grants."""
+    return SignedManifest.objects.filter(
+        status__in=(SignedManifest.Status.PENDING, SignedManifest.Status.READY)
+    ).update(
+        status=SignedManifest.Status.OBSOLETE,
+        completed_at=timezone.now(),
+        error_message=reason[:512],
+    )
 
 
 def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, object]:
@@ -414,11 +435,13 @@ def request_manifest(
                 request_dataset_key_grant(
                     publication=publication, installation=installation, retry_failed=True
                 )
+        capabilities = manifest_capabilities()
         state_hash = manifest_state_hash(
             installation=installation,
             vehicle=vehicle,
             publications=publications,
             generation=generation,
+            capabilities=capabilities,
         )
         try:
             manifest, _ = SignedManifest.objects.get_or_create(
