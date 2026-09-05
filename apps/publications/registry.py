@@ -25,6 +25,9 @@ class DatasetTypeDefinition:
     maximum_supported_schema_version: int
     feature_code: str
     internal_only: bool = False
+    # SYSTEM ownership never implies distribution. A future system dataset must
+    # opt into an authorization policy explicitly.
+    system_exposure: bool = False
 
 
 _DEFINITIONS = (
@@ -220,6 +223,24 @@ _DEFINITIONS = (
         feature_code="publications",
         internal_only=True,
     ),
+    DatasetTypeDefinition(
+        code="test_system_dataset",
+        display_name="Test system dataset",
+        scope="system",
+        artifact_format="json",
+        current_schema_version=1,
+        encryption_required=True,
+        minimum_app_version=None,
+        builder_service="test_system_dataset",
+        validator_service="summary",
+        summary_schema=MappingProxyType({"item_count": "item_count", "source_revision": "non_negative_integer"}),
+        required=False,
+        supported_schema_versions=(1,),
+        minimum_supported_schema_version=1,
+        maximum_supported_schema_version=1,
+        feature_code="publications",
+        internal_only=True,
+    ),
 )
 
 DATASET_REGISTRY = MappingProxyType({definition.code: definition for definition in _DEFINITIONS})
@@ -236,10 +257,28 @@ def get_dataset_definition(code: str) -> DatasetTypeDefinition:
         raise DatasetRegistryError("Unknown dataset type code.") from error
 
 
-def validate_dataset_scope(*, dataset_type_code: str, station) -> DatasetTypeDefinition:
+def validate_dataset_scope(*, dataset_type_code: str, scope_type: str | None = None, department=None, station=None) -> DatasetTypeDefinition:
     definition = get_dataset_definition(dataset_type_code)
-    if definition.scope == "department" and station is not None:
-        raise DatasetRegistryError("Department-scoped datasets cannot have a station.")
-    if definition.scope == "station" and station is None:
-        raise DatasetRegistryError("Station-scoped datasets require a station.")
+    expected_scope = definition.scope.upper()
+    # Registry-only callers may ask whether a type accepts a station. Persisted
+    # model/service paths always provide the explicit scope and owner fields.
+    if scope_type is None:
+        if expected_scope == "DEPARTMENT" and station is not None:
+            raise DatasetRegistryError("Department-scoped datasets cannot have a station.")
+        if expected_scope == "STATION" and station is None:
+            raise DatasetRegistryError("Station-scoped datasets require a station.")
+        return definition
+    if scope_type != expected_scope:
+        raise DatasetRegistryError("Dataset type is not registered for this publication scope.")
+    if scope_type == "SYSTEM":
+        if department is not None or station is not None:
+            raise DatasetRegistryError("System-scoped datasets cannot have a department or station.")
+    elif scope_type == "DEPARTMENT":
+        if department is None or station is not None:
+            raise DatasetRegistryError("Department-scoped datasets cannot have a station and require a department.")
+    elif scope_type == "STATION":
+        if department is None or station is None:
+            raise DatasetRegistryError("Station scope requires a department and station.")
+    else:
+        raise DatasetRegistryError("Unknown publication scope type.")
     return definition

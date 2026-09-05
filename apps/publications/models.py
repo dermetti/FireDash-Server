@@ -30,13 +30,20 @@ def validate_change_summary(summary: object) -> None:
 
 
 class DatasetScopeState(models.Model):
+    class ScopeType(models.TextChoices):
+        SYSTEM = "SYSTEM", "System"
+        DEPARTMENT = "DEPARTMENT", "Department"
+        STATION = "STATION", "Station"
     class DeliveryFormat(models.TextChoices):
         V1_ARTIFACT = "V1_ARTIFACT", "V1 artifact"
         DOCUMENT_MANIFEST_V2 = "DOCUMENT_MANIFEST_V2", "Document manifest v2"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    scope_type = models.CharField(
+        max_length=16, choices=ScopeType.choices, default=ScopeType.DEPARTMENT
+    )
     department = models.ForeignKey(
-        Department, on_delete=models.PROTECT, related_name="dataset_scopes"
+        Department, null=True, blank=True, on_delete=models.PROTECT, related_name="dataset_scopes"
     )
     station = models.ForeignKey(
         Station,
@@ -72,8 +79,14 @@ class DatasetScopeState(models.Model):
 
     class Meta:
         constraints = [
+            models.CheckConstraint(
+                condition=(Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
+                    | Q(scope_type="DEPARTMENT", department__isnull=False, station__isnull=True)
+                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)),
+                name="dataset_scope_owner_shape",
+            ),
             models.UniqueConstraint(
-                fields=("department", "station", "dataset_type_code"),
+                fields=("scope_type", "department", "station", "dataset_type_code"),
                 nulls_distinct=False,
                 name="unique_dataset_scope_state",
             ),
@@ -81,7 +94,12 @@ class DatasetScopeState(models.Model):
 
     def clean(self) -> None:
         try:
-            validate_dataset_scope(dataset_type_code=self.dataset_type_code, station=self.station)
+            validate_dataset_scope(
+                dataset_type_code=self.dataset_type_code,
+                scope_type=self.scope_type,
+                department=self.department,
+                station=self.station,
+            )
         except DatasetRegistryError as error:
             raise ValidationError({"dataset_type_code": str(error)}) from error
         if self.station_id and self.station and self.station.department_id != self.department_id:
@@ -141,8 +159,12 @@ class DatasetPublication(models.Model):
         CANCELLED = "CANCELLED", "Cancelled"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    scope_type = models.CharField(
+        max_length=16, choices=DatasetScopeState.ScopeType.choices,
+        default=DatasetScopeState.ScopeType.DEPARTMENT,
+    )
     department = models.ForeignKey(
-        Department, on_delete=models.PROTECT, related_name="dataset_publications"
+        Department, null=True, blank=True, on_delete=models.PROTECT, related_name="dataset_publications"
     )
     station = models.ForeignKey(
         Station,
@@ -212,15 +234,21 @@ class DatasetPublication(models.Model):
 
     class Meta:
         constraints = [
+            models.CheckConstraint(
+                condition=(Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
+                    | Q(scope_type="DEPARTMENT", department__isnull=False, station__isnull=True)
+                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)),
+                name="dataset_publication_owner_shape",
+            ),
             models.UniqueConstraint(
-                fields=("department", "station", "dataset_type_code", "version_number"),
+                fields=("scope_type", "department", "station", "dataset_type_code", "version_number"),
                 # PostgreSQL treats department-scoped NULL station values as
                 # equal here, so every assigned version is unique per scope.
                 nulls_distinct=False,
                 name="unique_dataset_publication_version",
             ),
             models.UniqueConstraint(
-                fields=("department", "station", "dataset_type_code"),
+                fields=("scope_type", "department", "station", "dataset_type_code"),
                 condition=Q(status="PUBLISHED"),
                 nulls_distinct=False,
                 name="one_current_published_dataset_publication",
@@ -245,7 +273,8 @@ class DatasetPublication(models.Model):
     def clean(self) -> None:
         try:
             definition = validate_dataset_scope(
-                dataset_type_code=self.dataset_type_code, station=self.station
+                dataset_type_code=self.dataset_type_code, scope_type=self.scope_type,
+                department=self.department, station=self.station,
             )
         except DatasetRegistryError as error:
             raise ValidationError({"dataset_type_code": str(error)}) from error
@@ -267,13 +296,14 @@ class DatasetPublication(models.Model):
         except ValidationError as error:
             raise ValidationError({"change_summary": error.message}) from error
         if self.scope_state_id and (
-            self.scope_state.department_id != self.department_id
+            self.scope_state.scope_type != self.scope_type
+            or self.scope_state.department_id != self.department_id
             or self.scope_state.station_id != self.station_id
             or self.scope_state.dataset_type_code != self.dataset_type_code
         ):
             raise ValidationError({"scope_state": "Scope state must match the publication scope."})
         if self.artifact_path and self.artifact_path != publication_artifact_relative_path(
-            department_id=self.department_id, publication_id=self.id
+            scope_type=self.scope_type, department_id=self.department_id, publication_id=self.id
         ):
             raise ValidationError(
                 {"artifact_path": "Artifact path must be a generated publication path."}
@@ -644,8 +674,12 @@ class PublicationJob(models.Model):
     scope_state = models.ForeignKey(
         DatasetScopeState, on_delete=models.PROTECT, related_name="publication_jobs"
     )
+    scope_type = models.CharField(
+        max_length=16, choices=DatasetScopeState.ScopeType.choices,
+        default=DatasetScopeState.ScopeType.DEPARTMENT,
+    )
     department = models.ForeignKey(
-        Department, on_delete=models.PROTECT, related_name="publication_jobs"
+        Department, null=True, blank=True, on_delete=models.PROTECT, related_name="publication_jobs"
     )
     station = models.ForeignKey(
         Station, null=True, blank=True, on_delete=models.PROTECT, related_name="publication_jobs"
@@ -679,8 +713,14 @@ class PublicationJob(models.Model):
 
     class Meta:
         constraints = [
+            models.CheckConstraint(
+                condition=(Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
+                    | Q(scope_type="DEPARTMENT", department__isnull=False, station__isnull=True)
+                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)),
+                name="publication_job_owner_shape",
+            ),
             models.UniqueConstraint(
-                fields=("department", "station", "dataset_type_code"),
+                fields=("scope_type", "department", "station", "dataset_type_code"),
                 condition=Q(status__in=("PENDING", "RUNNING")),
                 nulls_distinct=False,
                 name="one_active_publication_job_per_scope",
@@ -690,13 +730,17 @@ class PublicationJob(models.Model):
 
     def clean(self) -> None:
         try:
-            validate_dataset_scope(dataset_type_code=self.dataset_type_code, station=self.station)
+            validate_dataset_scope(
+                dataset_type_code=self.dataset_type_code, scope_type=self.scope_type,
+                department=self.department, station=self.station,
+            )
         except DatasetRegistryError as error:
             raise ValidationError({"dataset_type_code": str(error)}) from error
         if self.station_id and self.station and self.station.department_id != self.department_id:
             raise ValidationError({"station": "Station must belong to the job department."})
         if self.scope_state_id and (
-            self.scope_state.department_id != self.department_id
+            self.scope_state.scope_type != self.scope_type
+            or self.scope_state.department_id != self.department_id
             or self.scope_state.station_id != self.station_id
             or self.scope_state.dataset_type_code != self.dataset_type_code
         ):

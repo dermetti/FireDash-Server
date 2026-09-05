@@ -30,6 +30,10 @@ and do not replace the HOME assignment.
 
 ## Publications
 
+Publication scopes are first-class persisted identity: `SYSTEM` has no department or station, `DEPARTMENT` has a department only, and `STATION` has both a department and station. A SYSTEM publication has one global lifecycle and is never copied per department. Scope ownership is deliberately separate from tablet exposure: a usable publication still requires the dataset exposure policy and installation/department authorization before it enters a manifest.
+
+Stage 1 provides no SYSTEM dataset. CBRN/Dangerous Goods is planned as the first one; Vehicle Rescue Guides web configuration, licences, and offline rescue artifacts are not implemented by this architecture change.
+
 Publication work is split into three operational lanes:
 
 1. **Delivery** is a persistent worker that polls at roughly two seconds and

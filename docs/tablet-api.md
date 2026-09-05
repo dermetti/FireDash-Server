@@ -309,6 +309,10 @@ public keys while signed material referring to them remains available.
 
 ## Manifest retrieval and complete wire format
 
+### Publication scope identity
+
+Every dataset manifest entry has an explicit `scope` object: `{"type":"SYSTEM"}`, `{"type":"DEPARTMENT","department_id":"..."}`, or `{"type":"STATION","department_id":"...","station_id":"..."}`. The same explicit object is part of artifact and HPKE canonical identity. Missing tenant IDs never mean SYSTEM. SYSTEM ownership alone does not authorize delivery; exposure and installation authorization remain separate. There are no SYSTEM datasets, premium entitlement fields, or Vehicle Rescue Guides wire format in this stage.
+
 `GET /api/v1/tablet/manifest` only reads/coalesces database work in the web process;
 it never loads the KEK or signing private key. A ready manifest returns 200 and
 a quoted ETag. The ETag is SHA-256 of sorted compact JSON of the response payload

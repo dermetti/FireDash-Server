@@ -13,6 +13,7 @@ from django.views.decorators.http import require_http_methods
 from apps.accounts.reauth import require_recent_reauthentication
 from apps.authorization.scopes import active_department_ids
 from apps.authorization.services import require_department_admin
+from apps.authorization.services import require_system_admin
 from apps.organizations.models import Department
 from apps.publications.builders import build_source_payload
 from apps.publications.diffs import source_diff
@@ -223,6 +224,13 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
     rows = _decorate_scope_rows(scope_operational_states_for_scopes(list(page.object_list)))
     page_query = request.GET.copy()
     page_query.pop("page", None)
+    system_scopes = DatasetScopeState.objects.filter(
+        scope_type=DatasetScopeState.ScopeType.SYSTEM,
+        current_published_publication__isnull=False,
+    )
+    # The registry exposure gate is intentionally not evaluated here: this is
+    # an administrative read-only view, not a tablet authorization decision.
+    system_rows = _decorate_scope_rows(scope_operational_states_for_scopes(list(system_scopes)))
     return {
         "department": department,
         "scope_rows": rows,
@@ -231,6 +239,7 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
         "selected_filter": selected_filter,
         "scope_filters": SCOPE_FILTERS,
         "page_query": page_query.urlencode(),
+        "system_scope_rows": system_rows,
     }
 
 
@@ -298,6 +307,17 @@ def publications(request: HttpRequest, department_id) -> HttpResponse:
     if request.headers.get("HX-Request") == "true":
         return render(request, "publications/_scope_results.html", context)
     return render(request, "publications/list.html", context)
+
+
+@login_required
+@require_http_methods(["GET"])
+def system_publications(request: HttpRequest) -> HttpResponse:
+    """The system-owned lifecycle surface. It is intentionally empty until a
+    registered SYSTEM dataset exists; ownership does not create data."""
+    require_system_admin(request.user)
+    scopes = DatasetScopeState.objects.filter(scope_type=DatasetScopeState.ScopeType.SYSTEM)
+    rows = _decorate_scope_rows(scope_operational_states_for_scopes(list(scopes)))
+    return render(request, "publications/system_list.html", {"scope_rows": rows})
 
 
 @login_required

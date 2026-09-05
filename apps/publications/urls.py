@@ -3,6 +3,7 @@ from django.urls import path
 from apps.publications import views
 
 urlpatterns = [
+    path("system/publications/", views.system_publications, name="system-publications-list"),
     path(
         "departments/<uuid:department_id>/publications/",
         views.publications,

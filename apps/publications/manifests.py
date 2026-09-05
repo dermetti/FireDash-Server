@@ -120,7 +120,7 @@ def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, ob
         return {
             "publication_id": str(publication.id),
             "type": publication.dataset_type_code,
-            "scope": definition.scope,
+            "scope": _publication_scope_payload(publication),
             "version": publication.version_number,
             "schema_version": 2,
             "required": definition.required,
@@ -140,6 +140,7 @@ def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, ob
     return {
         "publication_id": str(publication.id),
         "type": publication.dataset_type_code,
+        "scope": _publication_scope_payload(publication),
         "version": publication.version_number,
         "schema_version": publication.schema_version,
         "artifact_size": publication.artifact_size,
@@ -153,6 +154,22 @@ def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, ob
         "artifact_signature_algorithm": publication.artifact_signature_algorithm,
         "artifact_signing_key_version": publication.artifact_signing_key_version,
     }
+
+
+def _publication_scope_payload(publication: DatasetPublication) -> dict[str, object]:
+    """Explicit signed identity; absence of a tenant is never a SYSTEM alias."""
+    scope = {"type": publication.scope_type}
+    if publication.scope_type in ("DEPARTMENT", "STATION"):
+        if publication.department_id is None:
+            raise ManifestError("Publication scope is invalid.")
+        scope["department_id"] = str(publication.department_id)
+    if publication.scope_type == "STATION":
+        if publication.station_id is None:
+            raise ManifestError("Publication scope is invalid.")
+        scope["station_id"] = str(publication.station_id)
+    if publication.scope_type not in ("SYSTEM", "DEPARTMENT", "STATION"):
+        raise ManifestError("Publication scope is invalid.")
+    return scope
 
 
 def _is_document_manifest_delivery(publication: DatasetPublication) -> bool:
@@ -219,7 +236,8 @@ def authorized_publications(*, installation: AppInstallation, now=None):
     )
     publications = (
         DatasetPublication.objects.filter(
-            department_id=installation.tablet.department_id,
+            Q(department_id=installation.tablet.department_id, scope_type__in=("DEPARTMENT", "STATION"))
+            | Q(scope_type="SYSTEM"),
             status=DatasetPublication.Status.PUBLISHED,
             artifact_status=DatasetPublication.ArtifactStatus.READY,
         )
@@ -232,7 +250,9 @@ def authorized_publications(*, installation: AppInstallation, now=None):
         [
             publication
             for publication in publications
-            if is_feature_enabled(
+            if _publication_is_exposed_to_installation(
+                publication=publication, installation=installation
+            ) and is_feature_enabled(
                 department=installation.tablet.department,
                 feature_code=get_dataset_definition(publication.dataset_type_code).feature_code,
             )
@@ -259,7 +279,8 @@ def manifest_publications(*, installation: AppInstallation, now=None):
         return installation, None, []
     publications = (
         DatasetPublication.objects.filter(
-            department_id=installation.tablet.department_id,
+            Q(department_id=installation.tablet.department_id, scope_type__in=("DEPARTMENT", "STATION"))
+            | Q(scope_type="SYSTEM"),
             status=DatasetPublication.Status.PUBLISHED,
             artifact_status=DatasetPublication.ArtifactStatus.READY,
         )
@@ -272,12 +293,22 @@ def manifest_publications(*, installation: AppInstallation, now=None):
         [
             publication
             for publication in publications
-            if is_feature_enabled(
+            if _publication_is_exposed_to_installation(
+                publication=publication, installation=installation
+            ) and is_feature_enabled(
                 department=installation.tablet.department,
                 feature_code=get_dataset_definition(publication.dataset_type_code).feature_code,
             )
         ],
     )
+
+
+def _publication_is_exposed_to_installation(*, publication, installation) -> bool:
+    """Keep publication ownership and tenant delivery decisions independent."""
+    definition = get_dataset_definition(publication.dataset_type_code)
+    if publication.scope_type == "SYSTEM":
+        return definition.system_exposure
+    return publication.department_id == installation.tablet.department_id
 
 
 @transaction.atomic

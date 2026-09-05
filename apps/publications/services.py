@@ -61,29 +61,38 @@ def _schedule_artifact_removal(relative_path: str) -> None:
     transaction.on_commit(remove_after_commit)
 
 
-def _scope_filter(*, department, station, dataset_type_code: str) -> dict[str, object]:
+def _registered_scope_type(dataset_type_code: str) -> str:
+    """The registry declares ownership; nullable tenant keys never do."""
+    return get_dataset_definition(dataset_type_code).scope.upper()
+
+
+def _scope_filter(*, department, station, dataset_type_code: str, scope_type=None) -> dict[str, object]:
+    scope_type = scope_type or _registered_scope_type(dataset_type_code)
     return {
+        "scope_type": scope_type,
         "department": department,
         "station": station,
         "dataset_type_code": dataset_type_code,
     }
 
 
-def _validate_scope(*, department, station, dataset_type_code: str) -> None:
+def _validate_scope(*, department, station, dataset_type_code: str, scope_type=None) -> None:
+    scope_type = scope_type or _registered_scope_type(dataset_type_code)
     try:
-        validate_dataset_scope(dataset_type_code=dataset_type_code, station=station)
+        validate_dataset_scope(dataset_type_code=dataset_type_code, scope_type=scope_type, department=department, station=station)
     except DatasetRegistryError as error:
         raise PublicationError(str(error)) from error
-    if station is not None and station.department_id != department.id:
+    if station is not None and (department is None or station.department_id != department.id):
         raise PublicationError("Station must belong to the scope department.")
 
 
-def _locked_scope(*, department, station, dataset_type_code: str) -> DatasetScopeState:
+def _locked_scope(*, department, station, dataset_type_code: str, scope_type=None) -> DatasetScopeState:
+    scope_type = scope_type or _registered_scope_type(dataset_type_code)
     scope = (
         DatasetScopeState.objects.select_for_update()
         .filter(
             **_scope_filter(
-                department=department, station=station, dataset_type_code=dataset_type_code
+                scope_type=scope_type, department=department, station=station, dataset_type_code=dataset_type_code
             )
         )
         .first()
@@ -115,6 +124,7 @@ def _allocate_staged_publication(
         else definition.current_schema_version
     )
     return DatasetPublication.objects.create(
+        scope_type=job.scope_type,
         department=job.department,
         station=job.station,
         dataset_type_code=job.dataset_type_code,
@@ -236,7 +246,7 @@ def _eligible_predecessor(
 
 @transaction.atomic
 def mark_dirty(
-    *, department, station=None, dataset_type_code: str, actor=None
+    *, department=None, station=None, dataset_type_code: str, actor=None
 ) -> DatasetScopeState:
     """Advance a scope revision and queue exactly one build after commit."""
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
@@ -348,7 +358,7 @@ def mark_dirty(
 @transaction.atomic
 def enqueue_publication_job(
     *,
-    department,
+    department=None,
     station=None,
     dataset_type_code: str,
     requested_by=None,

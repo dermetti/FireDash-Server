@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}System Publications{% endblock %}
+{% block content %}
+<p class="text-body-secondary small mb-0">Distributed Data / System Publications</p>
+<h1 class="mb-1">System Publications</h1>
+<p class="text-body-secondary">System-managed datasets are authored and published once. Delivery remains subject to each dataset’s exposure policy.</p>
+{% if scope_rows %}
+  <div class="list-group">{% for row in scope_rows %}<a class="list-group-item list-group-item-action" href="{% url 'publications-scope-detail' row.scope_id %}"><strong>{{ row.dataset_name }}</strong><span class="badge text-bg-{{ row.state_badge }} ms-2">{{ row.state_label }}</span><div class="small text-body-secondary">System managed · v{{ row.distributed_version|default:"—" }}</div></a>{% endfor %}</div>
+{% else %}<p class="text-body-secondary">No system publications are registered yet.</p>{% endif %}
+{% endblock %}

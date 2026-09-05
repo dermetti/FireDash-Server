@@ -179,6 +179,7 @@ def _nav_context(request):
             {
                 "label": "System Administration",
                 "children": [
+                    {"label": "System Publications", "url": reverse("system-publications-list")},
                     {
                         "label": "API Compatibility",
                         "url": reverse("portal-system-api-compatibility"),

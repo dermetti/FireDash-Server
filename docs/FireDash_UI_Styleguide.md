@@ -1047,3 +1047,9 @@ A new page or module is FireDash-consistent when:
 - authorization is enforced server-side;
 - destructive/security-sensitive operations remain audited;
 - the page remains understandable without product-specific UI training.
+# Publication ownership scopes
+
+Publication ownership is explicit and must be shown independently from delivery and licensing.
+`SYSTEM` publications are authored and published once by system administration and appear to eligible departments as read-only **System managed** content. `DEPARTMENT` publications are **Department managed**. `STATION` publications are department-managed and labelled **Station scoped**. “Web” and future “Offline” describe delivery, not ownership; eligibility/entitlement is a separate authorization decision.
+
+System-managed configuration is global configuration inherited by departments, but is not publication data. Vehicle Rescue Guides provider/URL is a future example only; it is not implemented here. CBRN/ADR is intended to be the first SYSTEM publication, but is not part of this stage. No premium licensing model exists in this stage.

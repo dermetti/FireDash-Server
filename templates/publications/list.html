@@ -7,5 +7,12 @@
 <section class="mb-4"><form method="post" action="{% url 'publications-bulk-rebuild' department.id %}">{% csrf_token %}<button type="submit" class="btn btn-primary">Build affected datasets</button></form></section>
 <section class="mb-4" aria-label="Publication filters"><form method="get" hx-get="{% url 'publications-list' department.id %}" hx-target="#publication-scope-results" hx-push-url="true" hx-trigger="change"><label class="form-label" for="publication-state-filter">Show</label><div class="d-flex align-items-center gap-2 flex-wrap"><select class="form-select" id="publication-state-filter" name="state" style="max-width: 18rem">{% for value, label in scope_filters.items %}<option value="{{ value }}"{% if value == selected_filter %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% if selected_filter %}<a class="btn btn-outline-secondary" href="{% url 'publications-list' department.id %}">Reset</a>{% endif %}</div></form></section>
 {% include "publications/_scope_results.html" %}
+{% if system_scope_rows %}
+<section class="mt-5" aria-labelledby="system-provided-publications-heading">
+  <h2 id="system-provided-publications-heading" class="h4">System-provided publications</h2>
+  <p class="text-body-secondary">These publications are System managed and read-only for department administrators.</p>
+  <div class="list-group">{% for row in system_scope_rows %}<div class="list-group-item"><strong>{{ row.dataset_name }}</strong><span class="badge text-bg-secondary ms-2">System managed</span><span class="badge text-bg-{{ row.state_badge }} ms-2">{{ row.state_label }}</span>{% if row.distributed_version %}<div class="small text-body-secondary">Current version v{{ row.distributed_version }}</div>{% endif %}</div>{% endfor %}</div>
+</section>
+{% endif %}
 {% include "components/_htmx_action_modal.html" with modal_container_id="publication-action-modal-container" %}
 {% endblock %}

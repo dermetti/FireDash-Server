@@ -101,9 +101,10 @@ def _signature_payload(
             "schema_version": publication.schema_version,
             "version_number": publication.version_number,
             "scope": {
-                "department_id": str(publication.department_id),
-                "station_id": str(publication.station_id) if publication.station_id else None,
+                "type": publication.scope_type,
                 "dataset_type_code": publication.dataset_type_code,
+                **({"department_id": str(publication.department_id)} if publication.department_id else {}),
+                **({"station_id": str(publication.station_id)} if publication.station_id else {}),
             },
             "kek_version": settings.PUBLICATION_KEK_VERSION,
         },
@@ -292,7 +293,9 @@ def build_encrypted_artifact(*, publication, plaintext: bytes) -> dict[str, obje
     )
     # The canonical final path is <department_id>/<publication_id>/artifact.bin.
     relative_path = publication_artifact_relative_path(
-        department_id=publication.department_id, publication_id=publication.id
+        scope_type=publication.scope_type,
+        department_id=publication.department_id,
+        publication_id=publication.id,
     )
     final_path = settings.PUBLICATION_ARTIFACT_ROOT / relative_path
     temp_dir = settings.PUBLICATION_ARTIFACT_TEMP_ROOT / str(publication.id)

@@ -15,6 +15,7 @@ from apps.publications.manifests import (
     ManifestError,
     _is_document_manifest_delivery,
     _publication_manifest_entry,
+    _publication_scope_payload,
     authorized_publications,
     canonical_manifest_payload,
     manifest_publications,
@@ -176,7 +177,7 @@ def _manifest_payload(*, installation, vehicle, publications, grants, generation
             {
                 "publication_id": str(publication.id),
                 "type": publication.dataset_type_code,
-                "scope": definition.scope,
+                "scope": _publication_scope_payload(publication),
                 "version": publication.version_number,
                 "schema_version": publication.schema_version,
                 "required": definition.required,

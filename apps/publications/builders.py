@@ -321,6 +321,7 @@ BUILDERS.update(
             "incident_count": 0,
             "source_revision": source_revision,
         },
+        "test_system_dataset": lambda *, source_revision, **_: {"item_count": 0, "source_revision": source_revision},
     }
 )
 VALIDATORS["summary"] = validate_summary
@@ -543,6 +544,7 @@ SOURCE_BUILDERS.update(
         "department_phonebook": _phonebook_source_payload,
         "station_phonebook": _phonebook_source_payload,
         "test_department_incidents": lambda **_: {"incidents": []},
+        "test_system_dataset": lambda **_: {"items": []},
     }
 )
 ARTIFACT_BUILDERS.update(
@@ -553,6 +555,7 @@ ARTIFACT_BUILDERS.update(
         "department_phonebook": _artifact_phonebook,
         "station_phonebook": _artifact_phonebook,
         "test_department_incidents": lambda **_: _json_bytes({"incidents": []}),
+        "test_system_dataset": lambda **_: _json_bytes({"items": []}),
     }
 )
 
