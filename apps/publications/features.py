@@ -11,7 +11,6 @@ class FeatureDefinition:
     code: str
     display_name: str
     description: str
-    default_enabled: bool = True
 
 
 FEATURE_REGISTRY = MappingProxyType(
@@ -24,8 +23,7 @@ FEATURE_REGISTRY = MappingProxyType(
         "klgv_plans": FeatureDefinition(
             code="klgv_plans",
             display_name="KLGV plan publications",
-            description="Optional future KLGV PDF document bundles.",
-            default_enabled=False,
+            description="KLGV PDF document bundles.",
         ),
     }
 )

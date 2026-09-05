@@ -58,7 +58,7 @@ def test_klgv_registry_is_department_scoped_required_and_production_visible():
     assert definition.artifact_format == "document-manifest-v2"
     assert definition.internal_only is False
     assert definition.feature_code == "klgv_plans"
-    assert get_feature_definition("klgv_plans").default_enabled is False
+    assert get_feature_definition("klgv_plans").code == "klgv_plans"
 
 
 @pytest.mark.django_db

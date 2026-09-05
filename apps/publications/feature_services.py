@@ -11,7 +11,7 @@ class FeatureDisabledError(ValueError):
 
 def is_feature_enabled(*, department, feature_code: str) -> bool:
     try:
-        definition = get_feature_definition(feature_code)
+        get_feature_definition(feature_code)
     except FeatureRegistryError as error:
         raise FeatureDisabledError(str(error)) from error
     feature = (
@@ -19,9 +19,9 @@ def is_feature_enabled(*, department, feature_code: str) -> bool:
         .only("enabled")
         .first()
     )
-    # Existing publication functionality retains its enabled-by-default behavior;
-    # future optional features may explicitly default to disabled.
-    return definition.default_enabled if feature is None else feature.enabled
+    # Tablet-deliverable capabilities are enabled unless an administrator has
+    # explicitly persisted a future deactivation decision.
+    return True if feature is None else feature.enabled
 
 
 def require_feature(*, department, feature_code: str) -> None:

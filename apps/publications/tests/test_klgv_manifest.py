@@ -30,15 +30,17 @@ from apps.publications.document_v2 import (
     generation_hpke_context,
     process_next_generation_key_grant,
 )
-from apps.publications.feature_services import set_department_feature
+from apps.publications.feature_services import is_feature_enabled, set_department_feature
+from apps.publications.features import FEATURE_REGISTRY
 from apps.publications.hpke import (
     DocumentGenerationHPKEContext,
     HPKEError,
     hpke_open,
     serialize_p256_public_key,
 )
-from apps.publications.manifests import request_manifest
+from apps.publications.manifests import manifest_publications, request_manifest
 from apps.publications.models import (
+    DepartmentFeature,
     DatasetPublication,
     DatasetScopeState,
     DocumentArtifact,
@@ -199,7 +201,6 @@ def klgv_delivery_context(db, tmp_path, monkeypatch):
         authorization_valid_until=timezone.now() + timedelta(days=1),
     )
     TabletVehicleAssignment.objects.create(tablet=tablet, vehicle=vehicle, valid_from=timezone.now(), created_by=user)
-    set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=True)
     accepted = tmp_path / "accepted"
     accepted.mkdir()
     kek, signing, ring = tmp_path / "kek", tmp_path / "signing", tmp_path / "ring.json"
@@ -238,6 +239,139 @@ def _klgv_publication(*, department, scope, version, status=DatasetPublication.S
         version_number=version, schema_version=2, source_revision=version,
         source_snapshot=snapshot, status=status,
     )
+
+
+def _ready_artifact_publication(*, department, scope, dataset_type_code, version):
+    """Create a v1 publication suitable for manifest-scope selection tests."""
+    publication_id = uuid.uuid4()
+    return DatasetPublication.objects.create(
+        id=publication_id,
+        department=department,
+        station=scope.station,
+        scope_state=scope,
+        dataset_type_code=dataset_type_code,
+        version_number=version,
+        schema_version=1,
+        source_revision=version,
+        status=DatasetPublication.Status.PUBLISHED,
+        artifact_status=DatasetPublication.ArtifactStatus.READY,
+        artifact_ready=True,
+        artifact_path=f"{department.id}/{publication_id}/artifact.bin",
+        artifact_size=1,
+        artifact_sha256="a" * 64,
+        artifact_nonce=b"n" * 12,
+        artifact_wrapped_cek=b"k" * 40,
+        artifact_encryption_algorithm="AES-256-GCM",
+        artifact_wrapping_algorithm="AES-KW-RFC3394",
+        artifact_kek_version="1",
+        artifact_signature=b"s" * 64,
+        artifact_signature_algorithm="Ed25519",
+        artifact_signing_key_version="1",
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_station_assigned_manifest_uses_default_feature_delivery_and_keeps_station_scope(
+    klgv_delivery_context,
+):
+    """No feature row is needed for eligible data in an assigned tablet scope."""
+    user, department, _, installation, _, _ = klgv_delivery_context
+    vehicle = TabletVehicleAssignment.objects.get(tablet=installation.tablet).vehicle
+
+    fire_scope = DatasetScopeState.objects.create(
+        department=department, dataset_type_code="department_fire_plans"
+    )
+    fire = _ready_artifact_publication(
+        department=department,
+        scope=fire_scope,
+        dataset_type_code="department_fire_plans",
+        version=1,
+    )
+    fire_scope.current_published_publication = fire
+    fire_scope.save(update_fields=("current_published_publication",))
+
+    personnel_scope = DatasetScopeState.objects.create(
+        department=department, station=vehicle.station, dataset_type_code="station_personnel"
+    )
+    personnel = _ready_artifact_publication(
+        department=department,
+        scope=personnel_scope,
+        dataset_type_code="station_personnel",
+        version=1,
+    )
+    personnel_scope.current_published_publication = personnel
+    personnel_scope.save(update_fields=("current_published_publication",))
+
+    _, resolved_vehicle, publications = manifest_publications(installation=installation)
+    assert resolved_vehicle.id == vehicle.id
+    assert {publication.id for publication in publications} == {fire.id, personnel.id}
+    assert not DepartmentFeature.objects.filter(
+        department=department, feature_code="klgv_plans"
+    ).exists()
+    assert all(
+        is_feature_enabled(department=department, feature_code=feature_code)
+        for feature_code in FEATURE_REGISTRY
+    )
+
+    klgv_scope = DatasetScopeState.objects.create(
+        department=department, dataset_type_code="department_klgv_plans"
+    )
+    klgv = _klgv_publication(department=department, scope=klgv_scope, version=1)
+    klgv.status = klgv.Status.PUBLISHED
+    klgv.artifact_status = klgv.ArtifactStatus.READY
+    klgv.artifact_ready = True
+    klgv.save(update_fields=("status", "artifact_status", "artifact_ready"))
+    klgv_scope.current_published_publication = klgv
+    klgv_scope.save(update_fields=("current_published_publication",))
+
+    _, _, publications = manifest_publications(installation=installation)
+    assert {publication.id for publication in publications} == {fire.id, klgv.id, personnel.id}
+    assert klgv.station_id is None  # KLGV has no direct station assignment.
+
+    other_department = Department.objects.create(
+        name="Other department", short_code="OTH", created_by=user
+    )
+    other_station = Station.objects.create(
+        department=other_department, name="Other station", short_code="OST"
+    )
+    other_vehicle = Vehicle.objects.create(
+        department=other_department, station=other_station, display_name="Other engine"
+    )
+    other_tablet = Tablet.objects.create(
+        department=other_department, display_name="Other tablet", status=Tablet.Status.ACTIVE
+    )
+    other_installation = AppInstallation.objects.create(
+        tablet=other_tablet,
+        installation_uuid=other_tablet.id,
+        credential_hash="x" * 64,
+        status=AppInstallation.Status.ACTIVE,
+        app_version="1.0.0",
+        adopted_app_version="1.0.0",
+        app_version_seen_at=timezone.now(),
+        hpke_public_key=installation.hpke_public_key,
+        hpke_ciphersuite=installation.hpke_ciphersuite,
+        hpke_key_fingerprint="b" * 64,
+        hpke_key_verified_at=timezone.now(),
+        adopted_at=timezone.now(),
+        authorization_valid_until=timezone.now() + timedelta(days=1),
+    )
+    TabletVehicleAssignment.objects.create(
+        tablet=other_tablet, vehicle=other_vehicle, valid_from=timezone.now(), created_by=user
+    )
+    _, _, other_publications = manifest_publications(installation=other_installation)
+    assert klgv.id not in {publication.id for publication in other_publications}
+
+    set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=False)
+    _, _, publications = manifest_publications(installation=installation)
+    assert {publication.id for publication in publications} == {fire.id, personnel.id}
+
+    set_department_feature(actor=user, department=department, feature_code="klgv_plans", enabled=True)
+    klgv.status = klgv.Status.SUPERSEDED
+    klgv.save(update_fields=("status",))
+    klgv_scope.current_published_publication = None
+    klgv_scope.save(update_fields=("current_published_publication",))
+    _, _, publications = manifest_publications(installation=installation)
+    assert {publication.id for publication in publications} == {fire.id, personnel.id}
 
 
 @pytest.mark.django_db(transaction=True)
