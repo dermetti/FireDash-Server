@@ -534,7 +534,7 @@ def system_data_hub(request: HttpRequest) -> HttpResponse:
         {
             "name": "Vehicle Rescue Guides",
             "description": "System-managed Euro RESCUE web application configuration.",
-            "icon": "rescue",
+            "icon": "vehicle",
             "url": reverse("portal-system-vehicle-rescue-guides"),
             "web_url": capability["web_url"],
         },
@@ -1174,7 +1174,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
                 {
                     "name": "Vehicle Rescue Guides",
                     "description": "Euro RESCUE web application available through system-managed configuration.",
-                    "icon": "rescue",
+                    "icon": "vehicle",
                     "web_url": vehicle_rescue_guides_capability()["web_url"],
                 },
             ),
