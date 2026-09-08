@@ -338,6 +338,22 @@ class DatasetPublication(models.Model):
             )
 
 
+class LegacyArtifactScopeSignatureUpgrade(models.Model):
+    """One-shot migration state for a pre-scope READY artifact envelope.
+
+    This is deliberately separate from immutable artifact metadata.  It is
+    created only by the scope migration and consumed atomically after the
+    worker has re-signed the unchanged ciphertext under the explicit scope.
+    """
+
+    publication = models.OneToOneField(
+        DatasetPublication,
+        on_delete=models.CASCADE,
+        related_name="legacy_scope_signature_upgrade",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 class FirePlanDocumentArtifact(models.Model):
     """Immutable, identity-addressed encrypted PDF for one canonical Fire Plan.
 

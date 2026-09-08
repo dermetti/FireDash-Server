@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import keywrap
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 from apps.publications.paths import (
@@ -345,31 +346,39 @@ def upgrade_legacy_scope_signature(*, publication) -> bool:
     remains at its historical path while its envelope adopts the explicit
     scope contract.
     """
-    if publication.artifact_signature_algorithm != "Ed25519-legacy-scope":
-        return False
-    root = settings.PUBLICATION_ARTIFACT_ROOT.resolve()
-    path = (root / publication.artifact_path).resolve()
-    try:
-        path.relative_to(root)
-        ciphertext = path.read_bytes()
-    except (OSError, ValueError) as error:
-        raise ArtifactError("Migrated publication artifact is unavailable for signature upgrade.") from error
-    if hashlib.sha256(ciphertext).hexdigest() != publication.artifact_sha256:
-        raise ArtifactError("Migrated publication artifact integrity check failed.")
-    signing_key = _credential(settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH, "signing")
-    if len(signing_key) != 32 or publication.artifact_wrapped_cek is None or publication.artifact_nonce is None:
-        raise ArtifactError("Migrated publication cryptographic metadata is unavailable.")
-    publication.artifact_signature = Ed25519PrivateKey.from_private_bytes(signing_key).sign(
-        _signature_payload(
-            publication=publication,
-            wrapped_cek=bytes(publication.artifact_wrapped_cek),
-            nonce=bytes(publication.artifact_nonce),
-            ciphertext=ciphertext,
+    from apps.publications.models import LegacyArtifactScopeSignatureUpgrade
+
+    with transaction.atomic():
+        marker = (
+            LegacyArtifactScopeSignatureUpgrade.objects.select_for_update()
+            .filter(publication_id=publication.id)
+            .first()
         )
-    )
-    publication.artifact_signature_algorithm = "Ed25519"
-    publication.artifact_signing_key_version = settings.PUBLICATION_SIGNING_KEY_VERSION
-    publication.save(update_fields=("artifact_signature", "artifact_signature_algorithm", "artifact_signing_key_version"))
+        if marker is None:
+            return False
+        root = settings.PUBLICATION_ARTIFACT_ROOT.resolve()
+        path = (root / publication.artifact_path).resolve()
+        try:
+            path.relative_to(root)
+            ciphertext = path.read_bytes()
+        except (OSError, ValueError) as error:
+            raise ArtifactError("Migrated publication artifact is unavailable for signature upgrade.") from error
+        if hashlib.sha256(ciphertext).hexdigest() != publication.artifact_sha256:
+            raise ArtifactError("Migrated publication artifact integrity check failed.")
+        signing_key = _credential(settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH, "signing")
+        if len(signing_key) != 32 or publication.artifact_wrapped_cek is None or publication.artifact_nonce is None:
+            raise ArtifactError("Migrated publication cryptographic metadata is unavailable.")
+        publication.artifact_signature = Ed25519PrivateKey.from_private_bytes(signing_key).sign(
+            _signature_payload(
+                publication=publication,
+                wrapped_cek=bytes(publication.artifact_wrapped_cek),
+                nonce=bytes(publication.artifact_nonce),
+                ciphertext=ciphertext,
+            )
+        )
+        publication.artifact_signing_key_version = settings.PUBLICATION_SIGNING_KEY_VERSION
+        publication.save(update_fields=("artifact_signature", "artifact_signing_key_version"))
+        marker.delete()
     return True
 
 
