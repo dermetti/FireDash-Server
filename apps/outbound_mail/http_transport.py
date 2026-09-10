@@ -36,6 +36,11 @@ def _proxy_configuration(proxy_url: str) -> dict[str, str] | None:
     return {"https": proxy_url}
 
 
+def validate_outbound_mail_https_proxy(proxy_url: str) -> None:
+    """Validate the deployment value using the transport's routing contract."""
+    _proxy_configuration(proxy_url)
+
+
 class OutboundMailHttpTransport:
     """One-shot JSON transport with explicit direct-or-proxy routing semantics."""
 

@@ -12,6 +12,7 @@ from apps.outbound_mail.http_transport import (
     HttpResponse,
     OutboundMailHttpTransport,
     OutboundMailTransportError,
+    validate_outbound_mail_https_proxy,
 )
 from apps.outbound_mail.models import SystemMailConfiguration
 from apps.outbound_mail.providers import resolve_runtime_provider
@@ -187,6 +188,12 @@ def test_http_transport_direct_and_proxy_routes_are_explicit() -> None:
     )
     proxy.post_json(url="https://provider.example.test/send", headers={}, payload={})
     assert proxy_session.calls[0][1]["proxies"] == {"https": "http://proxy.example.test:3128"}
+
+
+@pytest.mark.parametrize("value", ["socks5://proxy.example.test:1080", "http:///missing-host"])
+def test_proxy_validation_uses_the_transport_routing_contract(value: str) -> None:
+    with pytest.raises(OutboundMailTransportError):
+        validate_outbound_mail_https_proxy(value)
 
 
 @pytest.mark.parametrize("error", [requests.Timeout(), requests.ConnectionError()])

@@ -92,6 +92,23 @@ normal FireDash virtual environment to inspect parsed encryption metadata. It
 does not require an outbound-mail qpdf binary, vendor installation, or
 deployment setting. The separate reference-data sanitizer remains qpdf-based.
 
+## Optional outbound-mail HTTPS egress proxy
+
+Direct HTTPS egress is the default. Installations that require a fixed or
+NAT-controlled egress path may configure an HTTP(S) proxy with the persistent
+deployment option:
+
+```sh
+sudo deploy/install.sh --outbound-mail-https-proxy=http://proxy.example:3128
+```
+
+The installer stores this deployment-owned value in
+`/etc/fire-backend/install.conf` and renders it into
+`/etc/fire-backend/fire-backend.env`, which is loaded by `fire-backend.service`.
+It is retained on exact-SHA upgrades. Pass an empty value to clear it. The
+value must be an `http://` or `https://` URL with a hostname; invalid values
+fail before activation. This is not an administrator or database setting.
+
 ## Reference-data sandbox
 
 The root-owned PDF sanitizer broker remains outside the web process. Its Unix

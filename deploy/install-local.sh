@@ -57,6 +57,8 @@ while (($#)); do
         --admin-email=*) FIREDASH_INITIAL_ADMIN_EMAIL=${1#--admin-email=}; shift ;;
         --admin-name) (($# >= 2)) || die "--admin-name requires a value"; FIREDASH_INITIAL_ADMIN_DISPLAY_NAME=$2; shift 2 ;;
         --admin-name=*) FIREDASH_INITIAL_ADMIN_DISPLAY_NAME=${1#--admin-name=}; shift ;;
+        --outbound-mail-https-proxy) (($# >= 2)) || die "--outbound-mail-https-proxy requires a value"; FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=$2; export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY; shift 2 ;;
+        --outbound-mail-https-proxy=*) FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=${1#--outbound-mail-https-proxy=}; export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY; shift ;;
         *) die "unknown argument: $1" ;;
     esac
 done
@@ -76,11 +78,21 @@ if [[ -f $INSTALL_CONF ]]; then
     while IFS='=' read -r k v; do
         [[ -z ${k:-} || ${k:-} == \#* ]] && continue
         case "$k" in
+            FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY)
+                [[ ! ${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY+x} ]] && export "$k=$v"
+                ;;
             FIREDASH_BASE_URL|FIREDASH_TLS_CERT_PATH|FIREDASH_TLS_KEY_PATH|FIREDASH_REQUESTED_REF)
                 [[ -z ${!k:-} ]] && export "$k=$v"
                 ;;
         esac
     done < "$INSTALL_CONF"
+fi
+
+# Preserve a proxy configured by a release before install.conf owned this
+# setting. An explicitly supplied (including empty) installer value wins.
+if [[ ! ${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY+x} && -f $ENV_FILE ]]; then
+    FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=$(env_value "$ENV_FILE" OUTBOUND_MAIL_HTTPS_PROXY)
+    export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY
 fi
 
 FIREDASH_STATE=$(classify_state)
@@ -107,6 +119,7 @@ FIREDASH_REQUESTED_REF=${FIREDASH_REQUESTED_REF:-main}
 FIREDASH_RELEASE=/srv/firedash/releases/$FIREDASH_RESOLVED_SHA
 
 export FIREDASH_BASE_URL FIREDASH_HOST FIREDASH_TLS_CERT_PATH FIREDASH_TLS_KEY_PATH
+export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY
 export FIREDASH_RESOLVED_SHA FIREDASH_REQUESTED_REF FIREDASH_RELEASE
 export FIREDASH_INITIAL_ADMIN_EMAIL FIREDASH_INITIAL_ADMIN_DISPLAY_NAME
 
@@ -120,6 +133,7 @@ FIREDASH_INSTALL_SCHEMA_VERSION=1
 FIREDASH_BASE_URL=$FIREDASH_BASE_URL
 FIREDASH_TLS_CERT_PATH=$FIREDASH_TLS_CERT_PATH
 FIREDASH_TLS_KEY_PATH=$FIREDASH_TLS_KEY_PATH
+FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY:-}
 FIREDASH_REQUESTED_REF=$FIREDASH_REQUESTED_REF
 EOF
     sha=$(env_value "$INSTALL_CONF" FIREDASH_LAST_SUCCESSFUL_SHA 2>/dev/null || true)

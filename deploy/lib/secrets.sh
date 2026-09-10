@@ -42,10 +42,37 @@ require_no_deprecated_env_vars() {
     die "deprecated environment configuration must be migrated before continuing"
 }
 
+# Return the operator-selected proxy, preserving a legacy runtime value while
+# install.conf is being introduced as its canonical persistent source.
+effective_outbound_mail_https_proxy() {
+    if [[ ${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY+x} ]]; then
+        printf '%s' "$FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY"
+    elif [[ -f $ENV_FILE ]]; then
+        env_value "$ENV_FILE" OUTBOUND_MAIL_HTTPS_PROXY
+    fi
+}
+
+validate_outbound_mail_https_proxy() {
+    local release=$1 proxy_url=$2
+    PYTHONPATH="$release${PYTHONPATH:+:$PYTHONPATH}" "$release/venv/bin/python" - "$proxy_url" <<'PY'
+import sys
+from apps.outbound_mail.http_transport import (
+    OutboundMailTransportError,
+    validate_outbound_mail_https_proxy,
+)
+
+try:
+    validate_outbound_mail_https_proxy(sys.argv[1])
+except (OutboundMailTransportError, TypeError, ValueError):
+    raise SystemExit(1) from None
+PY
+}
+
 # Render /etc/fire-backend/fire-backend.env. Empty runtime_password/secret_key reuse existing values.
 render_env() {
     local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1 application_secret_kek_version=1
-    local ingest_upload_bytes=268435456 pdf_package_documents=250
+    local ingest_upload_bytes=268435456 pdf_package_documents=250 outbound_mail_https_proxy
+    outbound_mail_https_proxy=$(effective_outbound_mail_https_proxy)
     if [[ -f $ENV_FILE ]]; then
         [[ -z $runtime_password ]] && runtime_password=$(env_value "$ENV_FILE" POSTGRES_PASSWORD)
         [[ -z $secret_key ]] && secret_key=$(env_value "$ENV_FILE" DJANGO_SECRET_KEY)
@@ -121,6 +148,7 @@ PUBLICATION_ARTIFACT_STALE_SECONDS=3600
 PUBLICATION_KEK_VERSION=1
 PUBLICATION_SIGNING_KEY_VERSION=$signing_key_version
 APPLICATION_SECRET_KEK_VERSION=$application_secret_kek_version
+OUTBOUND_MAIL_HTTPS_PROXY=$outbound_mail_https_proxy
 EOF
     install_file_atomic "$tmp" "$ENV_FILE" 0640 root:fire_backend
     rm -f "$tmp"
@@ -339,7 +367,10 @@ validate_established_secrets() {
 
 # Main entry. Requires FIREDASH_STATE, FIREDASH_RELEASE, FIREDASH_HOST from the caller.
 secrets_ensure() {
-    local state=${FIREDASH_STATE:-PRISTINE} release=${FIREDASH_RELEASE:?} host=${FIREDASH_HOST:?}
+    local state=${FIREDASH_STATE:-PRISTINE} release=${FIREDASH_RELEASE:?} host=${FIREDASH_HOST:?} proxy_url
+    proxy_url=$(effective_outbound_mail_https_proxy)
+    validate_outbound_mail_https_proxy "$release" "$proxy_url" \
+        || die "OUTBOUND_MAIL_HTTPS_PROXY must be empty or an http:// or https:// proxy URL with a hostname"
     if [[ $state == ESTABLISHED ]]; then
         log "validating established secrets"
         validate_established_secrets "$release"
