@@ -9,6 +9,8 @@ ROOT=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
 source "$SELF_DIR/lib/common.sh"
 # shellcheck source=lib/postgresql.sh
 source "$SELF_DIR/lib/postgresql.sh"
+# shellcheck source=lib/qpdf.sh
+source "$SELF_DIR/lib/qpdf.sh"
 
 FAIL=0
 fail() { log_err "FAIL: $*"; FAIL=$((FAIL + 1)); }
@@ -56,12 +58,16 @@ log "=== host ==="
 is_debian_13 && ok "Debian 13" || fail "not Debian 13"
 is_amd64 && ok "amd64" || fail "not amd64"
 is_systemd && ok "systemd PID 1" || fail "systemd is not PID 1"
-for b in psql nginx curl openssl qpdf restic git; do
+for b in psql nginx curl openssl restic git; do
     command -v "$b" >/dev/null 2>&1 && ok "binary $b" || fail "binary $b missing"
 done
 [[ $(psql --version 2>/dev/null | grep -oE '[0-9]+' | head -n1) == 17 ]] && ok "PostgreSQL 17" || fail "PostgreSQL is not version 17"
-qpdf_version=$(qpdf --version 2>/dev/null | awk 'NR==1 { print $NF }')
-dpkg --compare-versions "$qpdf_version" ge 12.4 && ok "qpdf 12.4+" || fail "qpdf must be version 12.4 or newer"
+qpdf_binary=$(env_value "$ENV_FILE" OUTBOUND_MAIL_QPDF_BINARY)
+if qpdf_is_adequate "$qpdf_binary"; then
+    ok "configured qpdf 12.4+ with required JSON encryption capability"
+else
+    fail "configured qpdf is inadequate or lacks required JSON encryption capability"
+fi
 
 # -------- database --------
 log "=== database ==="

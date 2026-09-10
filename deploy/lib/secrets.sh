@@ -46,7 +46,10 @@ require_no_deprecated_env_vars() {
 render_env() {
     local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1
     local ingest_upload_bytes=268435456 pdf_package_documents=250
-    local qpdf_binary=${OUTBOUND_MAIL_QPDF_BINARY:-qpdf}
+    local qpdf_binary=${OUTBOUND_MAIL_QPDF_BINARY:-}
+    # qpdf-path is the bootstrap resolver's durable selection. It must win over
+    # an older environment-file value so a host cannot revert to an inadequate
+    # distribution qpdf after a managed fallback has been selected.
     [[ -f $FIREDASH_ETC/qpdf-path ]] && qpdf_binary=$(read_secret "$FIREDASH_ETC/qpdf-path")
     if [[ -f $ENV_FILE ]]; then
         [[ -z $runtime_password ]] && runtime_password=$(env_value "$ENV_FILE" POSTGRES_PASSWORD)
@@ -58,8 +61,9 @@ render_env() {
         existing=$(env_value "$ENV_FILE" MAX_PDF_PACKAGE_DOCUMENTS)
         [[ -n $existing ]] && pdf_package_documents=$existing
         existing=$(env_value "$ENV_FILE" OUTBOUND_MAIL_QPDF_BINARY)
-        [[ -n $existing ]] && qpdf_binary=$existing
+        [[ -z $qpdf_binary && -n $existing ]] && qpdf_binary=$existing
     fi
+    [[ -n $qpdf_binary ]] || qpdf_binary=qpdf
     [[ -n $runtime_password ]] || die "runtime database password is unavailable"
     [[ -n $secret_key ]] || die "Django SECRET_KEY is unavailable"
     [[ -n $host ]] || die "hostname is unavailable"

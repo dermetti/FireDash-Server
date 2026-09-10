@@ -92,9 +92,13 @@ its JSON encryption inspection through qpdf using stdin/stdout only; it must
 not be replaced with a PDF-marker check or a temporary-file workflow.
 Bootstrap prefers an adequate operator-selected `OUTBOUND_MAIL_QPDF_BINARY`,
 then an adequate system qpdf. If neither is available, it installs the pinned,
-checksum-verified qpdf 12.4.1 x86_64 release below `/opt/firedash/vendor/qpdf/`
-without modifying `/usr/bin/qpdf`, and persists that selected path into the
-FireDash runtime environment.
+checksum-verified qpdf 12.4.1 x86_64 Linux binary bundle below
+`/opt/firedash/vendor/qpdf/` without modifying `/usr/bin/qpdf`, and persists
+that selected path into the FireDash runtime environment. The fallback is the
+pinned official `qpdf-12.4.1-bin-linux-x86_64.zip`; bootstrap verifies its
+SHA-256 and JSON-encryption capability before promotion. It stages the complete
+relocatable bundle (including its sibling libraries), so do not copy only the
+`qpdf` executable into that location.
 
 ## Reference-data sandbox
 
