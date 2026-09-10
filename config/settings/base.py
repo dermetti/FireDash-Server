@@ -313,6 +313,12 @@ OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS = get_typed_env(
 OUTBOUND_MAIL_SMTP_ALLOWED_HOSTS = frozenset(get_list("OUTBOUND_MAIL_SMTP_ALLOWED_HOSTS"))
 OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS = tuple(get_list("OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS"))
 
+# A report PDF stays in request memory only.  This deliberately conservative
+# limit is independent of individual provider attachment limits.
+OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES = get_typed_env(
+    "OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES", int, default=20 * 1024 * 1024
+)
+
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))
 

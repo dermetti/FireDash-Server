@@ -195,6 +195,7 @@ administrator.
 | `OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS` | `15` |
 | `OUTBOUND_MAIL_SMTP_ALLOWED_HOSTS` | unset |
 | `OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS` | unset |
+| `OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES` | `20971520` (20 MiB) |
 
 SMTP destinations must be DNS hostnames that resolve only to globally routable
 addresses. IP literals and private, loopback, link-local, reserved, multicast,

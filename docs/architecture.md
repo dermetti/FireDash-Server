@@ -110,3 +110,19 @@ or Ed25519 private signing key. Those credentials are supplied only to the
 key needed to publish verification information. The detailed tablet contract
 is in [tablet-api.md](tablet-api.md); security rationale is in
 [security.md](security.md).
+
+## Outbound report admission
+
+Before any future report-delivery operation, the outbound-mail admission
+boundary resolves the recipient from the authenticated tablet's department and
+current persisted personnel record.  The tablet supplies only a personnel ID,
+never an email address.  A recipient must be active, commander-eligible, have
+a verified valid commander email, and satisfy the department's exact recipient
+domain policy.  Cross-department and ineligible identifiers have the same
+sanitized rejection.
+
+Admission accepts only a bounded, password-protected AES-256 PDF.  It performs
+no password handling, content extraction, persistence, provider resolution, or
+network activity.  The resulting in-memory value is intentionally redacted in
+normal representations; delivery must recheck recipient policy immediately
+before sending because policy and personnel state can change after admission.
