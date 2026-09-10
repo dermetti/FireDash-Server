@@ -10,6 +10,8 @@ from collections.abc import Callable
 
 from django.core.exceptions import ValidationError
 
+from apps.outbound_mail.runtime import MailProvider, ProviderConfigurationError
+
 BREVO = "BREVO"
 
 
@@ -24,6 +26,7 @@ def _validate_brevo(configuration) -> None:
 
 
 API_PROVIDER_REGISTRY: dict[str, Callable[[object], None]] = {BREVO: _validate_brevo}
+RUNTIME_PROVIDER_REGISTRY: dict[str, MailProvider] = {}
 
 
 def validate_api_provider_configuration(*, provider: str, configuration) -> None:
@@ -31,3 +34,24 @@ def validate_api_provider_configuration(*, provider: str, configuration) -> None
     if validator is None:
         raise ValidationError("Unsupported API mail provider.")
     validator(configuration)
+
+
+def register_runtime_provider(*, provider: str, implementation: MailProvider) -> None:
+    """Register an adapter only for a configured API-provider identity."""
+    if provider not in API_PROVIDER_REGISTRY:
+        raise ProviderConfigurationError(reason="unsupported")
+    if implementation.provider_id != provider:
+        raise ProviderConfigurationError(reason="identity_mismatch")
+    if provider in RUNTIME_PROVIDER_REGISTRY:
+        raise ProviderConfigurationError(reason="already_registered")
+    RUNTIME_PROVIDER_REGISTRY[provider] = implementation
+
+
+def resolve_runtime_provider(*, provider: str) -> MailProvider:
+    """Resolve a registered adapter without vendor-specific branches in callers."""
+    if provider not in API_PROVIDER_REGISTRY:
+        raise ProviderConfigurationError(reason="unsupported")
+    implementation = RUNTIME_PROVIDER_REGISTRY.get(provider)
+    if implementation is None:
+        raise ProviderConfigurationError(reason="unregistered")
+    return implementation
