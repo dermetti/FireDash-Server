@@ -8,6 +8,11 @@ urlpatterns = [
     path("tablet/check-in", api.CheckInView.as_view(), name="api-tablet-check-in"),
     path("tablet/refresh", api.RefreshView.as_view(), name="api-tablet-refresh"),
     path("tablet/status", api.StatusView.as_view(), name="api-tablet-status"),
+    path(
+        "tablet/report-delivery",
+        api.ReportDeliveryView.as_view(),
+        name="api-tablet-report-delivery",
+    ),
     path("tablet/configuration", api.ConfigurationView.as_view(), name="api-tablet-configuration"),
     path("tablet/manifest", api.ManifestView.as_view(), name="api-tablet-manifest"),
     path(

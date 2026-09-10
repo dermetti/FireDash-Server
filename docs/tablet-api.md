@@ -34,6 +34,17 @@ Authorization: Bearer <opaque-installation-credential>
 Never send an installation ID as an authentication selector. The server finds
 the credential itself and compares its protected digest.
 
+## Encrypted report delivery
+
+`POST /api/v1/tablet/report-delivery` is multipart and accepts only
+`delivery_request_id` (UUID), `recipient_personnel_id` (UUID), and `pdf`.
+The PDF must already be password-protected AES-256 revision 6; the password,
+recipient email, message content, sender, and provider are never API fields.
+Responses contain only `{state, code}`. Reusing a request UUID for the same
+installation replays its stored result without another send; a request left in
+progress or any ambiguous delivery result is returned as `UNKNOWN` and must
+not be retried under that UUID.
+
 Errors have this RFC 9457 shape:
 
 ```json

@@ -239,3 +239,36 @@ class DepartmentRecipientDomain(models.Model):
 
     def __str__(self) -> str:
         return self.domain
+
+
+class TabletReportDeliveryRequest(models.Model):
+    """Minimal durable idempotency state; report content is never stored."""
+
+    class State(models.TextChoices):
+        PROCESSING = "PROCESSING", "Processing"
+        SUCCESS = "SUCCESS", "Success"
+        FAILED = "FAILED", "Failed"
+        UNKNOWN = "UNKNOWN", "Unknown"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    installation = models.ForeignKey(
+        "tablets.AppInstallation", on_delete=models.PROTECT, related_name="report_delivery_requests"
+    )
+    department = models.ForeignKey(Department, on_delete=models.PROTECT)
+    delivery_request_id = models.UUIDField()
+    recipient_personnel_id = models.UUIDField()
+    state = models.CharField(max_length=16, choices=State.choices, default=State.PROCESSING)
+    result_code = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("installation", "delivery_request_id"),
+                name="unique_tablet_report_delivery_request",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Tablet report delivery request ({self.state})"

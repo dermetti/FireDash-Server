@@ -28,6 +28,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authorization.services import minimum_supported_app_version
+from apps.outbound_mail.report_delivery_requests import submit_tablet_report_delivery
 from apps.publications.document_v2 import (
     generation_hpke_context as document_generation_hpke_context,
 )
@@ -161,6 +162,17 @@ class AdoptionCompleteSerializer(serializers.Serializer[dict[str, object]]):
             return base64.b64decode(value, validate=True)
         except ValueError as error:
             raise serializers.ValidationError("Must be valid base64.") from error
+
+
+class ReportDeliverySerializer(serializers.Serializer[dict[str, object]]):
+    delivery_request_id = serializers.UUIDField()
+    recipient_personnel_id = serializers.UUIDField()
+    pdf = serializers.FileField(allow_empty_file=False)
+
+
+class ReportDeliveryResponseSerializer(serializers.Serializer[dict[str, object]]):
+    state = serializers.CharField()
+    code = serializers.CharField()
 
 
 class AdoptionPreviewResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -401,6 +413,32 @@ _MANIFEST_CONDITIONAL_GET_PARAMETERS = [
     *_CONDITIONAL_GET_PARAMETERS,
     OpenApiParameter("Retry-After", int, OpenApiParameter.HEADER, response=[202]),
 ]
+
+
+@extend_schema(
+    request=ReportDeliverySerializer,
+    responses={
+        200: ReportDeliveryResponseSerializer,
+        (400, "application/problem+json"): ProblemResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+        (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
+    },
+)
+class ReportDeliveryView(InstallationAPIView):
+    """Submit one password-encrypted report PDF under a client UUID."""
+
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+
+    def post(self, request):
+        serializer = ReportDeliverySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = submit_tablet_report_delivery(
+            installation=self.installation,
+            delivery_request_id=serializer.validated_data["delivery_request_id"],
+            recipient_personnel_id=serializer.validated_data["recipient_personnel_id"],
+            pdf=serializer.validated_data["pdf"],
+        )
+        return Response({"state": result.state, "code": result.code})
 
 
 @extend_schema(
