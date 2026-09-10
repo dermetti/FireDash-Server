@@ -179,9 +179,11 @@ def operational_summary(*, department: Department | None = None, station: Statio
             ),
         ]
     if station is not None:
-        people = Person.objects.filter(
-            active=True, station_assignments__station=station
-        ).distinct().count()
+        people = (
+            Person.objects.filter(active=True, station_assignments__station=station)
+            .distinct()
+            .count()
+        )
         return [
             OperationalMetric(
                 f"{people} active station personnel",

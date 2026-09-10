@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ department.name }} Outbound Email{% endblock %}
+{% block content %}
+{% include "components/_page_header.html" with breadcrumb=department.name title="Outbound Email" description="Configure department outbound email and recipient restrictions. SMTP credentials are write-only." %}
+
+<section class="card mt-4"><div class="card-body">
+  <h2 class="h5">Delivery mode</h2>
+  {% if mail.delivery_mode == 'SYSTEM' and not system_managed_allowed %}<div class="alert alert-warning">FireDash managed service is unavailable because this department is no longer authorized. The stored mode has not been changed.</div>{% endif %}
+  <form method="post" novalidate>{% csrf_token %}<input type="hidden" name="action" value="mode">
+    {% for error in mode_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+    <label class="form-label" for="{{ mode_form.delivery_mode.id_for_label }}">{{ mode_form.delivery_mode.label }}</label>
+    <select class="form-select" id="{{ mode_form.delivery_mode.id_for_label }}" name="delivery_mode">
+      <option value="DISABLED" {% if mail.delivery_mode == 'DISABLED' %}selected{% endif %}>Disabled</option>
+      <option value="SYSTEM" {% if mail.delivery_mode == 'SYSTEM' and system_managed_allowed %}selected{% endif %} {% if not system_managed_allowed %}disabled{% endif %}>FireDash managed service{% if not system_managed_allowed %} (unavailable){% endif %}</option>
+      <option value="CUSTOM_SMTP" {% if mail.delivery_mode == 'CUSTOM_SMTP' %}selected{% endif %}>Own SMTP server</option>
+    </select>
+    {% for error in mode_form.delivery_mode.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+    <p class="form-text">Disabled retains SMTP configuration and credentials. The managed service does not expose its provider details here.</p>
+    <button class="btn btn-primary" type="submit">Save delivery mode</button>
+  </form>
+</div></section>
+
+<section class="card mt-4"><div class="card-body">
+  <h2 class="h5">Own SMTP server</h2>
+  <p class="text-body-secondary">SMTP configuration is retained when another delivery mode is selected.</p>
+  <form method="post" novalidate>{% csrf_token %}<input type="hidden" name="action" value="smtp_configuration">
+    {% for error in smtp_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+    <div class="row g-3"><div class="col-md-8"><label class="form-label" for="{{ smtp_form.host.id_for_label }}">{{ smtp_form.host.label }}</label>{{ smtp_form.host }}{% for error in smtp_form.host.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-4"><label class="form-label" for="{{ smtp_form.port.id_for_label }}">{{ smtp_form.port.label }}</label>{{ smtp_form.port }}{% for error in smtp_form.port.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-12"><label class="form-label" for="{{ smtp_form.tls_mode.id_for_label }}">{{ smtp_form.tls_mode.label }}</label>{{ smtp_form.tls_mode }}{% for error in smtp_form.tls_mode.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-6"><label class="form-label" for="{{ smtp_form.sender_name.id_for_label }}">{{ smtp_form.sender_name.label }}</label>{{ smtp_form.sender_name }}{% for error in smtp_form.sender_name.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-6"><label class="form-label" for="{{ smtp_form.sender_email.id_for_label }}">{{ smtp_form.sender_email.label }}</label>{{ smtp_form.sender_email }}{% for error in smtp_form.sender_email.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div></div>
+    <button class="btn btn-outline-primary mt-3" type="submit">Save SMTP configuration</button>
+  </form>
+  <hr><p><strong>SMTP password:</strong> {% if mail.smtp_password_configured %}<span class="badge text-bg-success">Configured</span>{% else %}<span class="badge text-bg-secondary">Not configured</span>{% endif %}</p>
+  <form method="post" novalidate>{% csrf_token %}<input type="hidden" name="action" value="smtp_credentials">{% for error in smtp_credentials_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}<div class="row g-3"><div class="col-md-6"><label class="form-label" for="{{ smtp_credentials_form.username.id_for_label }}">{{ smtp_credentials_form.username.label }}</label>{{ smtp_credentials_form.username }}</div><div class="col-md-6"><label class="form-label" for="{{ smtp_credentials_form.password.id_for_label }}">{{ smtp_credentials_form.password.label }}</label>{{ smtp_credentials_form.password }}</div></div><button class="btn btn-outline-primary mt-3" type="submit">Replace SMTP credentials</button></form>
+  {% if mail.smtp_password_configured %}<form method="post" class="mt-2">{% csrf_token %}<input type="hidden" name="action" value="smtp_clear"><button class="btn btn-outline-danger" type="submit">Clear SMTP credentials</button></form>{% endif %}
+</div></section>
+
+<section class="card mt-4"><div class="card-body"><h2 class="h5">Recipient restriction</h2><p class="text-body-secondary">This applies independently of delivery mode. Exact approved domains match only themselves; subdomains are not included.</p><form method="post" novalidate>{% csrf_token %}<input type="hidden" name="action" value="recipient_policy">{% for error in recipient_policy_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}<div class="form-check mb-3">{{ recipient_policy_form.restriction_enabled }}<label class="form-check-label" for="{{ recipient_policy_form.restriction_enabled.id_for_label }}">{{ recipient_policy_form.restriction_enabled.label }}</label></div><div class="mb-3"><label class="form-label" for="{{ recipient_policy_form.approved_domains.id_for_label }}">{{ recipient_policy_form.approved_domains.label }}</label>{{ recipient_policy_form.approved_domains }}{% for error in recipient_policy_form.approved_domains.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}<div class="form-text">{{ recipient_policy_form.approved_domains.help_text }}</div></div><button class="btn btn-outline-primary" type="submit">Save recipient restriction</button></form></div></section>
+<p class="mt-4"><a class="btn btn-outline-secondary" href="{% url 'portal-department-settings' department.id %}">Back to System Settings</a></p>
+{% endblock %}

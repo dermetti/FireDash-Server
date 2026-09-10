@@ -70,47 +70,69 @@ def test_api_and_smtp_configuration_use_services_and_retain_inactive_settings(
     url = reverse("portal-system-outbound-email")
     client.force_login(system_admin)
     _reauthenticate(client)
-    assert client.post(
-        url,
-        {
-            "action": "brevo_configuration",
-            "sender_name": "FireDash",
-            "sender_email": "api@example.test",
-        },
-    ).status_code == 302
-    assert client.post(
-        url, {"action": "brevo_key", "api_key": "api-secret-value"}
-    ).status_code == 302
-    assert client.post(
-        url, {"action": "mode", "delivery_mode": "API", "api_provider": "BREVO"}
-    ).status_code == 302
+    assert (
+        client.post(
+            url,
+            {
+                "action": "brevo_configuration",
+                "sender_name": "FireDash",
+                "sender_email": "api@example.test",
+            },
+        ).status_code
+        == 302
+    )
+    assert (
+        client.post(url, {"action": "brevo_key", "api_key": "api-secret-value"}).status_code == 302
+    )
+    assert (
+        client.post(
+            url, {"action": "mode", "delivery_mode": "API", "api_provider": "BREVO"}
+        ).status_code
+        == 302
+    )
 
     configuration = SystemMailConfiguration.objects.get(singleton=True)
     assert configuration.delivery_mode == SystemMailConfiguration.DeliveryMode.API
     assert configuration.brevo_api_key_configured
     assert configuration.brevo_api_key_encrypted != "api-secret-value"
 
-    assert client.post(
-        url,
-        {
-            "action": "smtp_configuration",
-            "host": "smtp.example.test",
-            "port": 587,
-            "tls_mode": "STARTTLS",
-            "sender_name": "FireDash SMTP",
-            "sender_email": "smtp@example.test",
-        },
-    ).status_code == 302
-    assert client.post(
-        url,
-        {"action": "smtp_credentials", "username": "smtp-user", "password": "smtp-secret-value"},
-    ).status_code == 302
-    assert client.post(
-        url, {"action": "mode", "delivery_mode": "SMTP", "api_provider": ""}
-    ).status_code == 302
-    assert client.post(
-        url, {"action": "mode", "delivery_mode": "DISABLED", "api_provider": ""}
-    ).status_code == 302
+    assert (
+        client.post(
+            url,
+            {
+                "action": "smtp_configuration",
+                "host": "smtp.example.test",
+                "port": 587,
+                "tls_mode": "STARTTLS",
+                "sender_name": "FireDash SMTP",
+                "sender_email": "smtp@example.test",
+            },
+        ).status_code
+        == 302
+    )
+    assert (
+        client.post(
+            url,
+            {
+                "action": "smtp_credentials",
+                "username": "smtp-user",
+                "password": "smtp-secret-value",
+            },
+        ).status_code
+        == 302
+    )
+    assert (
+        client.post(
+            url, {"action": "mode", "delivery_mode": "SMTP", "api_provider": ""}
+        ).status_code
+        == 302
+    )
+    assert (
+        client.post(
+            url, {"action": "mode", "delivery_mode": "DISABLED", "api_provider": ""}
+        ).status_code
+        == 302
+    )
 
     configuration.refresh_from_db()
     assert configuration.delivery_mode == SystemMailConfiguration.DeliveryMode.DISABLED
@@ -159,6 +181,7 @@ def test_verification_is_non_delivery_service_action_and_presents_sanitized_stat
     configuration, _ = SystemMailConfiguration.objects.get_or_create(singleton=True)
     configuration.delivery_mode = SystemMailConfiguration.DeliveryMode.SMTP
     configuration.save(update_fields=("delivery_mode",))
+
     class UnavailableProvider:
         provider_id = "SMTP"
 
@@ -210,34 +233,47 @@ def test_system_admin_ui_grants_and_revokes_department_managed_mail_access(
     assert "Department access to system-managed email" in content
     assert "Department Mail" in content and "Not allowed" in content
     _reauthenticate(client)
-    assert client.post(
-        url,
-        {
-            "action": "department_mail_eligibility",
-            "department_id": department.id,
-            "allowed": "grant",
-        },
-    ).status_code == 302
+    assert (
+        client.post(
+            url,
+            {
+                "action": "department_mail_eligibility",
+                "department_id": department.id,
+                "allowed": "grant",
+            },
+        ).status_code
+        == 302
+    )
     assert is_system_managed_mail_allowed(department=department)
-    assert AuditEvent.objects.filter(
-        action="authorization.department_managed_mail_eligibility_granted", department=department
-    ).count() == 1
-    assert client.post(
-        url,
-        {
-            "action": "department_mail_eligibility",
-            "department_id": department.id,
-            "allowed": "revoke",
-        },
-    ).status_code == 302
+    assert (
+        AuditEvent.objects.filter(
+            action="authorization.department_managed_mail_eligibility_granted",
+            department=department,
+        ).count()
+        == 1
+    )
+    assert (
+        client.post(
+            url,
+            {
+                "action": "department_mail_eligibility",
+                "department_id": department.id,
+                "allowed": "revoke",
+            },
+        ).status_code
+        == 302
+    )
     assert not is_system_managed_mail_allowed(department=department)
 
     client.force_login(non_system_admin)
-    assert client.post(
-        url,
-        {
-            "action": "department_mail_eligibility",
-            "department_id": department.id,
-            "allowed": "grant",
-        },
-    ).status_code == 403
+    assert (
+        client.post(
+            url,
+            {
+                "action": "department_mail_eligibility",
+                "department_id": department.id,
+                "allowed": "grant",
+            },
+        ).status_code
+        == 403
+    )

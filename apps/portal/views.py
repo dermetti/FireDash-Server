@@ -67,7 +67,9 @@ from apps.portal.forms import (
     BrevoMailConfigurationForm,
     DepartmentForm,
     DepartmentLocaleTimePolicyForm,
+    DepartmentMailDeliveryModeForm,
     DepartmentPersonnelRetentionForm,
+    DepartmentRecipientPolicyForm,
     DepartmentStatusForm,
     DepartmentSystemSettingsForm,
     DepartmentTabletAssetNumberPolicyForm,
@@ -239,6 +241,10 @@ def _nav_context(request):
                     {
                         "label": "System Settings",
                         "url": reverse("portal-department-settings", args=(department.id,)),
+                    },
+                    {
+                        "label": "Outbound Email",
+                        "url": reverse("portal-department-outbound-email", args=(department.id,)),
                     },
                     {
                         "label": "Audit Logs",
@@ -1150,6 +1156,7 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     lease_form = DepartmentTabletLeaseForm(
         request.POST if action == "tablet-lease" else None, initial=lease_initial
     )
+
     retention_form = DepartmentPersonnelRetentionForm(
         request.POST if action == "personnel-retention" else None, initial=retention_initial
     )
@@ -1249,6 +1256,130 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
             "asset_number_form": asset_number_form,
             "locale_time_form": locale_time_form,
             "retention_policy": policy,
+        },
+    )
+
+
+def _department_mail_forms(*, state, policy, data=None, action=""):
+    """Build only safe form projections; credentials never populate initials."""
+    return {
+        "mode_form": DepartmentMailDeliveryModeForm(
+            data if action == "mode" else None, initial={"delivery_mode": state.delivery_mode}
+        ),
+        "smtp_form": SmtpMailConfigurationForm(
+            data if action == "smtp_configuration" else None,
+            initial={
+                "host": state.smtp_host,
+                "port": state.smtp_port,
+                "tls_mode": state.smtp_tls_mode,
+                "sender_name": state.smtp_sender_name,
+                "sender_email": state.smtp_sender_email,
+            },
+        ),
+        "smtp_credentials_form": ReplaceSmtpCredentialsForm(
+            data if action == "smtp_credentials" else None
+        ),
+        "recipient_policy_form": DepartmentRecipientPolicyForm(
+            data if action == "recipient_policy" else None,
+            initial={
+                "restriction_enabled": policy.restriction_enabled,
+                "approved_domains": "\n".join(policy.approved_domains),
+            },
+        ),
+    }
+
+
+@login_required
+@never_cache
+@require_http_methods(["GET", "POST"])
+def department_outbound_email(request: HttpRequest, department_id) -> HttpResponse:
+    """Department-admin UI over the bounded Phase 4A outbound-mail services."""
+    department = _department_or_403(request, department_id)
+    from apps.application_secrets.crypto import ApplicationSecretError
+    from apps.authorization.services import is_system_managed_mail_allowed
+    from apps.outbound_mail.services import (
+        clear_department_smtp_credentials,
+        configure_department_smtp,
+        get_department_mail_configuration,
+        get_department_recipient_policy,
+        replace_department_smtp_credentials,
+        set_department_delivery_mode,
+        set_department_recipient_policy,
+    )
+
+    state = get_department_mail_configuration(department=department)
+    policy = get_department_recipient_policy(department=department)
+    system_managed_allowed = is_system_managed_mail_allowed(department=department)
+    action = request.POST.get("action", "") if request.method == "POST" else ""
+    forms = _department_mail_forms(state=state, policy=policy, data=request.POST, action=action)
+    form = {
+        "mode": forms["mode_form"],
+        "smtp_configuration": forms["smtp_form"],
+        "smtp_credentials": forms["smtp_credentials_form"],
+        "recipient_policy": forms["recipient_policy_form"],
+    }.get(action)
+    if request.method == "POST":
+        if action not in {
+            "mode",
+            "smtp_configuration",
+            "smtp_credentials",
+            "smtp_clear",
+            "recipient_policy",
+        }:
+            raise PermissionDenied("A supported outbound-email action is required.")
+        if form is None or form.is_valid():
+            try:
+                require_recent_reauthentication(
+                    request,
+                    return_url=reverse("portal-department-outbound-email", args=(department.id,)),
+                )
+                if action == "mode":
+                    set_department_delivery_mode(
+                        actor=request.user, department=department, **form.cleaned_data
+                    )
+                    messages.success(request, "Outbound email delivery mode was updated.")
+                elif action == "smtp_configuration":
+                    configure_department_smtp(
+                        actor=request.user, department=department, **form.cleaned_data
+                    )
+                    messages.success(request, "SMTP configuration was updated.")
+                elif action == "smtp_credentials":
+                    replace_department_smtp_credentials(
+                        actor=request.user, department=department, **form.cleaned_data
+                    )
+                    messages.success(request, "SMTP credentials were replaced.")
+                elif action == "smtp_clear":
+                    clear_department_smtp_credentials(actor=request.user, department=department)
+                    messages.success(request, "SMTP credentials were cleared.")
+                else:
+                    set_department_recipient_policy(
+                        actor=request.user, department=department, **form.cleaned_data
+                    )
+                    messages.success(request, "Recipient restriction policy was updated.")
+                return redirect("portal-department-outbound-email", department_id=department.id)
+            except ApplicationSecretError:
+                if form is not None:
+                    form.add_error(
+                        None, "Credential storage is unavailable. Check deployment configuration."
+                    )
+                else:
+                    messages.error(request, "Outbound email operation is unavailable.")
+            except ValidationError as error:
+                if form is not None:
+                    form.add_error(None, error)
+                else:
+                    messages.error(
+                        request, "Outbound email configuration is incomplete or invalid."
+                    )
+    return render(
+        request,
+        "portal/department_outbound_email.html",
+        {
+            "department": department,
+            "mail": state,
+            "recipient_policy": policy,
+            "system_managed_allowed": system_managed_allowed,
+            **forms,
         },
     )
 

@@ -50,6 +50,11 @@ urlpatterns = [
         name="portal-department-settings",
     ),
     path(
+        "departments/<uuid:department_id>/outbound-email/",
+        views.department_outbound_email,
+        name="portal-department-outbound-email",
+    ),
+    path(
         "departments/<uuid:department_id>/administrators/<uuid:membership_id>/revoke/",
         views.department_admin_revoke_modal,
         name="portal-department-admin-revoke",

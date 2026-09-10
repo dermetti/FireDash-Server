@@ -321,3 +321,39 @@ class ReplaceSmtpCredentialsForm(forms.Form):
             attrs={"class": "form-control", "autocomplete": "new-password"}, render_value=False
         ),
     )
+
+
+class DepartmentMailDeliveryModeForm(forms.Form):
+    """Department mail mode selection; service remains authoritative for eligibility."""
+
+    delivery_mode = forms.ChoiceField(
+        choices=(
+            ("DISABLED", "Disabled"),
+            ("SYSTEM", "FireDash managed service"),
+            ("CUSTOM_SMTP", "Own SMTP server"),
+        ),
+        label="Outbound email mode",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+
+
+class DepartmentRecipientPolicyForm(forms.Form):
+    restriction_enabled = forms.BooleanField(
+        required=False,
+        label="Restrict recipients to approved domains",
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+    approved_domains = forms.CharField(
+        required=False,
+        label="Approved recipient domains",
+        help_text=(
+            "One exact domain per line, for example feuerwehr.hamburg.de. Do not include @; "
+            "subdomains are not included."
+        ),
+        widget=forms.Textarea(attrs={"class": "form-control", "rows": 4, "spellcheck": "false"}),
+    )
+
+    def clean_approved_domains(self):
+        # Domain canonicalization and validation deliberately remain in the
+        # outbound-mail service, so all callers share its exact policy.
+        return [domain for domain in self.cleaned_data["approved_domains"].splitlines() if domain]
