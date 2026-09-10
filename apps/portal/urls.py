@@ -7,6 +7,11 @@ urlpatterns = [
     path("departments/<uuid:department_id>/data/", views.data_hub, name="portal-data-hub"),
     path("system/data/", views.system_data_hub, name="portal-system-data-hub"),
     path(
+        "system/outbound-email/",
+        views.system_outbound_email,
+        name="portal-system-outbound-email",
+    ),
+    path(
         "system/data/vehicle-rescue-guides/",
         views.system_vehicle_rescue_guides,
         name="portal-system-vehicle-rescue-guides",

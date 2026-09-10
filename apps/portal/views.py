@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Prefetch, Q
@@ -64,6 +64,7 @@ from apps.portal.forms import (
     AdministratorForm,
     AdministratorRemovalForm,
     ApiVersionCompatibilityPolicyForm,
+    BrevoMailConfigurationForm,
     DepartmentForm,
     DepartmentLocaleTimePolicyForm,
     DepartmentPersonnelRetentionForm,
@@ -71,8 +72,12 @@ from apps.portal.forms import (
     DepartmentSystemSettingsForm,
     DepartmentTabletAssetNumberPolicyForm,
     DepartmentTabletLeaseForm,
+    ReplaceBrevoApiKeyForm,
+    ReplaceSmtpCredentialsForm,
+    SmtpMailConfigurationForm,
     StationForm,
     StationListFilterForm,
+    SystemMailDeliveryModeForm,
     VehicleForm,
     VehicleRescueGuidesWebUrlForm,
 )
@@ -530,6 +535,10 @@ def system_data_hub(request: HttpRequest) -> HttpResponse:
     from apps.authorization.services import vehicle_rescue_guides_capability
 
     capability = vehicle_rescue_guides_capability()
+    from apps.outbound_mail.models import SystemMailConfiguration
+    from apps.outbound_mail.services import get_system_mail_configuration
+
+    mail = get_system_mail_configuration()
     modules = (
         {
             "name": "Vehicle Rescue Guides",
@@ -537,6 +546,28 @@ def system_data_hub(request: HttpRequest) -> HttpResponse:
             "icon": "vehicle",
             "url": reverse("portal-system-vehicle-rescue-guides"),
             "web_url": capability["web_url"],
+            "status": "Enabled",
+            "status_css": "success",
+            "provider": "Euro RESCUE",
+            "delivery": "Web",
+        },
+        {
+            "name": "Outbound Email",
+            "description": "System-level transactional email delivery configuration.",
+            "icon": "mail",
+            "url": reverse("portal-system-outbound-email"),
+            "status": mail.delivery_mode.replace("_", " ").title(),
+            "status_css": "secondary" if mail.delivery_mode == "DISABLED" else "success",
+            "provider": mail.api_provider.replace("_", " ").title()
+            if mail.delivery_mode == SystemMailConfiguration.DeliveryMode.API
+            else "System SMTP"
+            if mail.delivery_mode == SystemMailConfiguration.DeliveryMode.SMTP
+            else "Not active",
+            "delivery": "Email API"
+            if mail.delivery_mode == SystemMailConfiguration.DeliveryMode.API
+            else "SMTP"
+            if mail.delivery_mode == SystemMailConfiguration.DeliveryMode.SMTP
+            else "Disabled",
         },
     )
     return render(request, "portal/system_data_hub.html", {"modules": modules})
@@ -565,6 +596,139 @@ def system_vehicle_rescue_guides(request: HttpRequest) -> HttpResponse:
         request,
         "portal/system_vehicle_rescue_guides.html",
         {"capability": capability, "form": form},
+    )
+
+
+def _mail_forms(state, *, data=None, action: str = ""):
+    """Return only safe outbound-mail configuration form state for the UI."""
+    bound = data if action else None
+    return {
+        "mode_form": SystemMailDeliveryModeForm(
+            bound if action == "mode" else None,
+            initial={"delivery_mode": state.delivery_mode, "api_provider": state.api_provider},
+        ),
+        "brevo_form": BrevoMailConfigurationForm(
+            bound if action == "brevo_configuration" else None,
+            initial={
+                "sender_name": state.brevo_sender_name,
+                "sender_email": state.brevo_sender_email,
+            },
+        ),
+        "brevo_key_form": ReplaceBrevoApiKeyForm(bound if action == "brevo_key" else None),
+        "smtp_form": SmtpMailConfigurationForm(
+            bound if action == "smtp_configuration" else None,
+            initial={
+                "host": state.smtp_host,
+                "port": state.smtp_port,
+                "tls_mode": state.smtp_tls_mode,
+                "sender_name": state.smtp_sender_name,
+                "sender_email": state.smtp_sender_email,
+            },
+        ),
+        "smtp_credentials_form": ReplaceSmtpCredentialsForm(
+            bound if action == "smtp_credentials" else None
+        ),
+    }
+
+
+@login_required
+@never_cache
+@require_http_methods(["GET", "POST"])
+def system_outbound_email(request: HttpRequest) -> HttpResponse:
+    """System-admin UI over the audited, write-only outbound-mail services."""
+    if not is_system_admin(request.user):
+        raise PermissionDenied("System administrator role is required.")
+
+    from apps.application_secrets.crypto import ApplicationSecretError
+    from apps.outbound_mail.services import (
+        clear_brevo_api_key,
+        clear_smtp_credentials,
+        configure_brevo,
+        configure_smtp,
+        get_system_mail_configuration,
+        replace_brevo_api_key,
+        replace_smtp_credentials,
+        set_delivery_mode,
+        verify_system_mail_configuration,
+    )
+
+    state = get_system_mail_configuration()
+    action = request.POST.get("action", "") if request.method == "POST" else ""
+    forms = _mail_forms(state, data=request.POST, action=action)
+    form = {
+        "mode": forms["mode_form"],
+        "brevo_configuration": forms["brevo_form"],
+        "brevo_key": forms["brevo_key_form"],
+        "smtp_configuration": forms["smtp_form"],
+        "smtp_credentials": forms["smtp_credentials_form"],
+    }.get(action)
+
+    if request.method == "POST":
+        if action not in {
+            "mode",
+            "brevo_configuration",
+            "brevo_key",
+            "brevo_clear",
+            "smtp_configuration",
+            "smtp_credentials",
+            "smtp_clear",
+            "verify",
+        }:
+            raise PermissionDenied("A supported outbound-email action is required.")
+        if form is not None and not form.is_valid():
+            pass
+        else:
+            try:
+                require_recent_reauthentication(
+                    request, return_url=reverse("portal-system-outbound-email")
+                )
+                if action == "mode":
+                    set_delivery_mode(actor=request.user, **form.cleaned_data)
+                    messages.success(request, "Outbound email delivery mode was updated.")
+                elif action == "brevo_configuration":
+                    configure_brevo(actor=request.user, **form.cleaned_data)
+                    messages.success(request, "Email API sender configuration was updated.")
+                elif action == "brevo_key":
+                    replace_brevo_api_key(actor=request.user, **form.cleaned_data)
+                    messages.success(request, "Email API credential was replaced.")
+                elif action == "brevo_clear":
+                    clear_brevo_api_key(actor=request.user)
+                    messages.success(request, "Email API credential was cleared.")
+                elif action == "smtp_configuration":
+                    configure_smtp(actor=request.user, **form.cleaned_data)
+                    messages.success(request, "SMTP configuration was updated.")
+                elif action == "smtp_credentials":
+                    replace_smtp_credentials(actor=request.user, **form.cleaned_data)
+                    messages.success(request, "SMTP credentials were replaced.")
+                elif action == "smtp_clear":
+                    clear_smtp_credentials(actor=request.user)
+                    messages.success(request, "SMTP credentials were cleared.")
+                else:
+                    result = verify_system_mail_configuration(actor=request.user)
+                    message = "Outbound email provider verification succeeded."
+                    if result.outcome != "SUCCESS":
+                        message = "Outbound email provider verification did not succeed."
+                    messages.info(request, message)
+                return redirect("portal-system-outbound-email")
+            except ApplicationSecretError:
+                if form is not None:
+                    form.add_error(
+                        None, "Credential storage is unavailable. Check deployment configuration."
+                    )
+                else:
+                    messages.error(request, "Outbound email operation is unavailable.")
+            except ValidationError as error:
+                if form is not None:
+                    form.add_error(None, error)
+                else:
+                    messages.error(
+                        request, "Outbound email configuration is incomplete or invalid."
+                    )
+
+    return render(
+        request,
+        "portal/system_outbound_email.html",
+        {"mail": state, **forms},
     )
 
 

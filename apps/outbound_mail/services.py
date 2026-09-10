@@ -43,6 +43,27 @@ class SystemMailConfigurationState:
     last_verified_at: datetime | None
     last_verification_code: str
 
+    @property
+    def brevo_configuration_complete(self) -> bool:
+        """Safe readiness projection; credentials remain opaque."""
+        return bool(
+            self.brevo_sender_name
+            and self.brevo_sender_email
+            and self.brevo_api_key_configured
+        )
+
+    @property
+    def smtp_configuration_complete(self) -> bool:
+        """SMTP authentication is optional, but never partially configured."""
+        return bool(
+            self.smtp_host
+            and self.smtp_port
+            and self.smtp_tls_mode
+            and self.smtp_sender_name
+            and self.smtp_sender_email
+            and self.smtp_username_configured == self.smtp_password_configured
+        )
+
 
 def _configuration() -> SystemMailConfiguration:
     try:

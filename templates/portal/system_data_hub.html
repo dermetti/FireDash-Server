@@ -13,10 +13,10 @@
           </div>
           <p class="text-body-secondary">{{ module.description }}</p>
           <dl class="row small mb-0">
-            <dt class="col-7">Status</dt><dd class="col-5 text-end"><span class="badge text-bg-success">Enabled</span></dd>
-            <dt class="col-7">Provider</dt><dd class="col-5 text-end">Euro RESCUE</dd>
-            <dt class="col-7">Delivery</dt><dd class="col-5 text-end">Web</dd>
-            <dt class="col-7">Web application</dt><dd class="col-5 text-end text-break">{{ module.web_url }}</dd>
+            <dt class="col-7">Status</dt><dd class="col-5 text-end"><span class="badge text-bg-{{ module.status_css }}">{{ module.status }}</span></dd>
+            <dt class="col-7">Provider</dt><dd class="col-5 text-end">{{ module.provider }}</dd>
+            <dt class="col-7">Delivery</dt><dd class="col-5 text-end">{{ module.delivery }}</dd>
+            {% if module.web_url %}<dt class="col-7">Web application</dt><dd class="col-5 text-end text-break">{{ module.web_url }}</dd>{% endif %}
           </dl>
           <span class="visually-hidden">Configure {{ module.name }}</span>
         </div>

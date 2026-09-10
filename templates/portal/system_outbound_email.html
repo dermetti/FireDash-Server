@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Outbound Email{% endblock %}
+{% block content %}
+{% include "components/_page_header.html" with breadcrumb="System Data Hub" title="Outbound Email" description="Configure system-level transactional email delivery. Credentials are write-only." %}
+
+<section class="card mt-4" aria-labelledby="outbound-email-state-heading">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between gap-3">
+      <div>
+        <h2 id="outbound-email-state-heading" class="h5 mb-1">Operational state</h2>
+        <p class="text-body-secondary mb-0">Configuration completeness and verification are separate. Verification never sends an email.</p>
+      </div>
+      <span class="badge align-self-start text-bg-{% if mail.delivery_mode == 'DISABLED' %}secondary{% elif mail.last_verification_outcome == 'SUCCESS' %}success{% else %}warning{% endif %}">{{ mail.delivery_mode|title }}</span>
+    </div>
+    <dl class="row small mt-4 mb-0">
+      <dt class="col-sm-3">Active delivery</dt><dd class="col-sm-9">{% if mail.delivery_mode == 'API' %}Email API{% elif mail.delivery_mode == 'SMTP' %}SMTP{% else %}Disabled{% endif %}</dd>
+      <dt class="col-sm-3">Active provider</dt><dd class="col-sm-9">{% if mail.delivery_mode == 'API' %}{{ mail.api_provider|title }}{% elif mail.delivery_mode == 'SMTP' %}System SMTP{% else %}None{% endif %}</dd>
+      <dt class="col-sm-3">Active configuration</dt><dd class="col-sm-9">{% if mail.delivery_mode == 'API' and mail.brevo_configuration_complete or mail.delivery_mode == 'SMTP' and mail.smtp_configuration_complete %}<span class="badge text-bg-success">Complete</span>{% elif mail.delivery_mode == 'DISABLED' %}<span class="badge text-bg-secondary">Not active</span>{% else %}<span class="badge text-bg-warning">Incomplete</span>{% endif %}</dd>
+      <dt class="col-sm-3">Verification</dt><dd class="col-sm-9">{% if mail.last_verification_outcome == 'SUCCESS' %}<span class="badge text-bg-success">Verified</span>{% elif mail.last_verification_outcome == 'FAILED' %}<span class="badge text-bg-warning">Did not succeed</span>{% else %}<span class="badge text-bg-secondary">Not verified</span>{% endif %}{% if mail.last_verified_at %}<span class="ms-2">{{ mail.last_verified_at|date:"Y-m-d H:i T" }}{% if mail.last_verification_code %} · {{ mail.last_verification_code }}{% endif %}</span>{% endif %}</dd>
+    </dl>
+    {% if mail.delivery_mode != 'DISABLED' %}
+      <form method="post" class="mt-3">
+        {% csrf_token %}<input type="hidden" name="action" value="verify">
+        <button class="btn btn-outline-primary" type="submit">Verify active provider</button>
+      </form>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card mt-4" aria-labelledby="delivery-mode-heading">
+  <div class="card-body">
+    <h2 id="delivery-mode-heading" class="h5">Active delivery mode</h2>
+    <form method="post" novalidate>
+      {% csrf_token %}<input type="hidden" name="action" value="mode">
+      {% for error in mode_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+      <div class="row g-3 align-items-end">
+        <div class="col-md-4"><label class="form-label" for="{{ mode_form.delivery_mode.id_for_label }}">{{ mode_form.delivery_mode.label }}</label>{{ mode_form.delivery_mode }}{% for error in mode_form.delivery_mode.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+        <div class="col-md-4"><label class="form-label" for="{{ mode_form.api_provider.id_for_label }}">{{ mode_form.api_provider.label }}</label>{{ mode_form.api_provider }}{% for error in mode_form.api_provider.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+        <div class="col-md-4"><button class="btn btn-primary" type="submit">Save active delivery</button></div>
+      </div>
+      <p class="form-text mb-0 mt-2">Disabled retains all stored provider configuration and credentials.</p>
+    </form>
+  </div>
+</section>
+
+<div class="row g-4 mt-0">
+  <div class="col-xl-6">
+    <section class="card h-100" aria-labelledby="api-configuration-heading"><div class="card-body">
+      <h2 id="api-configuration-heading" class="h5">Email API configuration</h2>
+      <p class="text-body-secondary small">Provider settings are retained while inactive.</p>
+      <p class="small"><strong>Brevo configuration:</strong> {% if mail.brevo_configuration_complete %}<span class="badge text-bg-success">Complete</span>{% else %}<span class="badge text-bg-warning">Incomplete</span>{% endif %}</p>
+      <form method="post" novalidate>
+        {% csrf_token %}<input type="hidden" name="action" value="brevo_configuration">
+        {% for error in brevo_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+        <div class="mb-3"><label class="form-label" for="{{ brevo_form.sender_name.id_for_label }}">{{ brevo_form.sender_name.label }}</label>{{ brevo_form.sender_name }}{% for error in brevo_form.sender_name.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+        <div class="mb-3"><label class="form-label" for="{{ brevo_form.sender_email.id_for_label }}">{{ brevo_form.sender_email.label }}</label>{{ brevo_form.sender_email }}{% for error in brevo_form.sender_email.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+        <button class="btn btn-outline-primary" type="submit">Save API sender</button>
+      </form>
+      <hr>
+      <p class="mb-2"><strong>API key:</strong> {% if mail.brevo_api_key_configured %}<span class="badge text-bg-success">Configured</span>{% else %}<span class="badge text-bg-secondary">Not configured</span>{% endif %}</p>
+      <form method="post" novalidate>
+        {% csrf_token %}<input type="hidden" name="action" value="brevo_key">
+        {% for error in brevo_key_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+        <div class="mb-3"><label class="form-label" for="{{ brevo_key_form.api_key.id_for_label }}">{{ brevo_key_form.api_key.label }}</label>{{ brevo_key_form.api_key }}{% for error in brevo_key_form.api_key.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+        <button class="btn btn-outline-primary" type="submit">Replace API key</button>
+      </form>
+      {% if mail.brevo_api_key_configured %}<form method="post" class="mt-2">{% csrf_token %}<input type="hidden" name="action" value="brevo_clear"><button class="btn btn-outline-danger" type="submit">Clear API key</button></form>{% endif %}
+    </div></section>
+  </div>
+  <div class="col-xl-6">
+    <section class="card h-100" aria-labelledby="smtp-configuration-heading"><div class="card-body">
+      <h2 id="smtp-configuration-heading" class="h5">SMTP configuration</h2>
+      <p class="small"><strong>SMTP configuration:</strong> {% if mail.smtp_configuration_complete %}<span class="badge text-bg-success">Complete</span>{% else %}<span class="badge text-bg-warning">Incomplete</span>{% endif %}</p>
+      <form method="post" novalidate>
+        {% csrf_token %}<input type="hidden" name="action" value="smtp_configuration">
+        {% for error in smtp_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}
+        <div class="row g-3"><div class="col-md-8"><label class="form-label" for="{{ smtp_form.host.id_for_label }}">{{ smtp_form.host.label }}</label>{{ smtp_form.host }}{% for error in smtp_form.host.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-4"><label class="form-label" for="{{ smtp_form.port.id_for_label }}">{{ smtp_form.port.label }}</label>{{ smtp_form.port }}{% for error in smtp_form.port.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-12"><label class="form-label" for="{{ smtp_form.tls_mode.id_for_label }}">{{ smtp_form.tls_mode.label }}</label>{{ smtp_form.tls_mode }}{% for error in smtp_form.tls_mode.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-6"><label class="form-label" for="{{ smtp_form.sender_name.id_for_label }}">{{ smtp_form.sender_name.label }}</label>{{ smtp_form.sender_name }}{% for error in smtp_form.sender_name.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-6"><label class="form-label" for="{{ smtp_form.sender_email.id_for_label }}">{{ smtp_form.sender_email.label }}</label>{{ smtp_form.sender_email }}{% for error in smtp_form.sender_email.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div></div>
+        <button class="btn btn-outline-primary mt-3" type="submit">Save SMTP configuration</button>
+      </form>
+      <hr>
+      <p class="mb-2"><strong>SMTP password:</strong> {% if mail.smtp_password_configured %}<span class="badge text-bg-success">Configured</span>{% else %}<span class="badge text-bg-secondary">Not configured</span>{% endif %}</p>
+      <form method="post" novalidate>{% csrf_token %}<input type="hidden" name="action" value="smtp_credentials">{% for error in smtp_credentials_form.non_field_errors %}<div class="alert alert-danger py-2">{{ error }}</div>{% endfor %}<div class="row g-3"><div class="col-md-6"><label class="form-label" for="{{ smtp_credentials_form.username.id_for_label }}">{{ smtp_credentials_form.username.label }}</label>{{ smtp_credentials_form.username }}{% for error in smtp_credentials_form.username.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="col-md-6"><label class="form-label" for="{{ smtp_credentials_form.password.id_for_label }}">{{ smtp_credentials_form.password.label }}</label>{{ smtp_credentials_form.password }}{% for error in smtp_credentials_form.password.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div></div><button class="btn btn-outline-primary mt-3" type="submit">Replace SMTP credentials</button></form>
+      {% if mail.smtp_password_configured %}<form method="post" class="mt-2">{% csrf_token %}<input type="hidden" name="action" value="smtp_clear"><button class="btn btn-outline-danger" type="submit">Clear SMTP credentials</button></form>{% endif %}
+    </div></section>
+  </div>
+</div>
+<p class="mt-4"><a class="btn btn-outline-secondary" href="{% url 'portal-system-data-hub' %}">Back to System Data Hub</a></p>
+{% endblock %}

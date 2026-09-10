@@ -2,6 +2,8 @@ from django import forms
 
 from apps.authorization.models import validate_vehicle_rescue_guides_web_url
 from apps.organizations.presentation import DEPARTMENT_LOCALE_CHOICES, DEPARTMENT_TIMEZONE_CHOICES
+from apps.outbound_mail.models import SystemMailConfiguration
+from apps.outbound_mail.providers import API_PROVIDER_REGISTRY
 from apps.tablets.models import Tablet
 from apps.tablets.versions import AppVersionError, parse_app_version
 
@@ -227,3 +229,95 @@ class VehicleRescueGuidesWebUrlForm(forms.Form):
         value = self.cleaned_data["web_url"]
         validate_vehicle_rescue_guides_web_url(value)
         return value
+
+
+class SystemMailDeliveryModeForm(forms.Form):
+    """Select the active system delivery mode without carrying credentials."""
+
+    delivery_mode = forms.ChoiceField(
+        choices=(
+            (SystemMailConfiguration.DeliveryMode.DISABLED, "Disabled"),
+            (SystemMailConfiguration.DeliveryMode.API, "Email API"),
+            (SystemMailConfiguration.DeliveryMode.SMTP, "SMTP"),
+        ),
+        label="Active delivery mode",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    api_provider = forms.ChoiceField(
+        required=False,
+        label="API provider",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["api_provider"].choices = [
+            (provider, provider.replace("_", " ").title()) for provider in API_PROVIDER_REGISTRY
+        ]
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if cleaned_data.get(
+            "delivery_mode"
+        ) == SystemMailConfiguration.DeliveryMode.API and not cleaned_data.get("api_provider"):
+            self.add_error("api_provider", "Select an API provider for Email API delivery.")
+        return cleaned_data
+
+
+class BrevoMailConfigurationForm(forms.Form):
+    sender_name = forms.CharField(
+        max_length=255, label="Sender name", widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    sender_email = forms.EmailField(
+        max_length=254,
+        label="Sender email",
+        widget=forms.EmailInput(attrs={"class": "form-control", "autocomplete": "email"}),
+    )
+
+
+class ReplaceBrevoApiKeyForm(forms.Form):
+    api_key = forms.CharField(
+        label="API key",
+        widget=forms.PasswordInput(
+            attrs={"class": "form-control", "autocomplete": "new-password"}, render_value=False
+        ),
+    )
+
+
+class SmtpMailConfigurationForm(forms.Form):
+    host = forms.CharField(
+        max_length=255,
+        label="SMTP host",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    port = forms.IntegerField(
+        min_value=1,
+        max_value=65535,
+        label="Port",
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+    tls_mode = forms.ChoiceField(
+        choices=SystemMailConfiguration.SmtpTlsMode.choices,
+        label="TLS mode",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    sender_name = forms.CharField(
+        max_length=255, label="Sender name", widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    sender_email = forms.EmailField(
+        max_length=254,
+        label="Sender email",
+        widget=forms.EmailInput(attrs={"class": "form-control", "autocomplete": "email"}),
+    )
+
+
+class ReplaceSmtpCredentialsForm(forms.Form):
+    username = forms.CharField(
+        max_length=255, label="Username", widget=forms.TextInput(attrs={"class": "form-control"})
+    )
+    password = forms.CharField(
+        label="Password",
+        widget=forms.PasswordInput(
+            attrs={"class": "form-control", "autocomplete": "new-password"}, render_value=False
+        ),
+    )
