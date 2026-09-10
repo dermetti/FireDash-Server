@@ -65,9 +65,17 @@ class OutboundMailHttpTransport:
         self._session.trust_env = False
 
     def post_json(self, *, url: str, headers: dict[str, str], payload: dict) -> HttpResponse:
+        return self.request_json(method="POST", url=url, headers=headers, payload=payload)
+
+    def get_json(self, *, url: str, headers: dict[str, str]) -> HttpResponse:
+        return self.request_json(method="GET", url=url, headers=headers)
+
+    def request_json(
+        self, *, method: str, url: str, headers: dict[str, str], payload: dict | None = None
+    ) -> HttpResponse:
         try:
             response = self._session.request(
-                "POST",
+                method,
                 url,
                 headers=headers,
                 json=payload,

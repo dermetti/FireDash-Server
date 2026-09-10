@@ -166,6 +166,7 @@ administrator.
 | `OUTBOUND_MAIL_HTTPS_PROXY` | unset (direct egress) |
 | `OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS` | `5` |
 | `OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS` | `15` |
+| `OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS` | `15` |
 
 ## Tablets, backups, and restore
 

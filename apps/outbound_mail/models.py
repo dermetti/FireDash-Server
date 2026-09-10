@@ -56,6 +56,12 @@ class SystemMailConfiguration(models.Model):
     smtp_password_encrypted = models.CharField(
         max_length=4096, blank=True, default="", editable=False
     )
+    verification_provider = models.CharField(max_length=32, blank=True, default="", editable=False)
+    last_verification_outcome = models.CharField(
+        max_length=16, blank=True, default="", editable=False
+    )
+    last_verified_at = models.DateTimeField(null=True, blank=True, editable=False)
+    last_verification_code = models.CharField(max_length=64, blank=True, default="", editable=False)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

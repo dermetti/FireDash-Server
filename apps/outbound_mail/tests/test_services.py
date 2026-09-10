@@ -10,6 +10,8 @@ from apps.application_secrets.crypto import ApplicationSecretError, decrypt_appl
 from apps.audit.models import AuditEvent
 from apps.authorization.models import SystemRole
 from apps.outbound_mail.models import SystemMailConfiguration
+from apps.outbound_mail.providers import BREVO, RUNTIME_PROVIDER_REGISTRY
+from apps.outbound_mail.runtime import ProviderUnavailableError, VerificationOutcome
 from apps.outbound_mail.services import (
     BREVO_API_KEY_CONTEXT,
     SMTP_PASSWORD_CONTEXT,
@@ -21,6 +23,7 @@ from apps.outbound_mail.services import (
     replace_brevo_api_key,
     replace_smtp_credentials,
     set_delivery_mode,
+    verify_system_mail_configuration,
 )
 
 
@@ -182,3 +185,72 @@ def test_smtp_authentication_requires_a_paired_username_and_password(
         replace_smtp_credentials(actor=actor, username="user", password="")
     with pytest.raises(ValidationError):
         replace_smtp_credentials(actor=actor, username="", password="password")
+
+
+def test_verification_is_observational_and_configuration_changes_invalidate_it(
+    actor, application_secret_settings
+) -> None:
+    configure_brevo(actor=actor, sender_name="FireDash", sender_email="sender@example.test")
+    replace_brevo_api_key(actor=actor, api_key="verification-secret")
+    set_delivery_mode(
+        actor=actor,
+        delivery_mode=SystemMailConfiguration.DeliveryMode.API,
+        api_provider=BREVO,
+    )
+
+    class FakeProvider:
+        provider_id = BREVO
+
+        def verify(self) -> None:
+            return None
+
+    RUNTIME_PROVIDER_REGISTRY[BREVO] = FakeProvider()
+    try:
+        result = verify_system_mail_configuration(actor=actor)
+    finally:
+        RUNTIME_PROVIDER_REGISTRY.pop(BREVO, None)
+    configuration = SystemMailConfiguration.objects.get(singleton=True)
+    assert result.outcome == VerificationOutcome.SUCCESS
+    assert result.diagnostic_code == "verified"
+    assert configuration.delivery_mode == SystemMailConfiguration.DeliveryMode.API
+    assert configuration.api_provider == BREVO
+    assert configuration.verification_provider == BREVO
+    assert configuration.last_verified_at is not None
+
+    configure_brevo(actor=actor, sender_name="Changed sender", sender_email="sender@example.test")
+    configuration.refresh_from_db()
+    assert not configuration.last_verification_outcome
+    assert configuration.last_verified_at is None
+    assert not configuration.last_verification_code
+
+
+def test_failed_verification_persists_only_sanitized_metadata(
+    actor, application_secret_settings
+) -> None:
+    configure_brevo(actor=actor, sender_name="FireDash", sender_email="sender@example.test")
+    replace_brevo_api_key(actor=actor, api_key="verification-secret")
+    set_delivery_mode(
+        actor=actor,
+        delivery_mode=SystemMailConfiguration.DeliveryMode.API,
+        api_provider=BREVO,
+    )
+
+    class FailingProvider:
+        provider_id = BREVO
+
+        def verify(self) -> None:
+            raise ProviderUnavailableError()
+
+    RUNTIME_PROVIDER_REGISTRY[BREVO] = FailingProvider()
+    try:
+        result = verify_system_mail_configuration(actor=actor)
+    finally:
+        RUNTIME_PROVIDER_REGISTRY.pop(BREVO, None)
+    configuration = SystemMailConfiguration.objects.get(singleton=True)
+    assert result.outcome == VerificationOutcome.FAILED
+    assert result.diagnostic_code == "provider_unavailable"
+    assert configuration.verification_provider == BREVO
+    assert "verification-secret" not in repr(configuration)
+    assert "verification-secret" not in repr(
+        AuditEvent.objects.filter(target_uuid=configuration.id).values_list("metadata", flat=True)
+    )

@@ -304,6 +304,9 @@ OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS = get_typed_env(
 OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS = get_typed_env(
     "OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS", float, default=15.0
 )
+OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS = get_typed_env(
+    "OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS", float, default=15.0
+)
 
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))

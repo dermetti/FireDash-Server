@@ -138,6 +138,11 @@ class ProviderConfigurationError(MailProviderError):
         super().__init__()
 
 
+class VerificationOutcome:
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+
+
 @runtime_checkable
 class MailProvider(Protocol):
     """One provider-neutral synchronous delivery contract for future adapters."""

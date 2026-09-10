@@ -21,6 +21,7 @@ from apps.outbound_mail.runtime import (
 from apps.outbound_mail.services import BREVO_API_KEY_CONTEXT
 
 _BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email"
+_BREVO_ACCOUNT_URL = "https://api.brevo.com/v3/account"
 
 
 class BrevoProvider:
@@ -99,6 +100,25 @@ class BrevoProvider:
                 raise ProviderUnavailableError()
             return MailSendResult(provider=self.provider_id, provider_message_id=message_id)
         if response.status_code in {429} or response.status_code >= 500:
+            raise ProviderUnavailableError()
+        if response.status_code in {401, 402, 403}:
+            raise ProviderConfigurationError()
+        if response.status_code in {400, 422}:
+            raise MessageRejectedError()
+        raise ProviderUnavailableError()
+
+    def verify(self) -> None:
+        """Authenticate against Brevo's non-delivery account endpoint only."""
+        try:
+            response = self._transport.get_json(
+                url=_BREVO_ACCOUNT_URL,
+                headers={"api-key": self._api_key, "accept": "application/json"},
+            )
+        except OutboundMailTransportError:
+            raise ProviderUnavailableError() from None
+        if response.status_code == 200:
+            return
+        if response.status_code == 429 or response.status_code >= 500:
             raise ProviderUnavailableError()
         if response.status_code in {401, 402, 403}:
             raise ProviderConfigurationError()

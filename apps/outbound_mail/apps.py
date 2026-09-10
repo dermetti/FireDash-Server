@@ -8,4 +8,4 @@ class OutboundMailConfig(AppConfig):
 
     def ready(self) -> None:
         # Register built-in factories only; construction/decryption remains lazy.
-        from apps.outbound_mail import brevo  # noqa: F401
+        from apps.outbound_mail import brevo, smtp  # noqa: F401

@@ -13,6 +13,7 @@ from django.core.exceptions import ValidationError
 from apps.outbound_mail.runtime import MailProvider, ProviderConfigurationError
 
 BREVO = "BREVO"
+SMTP = "SMTP"
 
 
 def _validate_brevo(configuration) -> None:
@@ -30,6 +31,10 @@ RUNTIME_PROVIDER_REGISTRY: dict[str, MailProvider] = {}
 RUNTIME_PROVIDER_FACTORY_REGISTRY: dict[str, Callable[[], MailProvider]] = {}
 
 
+def _runtime_provider_is_supported(provider: str) -> bool:
+    return provider == SMTP or provider in API_PROVIDER_REGISTRY
+
+
 def validate_api_provider_configuration(*, provider: str, configuration) -> None:
     validator = API_PROVIDER_REGISTRY.get(provider)
     if validator is None:
@@ -39,7 +44,7 @@ def validate_api_provider_configuration(*, provider: str, configuration) -> None
 
 def register_runtime_provider(*, provider: str, implementation: MailProvider) -> None:
     """Register an adapter only for a configured API-provider identity."""
-    if provider not in API_PROVIDER_REGISTRY:
+    if not _runtime_provider_is_supported(provider):
         raise ProviderConfigurationError(reason="unsupported")
     if implementation.provider_id != provider:
         raise ProviderConfigurationError(reason="identity_mismatch")
@@ -52,7 +57,7 @@ def register_runtime_provider_factory(
     *, provider: str, factory: Callable[[], MailProvider]
 ) -> None:
     """Register a built-in adapter factory for an existing provider identity."""
-    if provider not in API_PROVIDER_REGISTRY:
+    if not _runtime_provider_is_supported(provider):
         raise ProviderConfigurationError(reason="unsupported")
     if provider in RUNTIME_PROVIDER_FACTORY_REGISTRY:
         raise ProviderConfigurationError(reason="already_registered")
@@ -61,7 +66,7 @@ def register_runtime_provider_factory(
 
 def resolve_runtime_provider(*, provider: str) -> MailProvider:
     """Resolve a registered adapter without vendor-specific branches in callers."""
-    if provider not in API_PROVIDER_REGISTRY:
+    if not _runtime_provider_is_supported(provider):
         raise ProviderConfigurationError(reason="unsupported")
     implementation = RUNTIME_PROVIDER_REGISTRY.get(provider)
     if implementation is not None:
@@ -70,3 +75,12 @@ def resolve_runtime_provider(*, provider: str) -> MailProvider:
     if factory is None:
         raise ProviderConfigurationError(reason="unregistered")
     return factory()
+
+
+def resolve_effective_provider(*, delivery_mode: str, api_provider: str) -> MailProvider:
+    """Resolve the active typed configuration without callers branching on vendors."""
+    if delivery_mode == "API":
+        return resolve_runtime_provider(provider=api_provider)
+    if delivery_mode == "SMTP":
+        return resolve_runtime_provider(provider=SMTP)
+    raise ProviderConfigurationError()

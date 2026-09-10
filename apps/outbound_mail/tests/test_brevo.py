@@ -34,10 +34,16 @@ class FakeBrevoTransport:
         self.body = body
         self.api_key_was_used = False
         self.payload = None
+        self.get_url = None
 
     def post_json(self, *, url: str, headers: dict[str, str], payload: dict) -> HttpResponse:
         self.api_key_was_used = headers.get("api-key") == "test-brevo-key"
         self.payload = payload
+        return HttpResponse(status_code=self.status_code, body=self.body)
+
+    def get_json(self, *, url: str, headers: dict[str, str]) -> HttpResponse:
+        self.get_url = url
+        self.api_key_was_used = headers.get("api-key") == "test-brevo-key"
         return HttpResponse(status_code=self.status_code, body=self.body)
 
 
@@ -107,6 +113,14 @@ def test_brevo_is_resolved_through_the_generic_provider_registry(configured_brev
     assert provider.provider_id == "BREVO"
 
 
+def test_brevo_verification_uses_non_delivery_account_endpoint(configured_brevo) -> None:
+    transport = FakeBrevoTransport(status_code=200, body=b'{"sensitive":"response"}')
+    provider = BrevoProvider.from_system_configuration(transport=transport)
+    provider.verify()
+    assert transport.get_url == "https://api.brevo.com/v3/account"
+    assert transport.api_key_was_used
+
+
 @pytest.mark.parametrize(
     "status_code,error_type",
     [
@@ -139,21 +153,23 @@ def test_brevo_transport_failure_is_temporary_without_retry(configured_brevo) ->
 
 
 class FakeResponse:
-    status_code = 201
-    content = b'{"messageId":"opaque"}'
+    def __init__(self, *, status_code: int = 201) -> None:
+        self.status_code = status_code
+        self.content = b'{"messageId":"opaque"}'
 
 
 class FakeSession:
-    def __init__(self, *, error: Exception | None = None) -> None:
+    def __init__(self, *, error: Exception | None = None, status_code: int = 201) -> None:
         self.calls = []
         self.error = error
+        self.status_code = status_code
         self.trust_env = True
 
     def request(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         if self.error:
             raise self.error
-        return FakeResponse()
+        return FakeResponse(status_code=self.status_code)
 
 
 def test_http_transport_direct_and_proxy_routes_are_explicit() -> None:
@@ -182,3 +198,19 @@ def test_http_transport_proxy_failure_does_not_fall_back_to_direct(error) -> Non
         transport.post_json(url="https://provider.example.test/send", headers={}, payload={})
     assert len(session.calls) == 1
     assert session.calls[0][1]["proxies"] == {"https": "http://proxy.example.test:3128"}
+
+
+def test_brevo_verification_uses_the_shared_proxy_aware_transport() -> None:
+    session = FakeSession(status_code=200)
+    provider = BrevoProvider(
+        sender_name="Sender",
+        sender_email="sender@example.test",
+        api_key="test-brevo-key",
+        transport=OutboundMailHttpTransport(
+            proxy_url="http://proxy.example.test:3128", session=session
+        ),
+    )
+    provider.verify()
+    args, kwargs = session.calls[0]
+    assert args == ("GET", "https://api.brevo.com/v3/account")
+    assert kwargs["proxies"] == {"https": "http://proxy.example.test:3128"}

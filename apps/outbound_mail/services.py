@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.application_secrets.crypto import encrypt_application_secret
 from apps.audit.services import record_event
 from apps.authorization.services import require_system_admin
 from apps.outbound_mail.models import SystemMailConfiguration
-from apps.outbound_mail.providers import BREVO
+from apps.outbound_mail.providers import BREVO, resolve_effective_provider
+from apps.outbound_mail.runtime import (
+    MailProviderError,
+    ProviderConfigurationError,
+    VerificationOutcome,
+)
 
 BREVO_API_KEY_CONTEXT = "outbound-mail:api:brevo"
 SMTP_PASSWORD_CONTEXT = "outbound-mail:smtp:password"
@@ -31,6 +38,10 @@ class SystemMailConfigurationState:
     smtp_sender_email: str
     smtp_username_configured: bool
     smtp_password_configured: bool
+    verification_provider: str
+    last_verification_outcome: str
+    last_verified_at: datetime | None
+    last_verification_code: str
 
 
 def _configuration() -> SystemMailConfiguration:
@@ -56,6 +67,10 @@ def get_system_mail_configuration() -> SystemMailConfigurationState:
         smtp_sender_email=configuration.smtp_sender_email,
         smtp_username_configured=bool(configuration.smtp_username),
         smtp_password_configured=configuration.smtp_password_configured,
+        verification_provider=configuration.verification_provider,
+        last_verification_outcome=configuration.last_verification_outcome,
+        last_verified_at=configuration.last_verified_at,
+        last_verification_code=configuration.last_verification_code,
     )
 
 
@@ -76,6 +91,75 @@ def _audit(
     )
 
 
+def _invalidate_verification(configuration: SystemMailConfiguration) -> None:
+    configuration.verification_provider = ""
+    configuration.last_verification_outcome = ""
+    configuration.last_verified_at = None
+    configuration.last_verification_code = ""
+
+
+@dataclass(frozen=True)
+class ProviderVerificationResult:
+    provider: str
+    outcome: str
+    verified_at: datetime
+    diagnostic_code: str
+
+
+@transaction.atomic
+def verify_system_mail_configuration(*, actor) -> ProviderVerificationResult:
+    """Observe the selected provider without sending or changing its activation."""
+    require_system_admin(actor)
+    configuration = _locked_configuration()
+    provider_identity = (
+        configuration.api_provider
+        if configuration.delivery_mode == SystemMailConfiguration.DeliveryMode.API
+        else "SMTP"
+        if configuration.delivery_mode == SystemMailConfiguration.DeliveryMode.SMTP
+        else ""
+    )
+    verified_at = timezone.now()
+    try:
+        provider = resolve_effective_provider(
+            delivery_mode=configuration.delivery_mode, api_provider=configuration.api_provider
+        )
+        verify = getattr(provider, "verify", None)
+        if not callable(verify):
+            raise ProviderConfigurationError()
+        verify()
+    except MailProviderError as error:
+        outcome = VerificationOutcome.FAILED
+        diagnostic_code = error.code
+    else:
+        outcome = VerificationOutcome.SUCCESS
+        diagnostic_code = "verified"
+        provider_identity = provider.provider_id
+    configuration.verification_provider = provider_identity
+    configuration.last_verification_outcome = outcome
+    configuration.last_verified_at = verified_at
+    configuration.last_verification_code = diagnostic_code
+    configuration.save(
+        update_fields=(
+            "verification_provider",
+            "last_verification_outcome",
+            "last_verified_at",
+            "last_verification_code",
+        )
+    )
+    _audit(
+        actor=actor,
+        action="outbound_mail.provider_verification_completed",
+        configuration=configuration,
+        metadata={"provider": provider_identity, "outcome": outcome, "code": diagnostic_code},
+    )
+    return ProviderVerificationResult(
+        provider=provider_identity,
+        outcome=outcome,
+        verified_at=verified_at,
+        diagnostic_code=diagnostic_code,
+    )
+
+
 @transaction.atomic
 def configure_brevo(*, actor, sender_name: str, sender_email: str) -> SystemMailConfiguration:
     require_system_admin(actor)
@@ -85,8 +169,18 @@ def configure_brevo(*, actor, sender_name: str, sender_email: str) -> SystemMail
     configuration.updated_by = actor
     configuration.full_clean(exclude=("brevo_api_key_encrypted", "smtp_password_encrypted"))
     configuration.validate_brevo_sender_configuration()
+    _invalidate_verification(configuration)
     configuration.save(
-        update_fields=("brevo_sender_name", "brevo_sender_email", "updated_by", "updated_at")
+        update_fields=(
+            "brevo_sender_name",
+            "brevo_sender_email",
+            "updated_by",
+            "updated_at",
+            "verification_provider",
+            "last_verification_outcome",
+            "last_verified_at",
+            "last_verification_code",
+        )
     )
     _audit(
         actor=actor,
@@ -107,7 +201,18 @@ def replace_brevo_api_key(*, actor, api_key: str) -> SystemMailConfiguration:
         api_key, context=BREVO_API_KEY_CONTEXT
     ).serialized
     configuration.updated_by = actor
-    configuration.save(update_fields=("brevo_api_key_encrypted", "updated_by", "updated_at"))
+    _invalidate_verification(configuration)
+    configuration.save(
+        update_fields=(
+            "brevo_api_key_encrypted",
+            "updated_by",
+            "updated_at",
+            "verification_provider",
+            "last_verification_outcome",
+            "last_verified_at",
+            "last_verification_code",
+        )
+    )
     _audit(
         actor=actor,
         action="outbound_mail.brevo_api_key_replaced",
@@ -123,7 +228,18 @@ def clear_brevo_api_key(*, actor) -> SystemMailConfiguration:
     configuration = _locked_configuration()
     configuration.brevo_api_key_encrypted = ""
     configuration.updated_by = actor
-    configuration.save(update_fields=("brevo_api_key_encrypted", "updated_by", "updated_at"))
+    _invalidate_verification(configuration)
+    configuration.save(
+        update_fields=(
+            "brevo_api_key_encrypted",
+            "updated_by",
+            "updated_at",
+            "verification_provider",
+            "last_verification_outcome",
+            "last_verified_at",
+            "last_verification_code",
+        )
+    )
     _audit(
         actor=actor,
         action="outbound_mail.brevo_api_key_cleared",
@@ -147,6 +263,7 @@ def configure_smtp(
     configuration.updated_by = actor
     configuration.full_clean(exclude=("brevo_api_key_encrypted", "smtp_password_encrypted"))
     configuration.validate_smtp_configuration()
+    _invalidate_verification(configuration)
     configuration.save(
         update_fields=(
             "smtp_host",
@@ -156,6 +273,10 @@ def configure_smtp(
             "smtp_sender_email",
             "updated_by",
             "updated_at",
+            "verification_provider",
+            "last_verification_outcome",
+            "last_verified_at",
+            "last_verification_code",
         )
     )
     _audit(
@@ -178,8 +299,18 @@ def replace_smtp_credentials(*, actor, username: str, password: str) -> SystemMa
         password, context=SMTP_PASSWORD_CONTEXT
     ).serialized
     configuration.updated_by = actor
+    _invalidate_verification(configuration)
     configuration.save(
-        update_fields=("smtp_username", "smtp_password_encrypted", "updated_by", "updated_at")
+        update_fields=(
+            "smtp_username",
+            "smtp_password_encrypted",
+            "updated_by",
+            "updated_at",
+            "verification_provider",
+            "last_verification_outcome",
+            "last_verified_at",
+            "last_verification_code",
+        )
     )
     _audit(
         actor=actor,
@@ -197,8 +328,18 @@ def clear_smtp_credentials(*, actor) -> SystemMailConfiguration:
     configuration.smtp_username = ""
     configuration.smtp_password_encrypted = ""
     configuration.updated_by = actor
+    _invalidate_verification(configuration)
     configuration.save(
-        update_fields=("smtp_username", "smtp_password_encrypted", "updated_by", "updated_at")
+        update_fields=(
+            "smtp_username",
+            "smtp_password_encrypted",
+            "updated_by",
+            "updated_at",
+            "verification_provider",
+            "last_verification_outcome",
+            "last_verified_at",
+            "last_verification_code",
+        )
     )
     _audit(
         actor=actor,
