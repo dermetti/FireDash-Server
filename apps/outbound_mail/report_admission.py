@@ -7,8 +7,8 @@ never has a useful default string representation.
 
 from __future__ import annotations
 
-import io
-import re
+import json
+import subprocess
 from dataclasses import dataclass, field
 from typing import BinaryIO
 from uuid import UUID
@@ -160,34 +160,60 @@ def _validated_filename(filename: str) -> str:
     return filename
 
 
-# pikepdf/qpdf confirms that the document is password protected without trying
-# passwords. qpdf's Python API intentionally does not expose encryption details
-# before authentication, so require the unambiguous AES-256 revision-6 envelope
-# markers as an additional fail-closed structural gate. This examines no content
-# streams and never decrypts or rewrites the document.
-_AES256_R6_MARKERS = (
-    re.compile(rb"/R\s+6(?:\s|/|>>)", re.ASCII),
-    re.compile(rb"/V\s+5(?:\s|/|>>)", re.ASCII),
-    re.compile(rb"/Length\s+256(?:\s|/|>>)", re.ASCII),
-    re.compile(rb"/AESV3(?:\s|/|>>)", re.ASCII),
-)
-
-
 def _inspect_aes256_password_pdf(pdf_bytes: bytes) -> None:
+    """Accept only qpdf-parsed, password-required AES-256 revision-6 PDFs.
+
+    qpdf 12.4+ exposes the ``encrypt`` JSON summary even when no correct
+    password was supplied. Its stdin/stdout interface avoids an intermediate
+    file and no FireDash code parses PDF syntax or encryption dictionaries.
+    """
     if not pdf_bytes.startswith(b"%PDF-"):
         raise ReportAdmissionError("invalid_pdf")
     try:
-        import pikepdf
-
-        # Opening with only the empty password is intentionally not password
-        # guessing. A PasswordError is qpdf's mature parser confirmation that a
-        # non-empty document password protects the PDF.
-        with pikepdf.open(io.BytesIO(pdf_bytes), password="", attempt_recovery=False):
-            pass
-    except pikepdf.PasswordError:
-        if all(marker.search(pdf_bytes) for marker in _AES256_R6_MARKERS):
-            return
-        raise ReportAdmissionError("unsupported_pdf_encryption") from None
-    except Exception:
+        completed = subprocess.run(
+            (
+                settings.OUTBOUND_MAIL_QPDF_BINARY,
+                "--json",
+                "--json-key=encrypt",
+                "--json-stream-data=none",
+                "-",
+            ),
+            input=pdf_bytes,
+            capture_output=True,
+            check=False,
+            timeout=settings.OUTBOUND_MAIL_QPDF_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise ReportAdmissionError("pdf_inspection_unavailable") from None
+    if completed.returncode != 0:
         raise ReportAdmissionError("malformed_pdf") from None
-    raise ReportAdmissionError("pdf_password_required")
+    try:
+        payload = json.loads(completed.stdout)
+        encryption = payload["encrypt"]
+        parameters = encryption["parameters"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        raise ReportAdmissionError("unsupported_pdf_encryption") from None
+    if not _is_password_required_aes256_revision6(encryption, parameters):
+        raise ReportAdmissionError("unsupported_pdf_encryption")
+
+
+def _is_password_required_aes256_revision6(encryption: object, parameters: object) -> bool:
+    """Interpret qpdf's documented ``encrypt`` JSON schema fail-closed."""
+    if not isinstance(encryption, dict) or not isinstance(parameters, dict):
+        return False
+    required_encryption = {
+        "encrypted": True,
+        "userpasswordmatched": False,
+        "ownerpasswordmatched": False,
+    }
+    if any(encryption.get(key) is not value for key, value in required_encryption.items()):
+        return False
+    return (
+        parameters.get("R") == 6
+        and parameters.get("V") == 5
+        and parameters.get("bits") == 256
+        and parameters.get("method") == "AESv3"
+        and parameters.get("stringmethod") == "AESv3"
+        and parameters.get("streammethod") == "AESv3"
+        and parameters.get("filemethod") == "AESv3"
+    )

@@ -87,6 +87,10 @@ timer, and maintenance timer. It also installs the PDF sanitizer broker and
 per-job sandbox units. Preserve the unit hardening directives rather than
 copying commands into a less restricted service.
 
+Install qpdf 12.4 or newer for the web service. Outbound report admission runs
+its JSON encryption inspection through qpdf using stdin/stdout only; it must
+not be replaced with a PDF-marker check or a temporary-file workflow.
+
 ## Reference-data sandbox
 
 The root-owned PDF sanitizer broker remains outside the web process. Its Unix

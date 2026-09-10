@@ -41,6 +41,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${PAC
 
 log "verifying qpdf is present"
 command -v qpdf >/dev/null 2>&1 || die "qpdf is not installed"
+qpdf_version=$(qpdf --version 2>&1 | awk 'NR==1 { print $NF }')
+dpkg --compare-versions "$qpdf_version" ge 12.4 || die "qpdf 12.4 or newer is required"
 log "qpdf version: $(qpdf --version 2>&1 | head -n1)"
 
 systemctl enable --now postgresql

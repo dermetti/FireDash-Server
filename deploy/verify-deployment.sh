@@ -60,6 +60,8 @@ for b in psql nginx curl openssl qpdf restic git; do
     command -v "$b" >/dev/null 2>&1 && ok "binary $b" || fail "binary $b missing"
 done
 [[ $(psql --version 2>/dev/null | grep -oE '[0-9]+' | head -n1) == 17 ]] && ok "PostgreSQL 17" || fail "PostgreSQL is not version 17"
+qpdf_version=$(qpdf --version 2>/dev/null | awk 'NR==1 { print $NF }')
+dpkg --compare-versions "$qpdf_version" ge 12.4 && ok "qpdf 12.4+" || fail "qpdf must be version 12.4 or newer"
 
 # -------- database --------
 log "=== database ==="

@@ -196,6 +196,8 @@ administrator.
 | `OUTBOUND_MAIL_SMTP_ALLOWED_HOSTS` | unset |
 | `OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS` | unset |
 | `OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES` | `20971520` (20 MiB) |
+| `OUTBOUND_MAIL_QPDF_BINARY` | `qpdf` (qpdf 12.4 or newer) |
+| `OUTBOUND_MAIL_QPDF_TIMEOUT_SECONDS` | `10` |
 
 SMTP destinations must be DNS hostnames that resolve only to globally routable
 addresses. IP literals and private, loopback, link-local, reserved, multicast,

@@ -121,8 +121,10 @@ a verified valid commander email, and satisfy the department's exact recipient
 domain policy.  Cross-department and ineligible identifiers have the same
 sanitized rejection.
 
-Admission accepts only a bounded, password-protected AES-256 PDF.  It performs
-no password handling, content extraction, persistence, provider resolution, or
-network activity.  The resulting in-memory value is intentionally redacted in
-normal representations; delivery must recheck recipient policy immediately
-before sending because policy and personnel state can change after admission.
+Admission accepts only a bounded, password-protected AES-256 revision-6 PDF.
+Its qpdf 12.4+ JSON inspection reads parsed encryption metadata through stdin
+and stdout, never raw PDF marker strings. It performs no password handling,
+content extraction, persistence, provider resolution, or network activity.
+The resulting in-memory value is intentionally redacted in normal
+representations; delivery must recheck recipient policy immediately before
+sending because policy and personnel state can change after admission.
