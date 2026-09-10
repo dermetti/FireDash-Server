@@ -34,6 +34,14 @@ class ApplicationSecretError(Exception):
         super().__init__(f"Application secret operation failed ({code}).")
 
 
+class ApplicationSecretKeyringValidationError(ValueError):
+    """A non-sensitive reason why a deployment key-ring document is invalid."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 @dataclass(frozen=True, repr=False)
 class EncryptedApplicationSecret:
     """A persistable encrypted envelope whose representations are redacted."""
@@ -66,6 +74,63 @@ def _b64decode(value: str) -> bytes:
         return base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
     except (ValueError, binascii.Error):  # type: ignore[name-defined]
         raise ApplicationSecretError("malformed_envelope") from None
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[object, object]]) -> dict[object, object]:
+    result: dict[object, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ApplicationSecretKeyringValidationError("duplicate_key")
+        result[key] = value
+    return result
+
+
+def parse_application_secret_keyring(payload: bytes | str) -> dict[str, bytes]:
+    """Parse the sole supported deployment KEK-ring document format.
+
+    This is deliberately shared by the runtime loader and deployment tooling so
+    a generated credential cannot merely look valid to one of those consumers.
+    The failure codes identify only a validation class, never key material.
+    """
+    try:
+        document = json.loads(payload, object_pairs_hook=_reject_duplicate_json_keys)
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        raise ApplicationSecretKeyringValidationError("invalid_json") from None
+    if not isinstance(document, dict) or set(document) != {"keys"}:
+        raise ApplicationSecretKeyringValidationError("invalid_schema")
+    encoded_keys = document["keys"]
+    if not isinstance(encoded_keys, dict) or not encoded_keys:
+        raise ApplicationSecretKeyringValidationError("empty_or_invalid_keys")
+
+    keys: dict[str, bytes] = {}
+    for version, encoded in encoded_keys.items():
+        if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+            raise ApplicationSecretKeyringValidationError("invalid_key_version")
+        if not isinstance(encoded, str):
+            raise ApplicationSecretKeyringValidationError("invalid_key_encoding")
+        try:
+            key = base64.b64decode(encoded.encode("ascii"), validate=True)
+        except (UnicodeEncodeError, ValueError, binascii.Error):
+            raise ApplicationSecretKeyringValidationError("invalid_key_encoding") from None
+        if len(key) != _KEY_BYTES:
+            raise ApplicationSecretKeyringValidationError("invalid_key_length")
+        keys[version] = key
+    return keys
+
+
+def generate_application_secret_keyring(*, initial_version: str = "1") -> bytes:
+    """Return a new canonical JSON KEK ring containing one AES-256 key."""
+    if not _VERSION_RE.fullmatch(initial_version):
+        raise ValueError("initial_version is invalid")
+    document = {
+        "keys": {
+            initial_version: base64.b64encode(os.urandom(_KEY_BYTES)).decode("ascii"),
+        }
+    }
+    # Reparse before returning so generation and validation cannot drift.
+    encoded = json.dumps(document, separators=(",", ":")).encode("ascii")
+    parse_application_secret_keyring(encoded)
+    return encoded
 
 
 def _parse_envelope(serialized: str) -> tuple[str, bytes, bytes]:
@@ -146,19 +211,9 @@ class ApplicationSecretCipher:
 def load_application_secret_keyring(path: Path, *, active_version: str) -> ApplicationSecretCipher:
     """Load the root-managed JSON key-ring credential without exposing its bytes."""
     try:
-        payload = json.loads(path.read_bytes())
-        encoded_keys = payload["keys"]
-        if not isinstance(encoded_keys, dict):
-            raise ValueError
-        keys = {
-            version: base64.b64decode(encoded, validate=True)
-            for version, encoded in encoded_keys.items()
-            if isinstance(version, str) and isinstance(encoded, str)
-        }
-        if len(keys) != len(encoded_keys):
-            raise ValueError
+        keys = parse_application_secret_keyring(path.read_bytes())
         return ApplicationSecretCipher(keys=keys, active_version=active_version)
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+    except (OSError, ValueError, ApplicationSecretKeyringValidationError):
         raise ApplicationSecretError("key_unavailable") from None
 
 

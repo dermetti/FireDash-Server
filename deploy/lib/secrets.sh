@@ -44,12 +44,13 @@ require_no_deprecated_env_vars() {
 
 # Render /etc/fire-backend/fire-backend.env. Empty runtime_password/secret_key reuse existing values.
 render_env() {
-    local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1
+    local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1 application_secret_kek_version=1
     local ingest_upload_bytes=268435456 pdf_package_documents=250
     if [[ -f $ENV_FILE ]]; then
         [[ -z $runtime_password ]] && runtime_password=$(env_value "$ENV_FILE" POSTGRES_PASSWORD)
         [[ -z $secret_key ]] && secret_key=$(env_value "$ENV_FILE" DJANGO_SECRET_KEY)
         signing_key_version=$(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION)
+        application_secret_kek_version=$(env_value "$ENV_FILE" APPLICATION_SECRET_KEK_VERSION)
         local existing
         existing=$(env_value "$ENV_FILE" MAX_INGEST_UPLOAD_BYTES)
         [[ -n $existing ]] && ingest_upload_bytes=$existing
@@ -60,8 +61,11 @@ render_env() {
     [[ -n $secret_key ]] || die "Django SECRET_KEY is unavailable"
     [[ -n $host ]] || die "hostname is unavailable"
     [[ -n $signing_key_version ]] || signing_key_version=1
+    [[ -n $application_secret_kek_version ]] || application_secret_kek_version=1
     [[ $signing_key_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
         || die "PUBLICATION_SIGNING_KEY_VERSION is invalid"
+    [[ $application_secret_kek_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
+        || die "APPLICATION_SECRET_KEK_VERSION is invalid"
     require_no_deprecated_env_vars
     local tmp
     tmp=$(mktemp)
@@ -116,9 +120,84 @@ PUBLICATION_ARTIFACT_MAX_BYTES=629145600
 PUBLICATION_ARTIFACT_STALE_SECONDS=3600
 PUBLICATION_KEK_VERSION=1
 PUBLICATION_SIGNING_KEY_VERSION=$signing_key_version
+APPLICATION_SECRET_KEK_VERSION=$application_secret_kek_version
 EOF
     install_file_atomic "$tmp" "$ENV_FILE" 0640 root:fire_backend
     rm -f "$tmp"
+}
+
+# The following three helpers intentionally use the same Python implementation
+# as Django's application-secret runtime.  Do not duplicate the key-ring schema
+# in shell: deployment-generated KEKs must be accepted by the runtime verbatim.
+application_secret_kek_version() {
+    local version=1
+    if [[ -f $ENV_FILE ]]; then
+        version=$(env_value "$ENV_FILE" APPLICATION_SECRET_KEK_VERSION)
+    fi
+    [[ -n $version ]] || version=1
+    printf '%s' "$version"
+}
+
+generate_application_secret_keyring() {
+    local release=$1 output=$2 version=$3
+    PYTHONPATH="$release${PYTHONPATH:+:$PYTHONPATH}" "$release/venv/bin/python" - "$version" > "$output" <<'PY'
+import sys
+from apps.application_secrets.crypto import generate_application_secret_keyring
+
+sys.stdout.buffer.write(generate_application_secret_keyring(initial_version=sys.argv[1]))
+PY
+}
+
+validate_application_secret_keyring() {
+    local release=$1 credential=$2 active_version=$3
+    PYTHONPATH="$release${PYTHONPATH:+:$PYTHONPATH}" "$release/venv/bin/python" - "$credential" "$active_version" <<'PY'
+import sys
+from pathlib import Path
+
+from apps.application_secrets.crypto import (
+    ApplicationSecretCipher,
+    ApplicationSecretKeyringValidationError,
+    parse_application_secret_keyring,
+)
+
+try:
+    keys = parse_application_secret_keyring(Path(sys.argv[1]).read_bytes())
+    ApplicationSecretCipher(keys=keys, active_version=sys.argv[2])
+except OSError:
+    raise SystemExit("missing") from None
+except ApplicationSecretKeyringValidationError as error:
+    raise SystemExit(error.code) from None
+except ValueError:
+    raise SystemExit("invalid_active_key_version") from None
+PY
+}
+
+# Provision only an absent credential. Existing material is always validated,
+# never regenerated: credentials already encrypted with it must remain usable.
+ensure_application_secret_keyring() {
+    local release=$1 credential="$SECRET_DIR/application-secret-kek-ring.json" version staging reason
+    version=$(application_secret_kek_version)
+    if [[ -e $credential || -L $credential ]]; then
+        if ! reason=$(validate_application_secret_keyring "$release" "$credential" "$version" 2>&1); then
+            die "application-secret KEK ring at $credential is invalid ($reason); restore or repair that credential without replacing its key material"
+        fi
+        return 0
+    fi
+
+    staging=$(mktemp)
+    if ! generate_application_secret_keyring "$release" "$staging" "$version"; then
+        rm -f "$staging"
+        die "could not generate the initial application-secret KEK ring"
+    fi
+    if ! reason=$(validate_application_secret_keyring "$release" "$staging" "$version" 2>&1); then
+        rm -f "$staging"
+        die "generated application-secret KEK ring is invalid ($reason)"
+    fi
+    install_file_atomic "$staging" "$credential" 0600 root:root
+    rm -f "$staging"
+    if ! reason=$(validate_application_secret_keyring "$release" "$credential" "$version" 2>&1); then
+        die "provisioned application-secret KEK ring at $credential is invalid ($reason)"
+    fi
 }
 
 # Preserve every historical public key while ensuring the active private/public
@@ -185,7 +264,7 @@ PY
 
 # Generate and commit a full secret set. Only safe in PRISTINE / BOOTSTRAP_INCOMPLETE.
 generate_and_commit_secrets() {
-    local release=$1 host=$2 staging runtime_password secret_key f
+    local release=$1 host=$2 staging runtime_password secret_key application_secret_version f
     rm -rf /etc/fire-backend/.secrets-staging.*
     staging=$(mktemp -d /etc/fire-backend/.secrets-staging.XXXXXX)
     chmod 700 "$staging"
@@ -197,7 +276,8 @@ generate_and_commit_secrets() {
 
     "$release/venv/bin/python" -c 'import secrets, sys; sys.stdout.buffer.write(secrets.token_bytes(32))' > "$staging/publication-kek"
     "$release/venv/bin/python" -c 'import secrets, sys; sys.stdout.buffer.write(secrets.token_bytes(32))' > "$staging/publication-signing-key"
-    "$release/venv/bin/python" -c 'import base64, json, secrets, sys; json.dump({"keys": {"1": base64.b64encode(secrets.token_bytes(32)).decode("ascii")}}, sys.stdout, separators=(",", ":"))' > "$staging/application-secret-kek-ring.json"
+    application_secret_version=$(application_secret_kek_version)
+    generate_application_secret_keyring "$release" "$staging/application-secret-kek-ring.json" "$application_secret_version"
 
     derive_public_key "$release" "$staging/publication-signing-key" "$staging/publication-signing-public-key"
 
@@ -218,6 +298,7 @@ generate_and_commit_secrets() {
     for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key application-secret-kek-ring.json; do
         install -m 0600 -o root -g root "$staging/$f" "$SECRET_DIR/$f"
     done
+    ensure_application_secret_keyring "$release"
     render_env "$runtime_password" "$secret_key" "$host"
     ensure_public_signing_key_ring "$release"
 
@@ -228,26 +309,16 @@ generate_and_commit_secrets() {
     rm -rf "$staging"
 }
 
-# Validate an established install's secrets. Fails closed; never regenerates.
+# Validate an established install's secrets.  Upgrades from before
+# application-secret encryption have no ring yet, so provision exactly that
+# missing credential while preserving every existing deployment secret.
 validate_established_secrets() {
     local release=$1 f v rederived
     for f in publication-kek publication-signing-key publication-signing-public-key; do
         [[ -f $SECRET_DIR/$f ]] || die "established install: $SECRET_DIR/$f is missing (restore from backup)"
         [[ $(wc -c < "$SECRET_DIR/$f") -eq 32 ]] || die "established install: $f must be exactly 32 bytes"
     done
-    "$release/venv/bin/python" - "$SECRET_DIR/application-secret-kek-ring.json" <<'PY'
-import base64
-import json
-import sys
-from pathlib import Path
-
-try:
-    keys = json.loads(Path(sys.argv[1]).read_bytes())["keys"]
-    assert isinstance(keys, dict) and keys
-    assert all(isinstance(version, str) and len(base64.b64decode(key, validate=True)) == 32 for version, key in keys.items())
-except (AssertionError, KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
-    raise SystemExit("established install: application-secret-kek-ring.json is invalid")
-PY
+    ensure_application_secret_keyring "$release"
     for f in database-owner-password backup-role-password; do
         [[ -f $SECRET_DIR/$f ]] || die "established install: $SECRET_DIR/$f is missing (restore from backup)"
         v=$(read_secret "$SECRET_DIR/$f")

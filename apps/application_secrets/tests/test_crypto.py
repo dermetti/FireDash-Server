@@ -7,9 +7,12 @@ from django.test import override_settings
 from apps.application_secrets.crypto import (
     ApplicationSecretCipher,
     ApplicationSecretError,
+    ApplicationSecretKeyringValidationError,
     decrypt_application_secret,
     encrypt_application_secret,
+    generate_application_secret_keyring,
     load_application_secret_keyring,
+    parse_application_secret_keyring,
 )
 
 
@@ -97,3 +100,27 @@ def test_missing_or_invalid_credential_file_fails_closed(tmp_path, contents) -> 
     with pytest.raises(ApplicationSecretError) as error:
         load_application_secret_keyring(keyring, active_version="1")
     assert error.value.code in {"key_unavailable", "invalid_key_configuration"}
+
+
+def test_generated_keyring_is_the_canonical_runtime_format(tmp_path) -> None:
+    credential = tmp_path / "application-secret-kek-ring.json"
+    credential.write_bytes(generate_application_secret_keyring())
+
+    parsed = parse_application_secret_keyring(credential.read_bytes())
+    assert set(parsed) == {"1"}
+    assert len(parsed["1"]) == 32
+    assert load_application_secret_keyring(credential, active_version="1").active_version == "1"
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        (b'{"keys":{"1":"' + base64.b64encode(b"k" * 32) + b'"},"extra":1}', "invalid_schema"),
+        (b'{"keys":{"1":"' + base64.b64encode(b"k" * 31) + b'"}}', "invalid_key_length"),
+        (b'{"keys":{"1":"not-base64"}}', "invalid_key_encoding"),
+    ],
+)
+def test_keyring_parser_reports_only_safe_validation_classes(payload, code) -> None:
+    with pytest.raises(ApplicationSecretKeyringValidationError) as error:
+        parse_application_secret_keyring(payload)
+    assert error.value.code == code

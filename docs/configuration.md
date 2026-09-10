@@ -147,6 +147,12 @@ remain decryptable until they are re-encrypted:
 {"keys":{"1":"<standard-Base64 raw 32-byte AES key>","2":"<...>"}}
 ```
 
+Fresh installs and upgrades from releases predating outbound mail provision an
+absent initial credential automatically. A valid existing credential is reused
+byte-for-byte; a malformed existing credential is never replaced automatically,
+because doing so could make stored credentials undecryptable. Restore or repair
+that root-managed file from the corresponding key backup before redeploying.
+
 `APPLICATION_SECRET_KEK_VERSION` selects a listed version for new writes. Keep
 previous entries until all values using them have been re-encrypted. The
 application fails closed if the credential is absent, malformed, the selected
