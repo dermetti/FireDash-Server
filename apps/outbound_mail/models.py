@@ -6,6 +6,7 @@ from django.core.validators import EmailValidator, MaxValueValidator, MinValueVa
 from django.db import models
 from django.db.models import Q
 
+from apps.organizations.models import Department
 from apps.outbound_mail.providers import BREVO, validate_api_provider_configuration
 
 validate_sender_email = EmailValidator(message="A valid sender email address is required.")
@@ -123,3 +124,111 @@ class SystemMailConfiguration(models.Model):
         )
         if not all(required):
             raise ValidationError("SMTP delivery configuration is incomplete.")
+
+
+class DepartmentMailConfiguration(models.Model):
+    """Optional department mail state; absent rows deliberately mean disabled."""
+
+    class DeliveryMode(models.TextChoices):
+        DISABLED = "DISABLED", "Disabled"
+        SYSTEM = "SYSTEM", "System managed"
+        CUSTOM_SMTP = "CUSTOM_SMTP", "Custom SMTP"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    department = models.OneToOneField(
+        Department, on_delete=models.PROTECT, related_name="mail_configuration"
+    )
+    delivery_mode = models.CharField(
+        max_length=16, choices=DeliveryMode.choices, default=DeliveryMode.DISABLED
+    )
+    smtp_host = models.CharField(max_length=255, blank=True, default="")
+    smtp_port = models.PositiveIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(65535)]
+    )
+    smtp_tls_mode = models.CharField(
+        max_length=16, choices=SystemMailConfiguration.SmtpTlsMode.choices, blank=True, default=""
+    )
+    smtp_sender_name = models.CharField(max_length=255, blank=True, default="")
+    smtp_sender_email = models.EmailField(
+        blank=True, default="", validators=[validate_sender_email]
+    )
+    smtp_username = models.CharField(max_length=255, blank=True, default="")
+    smtp_password_encrypted = models.CharField(
+        max_length=4096, blank=True, default="", editable=False
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="updated_department_mail_configurations",
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(smtp_username="", smtp_password_encrypted="")
+                | (Q(smtp_username__gt="") & Q(smtp_password_encrypted__gt="")),
+                name="department_mail_smtp_auth_pair",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Department mail configuration ({self.delivery_mode})"
+
+    @property
+    def smtp_password_configured(self) -> bool:
+        return bool(self.smtp_password_encrypted)
+
+    def validate_smtp_configuration(self) -> None:
+        required = (
+            self.smtp_host,
+            self.smtp_port,
+            self.smtp_tls_mode,
+            self.smtp_sender_name,
+            self.smtp_sender_email,
+        )
+        if not all(required):
+            raise ValidationError("SMTP delivery configuration is incomplete.")
+
+
+class DepartmentRecipientPolicy(models.Model):
+    """Optional exact-domain restriction for a department's future mail recipients."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    department = models.OneToOneField(
+        Department, on_delete=models.PROTECT, related_name="mail_recipient_policy"
+    )
+    restriction_enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="updated_department_mail_recipient_policies",
+    )
+
+    def __str__(self) -> str:
+        return "Department mail recipient policy"
+
+
+class DepartmentRecipientDomain(models.Model):
+    """A canonical exact recipient domain, never a suffix or wildcard pattern."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    policy = models.ForeignKey(
+        DepartmentRecipientPolicy, on_delete=models.CASCADE, related_name="approved_domains"
+    )
+    domain = models.CharField(max_length=253)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("policy", "domain"), name="unique_department_mail_domain"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return self.domain
