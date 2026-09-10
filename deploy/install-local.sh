@@ -88,7 +88,7 @@ export FIREDASH_STATE
 log "installation state: $FIREDASH_STATE"
 
 # --- prompt only for still-missing required values, via /dev/tty ---
-prompt_for FIREDASH_BASE_URL "FireDash HTTPS base URL (e.g. https://firedash.mjblab.de)"
+prompt_for FIREDASH_BASE_URL "FireDash HTTPS base URL (e.g. https://firedash.example.org)"
 prompt_for FIREDASH_TLS_CERT_PATH "TLS full-chain certificate path"
 prompt_for FIREDASH_TLS_KEY_PATH "TLS private key path"
 

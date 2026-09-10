@@ -3,6 +3,7 @@ from django.core.exceptions import ValidationError
 
 from apps.outbound_mail.providers import (
     BREVO,
+    RUNTIME_PROVIDER_FACTORY_REGISTRY,
     RUNTIME_PROVIDER_REGISTRY,
     register_runtime_provider,
     resolve_runtime_provider,
@@ -119,7 +120,11 @@ def test_registry_rejects_unknown_and_unregistered_provider_deterministically() 
     assert unknown.value.code == "provider_configuration"
     assert unknown.value.detail == "Unsupported mail provider."
 
-    with pytest.raises(ProviderConfigurationError) as unregistered:
-        resolve_runtime_provider(provider=BREVO)
+    factory = RUNTIME_PROVIDER_FACTORY_REGISTRY.pop(BREVO)
+    try:
+        with pytest.raises(ProviderConfigurationError) as unregistered:
+            resolve_runtime_provider(provider=BREVO)
+    finally:
+        RUNTIME_PROVIDER_FACTORY_REGISTRY[BREVO] = factory
     assert unregistered.value.code == "provider_configuration"
     assert unregistered.value.detail == "Mail provider is not registered."

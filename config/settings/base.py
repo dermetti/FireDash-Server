@@ -295,6 +295,16 @@ APPLICATION_SECRET_KEK_CREDENTIAL_PATH = credential_path(
 )
 APPLICATION_SECRET_KEK_VERSION = get_env("APPLICATION_SECRET_KEK_VERSION", default="1")
 
+# Optional deployment-owned HTTPS egress proxy for outbound mail providers.
+# This is intentionally not a database/admin setting.
+OUTBOUND_MAIL_HTTPS_PROXY = get_env("OUTBOUND_MAIL_HTTPS_PROXY", default="")
+OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS = get_typed_env(
+    "OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS", float, default=5.0
+)
+OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS = get_typed_env(
+    "OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS", float, default=15.0
+)
+
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))
 

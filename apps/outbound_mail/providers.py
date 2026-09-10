@@ -27,6 +27,7 @@ def _validate_brevo(configuration) -> None:
 
 API_PROVIDER_REGISTRY: dict[str, Callable[[object], None]] = {BREVO: _validate_brevo}
 RUNTIME_PROVIDER_REGISTRY: dict[str, MailProvider] = {}
+RUNTIME_PROVIDER_FACTORY_REGISTRY: dict[str, Callable[[], MailProvider]] = {}
 
 
 def validate_api_provider_configuration(*, provider: str, configuration) -> None:
@@ -47,11 +48,25 @@ def register_runtime_provider(*, provider: str, implementation: MailProvider) ->
     RUNTIME_PROVIDER_REGISTRY[provider] = implementation
 
 
+def register_runtime_provider_factory(
+    *, provider: str, factory: Callable[[], MailProvider]
+) -> None:
+    """Register a built-in adapter factory for an existing provider identity."""
+    if provider not in API_PROVIDER_REGISTRY:
+        raise ProviderConfigurationError(reason="unsupported")
+    if provider in RUNTIME_PROVIDER_FACTORY_REGISTRY:
+        raise ProviderConfigurationError(reason="already_registered")
+    RUNTIME_PROVIDER_FACTORY_REGISTRY[provider] = factory
+
+
 def resolve_runtime_provider(*, provider: str) -> MailProvider:
     """Resolve a registered adapter without vendor-specific branches in callers."""
     if provider not in API_PROVIDER_REGISTRY:
         raise ProviderConfigurationError(reason="unsupported")
     implementation = RUNTIME_PROVIDER_REGISTRY.get(provider)
-    if implementation is None:
+    if implementation is not None:
+        return implementation
+    factory = RUNTIME_PROVIDER_FACTORY_REGISTRY.get(provider)
+    if factory is None:
         raise ProviderConfigurationError(reason="unregistered")
-    return implementation
+    return factory()

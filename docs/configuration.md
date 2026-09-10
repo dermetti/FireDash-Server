@@ -152,6 +152,21 @@ previous entries until all values using them have been re-encrypted. The
 application fails closed if the credential is absent, malformed, the selected
 version is unavailable, or authentication fails.
 
+## Outbound-mail egress
+
+API mail providers use direct HTTPS egress by default. Set
+`OUTBOUND_MAIL_HTTPS_PROXY` only when the deployment requires a dedicated HTTPS
+egress proxy; it accepts an `http://` or `https://` proxy URL. When configured,
+outbound-mail requests use that proxy exclusively and do not retry directly.
+This deployment setting is not stored in PostgreSQL or configurable by an
+administrator.
+
+| Setting | Default |
+| --- | --- |
+| `OUTBOUND_MAIL_HTTPS_PROXY` | unset (direct egress) |
+| `OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS` | `5` |
+| `OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS` | `15` |
+
 ## Tablets, backups, and restore
 
 Tablet lease duration belongs to each department, not an environment variable:
