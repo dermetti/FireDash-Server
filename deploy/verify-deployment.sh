@@ -276,6 +276,11 @@ if systemctl cat fire-backend.service 2>/dev/null | grep -q 'publication-signing
 else
     fail "web service missing public signing-key ring credential"
 fi
+if systemctl cat fire-backend.service 2>/dev/null | grep -q 'application-secret-kek-ring'; then
+    ok "web service loads application-secret key ring"
+else
+    fail "web service missing application-secret key ring credential"
+fi
 if systemctl cat fire-backend.service 2>/dev/null | grep -Eq 'publication-kek|publication-signing-key:'; then
     fail "web service loads private KEK/signing key"
 else
@@ -379,7 +384,7 @@ fi
 # -------- filesystem / credentials --------
 log "=== filesystem / credentials ==="
 [[ $(stat -c '%a' "$SECRET_DIR") == 700 ]] && ok "credentials dir 0700" || fail "credentials dir mode $(stat -c '%a' "$SECRET_DIR")"
-for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key publication-signing-public-key-ring.json; do
+for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key publication-signing-public-key-ring.json application-secret-kek-ring.json; do
     [[ $(stat -c '%U:%G:%a' "$SECRET_DIR/$f") == "root:root:600" ]] && ok "$f root:root 0600" || fail "$f has unexpected ownership/mode"
 done
 if "$RELEASE/venv/bin/python" - "$SECRET_DIR/publication-signing-key" \

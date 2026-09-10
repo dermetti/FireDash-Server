@@ -12,6 +12,7 @@ WorkingDirectory=/srv/firedash/current
 Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env
 LoadCredential=publication-signing-public-key-ring:/etc/fire-backend/credentials/publication-signing-public-key-ring.json
+LoadCredential=application-secret-kek-ring:/etc/fire-backend/credentials/application-secret-kek-ring.json
 ExecStart=/srv/firedash/current/venv/bin/gunicorn --config deploy/gunicorn/gunicorn.conf.py config.wsgi:application
 Restart=on-failure
 RestartSec=5s

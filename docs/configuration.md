@@ -125,6 +125,33 @@ keeps active private credentials root-only, and changes only
 [rotation runbook](operations.md#publication-signing-key-rotation). The KEK is
 not a signing-key rotation input.
 
+## Application-secret encryption
+
+Application credentials stored in PostgreSQL use their own AES-256-GCM key
+ring. It is unrelated to publication encryption and signing credentials. The
+web service receives it through systemd as `application-secret-kek-ring`;
+non-systemd deployments set the explicit `APPLICATION_SECRET_KEK_CREDENTIAL_PATH`
+to an equivalently protected file. Do not put key material in the environment
+file in production.
+
+| Setting | Default |
+| --- | --- |
+| `APPLICATION_SECRET_KEK_VERSION` | `1` |
+| `APPLICATION_SECRET_KEK_CREDENTIAL_PATH` | `$CREDENTIALS_DIRECTORY/application-secret-kek-ring` (explicit development/test override only) |
+
+The credential is root-managed mode `0600` JSON. Its version-to-key format
+allows a new active key to be introduced while older encrypted database values
+remain decryptable until they are re-encrypted:
+
+```json
+{"keys":{"1":"<standard-Base64 raw 32-byte AES key>","2":"<...>"}}
+```
+
+`APPLICATION_SECRET_KEK_VERSION` selects a listed version for new writes. Keep
+previous entries until all values using them have been re-encrypted. The
+application fails closed if the credential is absent, malformed, the selected
+version is unavailable, or authentication fails.
+
 ## Tablets, backups, and restore
 
 Tablet lease duration belongs to each department, not an environment variable:

@@ -197,6 +197,7 @@ generate_and_commit_secrets() {
 
     "$release/venv/bin/python" -c 'import secrets, sys; sys.stdout.buffer.write(secrets.token_bytes(32))' > "$staging/publication-kek"
     "$release/venv/bin/python" -c 'import secrets, sys; sys.stdout.buffer.write(secrets.token_bytes(32))' > "$staging/publication-signing-key"
+    "$release/venv/bin/python" -c 'import base64, json, secrets, sys; json.dump({"keys": {"1": base64.b64encode(secrets.token_bytes(32)).decode("ascii")}}, sys.stdout, separators=(",", ":"))' > "$staging/application-secret-kek-ring.json"
 
     derive_public_key "$release" "$staging/publication-signing-key" "$staging/publication-signing-public-key"
 
@@ -214,7 +215,7 @@ generate_and_commit_secrets() {
     rm -f "$rederived"
 
     install -d -m 0700 -o root -g root "$SECRET_DIR"
-    for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key; do
+    for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key application-secret-kek-ring.json; do
         install -m 0600 -o root -g root "$staging/$f" "$SECRET_DIR/$f"
     done
     render_env "$runtime_password" "$secret_key" "$host"
@@ -234,6 +235,19 @@ validate_established_secrets() {
         [[ -f $SECRET_DIR/$f ]] || die "established install: $SECRET_DIR/$f is missing (restore from backup)"
         [[ $(wc -c < "$SECRET_DIR/$f") -eq 32 ]] || die "established install: $f must be exactly 32 bytes"
     done
+    "$release/venv/bin/python" - "$SECRET_DIR/application-secret-kek-ring.json" <<'PY'
+import base64
+import json
+import sys
+from pathlib import Path
+
+try:
+    keys = json.loads(Path(sys.argv[1]).read_bytes())["keys"]
+    assert isinstance(keys, dict) and keys
+    assert all(isinstance(version, str) and len(base64.b64decode(key, validate=True)) == 32 for version, key in keys.items())
+except (AssertionError, KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+    raise SystemExit("established install: application-secret-kek-ring.json is invalid")
+PY
     for f in database-owner-password backup-role-password; do
         [[ -f $SECRET_DIR/$f ]] || die "established install: $SECRET_DIR/$f is missing (restore from backup)"
         v=$(read_secret "$SECRET_DIR/$f")

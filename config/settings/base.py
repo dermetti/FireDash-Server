@@ -247,7 +247,7 @@ PUBLICATION_RETENTION_BATCH_SIZE = get_typed_env(
 )
 
 
-def publication_credential_path(*, override_name: str, credential_name: str) -> Path:
+def credential_path(*, override_name: str, credential_name: str) -> Path:
     """Return an explicit override or this unit's systemd credential path.
 
     ``LoadCredential=`` gives each service invocation its own directory.  The
@@ -266,19 +266,33 @@ def publication_credential_path(*, override_name: str, credential_name: str) -> 
     return Path("/run/credentials") / credential_name
 
 
-PUBLICATION_KEK_CREDENTIAL_PATH = publication_credential_path(
+def publication_credential_path(*, override_name: str, credential_name: str) -> Path:
+    """Compatibility wrapper for the publication credential namespace."""
+    return credential_path(override_name=override_name, credential_name=credential_name)
+
+
+PUBLICATION_KEK_CREDENTIAL_PATH = credential_path(
     override_name="PUBLICATION_KEK_CREDENTIAL_PATH", credential_name="publication-kek"
 )
-PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = publication_credential_path(
+PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = credential_path(
     override_name="PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH",
     credential_name="publication-signing-key",
 )
-PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH = publication_credential_path(
+PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH = credential_path(
     override_name="PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH",
     credential_name="publication-signing-public-key-ring",
 )
 PUBLICATION_KEK_VERSION = get_env("PUBLICATION_KEK_VERSION", default="1")
 PUBLICATION_SIGNING_KEY_VERSION = get_env("PUBLICATION_SIGNING_KEY_VERSION", default="1")
+
+# Application credentials (for example future SMTP passwords) are deliberately
+# separate from publication artifact and signing material.  The credential file
+# is a versioned JSON key ring; see docs/configuration.md.
+APPLICATION_SECRET_KEK_CREDENTIAL_PATH = credential_path(
+    override_name="APPLICATION_SECRET_KEK_CREDENTIAL_PATH",
+    credential_name="application-secret-kek-ring",
+)
+APPLICATION_SECRET_KEK_VERSION = get_env("APPLICATION_SECRET_KEK_VERSION", default="1")
 
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))

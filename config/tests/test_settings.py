@@ -134,6 +134,23 @@ def test_explicit_publication_credential_path_override_takes_precedence(
     )
 
 
+def test_application_secret_credentials_use_a_distinct_systemd_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from config.settings.base import credential_path
+
+    monkeypatch.delenv("APPLICATION_SECRET_KEK_CREDENTIAL_PATH", raising=False)
+    credential_directory = tmp_path / "backend-invocation"
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_directory))
+    assert (
+        credential_path(
+            override_name="APPLICATION_SECRET_KEK_CREDENTIAL_PATH",
+            credential_name="application-secret-kek-ring",
+        )
+        == credential_directory / "application-secret-kek-ring"
+    )
+
+
 def test_production_settings_reject_temp_root_outside_artifact_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
