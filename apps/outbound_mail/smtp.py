@@ -17,6 +17,7 @@ from apps.outbound_mail.network_policy import (
 )
 from apps.outbound_mail.providers import SMTP, register_runtime_provider_factory
 from apps.outbound_mail.runtime import (
+    MailAddress,
     MailSendResult,
     MessageRejectedError,
     OutboundMessage,
@@ -77,6 +78,13 @@ class SmtpProvider:
         self._configuration = configuration
         self._connection_factory = connection_factory
         self._destination_resolver = destination_resolver
+
+    @property
+    def sender_identity(self) -> MailAddress:
+        return MailAddress(
+            display_name=self._configuration.sender_name,
+            email=self._configuration.sender_email,
+        )
 
     @classmethod
     def from_system_configuration(cls) -> SmtpProvider:

@@ -98,6 +98,7 @@ def test_normalized_success_and_failure_categories_are_stable() -> None:
 def test_registry_resolves_registered_provider_without_provider_branches() -> None:
     class FakeProvider:
         provider_id = BREVO
+        sender_identity = MailAddress(display_name="FireDash", email="sender@example.test")
 
         def send(self, message: OutboundMessage) -> MailSendResult:
             return MailSendResult(provider=self.provider_id, provider_message_id="fake-1")

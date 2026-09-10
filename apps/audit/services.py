@@ -11,6 +11,7 @@ def record_event(
     action: str,
     request: HttpRequest | None = None,
     actor_user=None,
+    actor_installation_uuid: uuid.UUID | None = None,
     department: Department | None = None,
     station: Station | None = None,
     target_type: str,
@@ -21,6 +22,7 @@ def record_event(
     return AuditEvent.objects.create(
         action=action,
         actor_user=actor_user,
+        actor_installation_uuid=actor_installation_uuid,
         department=department,
         station=station,
         target_type=target_type,

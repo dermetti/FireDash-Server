@@ -116,6 +116,13 @@ def _resolve_recipient(*, department: Department, personnel_id: UUID) -> Admitte
     return AdmittedReportRecipient(personnel_id=person.id, email=email)
 
 
+def resolve_report_recipient(
+    *, department: Department, recipient_personnel_id: UUID
+) -> AdmittedReportRecipient:
+    """Fresh server-side recipient/policy authorization for report delivery."""
+    return _resolve_recipient(department=department, personnel_id=recipient_personnel_id)
+
+
 def _normalized_valid_email(value: str | None) -> str | None:
     if not isinstance(value, str) or not value or value != value.strip():
         return None

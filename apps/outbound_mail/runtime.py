@@ -149,4 +149,7 @@ class MailProvider(Protocol):
 
     provider_id: str
 
+    @property
+    def sender_identity(self) -> MailAddress: ...
+
     def send(self, message: OutboundMessage) -> MailSendResult: ...

@@ -12,6 +12,7 @@ from apps.outbound_mail.http_transport import OutboundMailHttpTransport, Outboun
 from apps.outbound_mail.models import SystemMailConfiguration
 from apps.outbound_mail.providers import BREVO, register_runtime_provider_factory
 from apps.outbound_mail.runtime import (
+    MailAddress,
     MailSendResult,
     MessageRejectedError,
     OutboundMessage,
@@ -41,6 +42,10 @@ class BrevoProvider:
         self._sender_email = sender_email
         self._api_key = api_key
         self._transport = transport
+
+    @property
+    def sender_identity(self) -> MailAddress:
+        return MailAddress(display_name=self._sender_name, email=self._sender_email)
 
     @classmethod
     def from_system_configuration(
