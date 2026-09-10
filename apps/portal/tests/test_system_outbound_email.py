@@ -12,6 +12,8 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.audit.models import AuditEvent
 from apps.authorization.models import SystemRole
+from apps.authorization.services import is_system_managed_mail_allowed
+from apps.organizations.models import Department
 from apps.outbound_mail.models import SystemMailConfiguration
 from apps.outbound_mail.runtime import ProviderUnavailableError
 
@@ -193,3 +195,49 @@ def test_invalid_or_incomplete_configuration_is_safe_form_feedback(client, syste
     assert "incomplete" in content.lower()
     assert "app-secret:" not in content
     assert "api-key" not in content.lower()
+
+
+@pytest.mark.django_db
+def test_system_admin_ui_grants_and_revokes_department_managed_mail_access(
+    client, system_admin, non_system_admin
+):
+    url = reverse("portal-system-outbound-email")
+    department = Department.objects.create(
+        name="Department Mail", short_code="DML", created_by=system_admin
+    )
+    client.force_login(system_admin)
+    content = client.get(url).content.decode()
+    assert "Department access to system-managed email" in content
+    assert "Department Mail" in content and "Not allowed" in content
+    _reauthenticate(client)
+    assert client.post(
+        url,
+        {
+            "action": "department_mail_eligibility",
+            "department_id": department.id,
+            "allowed": "grant",
+        },
+    ).status_code == 302
+    assert is_system_managed_mail_allowed(department=department)
+    assert AuditEvent.objects.filter(
+        action="authorization.department_managed_mail_eligibility_granted", department=department
+    ).count() == 1
+    assert client.post(
+        url,
+        {
+            "action": "department_mail_eligibility",
+            "department_id": department.id,
+            "allowed": "revoke",
+        },
+    ).status_code == 302
+    assert not is_system_managed_mail_allowed(department=department)
+
+    client.force_login(non_system_admin)
+    assert client.post(
+        url,
+        {
+            "action": "department_mail_eligibility",
+            "department_id": department.id,
+            "allowed": "grant",
+        },
+    ).status_code == 403

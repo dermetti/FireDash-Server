@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any
 
 from django.core.exceptions import PermissionDenied
@@ -8,6 +9,7 @@ from apps.accounts.services import create_setup_token, permanently_deactivate_an
 from apps.audit.services import record_event
 from apps.authorization.models import (
     ApiVersionCompatibilityPolicy,
+    DepartmentManagedMailEligibility,
     DepartmentMembership,
     StationAdminAssignment,
     VehicleRescueGuidesConfiguration,
@@ -28,6 +30,81 @@ from apps.tablets.versions import AppVersionError, parse_app_version
 def require_system_admin(actor) -> None:
     if not is_system_admin(actor):
         raise PermissionDenied("System administrator role is required.")
+
+
+@dataclass(frozen=True)
+class DepartmentManagedMailEligibilityState:
+    """Safe system-admin presentation of a department's managed-mail authority."""
+
+    department: Department
+    allowed: bool
+
+
+def is_system_managed_mail_allowed(*, department: Department) -> bool:
+    """Fail closed for absent, denied, or otherwise non-allowed state."""
+    return DepartmentManagedMailEligibility.objects.filter(
+        department_id=department.id, allowed=True
+    ).exists()
+
+
+def system_managed_mail_eligibility_states() -> list[DepartmentManagedMailEligibilityState]:
+    """Return all department authorization states without leaking service configuration."""
+    departments = list(Department.objects.order_by("name", "short_code", "id"))
+    allowed_ids = set(
+        DepartmentManagedMailEligibility.objects.filter(allowed=True).values_list(
+            "department_id", flat=True
+        )
+    )
+    return [
+        DepartmentManagedMailEligibilityState(
+            department=department, allowed=department.id in allowed_ids
+        )
+        for department in departments
+    ]
+
+
+@transaction.atomic
+def set_system_managed_mail_eligibility(
+    *, actor, department: Department, allowed: bool
+) -> DepartmentManagedMailEligibility:
+    """Grant or revoke one department's service authority, auditing real changes only."""
+    require_system_admin(actor)
+    eligibility_manager = DepartmentManagedMailEligibility.objects.select_for_update()
+    eligibility, created = eligibility_manager.get_or_create(
+        department=department,
+        defaults={"allowed": allowed, "updated_by": actor},
+    )
+    if not created and eligibility.allowed == allowed:
+        return eligibility
+    if not created:
+        eligibility.allowed = allowed
+        eligibility.updated_by = actor
+        eligibility.save(update_fields=("allowed", "updated_by", "updated_at"))
+    record_event(
+        action=(
+            "authorization.department_managed_mail_eligibility_granted"
+            if allowed
+            else "authorization.department_managed_mail_eligibility_revoked"
+        ),
+        actor_user=actor,
+        department=department,
+        target_type="department_managed_mail_eligibility",
+        target_uuid=eligibility.id,
+        metadata={"allowed": allowed},
+    )
+    return eligibility
+
+
+def grant_system_managed_mail_eligibility(
+    *, actor, department: Department
+) -> DepartmentManagedMailEligibility:
+    return set_system_managed_mail_eligibility(actor=actor, department=department, allowed=True)
+
+
+def revoke_system_managed_mail_eligibility(
+    *, actor, department: Department
+) -> DepartmentManagedMailEligibility:
+    return set_system_managed_mail_eligibility(actor=actor, department=department, allowed=False)
 
 
 def minimum_supported_app_version(*, api_major: int):

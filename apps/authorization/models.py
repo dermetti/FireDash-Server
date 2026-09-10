@@ -123,6 +123,34 @@ class SystemRole(models.Model):
         ]
 
 
+class DepartmentManagedMailEligibility(models.Model):
+    """Explicit, fail-closed authority to use the system-managed mail service.
+
+    This deliberately is not a DepartmentFeature: absent rows are denied here,
+    unlike the default-enabled semantics of ordinary registered features.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    department = models.OneToOneField(
+        Department,
+        on_delete=models.PROTECT,
+        related_name="managed_mail_eligibility",
+    )
+    allowed = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="updated_department_managed_mail_eligibilities",
+    )
+
+    class Meta:
+        verbose_name = "department managed mail eligibility"
+        verbose_name_plural = "department managed mail eligibilities"
+
+
 class DepartmentMembership(models.Model):
     class Role(models.TextChoices):
         DEPARTMENT_ADMIN = "DEPARTMENT_ADMIN", "Department administrator"

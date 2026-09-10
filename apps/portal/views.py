@@ -640,6 +640,10 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
         raise PermissionDenied("System administrator role is required.")
 
     from apps.application_secrets.crypto import ApplicationSecretError
+    from apps.authorization.services import (
+        set_system_managed_mail_eligibility,
+        system_managed_mail_eligibility_states,
+    )
     from apps.outbound_mail.services import (
         clear_brevo_api_key,
         clear_smtp_credentials,
@@ -653,6 +657,7 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
     )
 
     state = get_system_mail_configuration()
+    department_mail_eligibilities = system_managed_mail_eligibility_states()
     action = request.POST.get("action", "") if request.method == "POST" else ""
     forms = _mail_forms(state, data=request.POST, action=action)
     form = {
@@ -673,8 +678,14 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
             "smtp_credentials",
             "smtp_clear",
             "verify",
+            "department_mail_eligibility",
         }:
             raise PermissionDenied("A supported outbound-email action is required.")
+        if action == "department_mail_eligibility" and request.POST.get("allowed") not in {
+            "grant",
+            "revoke",
+        }:
+            raise PermissionDenied("A supported managed-mail eligibility action is required.")
         if form is not None and not form.is_valid():
             pass
         else:
@@ -703,6 +714,18 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
                 elif action == "smtp_clear":
                     clear_smtp_credentials(actor=request.user)
                     messages.success(request, "SMTP credentials were cleared.")
+                elif action == "department_mail_eligibility":
+                    department = get_object_or_404(Department, pk=request.POST.get("department_id"))
+                    allowed = request.POST["allowed"] == "grant"
+                    set_system_managed_mail_eligibility(
+                        actor=request.user, department=department, allowed=allowed
+                    )
+                    messages.success(
+                        request,
+                        "Department may use system-managed email."
+                        if allowed
+                        else "Department system-managed email access was revoked.",
+                    )
                 else:
                     result = verify_system_mail_configuration(actor=request.user)
                     message = "Outbound email provider verification succeeded."
@@ -728,7 +751,11 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
     return render(
         request,
         "portal/system_outbound_email.html",
-        {"mail": state, **forms},
+        {
+            "mail": state,
+            "department_mail_eligibilities": department_mail_eligibilities,
+            **forms,
+        },
     )
 
 
