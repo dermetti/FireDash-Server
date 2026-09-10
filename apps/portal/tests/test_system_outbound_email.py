@@ -14,6 +14,7 @@ from apps.audit.models import AuditEvent
 from apps.authorization.models import SystemRole
 from apps.authorization.services import is_system_managed_mail_allowed
 from apps.organizations.models import Department
+from apps.outbound_mail.http_transport import OutboundMailHttpTransport
 from apps.outbound_mail.models import SystemMailConfiguration
 from apps.outbound_mail.runtime import ProviderUnavailableError
 
@@ -173,6 +174,33 @@ def test_credentials_are_write_only_and_replace_clear_remain_audited(
     assert not configuration.smtp_password_configured
     assert AuditEvent.objects.filter(action="outbound_mail.brevo_api_key_cleared").exists()
     assert AuditEvent.objects.filter(action="outbound_mail.smtp_credentials_cleared").exists()
+
+
+@pytest.mark.django_db
+def test_system_admin_can_configure_the_https_egress_proxy(client, system_admin):
+    url = reverse("portal-system-outbound-email")
+    client.force_login(system_admin)
+    _reauthenticate(client)
+    response = client.post(
+        url,
+        {"action": "https_proxy", "proxy_url": "http://proxy.example.test:3128"},
+    )
+    assert response.status_code == 302
+    configuration = SystemMailConfiguration.objects.get(singleton=True)
+    assert configuration.outbound_mail_https_proxy == "http://proxy.example.test:3128"
+    assert AuditEvent.objects.filter(
+        action="outbound_mail.https_proxy_changed",
+        metadata__configured=True,
+    ).exists()
+
+    transport = OutboundMailHttpTransport()
+    assert transport._proxies == {"https": "http://proxy.example.test:3128"}
+
+    response = client.post(url, {"action": "https_proxy", "proxy_url": "socks5://bad.example.test"})
+    assert response.status_code == 200
+    assert "HTTP(S) proxy URL" in response.content.decode()
+    configuration.refresh_from_db()
+    assert configuration.outbound_mail_https_proxy == "http://proxy.example.test:3128"
 
 
 @pytest.mark.django_db

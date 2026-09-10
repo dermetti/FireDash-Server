@@ -61,6 +61,9 @@ class SystemMailConfigurationState:
     last_verification_outcome: str
     last_verified_at: datetime | None
     last_verification_code: str
+    outbound_mail_https_proxy: str | None
+    outbound_mail_https_proxy_configured: bool
+    outbound_mail_https_proxy_uses_deployment_default: bool
 
     @property
     def brevo_configuration_complete(self) -> bool:
@@ -92,6 +95,12 @@ def _configuration() -> SystemMailConfiguration:
 
 def get_system_mail_configuration() -> SystemMailConfigurationState:
     configuration = _configuration()
+    proxy_uses_deployment_default = configuration.outbound_mail_https_proxy is None
+    effective_proxy = (
+        settings.OUTBOUND_MAIL_HTTPS_PROXY
+        if proxy_uses_deployment_default
+        else configuration.outbound_mail_https_proxy
+    )
     return SystemMailConfigurationState(
         delivery_mode=configuration.delivery_mode,
         api_provider=configuration.api_provider,
@@ -109,6 +118,9 @@ def get_system_mail_configuration() -> SystemMailConfigurationState:
         last_verification_outcome=configuration.last_verification_outcome,
         last_verified_at=configuration.last_verified_at,
         last_verification_code=configuration.last_verification_code,
+        outbound_mail_https_proxy=effective_proxy,
+        outbound_mail_https_proxy_configured=bool(effective_proxy),
+        outbound_mail_https_proxy_uses_deployment_default=proxy_uses_deployment_default,
     )
 
 
@@ -134,6 +146,40 @@ def _invalidate_verification(configuration: SystemMailConfiguration) -> None:
     configuration.last_verification_outcome = ""
     configuration.last_verified_at = None
     configuration.last_verification_code = ""
+
+
+@transaction.atomic
+def configure_outbound_mail_https_proxy(*, actor, proxy_url: str) -> SystemMailConfiguration:
+    """Set the system-owned HTTPS egress route without exposing it to providers."""
+    require_system_admin(actor)
+    from apps.outbound_mail.http_transport import validate_outbound_mail_https_proxy
+
+    proxy_url = proxy_url.strip()
+    validate_outbound_mail_https_proxy(proxy_url)
+    configuration = _locked_configuration()
+    if configuration.outbound_mail_https_proxy == proxy_url:
+        return configuration
+    configuration.outbound_mail_https_proxy = proxy_url
+    configuration.updated_by = actor
+    _invalidate_verification(configuration)
+    configuration.save(
+        update_fields=(
+            "outbound_mail_https_proxy",
+            "updated_by",
+            "updated_at",
+            "verification_provider",
+            "last_verification_outcome",
+            "last_verified_at",
+            "last_verification_code",
+        )
+    )
+    _audit(
+        actor=actor,
+        action="outbound_mail.https_proxy_changed",
+        configuration=configuration,
+        metadata={"configured": bool(proxy_url)},
+    )
+    return configuration
 
 
 @dataclass(frozen=True)

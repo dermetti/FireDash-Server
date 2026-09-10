@@ -75,6 +75,7 @@ from apps.portal.forms import (
     DepartmentSystemSettingsForm,
     DepartmentTabletAssetNumberPolicyForm,
     DepartmentTabletLeaseForm,
+    OutboundMailHttpsProxyForm,
     ReplaceBrevoApiKeyForm,
     ReplaceSmtpCredentialsForm,
     SmtpMailConfigurationForm,
@@ -622,6 +623,10 @@ def _mail_forms(state, *, data=None, action: str = ""):
             },
         ),
         "brevo_key_form": ReplaceBrevoApiKeyForm(bound if action == "brevo_key" else None),
+        "https_proxy_form": OutboundMailHttpsProxyForm(
+            bound if action == "https_proxy" else None,
+            initial={"proxy_url": state.outbound_mail_https_proxy or ""},
+        ),
         "smtp_form": SmtpMailConfigurationForm(
             bound if action == "smtp_configuration" else None,
             initial={
@@ -651,6 +656,7 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
         clear_brevo_api_key,
         clear_smtp_credentials,
         configure_brevo,
+        configure_outbound_mail_https_proxy,
         configure_smtp,
         get_system_mail_configuration,
         replace_brevo_api_key,
@@ -668,6 +674,7 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
         "brevo_key": forms["brevo_key_form"],
         "smtp_configuration": forms["smtp_form"],
         "smtp_credentials": forms["smtp_credentials_form"],
+        "https_proxy": forms["https_proxy_form"],
     }.get(action)
 
     if request.method == "POST":
@@ -679,6 +686,7 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
             "smtp_configuration",
             "smtp_credentials",
             "smtp_clear",
+            "https_proxy",
             "verify",
         }:
             raise PermissionDenied("A supported outbound-email action is required.")
@@ -710,6 +718,9 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
                 elif action == "smtp_clear":
                     clear_smtp_credentials(actor=request.user)
                     messages.success(request, "SMTP credentials were cleared.")
+                elif action == "https_proxy":
+                    configure_outbound_mail_https_proxy(actor=request.user, **form.cleaned_data)
+                    messages.success(request, "Outbound email HTTPS egress routing was updated.")
                 else:
                     result = verify_system_mail_configuration(actor=request.user)
                     message = "Outbound email provider verification succeeded."

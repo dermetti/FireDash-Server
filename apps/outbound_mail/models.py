@@ -57,6 +57,11 @@ class SystemMailConfiguration(models.Model):
     smtp_password_encrypted = models.CharField(
         max_length=4096, blank=True, default="", editable=False
     )
+    # ``None`` deliberately means use the deployment environment default.  An
+    # empty string is an explicit System Admin choice to use direct HTTPS.
+    outbound_mail_https_proxy = models.CharField(
+        max_length=2048, null=True, blank=True, default=None
+    )
     verification_provider = models.CharField(max_length=32, blank=True, default="", editable=False)
     last_verification_outcome = models.CharField(
         max_length=16, blank=True, default="", editable=False

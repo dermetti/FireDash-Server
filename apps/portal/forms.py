@@ -1,7 +1,13 @@
+from urllib.parse import urlsplit
+
 from django import forms
 
 from apps.authorization.models import validate_vehicle_rescue_guides_web_url
 from apps.organizations.presentation import DEPARTMENT_LOCALE_CHOICES, DEPARTMENT_TIMEZONE_CHOICES
+from apps.outbound_mail.http_transport import (
+    OutboundMailTransportError,
+    validate_outbound_mail_https_proxy,
+)
 from apps.outbound_mail.models import SystemMailConfiguration
 from apps.outbound_mail.providers import API_PROVIDER_REGISTRY
 from apps.tablets.models import Tablet
@@ -282,6 +288,29 @@ class ReplaceBrevoApiKeyForm(forms.Form):
             attrs={"class": "form-control", "autocomplete": "new-password"}, render_value=False
         ),
     )
+
+
+class OutboundMailHttpsProxyForm(forms.Form):
+    proxy_url = forms.CharField(
+        required=False,
+        max_length=2048,
+        label="HTTPS egress proxy",
+        help_text="Leave empty for direct HTTPS egress.",
+        widget=forms.URLInput(attrs={"class": "form-control", "inputmode": "url"}),
+    )
+
+    def clean_proxy_url(self):
+        value = self.cleaned_data["proxy_url"].strip()
+        try:
+            validate_outbound_mail_https_proxy(value)
+        except OutboundMailTransportError:
+            raise forms.ValidationError("Enter an HTTP(S) proxy URL with a hostname.") from None
+        parsed = urlsplit(value)
+        if parsed.username or parsed.password:
+            raise forms.ValidationError(
+                "Proxy URLs with embedded credentials are not supported here."
+            )
+        return value
 
 
 class SmtpMailConfigurationForm(forms.Form):

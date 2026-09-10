@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 import requests
 from django.conf import settings
+from django.db import DatabaseError
 
 
 class OutboundMailTransportError(Exception):
@@ -41,6 +42,23 @@ def validate_outbound_mail_https_proxy(proxy_url: str) -> None:
     _proxy_configuration(proxy_url)
 
 
+def _effective_proxy_url() -> str:
+    """Use the System Admin override when present, otherwise deployment default."""
+    try:
+        from apps.outbound_mail.models import SystemMailConfiguration
+
+        configuration = SystemMailConfiguration.objects.filter(singleton=True).only(
+            "outbound_mail_https_proxy"
+        ).first()
+    except DatabaseError:
+        # A provider cannot safely choose a direct route when its configured
+        # system routing state cannot be read.
+        raise OutboundMailTransportError() from None
+    if configuration is None or configuration.outbound_mail_https_proxy is None:
+        return settings.OUTBOUND_MAIL_HTTPS_PROXY
+    return configuration.outbound_mail_https_proxy
+
+
 class OutboundMailHttpTransport:
     """One-shot JSON transport with explicit direct-or-proxy routing semantics."""
 
@@ -52,7 +70,7 @@ class OutboundMailHttpTransport:
         read_timeout: float | None = None,
         session: requests.Session | None = None,
     ) -> None:
-        configured_proxy = settings.OUTBOUND_MAIL_HTTPS_PROXY if proxy_url is None else proxy_url
+        configured_proxy = _effective_proxy_url() if proxy_url is None else proxy_url
         self._proxies = _proxy_configuration(configured_proxy)
         self._timeout = (
             settings.OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS
