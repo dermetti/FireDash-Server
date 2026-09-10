@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "apps.ingestion",
     "apps.portal",
     "apps.health",
+    "apps.outbound_mail",
 ]
 
 MIDDLEWARE = [
