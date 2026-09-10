@@ -161,6 +161,10 @@ def test_credentials_are_write_only_and_replace_clear_remain_audited(
     assert "never-render-this-password" not in content
     assert "app-secret:" not in content
     assert "Configured" in content
+    assert "••••••••••••" in content
+    assert 'value="••••••••••••"' not in content
+    assert 'name="api_key" value=' not in content
+    assert 'name="password" value=' not in content
 
     assert client.post(url, {"action": "brevo_clear"}).status_code == 302
     assert client.post(url, {"action": "smtp_clear"}).status_code == 302
@@ -219,26 +223,36 @@ def test_invalid_or_incomplete_configuration_is_safe_form_feedback(client, syste
     assert "app-secret:" not in content
     assert "api-key" not in content.lower()
 
+    response = client.post(url, {"action": "smtp_configuration", "host": ""})
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "SMTP configuration" in content
+    assert "API key:" not in content
+
 
 @pytest.mark.django_db
-def test_system_admin_ui_grants_and_revokes_department_managed_mail_access(
+def test_managed_mail_eligibility_is_on_the_system_department_detail(
     client, system_admin, non_system_admin
 ):
-    url = reverse("portal-system-outbound-email")
     department = Department.objects.create(
         name="Department Mail", short_code="DML", created_by=system_admin
     )
+    outbound_url = reverse("portal-system-outbound-email")
+    detail_url = reverse("portal-system-department", args=(department.id,))
     client.force_login(system_admin)
-    content = client.get(url).content.decode()
-    assert "Department access to system-managed email" in content
-    assert "Department Mail" in content and "Not allowed" in content
+    content = client.get(outbound_url).content.decode()
+    assert "Department access to system-managed email" not in content
+    assert "Department Mail" not in content
+    content = client.get(detail_url).content.decode()
+    assert "FireDash managed outbound email" in content
+    assert "does not enable department email" in content
+    assert "Not allowed" in content
     _reauthenticate(client)
     assert (
         client.post(
-            url,
+            detail_url,
             {
-                "action": "department_mail_eligibility",
-                "department_id": department.id,
+                "action": "managed-mail-eligibility",
                 "allowed": "grant",
             },
         ).status_code
@@ -254,10 +268,9 @@ def test_system_admin_ui_grants_and_revokes_department_managed_mail_access(
     )
     assert (
         client.post(
-            url,
+            detail_url,
             {
-                "action": "department_mail_eligibility",
-                "department_id": department.id,
+                "action": "managed-mail-eligibility",
                 "allowed": "revoke",
             },
         ).status_code
@@ -268,12 +281,40 @@ def test_system_admin_ui_grants_and_revokes_department_managed_mail_access(
     client.force_login(non_system_admin)
     assert (
         client.post(
-            url,
+            detail_url,
             {
-                "action": "department_mail_eligibility",
-                "department_id": department.id,
+                "action": "managed-mail-eligibility",
                 "allowed": "grant",
             },
         ).status_code
         == 403
     )
+
+
+@pytest.mark.django_db
+def test_settings_card_adapts_with_htmx_and_cards_are_stacked(client, system_admin):
+    url = reverse("portal-system-outbound-email")
+    client.force_login(system_admin)
+    content = client.get(url).content.decode()
+    assert 'id="system-mail-settings"' in content
+    assert "Department access to system-managed email" not in content
+    assert "Email API configuration" not in content
+    assert "SMTP configuration" not in content
+    assert "row g-4" not in content
+    assert "app-desktop-sidebar" in content
+    assert "position: sticky" in content
+    assert "d-lg-none" in content
+
+    smtp = client.get(url, {"settings_method": "SMTP"}, HTTP_HX_REQUEST="true")
+    assert smtp.status_code == 200
+    smtp_content = smtp.content.decode()
+    assert 'id="system-mail-settings"' in smtp_content
+    assert "SMTP configuration" in smtp_content
+    assert "API key:" not in smtp_content
+    assert "<!doctype" not in smtp_content.lower()
+
+    api = client.get(url, {"settings_method": "API"}, HTTP_HX_REQUEST="true")
+    assert api.status_code == 200
+    api_content = api.content.decode()
+    assert "API key:" in api_content
+    assert "SMTP password:" not in api_content

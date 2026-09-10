@@ -34,6 +34,7 @@ from apps.authorization.services import (
     change_department_status,
     create_department,
     grant_station_admin,
+    is_system_managed_mail_allowed,
     permanently_remove_administrator,
     provision_department_admin,
     provision_station_admin,
@@ -646,10 +647,6 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
         raise PermissionDenied("System administrator role is required.")
 
     from apps.application_secrets.crypto import ApplicationSecretError
-    from apps.authorization.services import (
-        set_system_managed_mail_eligibility,
-        system_managed_mail_eligibility_states,
-    )
     from apps.outbound_mail.services import (
         clear_brevo_api_key,
         clear_smtp_credentials,
@@ -663,7 +660,6 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
     )
 
     state = get_system_mail_configuration()
-    department_mail_eligibilities = system_managed_mail_eligibility_states()
     action = request.POST.get("action", "") if request.method == "POST" else ""
     forms = _mail_forms(state, data=request.POST, action=action)
     form = {
@@ -684,14 +680,8 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
             "smtp_credentials",
             "smtp_clear",
             "verify",
-            "department_mail_eligibility",
         }:
             raise PermissionDenied("A supported outbound-email action is required.")
-        if action == "department_mail_eligibility" and request.POST.get("allowed") not in {
-            "grant",
-            "revoke",
-        }:
-            raise PermissionDenied("A supported managed-mail eligibility action is required.")
         if form is not None and not form.is_valid():
             pass
         else:
@@ -720,18 +710,6 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
                 elif action == "smtp_clear":
                     clear_smtp_credentials(actor=request.user)
                     messages.success(request, "SMTP credentials were cleared.")
-                elif action == "department_mail_eligibility":
-                    department = get_object_or_404(Department, pk=request.POST.get("department_id"))
-                    allowed = request.POST["allowed"] == "grant"
-                    set_system_managed_mail_eligibility(
-                        actor=request.user, department=department, allowed=allowed
-                    )
-                    messages.success(
-                        request,
-                        "Department may use system-managed email."
-                        if allowed
-                        else "Department system-managed email access was revoked.",
-                    )
                 else:
                     result = verify_system_mail_configuration(actor=request.user)
                     message = "Outbound email provider verification succeeded."
@@ -754,15 +732,35 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
                         request, "Outbound email configuration is incomplete or invalid."
                     )
 
-    return render(
-        request,
-        "portal/system_outbound_email.html",
-        {
-            "mail": state,
-            "department_mail_eligibilities": department_mail_eligibilities,
-            **forms,
-        },
-    )
+    from apps.outbound_mail.providers import API_PROVIDER_REGISTRY
+
+    settings_method = request.GET.get("settings_method", "")
+    if not settings_method and action in {"smtp_configuration", "smtp_credentials"}:
+        settings_method = "SMTP"
+    if not settings_method and action in {"brevo_configuration", "brevo_key"}:
+        settings_method = "API"
+    if settings_method not in {"API", "SMTP"}:
+        settings_method = (
+            state.delivery_mode if state.delivery_mode in {"API", "SMTP"} else "API"
+        )
+    provider_choices = [
+        (provider, provider.replace("_", " ").title()) for provider in API_PROVIDER_REGISTRY
+    ]
+    settings_provider = request.GET.get("settings_provider", "")
+    if settings_provider not in API_PROVIDER_REGISTRY:
+        settings_provider = state.api_provider if state.api_provider in API_PROVIDER_REGISTRY else ""
+    if not settings_provider and provider_choices:
+        settings_provider = provider_choices[0][0]
+    context = {
+        "mail": state,
+        "settings_method": settings_method,
+        "settings_provider": settings_provider,
+        "api_provider_choices": provider_choices,
+        **forms,
+    }
+    if request.method == "GET" and request.headers.get("HX-Request") == "true":
+        return render(request, "portal/_system_outbound_email_settings.html", context)
+    return render(request, "portal/system_outbound_email.html", context)
 
 
 @login_required
@@ -873,6 +871,26 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
                 tablet_lease_days=lease_form.cleaned_data["tablet_lease_days"],
             )
             return redirect("portal-system-department", department_id=department.id)
+    if request.method == "POST" and request.POST.get("action") == "managed-mail-eligibility":
+        allowed = request.POST.get("allowed")
+        if allowed not in {"grant", "revoke"}:
+            raise PermissionDenied("A supported managed-mail eligibility action is required.")
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-system-department", args=(department.id,)),
+        )
+        from apps.authorization.services import set_system_managed_mail_eligibility
+
+        set_system_managed_mail_eligibility(
+            actor=request.user, department=department, allowed=allowed == "grant"
+        )
+        messages.success(
+            request,
+            "Department may select the FireDash managed mail service."
+            if allowed == "grant"
+            else "Department access to the FireDash managed mail service was revoked.",
+        )
+        return redirect("portal-system-department", department_id=department.id)
     if (
         request.method == "POST"
         and request.POST.get("action") == "provision"
@@ -900,6 +918,7 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
             "admin_form": admin_form,
             "lease_form": lease_form,
             "can_bootstrap_admin": can_bootstrap_admin,
+            "system_managed_mail_allowed": is_system_managed_mail_allowed(department=department),
         },
     )
 

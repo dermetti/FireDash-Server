@@ -802,7 +802,7 @@ percentages; normal page flow remains preferred.
 
 # 17. Settings pages
 
-Settings pages use separate full-width cards.
+Settings and status pages use separate full-width cards, one card per row.
 
 Never place unrelated settings cards side by side.
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}FireDash{% endblock %}</title>
   <link href="{% static 'vendor/bootstrap/bootstrap.min.css' %}" rel="stylesheet">
-  <style>[x-cloak] { display: none !important; }</style>
+  <style>[x-cloak] { display: none !important; } @media (min-width: 992px) { .app-desktop-sidebar { position: sticky; top: 0; height: 100vh; align-self: flex-start; } }</style>
   <script defer src="{% static 'vendor/alpine/alpine.min.js' %}"></script>
   <script src="{% static 'vendor/htmx/htmx.min.js' %}"></script>
   {% block head %}{% endblock %}
@@ -14,7 +14,7 @@
   {% include "components/_topbar.html" %}
   <div class="container-fluid">
     <div class="row">
-      <aside class="d-none d-lg-block col-lg-3 col-xl-2 border-end bg-body-tertiary p-3 vh-100 position-sticky top-0">
+      <aside class="app-desktop-sidebar d-none d-lg-block col-lg-3 col-xl-2 border-end bg-body-tertiary p-3">
         {% include "components/_sidebar_nav.html" %}
       </aside>
       <main class="col-lg-9 col-xl-10 px-3 px-lg-4 py-4">
