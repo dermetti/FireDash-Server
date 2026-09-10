@@ -4,6 +4,7 @@ import hmac
 import json
 import uuid
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 import yaml
@@ -140,6 +141,10 @@ def test_configuration_and_manifest_use_bearer_installation_scope(api_context, t
     configuration = client.get("/api/v1/tablet/configuration", **_authorization(credential))
     assert configuration.status_code == 200
     assert configuration.json()["installation_id"] == str(installation.id)
+    assert (
+        configuration.json()["report_delivery_max_attachment_bytes"]
+        == settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES
+    )
 
     manifest = client.get("/api/v1/tablet/manifest", **_authorization(credential))
     assert manifest.status_code == 200
@@ -784,6 +789,54 @@ def test_openapi_schema_is_available():
 
     assert response.status_code == 200
     assert "openapi: 3.1.0" in response.content.decode()
+
+
+def test_report_delivery_openapi_and_tablet_contract_are_multipart_and_idempotent():
+    schema = yaml.safe_load(Client().get("/api/v1/schema/").content)
+    operation = schema["paths"]["/api/v1/tablet/report-delivery"]["post"]
+    request_content = operation["requestBody"]["content"]
+    request_schema = schema["components"]["schemas"]["ReportDelivery"]
+    response_schema = schema["components"]["schemas"]["ReportDeliveryResponse"]
+    configuration_schema = schema["components"]["schemas"]["ConfigurationResponse"]
+
+    assert set(request_content) == {"multipart/form-data"}
+    assert operation["security"] == [{"InstallationBearer": []}]
+    assert request_schema["required"] == ["delivery_request_id", "pdf", "recipient_personnel_id"]
+    assert request_schema["properties"]["delivery_request_id"]["format"] == "uuid"
+    assert request_schema["properties"]["recipient_personnel_id"]["format"] == "uuid"
+    assert request_schema["properties"]["pdf"] == {
+        "type": "string",
+        "format": "binary",
+        "description": request_schema["properties"]["pdf"]["description"],
+    }
+    assert set(operation["responses"]) == {"200", "400", "403", "426"}
+    assert configuration_schema["properties"]["report_delivery_max_attachment_bytes"] == {
+        "type": "integer",
+        "minimum": 1,
+    }
+
+    state_schema_name = response_schema["properties"]["state"]["$ref"].rsplit("/", 1)[-1]
+    code_schema_name = response_schema["properties"]["code"]["$ref"].rsplit("/", 1)[-1]
+    state_enum = schema["components"]["schemas"][state_schema_name]["enum"]
+    code_enum = schema["components"]["schemas"][code_schema_name]["enum"]
+    assert state_enum == ["SUCCESS", "FAILED", "UNKNOWN", "CONFLICT"]
+    assert {
+        "delivered",
+        "delivery_indeterminate",
+        "idempotency_conflict",
+        "provider_unavailable",
+    } <= set(code_enum)
+
+    contract = (Path(__file__).resolve().parents[3] / "docs" / "tablet-api.md").read_text(
+        encoding="utf-8"
+    )
+    assert "POST /api/v1/tablet/report-delivery" in contract
+    assert "multipart/form-data" in contract
+    assert "station_personnel" in contract
+    assert "report_delivery_max_attachment_bytes" in contract
+    assert "After a lost HTTP response, retry the" in contract
+    assert "same multipart request with the same UUID" in contract
+    assert "does not use HTTP 409" in contract
 
 
 def test_download_openapi_contract_has_no_drf_format_query_parameter():

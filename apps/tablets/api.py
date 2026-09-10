@@ -14,7 +14,7 @@ from django.http import HttpResponse
 from django.utils import timezone
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_field
 from rest_framework import (
     authentication,
     exceptions,
@@ -28,6 +28,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authorization.services import minimum_supported_app_version
+from apps.outbound_mail.report_delivery import ReportDeliveryCode
 from apps.outbound_mail.report_delivery_requests import submit_tablet_report_delivery
 from apps.publications.document_v2 import (
     generation_hpke_context as document_generation_hpke_context,
@@ -164,15 +165,48 @@ class AdoptionCompleteSerializer(serializers.Serializer[dict[str, object]]):
             raise serializers.ValidationError("Must be valid base64.") from error
 
 
+@extend_schema_field(OpenApiTypes.BINARY)
+class ReportDeliveryPdfField(serializers.FileField):
+    """A multipart upload, not a URL or a serialized document reference."""
+
+
 class ReportDeliverySerializer(serializers.Serializer[dict[str, object]]):
-    delivery_request_id = serializers.UUIDField()
-    recipient_personnel_id = serializers.UUIDField()
-    pdf = serializers.FileField(allow_empty_file=False)
+    delivery_request_id = serializers.UUIDField(
+        help_text="Client-generated UUID for one intentional logical delivery."
+    )
+    recipient_personnel_id = serializers.UUIDField(
+        help_text="The person UUID from the current station_personnel dataset."
+    )
+    pdf = ReportDeliveryPdfField(
+        allow_empty_file=False,
+        help_text=(
+            "Password-required AES-256 revision-6 (AESV3) PDF. The password is never uploaded. "
+            "The deployment enforces its configured report attachment size limit."
+        ),
+    )
 
 
 class ReportDeliveryResponseSerializer(serializers.Serializer[dict[str, object]]):
-    state = serializers.CharField()
-    code = serializers.CharField()
+    state = serializers.ChoiceField(choices=("SUCCESS", "FAILED", "UNKNOWN", "CONFLICT"))
+    code = serializers.ChoiceField(
+        choices=(
+            ReportDeliveryCode.DELIVERED,
+            ReportDeliveryCode.RECIPIENT_NOT_AUTHORIZED,
+            ReportDeliveryCode.RECIPIENT_EMAIL_UNAVAILABLE,
+            ReportDeliveryCode.RECIPIENT_DOMAIN_NOT_ALLOWED,
+            ReportDeliveryCode.INVALID_ATTACHMENT,
+            ReportDeliveryCode.ATTACHMENT_TOO_LARGE,
+            ReportDeliveryCode.INVALID_PDF,
+            ReportDeliveryCode.UNSUPPORTED_PDF_ENCRYPTION,
+            ReportDeliveryCode.PDF_INSPECTION_UNAVAILABLE,
+            ReportDeliveryCode.PROVIDER_UNAVAILABLE,
+            ReportDeliveryCode.MESSAGE_REJECTED,
+            ReportDeliveryCode.PROVIDER_CONFIGURATION,
+            ReportDeliveryCode.DELIVERY_UNAVAILABLE,
+            "delivery_indeterminate",
+            "idempotency_conflict",
+        )
+    )
 
 
 class AdoptionPreviewResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -218,6 +252,7 @@ class ConfigurationResponseSerializer(serializers.Serializer[dict[str, object]])
     department_id = serializers.UUIDField()
     station_id = serializers.UUIDField(allow_null=True)
     vehicle_id = serializers.UUIDField(allow_null=True)
+    report_delivery_max_attachment_bytes = serializers.IntegerField(min_value=1)
 
 
 class ManifestPendingResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -416,6 +451,12 @@ _MANIFEST_CONDITIONAL_GET_PARAMETERS = [
 
 
 @extend_schema(
+    summary="Deliver one encrypted report PDF",
+    description=(
+        "Authenticated multipart submission. The UUID is installation-scoped and durable: "
+        "replays never invoke delivery again. All admitted-delivery outcomes, including "
+        "idempotency conflict and indeterminate delivery, use the documented 200 response."
+    ),
     request=ReportDeliverySerializer,
     responses={
         200: ReportDeliveryResponseSerializer,
@@ -427,7 +468,7 @@ _MANIFEST_CONDITIONAL_GET_PARAMETERS = [
 class ReportDeliveryView(InstallationAPIView):
     """Submit one password-encrypted report PDF under a client UUID."""
 
-    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+    parser_classes = [parsers.MultiPartParser]
 
     def post(self, request):
         serializer = ReportDeliverySerializer(data=request.data)
@@ -544,7 +585,7 @@ class StatusView(InstallationAPIView):
         )
 
 
-def _configuration(installation: AppInstallation) -> dict[str, str | None]:
+def _configuration(installation: AppInstallation) -> dict[str, str | int | None]:
     _, vehicle = control_plane_context(installation=installation, now=timezone.now())
     return {
         "installation_id": str(installation.id),
@@ -552,6 +593,7 @@ def _configuration(installation: AppInstallation) -> dict[str, str | None]:
         "department_id": str(installation.tablet.department_id),
         "station_id": str(vehicle.station_id) if vehicle is not None else None,
         "vehicle_id": str(vehicle.id) if vehicle is not None else None,
+        "report_delivery_max_attachment_bytes": settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES,
     }
 
 

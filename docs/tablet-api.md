@@ -36,14 +36,93 @@ the credential itself and compares its protected digest.
 
 ## Encrypted report delivery
 
-`POST /api/v1/tablet/report-delivery` is multipart and accepts only
-`delivery_request_id` (UUID), `recipient_personnel_id` (UUID), and `pdf`.
-The PDF must already be password-protected AES-256 revision 6; the password,
-recipient email, message content, sender, and provider are never API fields.
-Responses contain only `{state, code}`. Reusing a request UUID for the same
-installation replays its stored result without another send; a request left in
-progress or any ambiguous delivery result is returned as `UNKNOWN` and must
-not be retried under that UUID.
+### `POST /api/v1/tablet/report-delivery`
+
+This is an authenticated installation endpoint. Send exactly the ordinary
+tablet bearer credential and `Content-Type: multipart/form-data`; do not send
+an installation, tablet, station, or department identifier in the form.
+
+| Form field | Type | Required contract |
+| --- | --- | --- |
+| `delivery_request_id` | Lower-case hyphenated UUID string | Generate one UUID for one intentional logical send. It is scoped to the authenticated installation. |
+| `recipient_personnel_id` | Lower-case hyphenated UUID string | A `people[].id` from the current `station_personnel` reference dataset described below. It is only a server-side recipient selector, never an email address. |
+| `pdf` | One binary file part | A real, password-required AES-256 revision-6/AESV3 PDF. Its maximum byte size is the current authenticated configuration's `report_delivery_max_attachment_bytes` value (20 MiB by default). Uploads above it are rejected. |
+
+The PDF password is generated and retained by the client. Never send it to
+FireDash, place it in a filename, or include it in any other request field.
+The client also never submits recipient email, sender identity, subject, body,
+provider choice, or department. FireDash obtains those values only from current
+server-side installation, personnel, policy, and provider state.
+
+#### Selecting a recipient
+
+Obtain candidates from the authenticated installation's current
+`station_personnel` publication in the manifest, then use the exact
+`people[].id` UUID as `recipient_personnel_id`. A candidate with
+`incident_commander_eligible: true` and a non-null `commander_email` is the
+useful client-side indication that a report recipient is currently available.
+This is not an authorization decision: immediately before delivery FireDash
+rechecks the current persisted department membership, active/commander state,
+verified email, and department recipient-domain policy. A stale publication or
+a changed record can therefore be rejected safely.
+
+#### Response and idempotency contract
+
+Every request that reaches report-delivery processing returns HTTP 200 with
+only this sanitized JSON shape:
+
+```json
+{"state":"SUCCESS","code":"delivered"}
+```
+
+| `state` | `code` values | Meaning and client action |
+| --- | --- | --- |
+| `SUCCESS` | `delivered` | The provider accepted the one send attempt. Do not resend this UUID. |
+| `FAILED` | `recipient_not_authorized`, `recipient_email_unavailable`, `recipient_domain_not_allowed`, `invalid_attachment`, `attachment_too_large`, `invalid_pdf`, `unsupported_pdf_encryption`, `pdf_inspection_unavailable`, `message_rejected`, `provider_configuration`, `delivery_unavailable` | Terminal failure for this UUID. No provider attempt occurs for admission/readiness failures. An intentional later send requires a new UUID and a newly selected/uploaded PDF. |
+| `UNKNOWN` | `provider_unavailable`, `delivery_indeterminate` | Delivery may already have occurred. Never automatically resend, including with a new UUID; require an explicit user decision/workflow outside this protocol. `delivery_indeterminate` is also returned when a prior request was left processing after interruption. |
+| `CONFLICT` | `idempotency_conflict` | This installation already used the UUID with a different `recipient_personnel_id`. Nothing is sent; create a new UUID only for a new intentional send. |
+
+Persist the UUID before the first request. After a lost HTTP response, retry the
+same multipart request with the same UUID and recipient ID. The server returns
+the persisted `SUCCESS`, `FAILED`, or `UNKNOWN` result and never invokes the
+provider a second time. It does not compare or re-admit a replacement PDF on a
+replay. A new UUID always means an intentional new logical send.
+
+HTTP 400 is reserved for an invalid multipart/form field (for example a missing
+file or malformed UUID). HTTP 403 is an ordinary tablet authentication or
+installation-authorization problem. HTTP 426 is possible when the deployment
+enforces a newer app version. These use the standard problem object below;
+admission, recipient authorization, provider, replay, and conflict outcomes
+instead use the HTTP-200 `{state, code}` contract above. In particular, this
+endpoint does not use HTTP 409 for idempotency conflict.
+
+#### Swift multipart outline
+
+The following illustrates the wire protocol only. `encryptedPDF` is already
+AES-256/R6 encrypted and `requestID` must be retained for recovery after a lost
+response.
+
+```swift
+var request = URLRequest(url: baseURL.appending(path: "/api/v1/tablet/report-delivery"))
+let boundary = "FireDash-\(UUID().uuidString)"
+request.httpMethod = "POST"
+request.setValue("Bearer \(installationCredential)", forHTTPHeaderField: "Authorization")
+request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+var body = Data()
+func textPart(_ name: String, _ value: String) {
+    body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".data(using: .utf8)!)
+}
+textPart("delivery_request_id", requestID.uuidString.lowercased())
+textPart("recipient_personnel_id", recipientID.uuidString.lowercased())
+body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"pdf\"; filename=\"report.pdf\"\r\nContent-Type: application/pdf\r\n\r\n".data(using: .utf8)!)
+body.append(encryptedPDF)
+body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+request.httpBody = body
+
+let (data, response) = try await URLSession.shared.data(for: request)
+// For HTTP 200 decode only { state, code }; replay the same requestID after a lost response.
+```
 
 Errors have this RFC 9457 shape:
 
@@ -54,7 +133,8 @@ Errors have this RFC 9457 shape:
 Switch on HTTP status plus `code`, never title or detail. Keep `request_id` only for support diagnostics. Current authentication and
 authorisation failures are rendered as 403; malformed input is 400; unknown
 routes/resources are 404; a queued manifest is 202; conditional matches are
-304. No tablet 409 or rate-limit/429 contract currently exists.
+304. Report-delivery uses its HTTP-200 outcome contract above, including
+`CONFLICT`; no tablet HTTP-409 or rate-limit/429 contract currently exists.
 
 ## Endpoint matrix
 
@@ -65,6 +145,7 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 | `POST /api/v1/tablet/check-in` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE operational; eligible current STALE recovers automatically; INACTIVE records control-plane contact without operational renewal |
 | `POST /api/v1/tablet/refresh` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
 | `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
+| `POST /api/v1/tablet/report-delivery` | Bearer | `multipart/form-data`: UUID `delivery_request_id`, UUID `recipient_personnel_id`, binary `pdf` | 200 `{state,code}` | 400, 403, 426 | Current authenticated installation; recipient authorization and delivery readiness are evaluated server-side |
 | `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403 | ACTIVE or INACTIVE current installation with a valid assignment |
 | `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | ACTIVE or INACTIVE current installation; exact configured public key version |
 | `GET /api/v1/tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403 | ACTIVE returns assigned publications; INACTIVE returns a signed empty dataset list |
@@ -291,10 +372,12 @@ manifest retrieval. Do not make automatic check-in an explicit lease top-up.
 `GET /api/v1/tablet/configuration` returns:
 
 ```json
-{"installation_id":"...","tablet_id":"...","department_id":"...","station_id":"...","vehicle_id":"..."}
+{"installation_id":"...","tablet_id":"...","department_id":"...","station_id":"...","vehicle_id":"...","report_delivery_max_attachment_bytes":20971520}
 ```
 
-This is the currently authorised vehicle assignment. `department_id` scopes
+This is the currently authorised vehicle assignment. `report_delivery_max_attachment_bytes`
+is the exact maximum permitted size for the `pdf` multipart part; use it before
+constructing a report-delivery upload. `department_id` scopes
 department datasets; `station_id` scopes station datasets; `vehicle_id` is the
 assignment identity. Refresh configuration before processing changed
 authorisation state or applying a newly retrieved manifest.
@@ -360,7 +443,7 @@ Representative complete 200 body (names are exact):
   "signing_key_version":"1",
   "generated_at":"2026-08-15T00:00:00+00:00",
   "authorization_valid_until":"2026-08-22T00:00:00+00:00",
-  "configuration":{"installation_id":"11111111-1111-1111-1111-111111111111","tablet_id":"22222222-2222-2222-2222-222222222222","department_id":"33333333-3333-3333-3333-333333333333","station_id":"44444444-4444-4444-4444-444444444444","vehicle_id":"55555555-5555-5555-5555-555555555555"},
+  "configuration":{"installation_id":"11111111-1111-1111-1111-111111111111","tablet_id":"22222222-2222-2222-2222-222222222222","department_id":"33333333-3333-3333-3333-333333333333","station_id":"44444444-4444-4444-4444-444444444444","vehicle_id":"55555555-5555-5555-5555-555555555555","report_delivery_max_attachment_bytes":20971520},
   "capabilities":{"vehicle_rescue_guides":{"provider":"euro_rescue","mode":"web","web_url":"https://rescue.euroncap.com/"}},
   "datasets":[{
     "publication_id":"66666666-6666-6666-6666-666666666666","type":"station_personnel","scope":"station","version":7,"schema_version":1,"required":true,"minimum_app_version":null,"artifact_format":"json","encrypted_size":1234,"ciphertext_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","content_encryption_algorithm":"AES-256-GCM","content_encryption_nonce":"Base64(12 bytes)","content_key_wrapped_for_kek":"Base64(AES-KW wrapped CEK)","content_key_wrapping_algorithm":"AES-KW-RFC3394","content_key_kek_version":"1","artifact_signature":"Base64(64-byte Ed25519 signature)","artifact_signature_algorithm":"Ed25519","artifact_signing_key_version":"1","download_url":"/api/v1/tablet/datasets/66666666-6666-6666-6666-666666666666/download",
