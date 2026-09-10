@@ -87,18 +87,10 @@ timer, and maintenance timer. It also installs the PDF sanitizer broker and
 per-job sandbox units. Preserve the unit hardening directives rather than
 copying commands into a less restricted service.
 
-Install qpdf 12.4 or newer for the web service. Outbound report admission runs
-its JSON encryption inspection through qpdf using stdin/stdout only; it must
-not be replaced with a PDF-marker check or a temporary-file workflow.
-Bootstrap prefers an adequate operator-selected `OUTBOUND_MAIL_QPDF_BINARY`,
-then an adequate system qpdf. If neither is available, it installs the pinned,
-checksum-verified qpdf 12.4.1 x86_64 Linux binary bundle below
-`/opt/firedash/vendor/qpdf/` without modifying `/usr/bin/qpdf`, and persists
-that selected path into the FireDash runtime environment. The fallback is the
-pinned official `qpdf-12.4.1-bin-linux-x86_64.zip`; bootstrap verifies its
-SHA-256 and JSON-encryption capability before promotion. It stages the complete
-relocatable bundle (including its sibling libraries), so do not copy only the
-`qpdf` executable into that location.
+Outbound report admission uses the pinned `pypdf` package installed in the
+normal FireDash virtual environment to inspect parsed encryption metadata. It
+does not require an outbound-mail qpdf binary, vendor installation, or
+deployment setting. The separate reference-data sanitizer remains qpdf-based.
 
 ## Reference-data sandbox
 

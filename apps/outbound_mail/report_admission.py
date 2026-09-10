@@ -7,8 +7,7 @@ never has a useful default string representation.
 
 from __future__ import annotations
 
-import json
-import subprocess
+import io
 from dataclasses import dataclass, field
 from typing import BinaryIO
 from uuid import UUID
@@ -16,6 +15,10 @@ from uuid import UUID
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from pypdf import PdfReader
+from pypdf._encryption import PasswordType
+from pypdf.errors import PdfReadError, PyPdfError
+from pypdf.generic import DictionaryObject
 
 from apps.organizations.models import Department
 from apps.outbound_mail.services import is_department_recipient_allowed
@@ -161,66 +164,70 @@ def _read_bounded_pdf(pdf: bytes | BinaryIO) -> bytes:
 
 def _validated_filename(filename: str) -> str:
     # Never put this caller-provided value in an exception. It is only delivery
-    # metadata; the bytes and qpdf inspection establish document type.
+    # metadata; the bytes and parsed-PDF inspection establish document type.
     if not isinstance(filename, str) or not filename or len(filename) > 255:
         raise ReportAdmissionError("invalid_attachment")
     return filename
 
 
 def _inspect_aes256_password_pdf(pdf_bytes: bytes) -> None:
-    """Accept only qpdf-parsed, password-required AES-256 revision-6 PDFs.
+    """Accept only parsed, password-required AES-256 revision-6 PDFs.
 
-    qpdf 12.4+ exposes the ``encrypt`` JSON summary even when no correct
-    password was supplied. Its stdin/stdout interface avoids an intermediate
-    file and no FireDash code parses PDF syntax or encryption dictionaries.
+    ``pypdf==6.18.0`` parses the encryption dictionary without authenticating a
+    password.  The small private-API use below is isolated deliberately:
+    pypdf's effective ``Encryption`` fields account for crypt-filter defaults
+    (notably an omitted ``/EFF``), which the raw parsed dictionary alone cannot
+    establish. Tests pin this dependency contract fail-closed.
     """
     if not pdf_bytes.startswith(b"%PDF-"):
         raise ReportAdmissionError("invalid_pdf")
     try:
-        completed = subprocess.run(
-            (
-                settings.OUTBOUND_MAIL_QPDF_BINARY,
-                "--json",
-                "--json-key=encrypt",
-                "--json-stream-data=none",
-                "-",
-            ),
-            input=pdf_bytes,
-            capture_output=True,
-            check=False,
-            timeout=settings.OUTBOUND_MAIL_QPDF_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        raise ReportAdmissionError("pdf_inspection_unavailable") from None
-    if completed.returncode != 0:
+        reader = PdfReader(io.BytesIO(pdf_bytes), strict=True)
+    except (PyPdfError, ValueError, TypeError, OverflowError):
         raise ReportAdmissionError("malformed_pdf") from None
+    if not reader.is_encrypted:
+        raise ReportAdmissionError("unsupported_pdf_encryption")
     try:
-        payload = json.loads(completed.stdout)
-        encryption = payload["encrypt"]
-        parameters = encryption["parameters"]
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        empty_password_result = reader.decrypt("")
+    except (PyPdfError, ValueError, TypeError, OverflowError):
         raise ReportAdmissionError("unsupported_pdf_encryption") from None
-    if not _is_password_required_aes256_revision6(encryption, parameters):
+    if empty_password_result is not PasswordType.NOT_DECRYPTED:
+        raise ReportAdmissionError("unsupported_pdf_encryption")
+    if not _is_password_required_aes256_revision6(reader):
         raise ReportAdmissionError("unsupported_pdf_encryption")
 
 
-def _is_password_required_aes256_revision6(encryption: object, parameters: object) -> bool:
-    """Interpret qpdf's documented ``encrypt`` JSON schema fail-closed."""
-    if not isinstance(encryption, dict) or not isinstance(parameters, dict):
+def _is_password_required_aes256_revision6(reader: PdfReader) -> bool:
+    """Validate pypdf's parsed and effective encryption representation."""
+    try:
+        encrypt = reader.trailer["/Encrypt"]
+        if not isinstance(encrypt, DictionaryObject):
+            return False
+        crypt_filters = encrypt.get("/CF")
+        if not isinstance(crypt_filters, DictionaryObject):
+            return False
+        stream_filter = encrypt.get("/StmF")
+        string_filter = encrypt.get("/StrF")
+        if not isinstance(stream_filter, str) or stream_filter != string_filter:
+            return False
+        crypt_filter = crypt_filters.get(stream_filter)
+        if not isinstance(crypt_filter, DictionaryObject):
+            return False
+        # pypdf's effective encryption fields are deliberately checked as well:
+        # EFF correctly applies the standard default when /EFF is omitted.
+        encryption = reader._encryption
+        return (
+            encrypt.get("/V") == 5
+            and encrypt.get("/R") == 6
+            and encrypt.get("/Length") == 256
+            and crypt_filter.get("/CFM") == "/AESV3"
+            and crypt_filter.get("/Length") in (32, 256)
+            and encryption.V == 5
+            and encryption.R == 6
+            and encryption.Length == 256
+            and encryption.StmF == "/AESV3"
+            and encryption.StrF == "/AESV3"
+            and encryption.EFF == "/AESV3"
+        )
+    except (AttributeError, KeyError, TypeError, ValueError, PdfReadError):
         return False
-    required_encryption = {
-        "encrypted": True,
-        "userpasswordmatched": False,
-        "ownerpasswordmatched": False,
-    }
-    if any(encryption.get(key) is not value for key, value in required_encryption.items()):
-        return False
-    return (
-        parameters.get("R") == 6
-        and parameters.get("V") == 5
-        and parameters.get("bits") == 256
-        and parameters.get("method") == "AESv3"
-        and parameters.get("stringmethod") == "AESv3"
-        and parameters.get("streammethod") == "AESv3"
-        and parameters.get("filemethod") == "AESv3"
-    )

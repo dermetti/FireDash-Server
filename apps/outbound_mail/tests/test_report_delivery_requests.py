@@ -1,8 +1,6 @@
 import hashlib
 import hmac
 import io
-import json
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier, Lock
@@ -243,6 +241,16 @@ def _encrypted_pdf() -> bytes:
     return output.getvalue()
 
 
+def _plain_pdf() -> bytes:
+    import pikepdf
+
+    document = pikepdf.Pdf.new()
+    document.add_blank_page()
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
 class _EndpointProvider:
     provider_id = "FAKE"
     sender_identity = MailAddress(display_name="FireDash", email="sender@example.test")
@@ -257,16 +265,6 @@ class _EndpointProvider:
 
 def _usable(provider):
     return DepartmentMailProviderResolution(provider=provider, provider_id="FAKE")
-
-
-def _qpdf_payload(encrypted: bool) -> bytes:
-    return json.dumps(
-        {"encrypt": {"encrypted": encrypted, "userpasswordmatched": False,
-                      "ownerpasswordmatched": False,
-                      "parameters": {"R": 6, "V": 5, "bits": 256, "method": "AESv3",
-                                     "stringmethod": "AESv3", "streammethod": "AESv3",
-                                     "filemethod": "AESv3"}}}
-    ).encode()
 
 
 def _endpoint_post(client, credential, request_id, recipient_id, content, filename="client.pdf"):
@@ -288,15 +286,8 @@ def test_endpoint_admission_failures_use_existing_admission_without_send(
         lambda *, department: _usable(provider),
     )
 
-    def qpdf(*args, input, **kwargs):
-        return subprocess.CompletedProcess(
-            args=args, returncode=0 if input.startswith(b"%PDF-") else 2,
-            stdout=_qpdf_payload(False) if input.startswith(b"%PDF-") else b"",
-        )
-
-    monkeypatch.setattr("apps.outbound_mail.report_admission.subprocess.run", qpdf)
     client = Client()
-    plain = _endpoint_post(client, credential, uuid4(), person.id, b"%PDF-1.7\nplain")
+    plain = _endpoint_post(client, credential, uuid4(), person.id, _plain_pdf())
     malformed = _endpoint_post(client, credential, uuid4(), person.id, b"not-a-pdf")
     with override_settings(OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES=8):
         oversized = _endpoint_post(client, credential, uuid4(), person.id, b"x" * 9)
@@ -314,12 +305,6 @@ def test_endpoint_replay_conflict_and_cross_department_are_fail_closed(
     monkeypatch.setattr(
         "apps.outbound_mail.report_delivery.resolve_department_mail_provider",
         lambda *, department: _usable(provider),
-    )
-    monkeypatch.setattr(
-        "apps.outbound_mail.report_admission.subprocess.run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=args, returncode=0, stdout=_qpdf_payload(True)
-        ),
     )
     other = Department.objects.create(
         name="Other", short_code="other", created_by=installation.tablet.department.created_by

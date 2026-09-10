@@ -1,6 +1,4 @@
 import io
-import json
-import subprocess
 from datetime import timedelta
 
 import pikepdf
@@ -28,35 +26,6 @@ from apps.outbound_mail.runtime import (
 )
 from apps.personnel.models import Person
 from apps.tablets.models import AppInstallation, Tablet
-
-
-def _qpdf_encryption_json() -> bytes:
-    return json.dumps(
-        {
-            "encrypt": {
-                "encrypted": True,
-                "userpasswordmatched": False,
-                "ownerpasswordmatched": False,
-                "parameters": {
-                    "R": 6,
-                    "V": 5,
-                    "bits": 256,
-                    "method": "AESv3",
-                    "stringmethod": "AESv3",
-                    "streammethod": "AESv3",
-                    "filemethod": "AESv3",
-                },
-            }
-        }
-    ).encode()
-
-
-@pytest.fixture
-def qpdf_runner(monkeypatch):
-    def run(*args, **kwargs):
-        return subprocess.CompletedProcess(args=args, returncode=0, stdout=_qpdf_encryption_json())
-
-    monkeypatch.setattr("apps.outbound_mail.report_admission.subprocess.run", run)
 
 
 @pytest.fixture
@@ -122,9 +91,7 @@ def _usable(provider):
     return DepartmentMailProviderResolution(provider=provider, provider_id=provider.provider_id)
 
 
-def test_delivery_admits_then_sends_one_generic_canonical_message(
-    delivery_context, qpdf_runner, monkeypatch
-):
+def test_delivery_admits_then_sends_one_generic_canonical_message(delivery_context, monkeypatch):
     department, installation, person = delivery_context
     provider = FakeProvider()
     monkeypatch.setattr(
@@ -161,9 +128,7 @@ def test_delivery_admits_then_sends_one_generic_canonical_message(
     assert encrypted_pdf[:40].decode("latin1") not in rendered
 
 
-def test_fresh_recipient_check_and_unavailable_provider_prevent_send(
-    delivery_context, qpdf_runner, monkeypatch
-):
+def test_fresh_recipient_check_and_unavailable_provider_prevent_send(delivery_context, monkeypatch):
     department, installation, person = delivery_context
     provider = FakeProvider()
     from apps.outbound_mail import report_delivery
@@ -227,7 +192,7 @@ def test_fresh_recipient_check_and_unavailable_provider_prevent_send(
     ],
 )
 def test_provider_failures_are_sanitized_audited_and_never_retried(
-    delivery_context, qpdf_runner, monkeypatch, failure, expected
+    delivery_context, monkeypatch, failure, expected
 ):
     _department, installation, person = delivery_context
     provider = FakeProvider(outcome=failure)
@@ -249,9 +214,7 @@ def test_provider_failures_are_sanitized_audited_and_never_retried(
     assert "ambiguous" not in repr(event.metadata)
 
 
-def test_delivery_does_not_create_report_or_attachment_state(
-    delivery_context, qpdf_runner, monkeypatch
-):
+def test_delivery_does_not_create_report_or_attachment_state(delivery_context, monkeypatch):
     _department, installation, person = delivery_context
     provider = FakeProvider()
     monkeypatch.setattr(

@@ -16,8 +16,6 @@ source "$SELF_DIR/lib/postgresql.sh"
 source "$SELF_DIR/lib/systemd.sh"
 # shellcheck source=lib/converge.sh
 source "$SELF_DIR/lib/converge.sh"
-# shellcheck source=lib/qpdf.sh
-source "$SELF_DIR/lib/qpdf.sh"
 
 FIREDASH_REPO_ROOT=${FIREDASH_REPO_ROOT:-$ROOT}
 export FIREDASH_REPO_ROOT
@@ -40,9 +38,6 @@ grep -qE 'container=(lxc|container)' /proc/1/environ 2>/dev/null || log_warn "LX
 log "installing packages"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${PACKAGES[@]}"
-
-log "resolving qpdf encryption-inspection runtime"
-resolve_qpdf
 
 systemctl enable --now postgresql
 

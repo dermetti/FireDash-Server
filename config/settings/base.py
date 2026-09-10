@@ -318,10 +318,6 @@ OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS = tuple(get_list("OUTBOUND_MAIL_SMTP_ALLOWED
 OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES = get_typed_env(
     "OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES", int, default=20 * 1024 * 1024
 )
-OUTBOUND_MAIL_QPDF_BINARY = get_env("OUTBOUND_MAIL_QPDF_BINARY", default="qpdf")
-OUTBOUND_MAIL_QPDF_TIMEOUT_SECONDS = get_typed_env(
-    "OUTBOUND_MAIL_QPDF_TIMEOUT_SECONDS", float, default=10.0
-)
 
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))
