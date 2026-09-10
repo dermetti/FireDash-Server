@@ -1305,6 +1305,7 @@ def department_outbound_email(request: HttpRequest, department_id) -> HttpRespon
         replace_department_smtp_credentials,
         set_department_delivery_mode,
         set_department_recipient_policy,
+        verify_department_smtp_configuration,
     )
 
     state = get_department_mail_configuration(department=department)
@@ -1325,6 +1326,7 @@ def department_outbound_email(request: HttpRequest, department_id) -> HttpRespon
             "smtp_credentials",
             "smtp_clear",
             "recipient_policy",
+            "verify_smtp",
         }:
             raise PermissionDenied("A supported outbound-email action is required.")
         if form is None or form.is_valid():
@@ -1351,6 +1353,16 @@ def department_outbound_email(request: HttpRequest, department_id) -> HttpRespon
                 elif action == "smtp_clear":
                     clear_department_smtp_credentials(actor=request.user, department=department)
                     messages.success(request, "SMTP credentials were cleared.")
+                elif action == "verify_smtp":
+                    result = verify_department_smtp_configuration(
+                        actor=request.user, department=department
+                    )
+                    messages.info(
+                        request,
+                        "SMTP verification succeeded."
+                        if result.outcome == "SUCCESS"
+                        else "SMTP verification did not succeed.",
+                    )
                 else:
                     set_department_recipient_policy(
                         actor=request.user, department=department, **form.cleaned_data

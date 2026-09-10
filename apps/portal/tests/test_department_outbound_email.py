@@ -1,5 +1,6 @@
 import base64
 import json
+from unittest.mock import patch
 
 import pytest
 from django.test import override_settings
@@ -15,6 +16,7 @@ from apps.authorization.services import (
 )
 from apps.organizations.models import Department
 from apps.outbound_mail.models import DepartmentMailConfiguration
+from apps.outbound_mail.runtime import ProviderUnavailableError
 
 
 @pytest.fixture
@@ -155,3 +157,36 @@ def test_smtp_credentials_are_write_only_and_recipient_policy_uses_services(
     assert AuditEvent.objects.filter(
         action="outbound_mail.department_recipient_policy_changed"
     ).exists()
+
+
+@pytest.mark.django_db
+def test_department_smtp_verification_is_sanitized_and_scoped(
+    client, scope, application_secret_settings
+):
+    _system_admin, administrator, department, other = scope
+    client.force_login(administrator)
+    _reauthenticate(client)
+    client.post(
+        _url(department),
+        {
+            "action": "smtp_configuration",
+            "host": "smtp.example.test",
+            "port": 587,
+            "tls_mode": "STARTTLS",
+            "sender_name": "Own",
+            "sender_email": "sender@example.test",
+        },
+    )
+    client.post(
+        _url(department),
+        {"action": "smtp_credentials", "username": "user", "password": "ui-verify-secret"},
+    )
+    with patch(
+        "apps.outbound_mail.smtp.SmtpProvider.verify", side_effect=ProviderUnavailableError()
+    ):
+        assert client.post(_url(department), {"action": "verify_smtp"}).status_code == 302
+    content = client.get(_url(department)).content.decode()
+    assert "Did not succeed" in content and "provider_unavailable" in content
+    assert "ui-verify-secret" not in content
+    assert "raw SMTP" not in content
+    assert client.post(_url(other), {"action": "verify_smtp"}).status_code == 403

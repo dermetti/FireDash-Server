@@ -7,11 +7,16 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from apps.application_secrets.crypto import encrypt_application_secret
+from apps.application_secrets.crypto import (
+    ApplicationSecretError,
+    decrypt_application_secret,
+    encrypt_application_secret,
+)
 from apps.audit.services import record_event
 from apps.authorization.scopes import is_system_admin
 from apps.authorization.services import (
@@ -423,6 +428,9 @@ class DepartmentMailConfigurationState:
     smtp_sender_email: str
     smtp_username_configured: bool
     smtp_password_configured: bool
+    last_smtp_verification_outcome: str
+    last_smtp_verified_at: datetime | None
+    last_smtp_verification_code: str
 
 
 def department_smtp_password_context(*, department: Department) -> str:
@@ -453,6 +461,9 @@ def get_department_mail_configuration(
             smtp_sender_email="",
             smtp_username_configured=False,
             smtp_password_configured=False,
+            last_smtp_verification_outcome="",
+            last_smtp_verified_at=None,
+            last_smtp_verification_code="",
         )
     return DepartmentMailConfigurationState(
         delivery_mode=configuration.delivery_mode,
@@ -463,6 +474,9 @@ def get_department_mail_configuration(
         smtp_sender_email=configuration.smtp_sender_email,
         smtp_username_configured=bool(configuration.smtp_username),
         smtp_password_configured=configuration.smtp_password_configured,
+        last_smtp_verification_outcome=configuration.last_smtp_verification_outcome,
+        last_smtp_verified_at=configuration.last_smtp_verified_at,
+        last_smtp_verification_code=configuration.last_smtp_verification_code,
     )
 
 
@@ -480,6 +494,12 @@ def _audit_department_configuration(*, actor, action: str, configuration, metada
         target_uuid=configuration.id,
         metadata=metadata,
     )
+
+
+def _invalidate_department_smtp_verification(configuration: DepartmentMailConfiguration) -> None:
+    configuration.last_smtp_verification_outcome = ""
+    configuration.last_smtp_verified_at = None
+    configuration.last_smtp_verification_code = ""
 
 
 @transaction.atomic
@@ -509,7 +529,17 @@ def configure_department_smtp(
     if not candidate_changed:
         return configuration
     configuration.updated_by = actor
-    configuration.save(update_fields=(*updated.keys(), "updated_by", "updated_at"))
+    _invalidate_department_smtp_verification(configuration)
+    configuration.save(
+        update_fields=(
+            *updated.keys(),
+            "updated_by",
+            "updated_at",
+            "last_smtp_verification_outcome",
+            "last_smtp_verified_at",
+            "last_smtp_verification_code",
+        )
+    )
     _audit_department_configuration(
         actor=actor,
         action="outbound_mail.department_smtp_configuration_changed",
@@ -532,8 +562,17 @@ def replace_department_smtp_credentials(
         password, context=department_smtp_password_context(department=department)
     ).serialized
     configuration.updated_by = actor
+    _invalidate_department_smtp_verification(configuration)
     configuration.save(
-        update_fields=("smtp_username", "smtp_password_encrypted", "updated_by", "updated_at")
+        update_fields=(
+            "smtp_username",
+            "smtp_password_encrypted",
+            "updated_by",
+            "updated_at",
+            "last_smtp_verification_outcome",
+            "last_smtp_verified_at",
+            "last_smtp_verification_code",
+        )
     )
     _audit_department_configuration(
         actor=actor,
@@ -555,8 +594,17 @@ def clear_department_smtp_credentials(
     configuration.smtp_username = ""
     configuration.smtp_password_encrypted = ""
     configuration.updated_by = actor
+    _invalidate_department_smtp_verification(configuration)
     configuration.save(
-        update_fields=("smtp_username", "smtp_password_encrypted", "updated_by", "updated_at")
+        update_fields=(
+            "smtp_username",
+            "smtp_password_encrypted",
+            "updated_by",
+            "updated_at",
+            "last_smtp_verification_outcome",
+            "last_smtp_verified_at",
+            "last_smtp_verification_code",
+        )
     )
     _audit_department_configuration(
         actor=actor,
@@ -565,6 +613,81 @@ def clear_department_smtp_credentials(
         metadata={"configured": False},
     )
     return configuration
+
+
+@dataclass(frozen=True)
+class DepartmentSmtpVerificationResult:
+    outcome: str
+    verified_at: datetime
+    diagnostic_code: str
+
+
+@transaction.atomic
+def verify_department_smtp_configuration(
+    *, actor, department: Department
+) -> DepartmentSmtpVerificationResult:
+    """Verify a department SMTP endpoint without sending a message or changing mode."""
+    _require_department_mail_manager(actor=actor, department=department)
+    configuration = (
+        DepartmentMailConfiguration.objects.select_for_update()
+        .filter(department=department)
+        .first()
+    )
+    if configuration is None:
+        raise ValidationError("SMTP delivery configuration is incomplete.")
+    try:
+        configuration.validate_smtp_configuration()
+        if bool(configuration.smtp_username) != bool(configuration.smtp_password_encrypted):
+            raise ValueError
+        password = ""
+        if configuration.smtp_username:
+            password = decrypt_application_secret(
+                configuration.smtp_password_encrypted,
+                context=department_smtp_password_context(department=department),
+            ).decode("utf-8")
+        # Reuse the Phase 2C generic SMTP provider. It owns TLS, certificate,
+        # timeout, authentication, no-message verification, and error mapping.
+        from apps.outbound_mail.smtp import SmtpEffectiveConfiguration, SmtpProvider
+
+        provider = SmtpProvider(
+            configuration=SmtpEffectiveConfiguration(
+                host=configuration.smtp_host,
+                port=configuration.smtp_port,
+                tls_mode=configuration.smtp_tls_mode,
+                sender_name=configuration.smtp_sender_name,
+                sender_email=configuration.smtp_sender_email,
+                username=configuration.smtp_username,
+                password=password,
+                timeout=settings.OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS,
+            )
+        )
+        provider.verify()
+    except (ApplicationSecretError, UnicodeDecodeError, ValueError):
+        outcome, code = VerificationOutcome.FAILED, "provider_configuration"
+    except MailProviderError as error:
+        outcome, code = VerificationOutcome.FAILED, error.code
+    else:
+        outcome, code = VerificationOutcome.SUCCESS, "verified"
+    verified_at = timezone.now()
+    configuration.last_smtp_verification_outcome = outcome
+    configuration.last_smtp_verified_at = verified_at
+    configuration.last_smtp_verification_code = code
+    configuration.save(
+        update_fields=(
+            "last_smtp_verification_outcome",
+            "last_smtp_verified_at",
+            "last_smtp_verification_code",
+        )
+    )
+    _audit_department_configuration(
+        actor=actor,
+        action="outbound_mail.department_smtp_verification_completed",
+        configuration=configuration,
+        metadata={"outcome": outcome, "code": code},
+    )
+    return DepartmentSmtpVerificationResult(
+        outcome=outcome, verified_at=verified_at, diagnostic_code=code
+    )
 
 
 @transaction.atomic

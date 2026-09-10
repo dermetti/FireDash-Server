@@ -1,5 +1,6 @@
 import base64
 import json
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -15,6 +16,7 @@ from apps.authorization.services import (
 )
 from apps.organizations.models import Department
 from apps.outbound_mail.models import DepartmentMailConfiguration
+from apps.outbound_mail.runtime import ProviderUnavailableError
 from apps.outbound_mail.services import (
     clear_department_smtp_credentials,
     configure_department_smtp,
@@ -25,6 +27,7 @@ from apps.outbound_mail.services import (
     replace_department_smtp_credentials,
     set_department_delivery_mode,
     set_department_recipient_policy,
+    verify_department_smtp_configuration,
 )
 
 
@@ -237,3 +240,72 @@ def test_department_mutations_audit_without_secrets_or_idempotent_noise(
     assert actions.count("outbound_mail.department_smtp_credentials_cleared") == 1
     assert actions.count("outbound_mail.department_recipient_policy_changed") == 0
     assert "audit-secret" not in repr([(event.action, event.metadata) for event in events])
+
+
+def test_department_smtp_verification_reuses_generic_provider_and_is_mode_independent(
+    system_admin, departments, application_secret_settings
+):
+    department, _, _ = departments
+    _configure_smtp(actor=system_admin, department=department)
+    replace_department_smtp_credentials(
+        actor=system_admin, department=department, username="user", password="verify-secret"
+    )
+    with patch("apps.outbound_mail.smtp.SmtpProvider.verify") as verify:
+        result = verify_department_smtp_configuration(actor=system_admin, department=department)
+    verify.assert_called_once()
+    configuration = DepartmentMailConfiguration.objects.get(department=department)
+    assert result.outcome == "SUCCESS"
+    assert result.diagnostic_code == "verified"
+    assert configuration.delivery_mode == "DISABLED"
+    assert configuration.last_smtp_verification_outcome == "SUCCESS"
+    assert configuration.last_smtp_verified_at is not None
+    set_department_recipient_policy(
+        actor=system_admin, department=department, restriction_enabled=False, approved_domains=[]
+    )
+    grant_system_managed_mail_eligibility(actor=system_admin, department=department)
+    set_department_delivery_mode(
+        actor=system_admin,
+        department=department,
+        delivery_mode=DepartmentMailConfiguration.DeliveryMode.SYSTEM,
+    )
+    revoke_system_managed_mail_eligibility(actor=system_admin, department=department)
+    configuration.refresh_from_db()
+    assert configuration.last_smtp_verification_outcome == "SUCCESS"
+    assert "verify-secret" not in repr(configuration)
+    assert AuditEvent.objects.filter(
+        action="outbound_mail.department_smtp_verification_completed", department=department
+    ).exists()
+
+
+def test_department_smtp_verification_failure_is_sanitized_and_changes_invalidate_it(
+    system_admin, departments, application_secret_settings
+):
+    department, _, _ = departments
+    _configure_smtp(actor=system_admin, department=department)
+    replace_department_smtp_credentials(
+        actor=system_admin, department=department, username="user", password="failure-secret"
+    )
+    with patch(
+        "apps.outbound_mail.smtp.SmtpProvider.verify", side_effect=ProviderUnavailableError()
+    ):
+        result = verify_department_smtp_configuration(actor=system_admin, department=department)
+    configuration = DepartmentMailConfiguration.objects.get(department=department)
+    assert result.outcome == "FAILED" and result.diagnostic_code == "provider_unavailable"
+    assert configuration.smtp_password_configured
+    assert "failure-secret" not in repr(
+        AuditEvent.objects.filter(department=department).values_list("metadata", flat=True)
+    )
+    _configure_smtp(actor=system_admin, department=department)
+    configuration.refresh_from_db()
+    assert configuration.last_smtp_verification_outcome == "FAILED"
+    configure_department_smtp(
+        actor=system_admin,
+        department=department,
+        host="changed.example.test",
+        port=587,
+        tls_mode="STARTTLS",
+        sender_name="Department",
+        sender_email="sender@example.test",
+    )
+    configuration.refresh_from_db()
+    assert not configuration.last_smtp_verification_outcome
