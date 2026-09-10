@@ -179,6 +179,7 @@ def test_http_transport_direct_and_proxy_routes_are_explicit() -> None:
     assert direct_session.trust_env is False
     assert direct_session.calls[0][1]["proxies"] is None
     assert direct_session.calls[0][1]["timeout"] == (5.0, 15.0)
+    assert direct_session.calls[0][1]["allow_redirects"] is False
 
     proxy_session = FakeSession()
     proxy = OutboundMailHttpTransport(
@@ -214,3 +215,4 @@ def test_brevo_verification_uses_the_shared_proxy_aware_transport() -> None:
     args, kwargs = session.calls[0]
     assert args == ("GET", "https://api.brevo.com/v3/account")
     assert kwargs["proxies"] == {"https": "http://proxy.example.test:3128"}
+    assert kwargs["allow_redirects"] is False

@@ -307,6 +307,11 @@ OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS = get_typed_env(
 OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS = get_typed_env(
     "OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS", float, default=15.0
 )
+# Narrow deployment exceptions for intentionally internal SMTP relays. Values
+# are never administrator/database configuration; absent values allow public
+# globally-routable DNS answers only.
+OUTBOUND_MAIL_SMTP_ALLOWED_HOSTS = frozenset(get_list("OUTBOUND_MAIL_SMTP_ALLOWED_HOSTS"))
+OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS = tuple(get_list("OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS"))
 
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))

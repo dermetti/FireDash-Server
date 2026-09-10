@@ -84,6 +84,15 @@ def _parse_envelope(serialized: str) -> tuple[str, bytes, bytes]:
     return version, nonce, ciphertext
 
 
+def application_secret_key_version(encrypted: EncryptedApplicationSecret | str) -> str:
+    """Return only persisted envelope metadata, without loading or using a KEK."""
+    serialized = (
+        encrypted.serialized if isinstance(encrypted, EncryptedApplicationSecret) else encrypted
+    )
+    version, _, _ = _parse_envelope(serialized)
+    return version
+
+
 class ApplicationSecretCipher:
     """Versioned AES-256-GCM cipher using deployment-provided KEKs only."""
 
@@ -101,6 +110,11 @@ class ApplicationSecretCipher:
             normalized[version] = key
         self._keys = normalized
         self._active_version = active_version
+
+    @property
+    def active_version(self) -> str:
+        """The configured write version; key bytes remain inaccessible."""
+        return self._active_version
 
     def encrypt(
         self, plaintext: str | bytes, *, context: str | bytes

@@ -152,6 +152,32 @@ previous entries until all values using them have been re-encrypted. The
 application fails closed if the credential is absent, malformed, the selected
 version is unavailable, or authentication fails.
 
+### Application-secret KEK rotation and recovery
+
+Generate each new key as 32 cryptographically random bytes and store its
+standard-Base64 value only in the root-managed key-ring credential. Back up that
+credential separately from PostgreSQL, with access controls equivalent to other
+production key material. A PostgreSQL backup alone cannot restore encrypted mail
+credentials: recovery requires every corresponding application-secret key
+version.
+
+To rotate an outbound-mail credential key, first add the new version to the
+key-ring while retaining all old versions, then set
+`APPLICATION_SECRET_KEK_VERSION` to the new version and reload the service.
+Run `python manage.py rotate_outbound_mail_secrets --status`, then
+`python manage.py rotate_outbound_mail_secrets --rotate`; rerunning the rotate
+command is safe after an interruption because already-current envelopes are
+skipped. Finally run `python manage.py rotate_outbound_mail_secrets
+--check-retirement OLD_VERSION`. Remove an old live key only after that check
+succeeds.
+
+Keep prior key versions for as long as any retained database backup might need
+them. Even after all live rows have been re-encrypted, historical backups can
+contain ciphertext under retired versions. If rotation fails, restore the
+previous active-version deployment setting while retaining the complete key
+ring, remediate the sanitized command reference, and rerun; never remove a key
+needed by a still-live row or retained backup.
+
 ## Outbound-mail egress
 
 API mail providers use direct HTTPS egress by default. Set
@@ -167,6 +193,18 @@ administrator.
 | `OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS` | `5` |
 | `OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS` | `15` |
 | `OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS` | `15` |
+| `OUTBOUND_MAIL_SMTP_ALLOWED_HOSTS` | unset |
+| `OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS` | unset |
+
+SMTP destinations must be DNS hostnames that resolve only to globally routable
+addresses. IP literals and private, loopback, link-local, reserved, multicast,
+or documentation addresses are rejected for both delivery and verification.
+For a self-hosted relay, deployment operators may set a comma-separated exact
+hostname in `OUTBOUND_MAIL_SMTP_ALLOWED_HOSTS` or a narrowly scoped CIDR in
+`OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS`. These exceptions are deployment-only;
+they are not Department or System Admin settings. SMTP connects are pinned to
+the checked DNS answers to prevent a later resolver result from changing the
+destination.
 
 ## Tablets, backups, and restore
 

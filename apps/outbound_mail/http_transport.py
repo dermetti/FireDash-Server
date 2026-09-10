@@ -81,6 +81,9 @@ class OutboundMailHttpTransport:
                 json=payload,
                 timeout=self._timeout,
                 proxies=self._proxies,
+                # Authenticated provider requests never follow a redirect: a
+                # redirect could otherwise move credentials to another origin.
+                allow_redirects=False,
             )
         except requests.RequestException:
             raise OutboundMailTransportError() from None

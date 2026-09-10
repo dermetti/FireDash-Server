@@ -11,6 +11,10 @@ from django.core.mail import EmailMultiAlternatives, get_connection
 
 from apps.application_secrets.crypto import ApplicationSecretError, decrypt_application_secret
 from apps.outbound_mail.models import SystemMailConfiguration
+from apps.outbound_mail.network_policy import (
+    OutboundNetworkPolicyError,
+    resolve_smtp_destination,
+)
 from apps.outbound_mail.providers import SMTP, register_runtime_provider_factory
 from apps.outbound_mail.runtime import (
     MailSendResult,
@@ -64,10 +68,15 @@ class SmtpProvider:
     provider_id = SMTP
 
     def __init__(
-        self, *, configuration: SmtpEffectiveConfiguration, connection_factory=get_connection
+        self,
+        *,
+        configuration: SmtpEffectiveConfiguration,
+        connection_factory=get_connection,
+        destination_resolver=resolve_smtp_destination,
     ) -> None:
         self._configuration = configuration
         self._connection_factory = connection_factory
+        self._destination_resolver = destination_resolver
 
     @classmethod
     def from_system_configuration(cls) -> SmtpProvider:
@@ -107,8 +116,14 @@ class SmtpProvider:
         use_ssl = self._configuration.tls_mode == SystemMailConfiguration.SmtpTlsMode.IMPLICIT_TLS
         if not (use_tls or use_ssl):
             raise ProviderConfigurationError()
+        try:
+            destination = self._destination_resolver(
+                self._configuration.host, self._configuration.port
+            )
+        except OutboundNetworkPolicyError:
+            raise ProviderConfigurationError() from None
         return self._connection_factory(
-            backend="django.core.mail.backends.smtp.EmailBackend",
+            backend="apps.outbound_mail.network_policy.PinnedSmtpEmailBackend",
             host=self._configuration.host,
             port=self._configuration.port,
             username=self._configuration.username,
@@ -117,6 +132,7 @@ class SmtpProvider:
             use_ssl=use_ssl,
             timeout=self._configuration.timeout,
             fail_silently=False,
+            pinned_addresses=destination.addresses,
         )
 
     def send(self, message: OutboundMessage) -> MailSendResult:

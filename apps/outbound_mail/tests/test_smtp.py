@@ -4,6 +4,7 @@ import ssl
 import pytest
 
 from apps.outbound_mail.models import SystemMailConfiguration
+from apps.outbound_mail.network_policy import ResolvedSmtpDestination
 from apps.outbound_mail.runtime import (
     MailAddress,
     MailAttachment,
@@ -62,6 +63,10 @@ def _message() -> OutboundMessage:
     )
 
 
+def _public_destination(host: str, port: int) -> ResolvedSmtpDestination:
+    return ResolvedSmtpDestination(hostname=host, addresses=("8.8.8.8",))
+
+
 @pytest.mark.parametrize(
     "tls_mode,expected_tls,expected_ssl",
     [
@@ -80,7 +85,9 @@ def test_smtp_maps_canonical_message_in_memory_for_both_approved_tls_modes(
         return connection
 
     provider = SmtpProvider(
-        configuration=_configuration(tls_mode=tls_mode), connection_factory=factory
+        configuration=_configuration(tls_mode=tls_mode),
+        connection_factory=factory,
+        destination_resolver=_public_destination,
     )
     result = provider.send(_message())
 
@@ -89,6 +96,7 @@ def test_smtp_maps_canonical_message_in_memory_for_both_approved_tls_modes(
     assert options["use_tls"] is expected_tls
     assert options["use_ssl"] is expected_ssl
     assert options["timeout"] == 12.0
+    assert options["pinned_addresses"] == ("8.8.8.8",)
     assert "ssl_context" not in options
     email = connection.messages[0]
     assert email.to == ["recipient@example.test"]
@@ -118,7 +126,11 @@ def test_smtp_failures_are_sanitized_and_never_retried(error, error_type) -> Non
     def factory(**kwargs):
         return connection
 
-    provider = SmtpProvider(configuration=_configuration(), connection_factory=factory)
+    provider = SmtpProvider(
+        configuration=_configuration(),
+        connection_factory=factory,
+        destination_resolver=_public_destination,
+    )
     connection.send_messages = lambda messages: (_ for _ in ()).throw(error)
     with pytest.raises(error_type) as raised:
         provider.send(_message())
@@ -129,7 +141,9 @@ def test_smtp_failures_are_sanitized_and_never_retried(error, error_type) -> Non
 def test_smtp_verification_opens_secure_session_without_sending() -> None:
     connection = FakeConnection()
     provider = SmtpProvider(
-        configuration=_configuration(), connection_factory=lambda **kwargs: connection
+        configuration=_configuration(),
+        connection_factory=lambda **kwargs: connection,
+        destination_resolver=_public_destination,
     )
     provider.verify()
     assert connection.opened and connection.closed
