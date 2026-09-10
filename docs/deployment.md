@@ -90,6 +90,11 @@ copying commands into a less restricted service.
 Install qpdf 12.4 or newer for the web service. Outbound report admission runs
 its JSON encryption inspection through qpdf using stdin/stdout only; it must
 not be replaced with a PDF-marker check or a temporary-file workflow.
+Bootstrap prefers an adequate operator-selected `OUTBOUND_MAIL_QPDF_BINARY`,
+then an adequate system qpdf. If neither is available, it installs the pinned,
+checksum-verified qpdf 12.4.1 x86_64 release below `/opt/firedash/vendor/qpdf/`
+without modifying `/usr/bin/qpdf`, and persists that selected path into the
+FireDash runtime environment.
 
 ## Reference-data sandbox
 

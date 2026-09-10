@@ -46,6 +46,8 @@ require_no_deprecated_env_vars() {
 render_env() {
     local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1
     local ingest_upload_bytes=268435456 pdf_package_documents=250
+    local qpdf_binary=${OUTBOUND_MAIL_QPDF_BINARY:-qpdf}
+    [[ -f $FIREDASH_ETC/qpdf-path ]] && qpdf_binary=$(read_secret "$FIREDASH_ETC/qpdf-path")
     if [[ -f $ENV_FILE ]]; then
         [[ -z $runtime_password ]] && runtime_password=$(env_value "$ENV_FILE" POSTGRES_PASSWORD)
         [[ -z $secret_key ]] && secret_key=$(env_value "$ENV_FILE" DJANGO_SECRET_KEY)
@@ -55,6 +57,8 @@ render_env() {
         [[ -n $existing ]] && ingest_upload_bytes=$existing
         existing=$(env_value "$ENV_FILE" MAX_PDF_PACKAGE_DOCUMENTS)
         [[ -n $existing ]] && pdf_package_documents=$existing
+        existing=$(env_value "$ENV_FILE" OUTBOUND_MAIL_QPDF_BINARY)
+        [[ -n $existing ]] && qpdf_binary=$existing
     fi
     [[ -n $runtime_password ]] || die "runtime database password is unavailable"
     [[ -n $secret_key ]] || die "Django SECRET_KEY is unavailable"
@@ -116,6 +120,7 @@ PUBLICATION_ARTIFACT_MAX_BYTES=629145600
 PUBLICATION_ARTIFACT_STALE_SECONDS=3600
 PUBLICATION_KEK_VERSION=1
 PUBLICATION_SIGNING_KEY_VERSION=$signing_key_version
+OUTBOUND_MAIL_QPDF_BINARY=$qpdf_binary
 EOF
     install_file_atomic "$tmp" "$ENV_FILE" 0640 root:fire_backend
     rm -f "$tmp"

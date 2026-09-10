@@ -16,6 +16,8 @@ source "$SELF_DIR/lib/postgresql.sh"
 source "$SELF_DIR/lib/systemd.sh"
 # shellcheck source=lib/converge.sh
 source "$SELF_DIR/lib/converge.sh"
+# shellcheck source=lib/qpdf.sh
+source "$SELF_DIR/lib/qpdf.sh"
 
 FIREDASH_REPO_ROOT=${FIREDASH_REPO_ROOT:-$ROOT}
 export FIREDASH_REPO_ROOT
@@ -39,11 +41,8 @@ log "installing packages"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 
-log "verifying qpdf is present"
-command -v qpdf >/dev/null 2>&1 || die "qpdf is not installed"
-qpdf_version=$(qpdf --version 2>&1 | awk 'NR==1 { print $NF }')
-dpkg --compare-versions "$qpdf_version" ge 12.4 || die "qpdf 12.4 or newer is required"
-log "qpdf version: $(qpdf --version 2>&1 | head -n1)"
+log "resolving qpdf encryption-inspection runtime"
+resolve_qpdf
 
 systemctl enable --now postgresql
 
