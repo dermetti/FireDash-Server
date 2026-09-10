@@ -8,12 +8,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import User
-from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership, SystemRole
-from apps.authorization.services import (
-    grant_system_managed_mail_eligibility,
-    revoke_system_managed_mail_eligibility,
-)
+from apps.authorization.services import grant_system_managed_mail_eligibility
 from apps.organizations.models import Department
 from apps.outbound_mail.models import DepartmentMailConfiguration
 from apps.outbound_mail.runtime import ProviderUnavailableError
@@ -21,172 +17,92 @@ from apps.outbound_mail.runtime import ProviderUnavailableError
 
 @pytest.fixture
 def scope(db):
-    system_admin = User.objects.create_user("system@example.test", "System", "safe-password")
-    SystemRole.objects.create(user=system_admin)
-    department = Department.objects.create(name="Own", short_code="OWN", created_by=system_admin)
-    other = Department.objects.create(name="Other", short_code="OTH", created_by=system_admin)
-    administrator = User.objects.create_user(
-        "department@example.test", "Department", "safe-password"
-    )
-    DepartmentMembership.objects.create(
-        user=administrator, department=department, created_by=system_admin
-    )
-    return system_admin, administrator, department, other
+    system = User.objects.create_user("system@example.test", "System", "safe-password")
+    SystemRole.objects.create(user=system)
+    department = Department.objects.create(name="Own", short_code="OWN", created_by=system)
+    other = Department.objects.create(name="Other", short_code="OTH", created_by=system)
+    admin = User.objects.create_user("department@example.test", "Department", "safe-password")
+    DepartmentMembership.objects.create(user=admin, department=department, created_by=system)
+    return system, admin, department, other
 
 
 @pytest.fixture
-def application_secret_settings(tmp_path):
-    keyring = tmp_path / "application-secret-kek-ring"
-    keyring.write_text(json.dumps({"keys": {"1": base64.b64encode(b"a" * 32).decode("ascii")}}))
+def secret_settings(tmp_path):
+    keyring = tmp_path / "keyring"
+    keyring.write_text(json.dumps({"keys": {"1": base64.b64encode(b"a" * 32).decode()}}))
     with override_settings(
         APPLICATION_SECRET_KEK_CREDENTIAL_PATH=keyring, APPLICATION_SECRET_KEK_VERSION="1"
     ):
         yield
 
 
-def _reauthenticate(client):
+def _reauth(client):
     session = client.session
     session["recent_reauthentication_at"] = timezone.now().timestamp()
     session.save()
 
 
 def _url(department):
-    return reverse("portal-department-outbound-email", args=(department.id,))
+    return reverse("portal-department-settings", args=(department.id,))
+
+
+def _smtp_payload(**changes):
+    payload = {
+        "action": "email-settings",
+        "delivery_mode": "CUSTOM_SMTP",
+        "host": "smtp.example.test",
+        "port": 587,
+        "tls_mode": "STARTTLS",
+        "sender_name": "Own",
+        "sender_email": "sender@example.test",
+        "username": "user",
+        "password": "write-only-secret",
+        "approved_domains": "example.test",
+    }
+    payload.update(changes)
+    return payload
 
 
 @pytest.mark.django_db
-def test_department_admin_scope_and_missing_configuration_are_fail_closed(client, scope):
-    _system_admin, administrator, department, other = scope
-    client.force_login(administrator)
-    response = client.get(_url(department))
-    assert response.status_code == 200
-    assert "Disabled" in response.content.decode()
-    assert "Brevo" not in response.content.decode()
-    assert "proxy" not in response.content.decode().lower()
-    assert not DepartmentMailConfiguration.objects.filter(department=department).exists()
+def test_email_is_one_settings_card_not_navigation_and_mode_is_adaptive(client, scope):
+    system, admin, department, other = scope
+    client.force_login(admin)
+    content = client.get(_url(department)).content.decode()
+    assert 'id="department-outbound-email"' in content
+    assert (
+        "Outbound Email"
+        not in content.split('aria-label="Primary navigation"', 1)[1].split("</nav>", 1)[0]
+    )
+    assert "SMTP password" not in content
+    assert "FireDash managed service not available" in content
+    partial = client.get(_url(department), {"delivery_mode": "CUSTOM_SMTP"}, HTTP_HX_REQUEST="true")
+    assert partial.status_code == 200 and "Own SMTP server" in partial.content.decode()
     assert client.get(_url(other)).status_code == 403
-    assert (
-        client.post(_url(other), {"action": "mode", "delivery_mode": "DISABLED"}).status_code == 403
-    )
+    grant_system_managed_mail_eligibility(actor=system, department=department)
+    assert "available" in client.get(_url(department)).content.decode()
 
 
 @pytest.mark.django_db
-def test_system_mode_availability_and_revocation_are_presented_without_mutation(client, scope):
-    system_admin, administrator, department, _ = scope
-    client.force_login(administrator)
-    _reauthenticate(client)
-    response = client.post(_url(department), {"action": "mode", "delivery_mode": "SYSTEM"})
-    assert response.status_code == 200
-    assert "not authorized" in response.content.decode()
-    grant_system_managed_mail_eligibility(actor=system_admin, department=department)
-    assert (
-        client.post(_url(department), {"action": "mode", "delivery_mode": "SYSTEM"}).status_code
-        == 302
-    )
-    revoke_system_managed_mail_eligibility(actor=system_admin, department=department)
-    content = client.get(_url(department)).content.decode()
-    assert "managed service is unavailable" in content
-    assert DepartmentMailConfiguration.objects.get(department=department).delivery_mode == "SYSTEM"
-    assert (
-        client.post(_url(department), {"action": "mode", "delivery_mode": "DISABLED"}).status_code
-        == 302
-    )
-
-
-@pytest.mark.django_db
-def test_smtp_credentials_are_write_only_and_recipient_policy_uses_services(
-    client, scope, application_secret_settings
+def test_one_apply_preserves_blank_password_sets_domains_and_verifies(
+    client, scope, secret_settings
 ):
-    _system_admin, administrator, department, _ = scope
-    client.force_login(administrator)
-    _reauthenticate(client)
-    assert (
-        client.post(
-            _url(department),
-            {
-                "action": "smtp_configuration",
-                "host": "smtp.example.test",
-                "port": 587,
-                "tls_mode": "STARTTLS",
-                "sender_name": "Own",
-                "sender_email": "sender@example.test",
-            },
-        ).status_code
-        == 302
-    )
-    assert (
-        client.post(
-            _url(department),
-            {"action": "smtp_credentials", "username": "user", "password": "never-render-password"},
-        ).status_code
-        == 302
-    )
-    content = client.get(_url(department)).content.decode()
-    configuration = DepartmentMailConfiguration.objects.get(department=department)
-    assert "never-render-password" not in content
-    assert configuration.smtp_password_encrypted not in content
-    assert "app-secret:" not in content
-    assert client.post(_url(department), {"action": "smtp_clear"}).status_code == 302
-    assert not DepartmentMailConfiguration.objects.get(
-        department=department
-    ).smtp_password_configured
-
-    assert (
-        client.post(
-            _url(department),
-            {
-                "action": "recipient_policy",
-                "restriction_enabled": "on",
-                "approved_domains": "feuerwehr.hamburg.de\nexample.test",
-            },
-        ).status_code
-        == 302
-    )
-    content = client.get(_url(department)).content.decode()
-    assert "subdomains are not included" in content
-    invalid = client.post(
-        _url(department),
-        {
-            "action": "recipient_policy",
-            "restriction_enabled": "on",
-            "approved_domains": "*.example.test",
-        },
-    )
-    assert invalid.status_code == 200
-    assert "valid exact domain names" in invalid.content.decode()
-    assert AuditEvent.objects.filter(
-        action="outbound_mail.department_recipient_policy_changed"
-    ).exists()
-
-
-@pytest.mark.django_db
-def test_department_smtp_verification_is_sanitized_and_scoped(
-    client, scope, application_secret_settings
-):
-    _system_admin, administrator, department, other = scope
-    client.force_login(administrator)
-    _reauthenticate(client)
-    client.post(
-        _url(department),
-        {
-            "action": "smtp_configuration",
-            "host": "smtp.example.test",
-            "port": 587,
-            "tls_mode": "STARTTLS",
-            "sender_name": "Own",
-            "sender_email": "sender@example.test",
-        },
-    )
-    client.post(
-        _url(department),
-        {"action": "smtp_credentials", "username": "user", "password": "ui-verify-secret"},
-    )
+    _system, admin, department, _other = scope
+    client.force_login(admin)
+    _reauth(client)
     with patch(
         "apps.outbound_mail.smtp.SmtpProvider.verify", side_effect=ProviderUnavailableError()
     ):
-        assert client.post(_url(department), {"action": "verify_smtp"}).status_code == 302
+        response = client.post(_url(department), _smtp_payload())
+    assert response.status_code == 302
+    config = DepartmentMailConfiguration.objects.get(department=department)
+    encrypted = config.smtp_password_encrypted
+    assert config.delivery_mode == "CUSTOM_SMTP"
+    assert config.last_smtp_verification_outcome == "FAILED"
+    response = client.post(_url(department), _smtp_payload(password="", approved_domains=""))
+    assert response.status_code == 302
+    config.refresh_from_db()
+    assert config.smtp_password_encrypted == encrypted
     content = client.get(_url(department)).content.decode()
-    assert "Did not succeed" in content and "provider_unavailable" in content
-    assert "ui-verify-secret" not in content
-    assert "raw SMTP" not in content
-    assert client.post(_url(other), {"action": "verify_smtp"}).status_code == 403
+    assert "write-only-secret" not in content and encrypted not in content
+    assert "Restrict recipients to approved domains" not in content
+    assert "Save SMTP configuration" not in content and "Verify SMTP configuration" not in content

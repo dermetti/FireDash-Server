@@ -48,11 +48,14 @@ an installation, tablet, station, or department identifier in the form.
 | `recipient_personnel_id` | Lower-case hyphenated UUID string | A `people[].id` from the current `station_personnel` reference dataset described below. It is only a server-side recipient selector, never an email address. |
 | `pdf` | One binary file part | A real, password-required AES-256 revision-6/AESV3 PDF. Its maximum byte size is the current authenticated configuration's `report_delivery_max_attachment_bytes` value (20 MiB by default). Uploads above it are rejected. |
 
-The PDF password is generated and retained by the client. Never send it to
-FireDash, place it in a filename, or include it in any other request field.
-The client also never submits recipient email, sender identity, subject, body,
-provider choice, or department. FireDash obtains those values only from current
-server-side installation, personnel, policy, and provider state.
+Generate the PDF password locally on the tablet: it is exactly 12
+cryptographically random characters from the Base58 alphabet
+`123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz`. Never send it to
+FireDash, place it in request metadata or a filename, or record it in logs,
+analytics, or any other server-visible field. The client also never submits
+recipient email, sender identity, subject, body, provider choice, or department.
+FireDash obtains those values only from current server-side installation,
+personnel, policy, and provider state.
 
 #### Selecting a recipient
 
@@ -78,15 +81,20 @@ only this sanitized JSON shape:
 | `state` | `code` values | Meaning and client action |
 | --- | --- | --- |
 | `SUCCESS` | `delivered` | The provider accepted the one send attempt. Do not resend this UUID. |
-| `FAILED` | `recipient_not_authorized`, `recipient_email_unavailable`, `recipient_domain_not_allowed`, `invalid_attachment`, `attachment_too_large`, `invalid_pdf`, `unsupported_pdf_encryption`, `pdf_inspection_unavailable`, `message_rejected`, `provider_configuration`, `delivery_unavailable` | Terminal failure for this UUID. No provider attempt occurs for admission/readiness failures. An intentional later send requires a new UUID and a newly selected/uploaded PDF. |
+| `FAILED` | `recipient_not_authorized`, `recipient_email_unavailable`, `recipient_domain_not_allowed`, `invalid_attachment`, `attachment_too_large`, `invalid_pdf`, `unsupported_pdf_encryption`, `pdf_inspection_unavailable`, `message_rejected`, `provider_configuration`, `delivery_unavailable` | Terminal failure for this UUID. No provider attempt occurs for admission/readiness failures. A user may intentionally make a later logical send with a new UUID; it may use the same encrypted PDF if it remains valid. `invalid_attachment`, `attachment_too_large`, `invalid_pdf`, `unsupported_pdf_encryption`, and `pdf_inspection_unavailable` require correction before a later send. |
 | `UNKNOWN` | `provider_unavailable`, `delivery_indeterminate` | Delivery may already have occurred. Never automatically resend, including with a new UUID; require an explicit user decision/workflow outside this protocol. `delivery_indeterminate` is also returned when a prior request was left processing after interruption. |
 | `CONFLICT` | `idempotency_conflict` | This installation already used the UUID with a different `recipient_personnel_id`. Nothing is sent; create a new UUID only for a new intentional send. |
 
-Persist the UUID before the first request. After a lost HTTP response, retry the
-same multipart request with the same UUID and recipient ID. The server returns
-the persisted `SUCCESS`, `FAILED`, or `UNKNOWN` result and never invokes the
-provider a second time. It does not compare or re-admit a replacement PDF on a
-replay. A new UUID always means an intentional new logical send.
+Persist the UUID and encrypted report before the first request, and retain both
+until a terminal report-delivery state is received or the user resolves an
+`UNKNOWN` outcome. For any automatic recovery after a timeout, transport
+failure, lost response, connection interruption, or HTTP 5xx where the client
+cannot prove processing did not occur, retry the same logical encrypted report
+with the already persisted UUID and the same recipient ID. Never generate a new
+UUID automatically. The server returns the persisted `SUCCESS`, `FAILED`, or
+`UNKNOWN` result and never invokes the provider a second time. It does not
+compare or re-admit a replacement PDF on a replay. A new UUID always means an
+intentional new logical send.
 
 HTTP 400 is reserved for an invalid multipart/form field (for example a missing
 file or malformed UUID). HTTP 403 is an ordinary tablet authentication or
@@ -617,7 +625,7 @@ infer a lease renewal.
 
 | Result or failure | Client action |
 | --- | --- |
-| Transport failure / 5xx | Retain verified state; use bounded exponential backoff with jitter. |
+| Transport failure / 5xx | Retain verified state; use bounded exponential backoff with jitter. **Report delivery is the exception:** after any timeout, transport failure, lost response, connection interruption, or HTTP 5xx that cannot prove no processing occurred, retry only the same logical encrypted report with its persisted `delivery_request_id` and unchanged `recipient_personnel_id`; never automatically create a new UUID. |
 | 202 manifest | Retain cache; wait at least the supplied `Retry-After` duration and never retry earlier before manifest retry. This remains correct when iOS resumes later from suspension/backgrounding. |
 | 304 | No body: retain the corresponding verified cache and ETag. |
 | 400 | Treat as client/protocol error; do not blind-retry malformed canonical crypto input. |
@@ -969,6 +977,21 @@ purge. A candidate manifest with an unsupported `required:false` dataset must
 activate its supported required entries; an unsupported required type, schema,
 or minimum app version must block activation.
 
+For report delivery, also prove:
+
+- a valid password-required AES-256/R6/AESV3 PDF is accepted and its locally
+  generated 12-character Base58 password never appears in HTTP request data;
+- the current `report_delivery_max_attachment_bytes` limit is enforced before
+  upload, and the recipient UUID is selected from `station_personnel`;
+- `SUCCESS` and terminal `FAILED` are handled according to their documented
+  codes;
+- a lost response is replayed with the same UUID and causes no duplicate
+  logical send; an ID/recipient mismatch yields `CONFLICT`;
+- `UNKNOWN`/`delivery_indeterminate` causes no automatic resend, including
+  with a new UUID; and
+- malformed multipart input and standard problem responses are handled without
+  exposing or transmitting the password.
+
 ## Current known limitations / interoperability gaps
 
 - **Trust-bootstrap limitation:** authenticated HTTPS to FireDash supplies the
@@ -986,6 +1009,7 @@ Use these deterministic materials when building Swift interoperability tests:
 | Complete manifest signed bytes, signature, and ETag | `apps/publications/manifests.py`, `apps/publications/worker_grants.py` | `apps/publications/tests/fixtures/complete_manifest_contract.json`, `apps/publications/tests/test_manifest_contract.py` |
 | Artifact signature and AES-GCM metadata | `apps/publications/artifacts.py` | `apps/publications/tests/fixtures/artifact_signature_contract.json`, `apps/publications/tests/test_artifacts.py` |
 | Tablet routes, request validation, headers and states | `apps/tablets/api_urls.py`, `apps/tablets/api.py`, `apps/tablets/services.py`, `apps/tablets/models.py` | `apps/tablets/tests/test_api.py`, `apps/tablets/tests/test_adoption_api_crypto.py` |
+| Report-delivery admission, idempotency, and endpoint contract | `apps/tablets/api.py`, `apps/outbound_mail/report_admission.py`, `apps/outbound_mail/report_delivery.py`, `apps/outbound_mail/report_delivery_requests.py` | `apps/tablets/tests/test_api.py`, `apps/outbound_mail/tests/test_report_admission.py`, `apps/outbound_mail/tests/test_report_delivery.py`, `apps/outbound_mail/tests/test_report_delivery_requests.py` |
 | Dataset schemas | `apps/publications/registry.py`, `apps/publications/builders.py` | publication builder tests |
 
 ## /api/v1 beta freeze

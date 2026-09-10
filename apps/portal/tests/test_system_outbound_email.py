@@ -330,7 +330,7 @@ def test_settings_card_adapts_with_htmx_and_cards_are_stacked(client, system_adm
     assert "SMTP configuration" not in content
     assert "row g-4" not in content
     assert "app-desktop-sidebar" in content
-    assert "position: sticky" in content
+    assert "position: fixed" in content
     assert "d-lg-none" in content
 
     smtp = client.get(url, {"settings_method": "SMTP"}, HTTP_HX_REQUEST="true")

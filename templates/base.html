@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}FireDash{% endblock %}</title>
   <link href="{% static 'vendor/bootstrap/bootstrap.min.css' %}" rel="stylesheet">
-  <style>[x-cloak] { display: none !important; } @media (min-width: 992px) { .app-desktop-sidebar { position: sticky; top: 0; height: 100vh; align-self: flex-start; } }</style>
+  <style>[x-cloak] { display: none !important; } @media (min-width: 992px) { .app-desktop-sidebar { position: fixed; top: var(--firedash-topbar-height, 56px); bottom: 0; overflow-y: auto; z-index: 1020; } .app-main-with-sidebar { margin-left: 25%; } } @media (min-width: 1200px) { .app-main-with-sidebar { margin-left: 16.66666667%; } }</style>
   <script defer src="{% static 'vendor/alpine/alpine.min.js' %}"></script>
   <script src="{% static 'vendor/htmx/htmx.min.js' %}"></script>
   {% block head %}{% endblock %}
@@ -17,7 +17,7 @@
       <aside class="app-desktop-sidebar d-none d-lg-block col-lg-3 col-xl-2 border-end bg-body-tertiary p-3">
         {% include "components/_sidebar_nav.html" %}
       </aside>
-      <main class="col-lg-9 col-xl-10 px-3 px-lg-4 py-4">
+      <main class="app-main-with-sidebar col-lg-9 col-xl-10 px-3 px-lg-4 py-4">
         {% include "components/_alerts.html" %}
         {% block content %}{% endblock %}
       </main>

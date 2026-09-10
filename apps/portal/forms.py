@@ -1,5 +1,6 @@
 from urllib.parse import urlsplit
 
+# ruff: noqa: E501
 from django import forms
 
 from apps.authorization.models import validate_vehicle_rescue_guides_web_url
@@ -386,3 +387,28 @@ class DepartmentRecipientPolicyForm(forms.Form):
         # Domain canonicalization and validation deliberately remain in the
         # outbound-mail service, so all callers share its exact policy.
         return [domain for domain in self.cleaned_data["approved_domains"].splitlines() if domain]
+
+
+class DepartmentOutboundEmailSettingsForm(forms.Form):
+    delivery_mode = DepartmentMailDeliveryModeForm.base_fields["delivery_mode"]
+    host = forms.CharField(required=False, max_length=255, label="Host", widget=forms.TextInput(attrs={"class": "form-control"}))
+    port = forms.IntegerField(required=False, min_value=1, max_value=65535, label="Port", widget=forms.NumberInput(attrs={"class": "form-control"}))
+    tls_mode = forms.ChoiceField(required=False, choices=(("", "Select TLS mode"), *SystemMailConfiguration.SmtpTlsMode.choices), label="TLS mode", widget=forms.Select(attrs={"class": "form-select"}))
+    sender_name = forms.CharField(required=False, max_length=255, label="Sender name", widget=forms.TextInput(attrs={"class": "form-control"}))
+    sender_email = forms.EmailField(required=False, max_length=254, label="Sender email", widget=forms.EmailInput(attrs={"class": "form-control"}))
+    username = forms.CharField(required=False, max_length=255, label="Username", widget=forms.TextInput(attrs={"class": "form-control"}))
+    password = forms.CharField(required=False, label="Password", widget=forms.PasswordInput(attrs={"class": "form-control", "autocomplete": "new-password"}, render_value=False))
+    approved_domains = forms.CharField(required=False, label="Approved recipient domains", help_text="One exact domain per line, for example feuerwehr.hamburg.de. Do not include @; subdomains are not included.", widget=forms.Textarea(attrs={"class": "form-control", "rows": 4, "spellcheck": "false"}))
+
+    def clean_approved_domains(self):
+        return [value for value in self.cleaned_data["approved_domains"].splitlines() if value]
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("delivery_mode") == "CUSTOM_SMTP":
+            for name in ("host", "port", "tls_mode", "sender_name", "sender_email"):
+                if not cleaned.get(name):
+                    self.add_error(name, "This field is required for Own SMTP server.")
+            if cleaned.get("username") and not cleaned.get("password") and not self.initial.get("smtp_password_configured"):
+                self.add_error("password", "A password is required when configuring SMTP authentication.")
+        return cleaned

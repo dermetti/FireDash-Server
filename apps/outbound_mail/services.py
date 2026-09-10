@@ -472,6 +472,7 @@ class DepartmentMailConfigurationState:
     smtp_tls_mode: str
     smtp_sender_name: str
     smtp_sender_email: str
+    smtp_username: str
     smtp_username_configured: bool
     smtp_password_configured: bool
     last_smtp_verification_outcome: str
@@ -505,6 +506,7 @@ def get_department_mail_configuration(
             smtp_tls_mode="",
             smtp_sender_name="",
             smtp_sender_email="",
+            smtp_username="",
             smtp_username_configured=False,
             smtp_password_configured=False,
             last_smtp_verification_outcome="",
@@ -518,6 +520,7 @@ def get_department_mail_configuration(
         smtp_tls_mode=configuration.smtp_tls_mode,
         smtp_sender_name=configuration.smtp_sender_name,
         smtp_sender_email=configuration.smtp_sender_email,
+        smtp_username=configuration.smtp_username,
         smtp_username_configured=bool(configuration.smtp_username),
         smtp_password_configured=configuration.smtp_password_configured,
         last_smtp_verification_outcome=configuration.last_smtp_verification_outcome,

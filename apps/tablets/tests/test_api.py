@@ -834,9 +834,15 @@ def test_report_delivery_openapi_and_tablet_contract_are_multipart_and_idempoten
     assert "multipart/form-data" in contract
     assert "station_personnel" in contract
     assert "report_delivery_max_attachment_bytes" in contract
-    assert "After a lost HTTP response, retry the" in contract
-    assert "same multipart request with the same UUID" in contract
+    assert "For any automatic recovery after a timeout" in contract
+    assert "with the already persisted UUID and the same recipient ID" in contract
     assert "does not use HTTP 409" in contract
+    assert "exactly 12" in contract
+    assert "cryptographically random characters from the Base58 alphabet" in contract
+    assert "Never generate a new\nUUID automatically." in contract
+    assert "it may use the same encrypted PDF if it remains valid" in contract
+    assert "Report delivery is the exception" in contract
+    assert "Report-delivery admission, idempotency, and endpoint contract" in contract
 
 
 def test_download_openapi_contract_has_no_drf_format_query_parameter():

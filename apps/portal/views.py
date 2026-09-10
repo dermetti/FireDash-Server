@@ -15,6 +15,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.accounts.models import User
 from apps.accounts.reauth import require_recent_reauthentication
+from apps.application_secrets.crypto import ApplicationSecretError
 from apps.assignments.services import AssignmentError
 from apps.audit.models import AuditEvent
 from apps.authorization.models import (
@@ -69,6 +70,7 @@ from apps.portal.forms import (
     DepartmentForm,
     DepartmentLocaleTimePolicyForm,
     DepartmentMailDeliveryModeForm,
+    DepartmentOutboundEmailSettingsForm,
     DepartmentPersonnelRetentionForm,
     DepartmentRecipientPolicyForm,
     DepartmentStatusForm,
@@ -243,10 +245,6 @@ def _nav_context(request):
                     {
                         "label": "System Settings",
                         "url": reverse("portal-department-settings", args=(department.id,)),
-                    },
-                    {
-                        "label": "Outbound Email",
-                        "url": reverse("portal-department-outbound-email", args=(department.id,)),
                     },
                     {
                         "label": "Audit Logs",
@@ -1198,6 +1196,52 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         request.POST if action == "locale-time" else None,
         initial={"locale": department.locale, "timezone": department.timezone},
     )
+    from apps.outbound_mail.services import (
+        configure_department_smtp,
+        get_department_mail_configuration,
+        get_department_recipient_policy,
+        replace_department_smtp_credentials,
+        set_department_delivery_mode,
+        set_department_recipient_policy,
+        verify_department_smtp_configuration,
+    )
+    mail = get_department_mail_configuration(department=department)
+    recipient_policy = get_department_recipient_policy(department=department)
+    mail_initial = {
+        "delivery_mode": mail.delivery_mode, "host": mail.smtp_host, "port": mail.smtp_port,
+        "tls_mode": mail.smtp_tls_mode, "sender_name": mail.smtp_sender_name,
+        "sender_email": mail.smtp_sender_email, "username": mail.smtp_username,
+        "approved_domains": "\n".join(recipient_policy.approved_domains),
+        "smtp_password_configured": mail.smtp_password_configured,
+    }
+    mail_mode = request.GET.get("delivery_mode", mail.delivery_mode)
+    if request.headers.get("HX-Request") and request.method == "GET":
+        mail_initial["delivery_mode"] = mail_mode
+        return render(request, "portal/_department_outbound_email_card.html", {
+            "department": department, "mail": mail, "system_managed_allowed": is_system_managed_mail_allowed(department=department),
+            "email_form": DepartmentOutboundEmailSettingsForm(initial=mail_initial),
+        })
+    email_form = DepartmentOutboundEmailSettingsForm(
+        request.POST if action == "email-settings" else None, initial=mail_initial
+    )
+    if action == "email-settings" and email_form.is_valid():
+        try:
+            require_recent_reauthentication(request, return_url=reverse("portal-department-settings", args=(department.id,)))
+            values = email_form.cleaned_data
+            set_department_recipient_policy(actor=request.user, department=department, restriction_enabled=bool(values["approved_domains"]), approved_domains=values["approved_domains"])
+            if values["delivery_mode"] == "CUSTOM_SMTP":
+                configure_department_smtp(actor=request.user, department=department, host=values["host"], port=values["port"], tls_mode=values["tls_mode"], sender_name=values["sender_name"], sender_email=values["sender_email"])
+                if values["password"]:
+                    replace_department_smtp_credentials(actor=request.user, department=department, username=values["username"], password=values["password"])
+                set_department_delivery_mode(actor=request.user, department=department, delivery_mode=values["delivery_mode"])
+                result = verify_department_smtp_configuration(actor=request.user, department=department)
+                messages.info(request, "SMTP verification succeeded." if result.outcome == "SUCCESS" else "SMTP verification did not succeed.")
+            else:
+                set_department_delivery_mode(actor=request.user, department=department, delivery_mode=values["delivery_mode"])
+                messages.success(request, "Outbound email settings were updated.")
+            return redirect("portal-department-settings", department_id=department.id)
+        except (ValidationError, ApplicationSecretError) as error:
+            email_form.add_error(None, error)
     if action == "asset-numbering" and asset_number_form.is_valid():
         require_recent_reauthentication(
             request,
@@ -1286,6 +1330,9 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
             "asset_number_form": asset_number_form,
             "locale_time_form": locale_time_form,
             "retention_policy": policy,
+            "mail": mail,
+            "system_managed_allowed": is_system_managed_mail_allowed(department=department),
+            "email_form": email_form,
         },
     )
 
@@ -1323,6 +1370,9 @@ def _department_mail_forms(*, state, policy, data=None, action=""):
 @never_cache
 @require_http_methods(["GET", "POST"])
 def department_outbound_email(request: HttpRequest, department_id) -> HttpResponse:
+    """Compatibility redirect after consolidation into Department System Settings."""
+    department = _department_or_403(request, department_id)
+    return redirect("portal-department-settings", department_id=department.id)
     """Department-admin UI over the bounded Phase 4A outbound-mail services."""
     department = _department_or_403(request, department_id)
     from apps.application_secrets.crypto import ApplicationSecretError
