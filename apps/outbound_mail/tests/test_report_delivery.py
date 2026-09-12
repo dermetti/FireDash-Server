@@ -107,7 +107,11 @@ def test_delivery_admits_then_sends_one_generic_canonical_message(delivery_conte
         filename="tablet-private-name.pdf",
     )
 
-    assert outcome == type(outcome)(code=ReportDeliveryCode.DELIVERED, delivered=True)
+    assert outcome == type(outcome)(
+        code=ReportDeliveryCode.DELIVERED,
+        delivered=True,
+        recipient_email="commander@example.test",
+    )
     assert len(provider.messages) == 1
     message = provider.messages[0]
     assert message.sender == provider.sender_identity
