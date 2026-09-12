@@ -207,6 +207,8 @@ class ReportDeliveryResponseSerializer(serializers.Serializer[dict[str, object]]
             "idempotency_conflict",
         )
     )
+    recipient_email = serializers.EmailField(required=False)
+    accepted_at = serializers.DateTimeField(required=False)
 
 
 class AdoptionPreviewResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -479,7 +481,13 @@ class ReportDeliveryView(InstallationAPIView):
             recipient_personnel_id=serializer.validated_data["recipient_personnel_id"],
             pdf=serializer.validated_data["pdf"],
         )
-        return Response({"state": result.state, "code": result.code})
+        response: dict[str, object] = {"state": result.state, "code": result.code}
+        if result.delivered and result.recipient_email and result.accepted_at:
+            response.update(
+                recipient_email=result.recipient_email,
+                accepted_at=result.accepted_at,
+            )
+        return Response(response)
 
 
 @extend_schema(
@@ -850,7 +858,12 @@ class FirePlanDocumentArtifactDownloadView(InstallationAPIView):
 
 
 @extend_schema(
-    responses={200: OpenApiTypes.OBJECT, 202: None, 403: ProblemResponseSerializer, 404: ProblemResponseSerializer},
+    responses={
+        200: OpenApiTypes.OBJECT,
+        202: None,
+        403: ProblemResponseSerializer,
+        404: ProblemResponseSerializer,
+    },
     parameters=_MANIFEST_CONDITIONAL_GET_PARAMETERS,
 )
 class DocumentGenerationManifestView(InstallationAPIView):
@@ -897,7 +910,12 @@ class DocumentGenerationManifestView(InstallationAPIView):
 
 @extend_schema(
     parameters=[OpenApiParameter("format", exclude=True), *_CONDITIONAL_GET_PARAMETERS],
-    responses={(200, "application/octet-stream"): OpenApiTypes.BINARY, 304: None, 403: ProblemResponseSerializer, 404: ProblemResponseSerializer},
+    responses={
+        (200, "application/octet-stream"): OpenApiTypes.BINARY,
+        304: None,
+        403: ProblemResponseSerializer,
+        404: ProblemResponseSerializer,
+    },
 )
 class DocumentArtifactDownloadView(InstallationAPIView):
     renderer_classes = [renderers.JSONRenderer, OctetStreamRenderer]
