@@ -9,7 +9,7 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership
-from apps.authorization.services import suspend_department_admin
+from apps.authorization.services import set_department_tablet_lease, suspend_department_admin
 from apps.file_library import services
 from apps.file_library.models import Content, TemporaryStationAccess
 from apps.file_library.publication import publish_now
@@ -19,6 +19,7 @@ from apps.file_library.tests.test_libraries import (  # noqa: F401
     pdf_pipeline,
     scope,
 )
+from apps.organizations.services import update_station
 from apps.publications.models import DatasetScopeState
 
 pytestmark = pytest.mark.django_db
@@ -210,3 +211,110 @@ def test_authority_lifecycle_immediately_revokes_and_audits_access(scope):
     )
     assert event.actor_user == actor
     assert event.metadata["access_user_id"] == str(target.id)
+
+
+def test_expiry_audit_survives_rejected_mutation(scope):
+    admin, station_admin, _other, _department, _outside, station, _second = scope
+    library = services.get_library(station_admin, station_id=station.id)
+    access = _activate(admin, station)
+    TemporaryStationAccess.objects.filter(pk=access.pk).update(
+        activated_at=timezone.now() - timedelta(hours=2),
+        expires_at=timezone.now() - timedelta(hours=1),
+    )
+
+    with pytest.raises(PermissionDenied):
+        services.create_folder(actor=admin, library_id=library.id, name="Denied")
+
+    access.refresh_from_db()
+    assert access.revocation_reason == "expired"
+    assert AuditEvent.objects.filter(
+        action="file_library.temporary_access_expired", target_uuid=access.id
+    ).exists()
+
+
+def test_successful_settings_mutation_revokes_but_noop_and_failure_do_not(scope):
+    admin, _station_admin, _other, department, _outside, station, _second = scope
+    first = _activate(admin, station)
+    set_department_tablet_lease(
+        actor=admin,
+        department=department,
+        tablet_lease_days=department.tablet_lease_days,
+    )
+    first.refresh_from_db()
+    assert first.revoked_at is None
+
+    with pytest.raises(ValueError):
+        set_department_tablet_lease(actor=admin, department=department, tablet_lease_days=1)
+    first.refresh_from_db()
+    assert first.revoked_at is None
+
+    set_department_tablet_lease(
+        actor=admin,
+        department=department,
+        tablet_lease_days=department.tablet_lease_days + 1,
+    )
+    first.refresh_from_db()
+    assert first.revocation_reason == "department_mutation"
+
+
+def test_successful_station_configuration_revokes_but_noop_does_not(scope):
+    admin, _station_admin, _other, _department, _outside, station, _second = scope
+    access = _activate(admin, station)
+    values = {
+        "name": station.name,
+        "short_code": station.short_code,
+        "street": station.street,
+        "house_number": station.house_number,
+        "postal_code": station.postal_code,
+        "city": station.city,
+        "active": station.active,
+    }
+    update_station(actor=admin, station=station, **values)
+    access.refresh_from_db()
+    assert access.revoked_at is None
+
+    update_station(actor=admin, station=station, **(values | {"name": "Changed"}))
+    access.refresh_from_db()
+    assert access.revocation_reason == "department_mutation"
+
+
+def test_expiry_between_preflight_and_locked_delete_persists_after_denial(scope, monkeypatch):
+    admin, station_admin, _other, _department, _outside, station, _second = scope
+    library = services.get_library(station_admin, station_id=station.id)
+    folder = services.create_folder(actor=station_admin, library_id=library.id, name="Keep")
+    access = _activate(admin, station)
+    original = services.active_temporary_access
+    first = True
+
+    def expire_after_preflight(actor, **kwargs):
+        nonlocal first
+        result = original(actor, **kwargs)
+        if first:
+            first = False
+            TemporaryStationAccess.objects.filter(pk=access.pk).update(
+                activated_at=timezone.now() - timedelta(hours=2),
+                expires_at=timezone.now() - timedelta(hours=1),
+            )
+        return result
+
+    monkeypatch.setattr(services, "active_temporary_access", expire_after_preflight)
+    with pytest.raises(PermissionDenied):
+        services.delete_entry(actor=admin, library_id=library.id, entry_id=folder.id)
+    access.refresh_from_db()
+    assert access.revocation_reason == "expired"
+    assert library.entries.filter(pk=folder.id).exists()
+    assert AuditEvent.objects.filter(
+        action="file_library.temporary_access_expired", target_uuid=access.id
+    ).count() == 1
+
+
+def test_successful_administrator_provisioning_revokes_access(scope):
+    from apps.authorization.services import provision_station_admin
+
+    admin, _station_admin, _other, _department, _outside, station, _second = scope
+    access = _activate(admin, station)
+    provision_station_admin(
+        actor=admin, station=station, email="new-station@example.test", display_name="New admin"
+    )
+    access.refresh_from_db()
+    assert access.revocation_reason == "department_mutation"

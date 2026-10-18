@@ -77,6 +77,7 @@ from apps.portal.forms import (
     DepartmentSystemSettingsForm,
     DepartmentTabletAssetNumberPolicyForm,
     DepartmentTabletLeaseForm,
+    FileLibraryQuotaForm,
     OutboundMailHttpsProxyForm,
     ReplaceBrevoApiKeyForm,
     ReplaceSmtpCredentialsForm,
@@ -1192,6 +1193,11 @@ def department_admin_revoke_modal(
 def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     """Edit only existing, authoritative per-department settings."""
     department = _department_or_403(request, department_id)
+    from apps.file_library.services import department_quota_libraries, set_library_quota
+
+    department_library, station_libraries = department_quota_libraries(
+        actor=request.user, department=department
+    )
     policy = getattr(department, "personnel_retention_policy", None)
     lease_initial = {"tablet_lease_days": department.tablet_lease_days}
     retention_initial = {"retention_days": policy.retention_period.days if policy else 30}
@@ -1215,6 +1221,9 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     locale_time_form = DepartmentLocaleTimePolicyForm(
         request.POST if action == "locale-time" else None,
         initial={"locale": department.locale, "timezone": department.timezone},
+    )
+    quota_form = FileLibraryQuotaForm(
+        request.POST if action == "file-library-quota" else None
     )
     from apps.outbound_mail.services import (
         configure_department_smtp,
@@ -1244,6 +1253,22 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     email_form = DepartmentOutboundEmailSettingsForm(
         request.POST if action == "email-settings" else None, initial=mail_initial
     )
+    if action == "file-library-quota" and quota_form.is_valid():
+        if quota_form.cleaned_data["library_id"] not in {
+            library.id for library in [department_library, *station_libraries]
+        }:
+            raise PermissionDenied("Library is outside this department's settings.")
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-settings", args=(department.id,)),
+        )
+        set_library_quota(
+            actor=request.user,
+            library_id=quota_form.cleaned_data["library_id"],
+            quota_bytes=quota_form.cleaned_data["quota_bytes"],
+        )
+        messages.success(request, "File-library quota was updated.")
+        return redirect("portal-department-settings", department_id=department.id)
     if action == "email-settings" and email_form.is_valid():
         try:
             require_recent_reauthentication(request, return_url=reverse("portal-department-settings", args=(department.id,)))
@@ -1349,6 +1374,9 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
             "retention_form": retention_form,
             "asset_number_form": asset_number_form,
             "locale_time_form": locale_time_form,
+            "quota_form": quota_form,
+            "department_library": department_library,
+            "station_libraries": station_libraries,
             "retention_policy": policy,
             "mail": mail,
             "system_managed_allowed": is_system_managed_mail_allowed(department=department),

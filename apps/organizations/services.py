@@ -44,6 +44,9 @@ def create_station(
         target_type="station",
         target_uuid=station.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return station
 
 
@@ -60,19 +63,31 @@ def update_station(
     city: str = "",
     active: bool,
 ) -> Station:
+    station = Station.objects.select_for_update().select_related("department").get(pk=station.pk)
     require_department_admin(actor, station.department)
+    normalized = {
+        "name": name.strip(),
+        "short_code": short_code.strip(),
+        "street": street.strip(),
+        "house_number": house_number.strip(),
+        "postal_code": postal_code.strip(),
+        "city": city.strip(),
+        "active": active,
+    }
+    if all(getattr(station, field) == value for field, value in normalized.items()):
+        return station
     if not active and station.active:
         deactivate_station(station=station)
     else:
         station.name, station.short_code, station.active = (
-            name.strip(),
-            short_code.strip(),
+            normalized["name"],
+            normalized["short_code"],
             active,
         )
-        station.street = street.strip()
-        station.house_number = house_number.strip()
-        station.postal_code = postal_code.strip()
-        station.city = city.strip()
+        station.street = normalized["street"]
+        station.house_number = normalized["house_number"]
+        station.postal_code = normalized["postal_code"]
+        station.city = normalized["city"]
         station.save(
             update_fields=(
                 "name",
@@ -93,6 +108,9 @@ def update_station(
         target_type="station",
         target_uuid=station.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return station
 
 
@@ -126,6 +144,9 @@ def create_vehicle(
         target_type="vehicle",
         target_uuid=vehicle.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return vehicle
 
 
@@ -139,7 +160,15 @@ def update_vehicle(
     asset_identifier: str,
     active: bool,
 ) -> Vehicle:
+    vehicle = Vehicle.objects.select_for_update().select_related("department").get(pk=vehicle.pk)
     require_department_admin(actor, vehicle.department)
+    if (
+        vehicle.display_name == display_name.strip()
+        and vehicle.call_sign == call_sign.strip()
+        and vehicle.asset_identifier == asset_identifier.strip()
+        and vehicle.active == active
+    ):
+        return vehicle
     if not active and vehicle.active:
         retire_vehicle(actor=actor, vehicle=vehicle)
     else:
@@ -160,6 +189,9 @@ def update_vehicle(
         target_type="vehicle",
         target_uuid=vehicle.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return vehicle
 
 
@@ -230,6 +262,9 @@ def retire_vehicle(*, actor, vehicle: Vehicle) -> Vehicle:
         target_type="vehicle",
         target_uuid=vehicle.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return vehicle
 
 
@@ -256,6 +291,9 @@ def delete_station(*, actor, station: Station) -> None:
         target_uuid=station_id,
         metadata={"name": station_name, "short_code": station_short_code},
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 @transaction.atomic

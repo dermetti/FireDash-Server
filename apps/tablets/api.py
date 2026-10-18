@@ -239,6 +239,25 @@ class CheckInResponseSerializer(serializers.Serializer[dict[str, object]]):
     authorization_valid_until = serializers.DateTimeField()
 
 
+class StorageByteCountField(serializers.IntegerField):
+    def to_internal_value(self, data):
+        if type(data) is not int:
+            self.fail("invalid")
+        return super().to_internal_value(data)
+
+
+class CheckInRequestSerializer(serializers.Serializer[dict[str, int]]):
+    free_storage_bytes = StorageByteCountField(min_value=0, max_value=2**63 - 1)
+    total_storage_bytes = StorageByteCountField(min_value=1, max_value=2**63 - 1)
+
+    def validate(self, attrs):
+        if attrs["free_storage_bytes"] > attrs["total_storage_bytes"]:
+            raise serializers.ValidationError(
+                {"free_storage_bytes": "Free storage cannot exceed total storage."}
+            )
+        return attrs
+
+
 class StatusResponseSerializer(serializers.Serializer[dict[str, object]]):
     status = serializers.CharField()
     authorization_valid_until = serializers.DateTimeField()
@@ -483,9 +502,10 @@ class ReportDeliveryView(InstallationAPIView):
 
 
 @extend_schema(
-    request=None,
+    request=CheckInRequestSerializer,
     responses={
         200: CheckInResponseSerializer,
+        (400, "application/problem+json"): ProblemResponseSerializer,
         (403, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     },
@@ -493,8 +513,11 @@ class ReportDeliveryView(InstallationAPIView):
 )
 class CheckInView(InstallationAPIView):
     defer_compatibility = True
+    parser_classes = [parsers.JSONParser]
 
     def post(self, request):
+        serializer = CheckInRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         try:
             app_version, app_build, build_supplied = _telemetry_from_headers(request)
             minimum = _minimum_or_none()
@@ -505,6 +528,8 @@ class CheckInView(InstallationAPIView):
                 app_build=app_build,
                 build_supplied=build_supplied,
                 minimum_app_version=minimum,
+                free_storage_bytes=serializer.validated_data["free_storage_bytes"],
+                total_storage_bytes=serializer.validated_data["total_storage_bytes"],
             )
         except (TabletError, PermissionDenied) as error:
             raise _problem_from_service(error) from error

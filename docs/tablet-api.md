@@ -150,7 +150,7 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 | --- | --- | --- | --- | --- | --- |
 | `POST /api/v1/adoption/preview` | None | preview JSON | 201 challenge | 400, 403 | Valid unused adoption invitation; operational tablet |
 | `POST /api/v1/adoption/complete` | None | completion JSON | 201 credential | 400, 403 | Matching unexpired challenge/invitation |
-| `POST /api/v1/tablet/check-in` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE operational; eligible current STALE recovers automatically; INACTIVE records control-plane contact without operational renewal |
+| `POST /api/v1/tablet/check-in` | Bearer | Required JSON storage telemetry; optional version/build headers | 200 lease JSON | 400, 403, 426 | ACTIVE operational; eligible current STALE recovers automatically; INACTIVE records control-plane contact without operational renewal |
 | `POST /api/v1/tablet/refresh` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
 | `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
 | `POST /api/v1/tablet/report-delivery` | Bearer | `multipart/form-data`: UUID `delivery_request_id`, UUID `recipient_personnel_id`, binary `pdf` | 200 `{state,code}` | 400, 403, 426 | Current authenticated installation; recipient authorization and delivery readiness are evaluated server-side |
@@ -333,7 +333,25 @@ revocation, and tablet removal also block recovery.
 
 Department lease policy is server-owned: default seven days, minimum three.
 
-`POST /api/v1/tablet/check-in` has no body. It always records activity. With more
+`POST /api/v1/tablet/check-in` requires this JSON body:
+
+```json
+{"free_storage_bytes":4294967296,"total_storage_bytes":68719476736}
+```
+
+Use `Content-Type: application/json`. Both fields must be JSON integers;
+booleans, floating-point values, numeric strings, and null are invalid.
+`free_storage_bytes` is nonnegative,
+`total_storage_bytes` is greater than zero, both are at most signed 64-bit
+integer range, and free must not exceed total. A valid authenticated check-in
+stores the complete measurement and a server-generated observation timestamp on
+the current installation. Re-provisioned installations begin without telemetry;
+measurements are never inherited from a replaced installation. Invalid or
+incomplete telemetry returns 400 and does not update storage, contact time, app
+telemetry, installation status, or authorization lease.
+
+The measurement is device-reported and is not independently verified by the
+server. Check-in always records activity after request validation. With more
 than 48 hours remaining it leaves `authorization_valid_until` unchanged. With
 48 hours or less it sets the deadline to `server_time + department lease`. A
 current STALE installation with a valid durable credential automatically becomes

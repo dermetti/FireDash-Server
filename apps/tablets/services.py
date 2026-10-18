@@ -197,6 +197,34 @@ def update_app_telemetry(
     return True
 
 
+def update_storage_telemetry(
+    *,
+    installation: AppInstallation,
+    free_storage_bytes: int | None,
+    total_storage_bytes: int | None,
+    now: datetime,
+) -> bool:
+    """Apply one complete device-reported capacity measurement."""
+    if free_storage_bytes is None and total_storage_bytes is None:
+        return False
+    if (
+        isinstance(free_storage_bytes, bool)
+        or isinstance(total_storage_bytes, bool)
+        or not isinstance(free_storage_bytes, int)
+        or not isinstance(total_storage_bytes, int)
+        or free_storage_bytes < 0
+        or total_storage_bytes <= 0
+        or free_storage_bytes > total_storage_bytes
+        or free_storage_bytes > 2**63 - 1
+        or total_storage_bytes > 2**63 - 1
+    ):
+        raise TabletError("Storage telemetry is invalid.", code="invalid_request")
+    installation.free_storage_bytes = free_storage_bytes
+    installation.total_storage_bytes = total_storage_bytes
+    installation.storage_observed_at = now
+    return True
+
+
 def lease_target(*, department, now: datetime) -> datetime:
     """Return the department-owned maximum offline authorization lease target."""
     return now + timedelta(days=cast(int, department.tablet_lease_days))
@@ -389,6 +417,9 @@ def create_tablet(
         target_type="tablet",
         target_uuid=tablet.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return tablet
 
 
@@ -417,6 +448,9 @@ def create_adoption_invitation(
         target_type="adoption_invitation",
         target_uuid=invitation.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return invitation, token
 
 
@@ -752,6 +786,8 @@ def check_in(
     app_build: int | None = None,
     build_supplied: bool = False,
     minimum_app_version=None,
+    free_storage_bytes: int | None = None,
+    total_storage_bytes: int | None = None,
 ) -> AppInstallation:
     installation = (
         AppInstallation.objects.select_for_update()
@@ -759,6 +795,12 @@ def check_in(
         .get(pk=installation.pk)
     )
     now = timezone.now()
+    storage_updated = update_storage_telemetry(
+        installation=installation,
+        free_storage_bytes=free_storage_bytes,
+        total_storage_bytes=total_storage_bytes,
+        now=now,
+    )
     if not verify_credential(installation=installation, credential=credential):
         raise PermissionDenied("Installation credential is invalid.")
     if installation.status not in (AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE):
@@ -779,6 +821,10 @@ def check_in(
         inactive_fields = ["last_successful_check_in_at"]
         if telemetry_updated:
             inactive_fields.extend(("app_version", "app_build", "app_version_seen_at"))
+        if storage_updated:
+            inactive_fields.extend(
+                ("free_storage_bytes", "total_storage_bytes", "storage_observed_at")
+            )
         installation.save(update_fields=inactive_fields)
         if (
             minimum_app_version is not None
@@ -805,6 +851,10 @@ def check_in(
         compatibility_fields: list[str] = []
         if telemetry_updated:
             compatibility_fields.extend(("app_version", "app_build", "app_version_seen_at"))
+        if storage_updated:
+            compatibility_fields.extend(
+                ("free_storage_bytes", "total_storage_bytes", "storage_observed_at")
+            )
         if compatibility_fields:
             installation.save(update_fields=compatibility_fields)
         installation.compatibility_blocked = True
@@ -820,6 +870,8 @@ def check_in(
         fields = ["last_successful_check_in_at"]
     if telemetry_updated:
         fields.extend(("app_version", "app_build", "app_version_seen_at"))
+    if storage_updated:
+        fields.extend(("free_storage_bytes", "total_storage_bytes", "storage_observed_at"))
     installation.save(update_fields=fields)
     return installation
 
@@ -982,6 +1034,9 @@ def activate_tablet(*, actor, tablet: Tablet) -> Tablet:
         target_type="tablet",
         target_uuid=tablet.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return tablet
 
 
@@ -1016,6 +1071,9 @@ def deactivate_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
         target_type="tablet",
         target_uuid=tablet.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return tablet
 
 
@@ -1037,6 +1095,9 @@ def mark_tablet_lost(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
         target_type="tablet",
         target_uuid=tablet.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return tablet
 
 
@@ -1056,6 +1117,9 @@ def recover_tablet(*, actor, tablet: Tablet) -> Tablet:
         target_type="tablet",
         target_uuid=tablet.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return tablet
 
 
@@ -1077,6 +1141,9 @@ def retire_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
         target_type="tablet",
         target_uuid=tablet.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return tablet
 
 
@@ -1108,4 +1175,7 @@ def revoke_installation(
         target_type="app_installation",
         target_uuid=installation.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return installation

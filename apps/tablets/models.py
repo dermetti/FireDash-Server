@@ -3,6 +3,7 @@ import uuid
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.organizations.models import Department
 from apps.tablets.versions import validate_app_version
@@ -85,6 +86,9 @@ class AppInstallation(models.Model):
         related_name="adopted_app_installations",
     )
     last_successful_check_in_at = models.DateTimeField(null=True, blank=True)
+    free_storage_bytes = models.PositiveBigIntegerField(null=True, blank=True)
+    total_storage_bytes = models.PositiveBigIntegerField(null=True, blank=True)
+    storage_observed_at = models.DateTimeField(null=True, blank=True)
     authorization_valid_until = models.DateTimeField()
     stale_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
@@ -96,8 +100,47 @@ class AppInstallation(models.Model):
                 fields=("tablet",),
                 condition=Q(status__in=("ACTIVE", "STALE")),
                 name="one_current_installation_per_tablet",
-            )
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        free_storage_bytes__isnull=True,
+                        total_storage_bytes__isnull=True,
+                        storage_observed_at__isnull=True,
+                    )
+                    | Q(
+                        free_storage_bytes__isnull=False,
+                        total_storage_bytes__isnull=False,
+                        total_storage_bytes__gt=0,
+                        storage_observed_at__isnull=False,
+                    )
+                ),
+                name="installation_storage_complete",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(free_storage_bytes__isnull=True)
+                    | Q(free_storage_bytes__lte=models.F("total_storage_bytes"))
+                ),
+                name="installation_storage_free_lte_total",
+            ),
         ]
+
+    @property
+    def storage_is_stale(self) -> bool:
+        return (
+            self.status != self.Status.ACTIVE
+            or self.authorization_valid_until <= timezone.now()
+        )
+
+    @property
+    def storage_is_low(self) -> bool:
+        return bool(
+            not self.storage_is_stale
+            and self.free_storage_bytes is not None
+            and self.total_storage_bytes
+            and self.free_storage_bytes * 5 < self.total_storage_bytes
+        )
 
 
 class AdoptionInvitation(models.Model):

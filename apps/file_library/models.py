@@ -33,9 +33,6 @@ class Library(models.Model):
                 ),
                 name="file_library_exact_scope",
             ),
-            models.CheckConstraint(
-                condition=Q(usage_bytes__lte=models.F("quota_bytes")), name="file_library_capacity"
-            ),
         ]
 
 

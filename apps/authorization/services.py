@@ -252,6 +252,9 @@ def set_department_tablet_lease(
         target_uuid=department.id,
         metadata={"old_days": old_value, "new_days": tablet_lease_days},
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return department
 
 
@@ -314,6 +317,9 @@ def set_department_tablet_asset_number_policy(
             "new_width": new_values["width"],
         },
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return department
 
 
@@ -354,6 +360,9 @@ def set_department_locale_time_policy(
             "new_timezone": new_values["timezone"],
         },
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return department
 
 
@@ -448,6 +457,9 @@ def provision_department_admin(
         target_type="user",
         target_uuid=token.user.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return raw_token
 
 
@@ -464,6 +476,9 @@ def provision_station_admin(*, actor, station: Station, email: str, display_name
         target_type="user",
         target_uuid=token.user.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return raw_token
 
 
@@ -525,6 +540,9 @@ def suspend_department_admin(*, actor, membership: DepartmentMembership) -> None
         target_type="department_membership",
         target_uuid=membership.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 @transaction.atomic
@@ -553,6 +571,9 @@ def reinstate_department_admin(*, actor, membership: DepartmentMembership) -> No
         target_type="department_membership",
         target_uuid=membership.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 @transaction.atomic
@@ -582,6 +603,9 @@ def revoke_department_admin(*, actor, membership: DepartmentMembership) -> None:
         target_type="department_membership",
         target_uuid=membership.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 @transaction.atomic
@@ -610,6 +634,9 @@ def revoke_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
         target_type="station_admin_assignment",
         target_uuid=assignment.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 @transaction.atomic
@@ -635,6 +662,9 @@ def suspend_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
         target_type="station_admin_assignment",
         target_uuid=assignment.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 @transaction.atomic
@@ -668,6 +698,9 @@ def reinstate_station_admin(*, actor, assignment: StationAdminAssignment) -> Non
         target_type="station_admin_assignment",
         target_uuid=assignment.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 @transaction.atomic
@@ -689,6 +722,9 @@ def grant_station_admin(*, actor, user, station: Station) -> StationAdminAssignm
         target_type="station_admin_assignment",
         target_uuid=assignment.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return assignment
 
 
@@ -749,3 +785,6 @@ def permanently_remove_administrator(*, actor, user, department: Department) -> 
         target_type="user",
         target_uuid=user.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")

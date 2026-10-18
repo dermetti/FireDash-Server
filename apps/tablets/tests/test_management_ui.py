@@ -5,6 +5,8 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -342,6 +344,106 @@ def test_ordinary_pages_never_expose_device_secrets(client, tablet_ui_scope):
         assert secret not in list_html
         assert secret not in detail_html
         assert secret not in status_html
+
+
+@pytest.mark.django_db
+def test_storage_warning_threshold_and_stale_list_behavior(client, tablet_ui_scope):
+    scope = tablet_ui_scope
+    below = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Below")
+    equal = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Equal")
+    stale = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Stale")
+    below_installation = _adopted_installation(below)
+    equal_installation = _adopted_installation(equal)
+    stale_installation = _adopted_installation(stale)
+    now = timezone.now()
+    AppInstallation.objects.filter(pk=below_installation.pk).update(
+        free_storage_bytes=199, total_storage_bytes=1000, storage_observed_at=now
+    )
+    AppInstallation.objects.filter(pk=equal_installation.pk).update(
+        free_storage_bytes=200, total_storage_bytes=1000, storage_observed_at=now
+    )
+    AppInstallation.objects.filter(pk=stale_installation.pk).update(
+        free_storage_bytes=1,
+        total_storage_bytes=1000,
+        storage_observed_at=now,
+        status=AppInstallation.Status.STALE,
+    )
+    client.force_login(scope.admin)
+
+    html = client.get(reverse("tablet-list", args=(scope.department.id,))).content.decode()
+    rows = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0].split("<tr>")
+    below_row = next(row for row in rows if ">Below</a>" in row)
+    equal_row = next(row for row in rows if ">Equal</a>" in row)
+    stale_row = next(row for row in rows if ">Stale</a>" in row)
+    assert "Low Storage" in below_row
+    assert "Low Storage" not in equal_row
+    assert "Low Storage" not in stale_row
+    assert html.count("Low Storage") == 1
+
+
+@pytest.mark.django_db
+def test_storage_detail_exact_missing_and_stale_presentation(client, tablet_ui_scope):
+    scope = tablet_ui_scope
+    tablet = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE)
+    installation = _adopted_installation(tablet)
+    observed = timezone.now()
+    AppInstallation.objects.filter(pk=installation.pk).update(
+        free_storage_bytes=199,
+        total_storage_bytes=1000,
+        storage_observed_at=observed,
+    )
+    client.force_login(scope.admin)
+    url = reverse("tablet-detail", args=(scope.department.id, tablet.id))
+
+    current = client.get(url).content.decode()
+    assert "199 bytes free" in current
+    assert "1000 bytes total" in current
+    assert "19.9% free" in current
+    assert "Low Storage" in current
+    assert "Current reported capacity" not in current
+
+    AppInstallation.objects.filter(pk=installation.pk).update(
+        authorization_valid_until=timezone.now() - timedelta(seconds=1)
+    )
+    expired = client.get(url).content.decode()
+    assert "Last known storage only" in expired
+    assert "Low Storage" not in expired
+
+    AppInstallation.objects.filter(pk=installation.pk).update(status=AppInstallation.Status.STALE)
+    stale = client.get(url).content.decode()
+    assert "Last known storage only" in stale
+    assert "has not confirmed current capacity" in stale
+
+    AppInstallation.objects.filter(pk=installation.pk).update(
+        free_storage_bytes=None,
+        total_storage_bytes=None,
+        storage_observed_at=None,
+    )
+    missing = client.get(url).content.decode()
+    assert "No storage telemetry reported" in missing
+
+
+@pytest.mark.django_db
+def test_tablet_list_storage_prefetch_remains_bounded(client, tablet_ui_scope):
+    scope = tablet_ui_scope
+    client.force_login(scope.admin)
+    one = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="One")
+    _adopted_installation(one)
+    url = reverse("tablet-list", args=(scope.department.id,))
+    with CaptureQueriesContext(connection) as first_queries:
+        assert client.get(url).status_code == 200
+
+    for index in range(8):
+        tablet = _pending_tablet(
+            scope.department,
+            status=Tablet.Status.ACTIVE,
+            display_name=f"Extra {index}",
+        )
+        _adopted_installation(tablet)
+    with CaptureQueriesContext(connection) as many_queries:
+        assert client.get(url).status_code == 200
+
+    assert len(many_queries) == len(first_queries)
 
 
 # --- adoption ---------------------------------------------------------------

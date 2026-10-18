@@ -19,7 +19,7 @@
           <a href="{% url 'tablet-detail' department.id tablet.id %}" class="text-decoration-none">{{ tablet.display_name|default:"Unnamed tablet" }}</a>
           {% if tablet.asset_number %}<div class="text-body-secondary small">{{ tablet.asset_number }}</div>{% endif %}
         </td>
-        <td>{% include "tablets/_tablet_status_badge.html" with status=tablet.status %}</td>
+        <td>{% include "tablets/_tablet_status_badge.html" with status=tablet.status %}{% for installation in tablet.current_installations %}{% if installation.storage_is_low %}<div><span class="badge text-bg-danger mt-1">Low Storage</span></div>{% endif %}{% endfor %}</td>
         <td>
           {% if tablet.installation_status == "ACTIVE" %}<span class="badge text-bg-success">Current</span>
           {% elif tablet.installation_status == "STALE" %}<span class="badge text-bg-warning">Stale</span>

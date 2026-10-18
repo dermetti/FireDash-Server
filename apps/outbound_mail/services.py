@@ -534,7 +534,9 @@ def _locked_department_configuration(*, department: Department) -> DepartmentMai
     return DepartmentMailConfiguration.objects.select_for_update().get(pk=configuration.pk)
 
 
-def _audit_department_configuration(*, actor, action: str, configuration, metadata: dict) -> None:
+def _audit_department_configuration(
+    *, actor, action: str, configuration, metadata: dict, revoke_access=True
+) -> None:
     record_event(
         action=action,
         actor_user=actor,
@@ -543,6 +545,10 @@ def _audit_department_configuration(*, actor, action: str, configuration, metada
         target_uuid=configuration.id,
         metadata=metadata,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    if revoke_access:
+        revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 def _invalidate_department_smtp_verification(configuration: DepartmentMailConfiguration) -> None:
@@ -733,6 +739,7 @@ def verify_department_smtp_configuration(
         action="outbound_mail.department_smtp_verification_completed",
         configuration=configuration,
         metadata={"outcome": outcome, "code": code},
+        revoke_access=False,
     )
     return DepartmentSmtpVerificationResult(
         outcome=outcome, verified_at=verified_at, diagnostic_code=code
@@ -854,6 +861,9 @@ def set_department_recipient_policy(
             "approved_domain_count": len(normalized_domains),
         },
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return policy
 
 

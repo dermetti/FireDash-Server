@@ -335,10 +335,21 @@ def set_retention_policy(
 ) -> PersonnelRetentionPolicy:
     if not _is_department_admin(actor, department.id) or retention_period <= timedelta(0):
         raise PermissionDenied("A positive retention period and department scope are required.")
-    policy, _ = PersonnelRetentionPolicy.objects.update_or_create(
-        department=department,
-        defaults={"retention_period": retention_period, "updated_by": actor},
-    )
+    # Serialize initialization as well as updates when no policy row exists yet.
+    Department.objects.select_for_update().get(pk=department.pk)
+    policy = PersonnelRetentionPolicy.objects.select_for_update().filter(
+        department=department
+    ).first()
+    if policy is not None and policy.retention_period == retention_period:
+        return policy
+    if policy is None:
+        policy = PersonnelRetentionPolicy.objects.create(
+            department=department, retention_period=retention_period, updated_by=actor
+        )
+    else:
+        policy.retention_period = retention_period
+        policy.updated_by = actor
+        policy.save(update_fields=("retention_period", "updated_by", "updated_at"))
     record_event(
         action="personnel.retention_policy_changed",
         actor_user=actor,
@@ -346,6 +357,9 @@ def set_retention_policy(
         target_type="personnel_retention_policy",
         target_uuid=department.id,
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return policy
 
 

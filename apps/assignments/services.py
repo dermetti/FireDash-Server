@@ -269,6 +269,9 @@ def assign_tablet_vehicle(
         target_uuid=assignment.id,
         metadata={"tablet_id": str(tablet.id), "vehicle_id": str(vehicle.id)},
     )
+    from apps.file_library.services import revoke_temporary_access
+
+    revoke_temporary_access(actor=actor, reason="department_mutation")
     return assignment
 
 

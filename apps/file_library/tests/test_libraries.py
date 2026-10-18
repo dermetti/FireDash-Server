@@ -247,7 +247,6 @@ def test_cross_library_targets_and_database_guards(scope, pdf_pipeline):
         lambda: Entry.objects.filter(pk=local.pk).update(library=foreign),
         lambda: Content.objects.filter(pk=content.pk).update(sha256="0" * 64),
         lambda: Library.objects.filter(pk=library.pk).update(station=scope[5]),
-        lambda: Library.objects.filter(pk=library.pk).update(usage_bytes=library.quota_bytes + 1),
         lambda: Entry.objects.create(
             library=library, name="LOCAL", is_folder=True, modified_by=scope[0]
         ),

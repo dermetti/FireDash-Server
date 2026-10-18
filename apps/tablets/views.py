@@ -323,6 +323,15 @@ def tablet_detail(request: HttpRequest, department_id, tablet_id) -> HttpRespons
             current_installation is not None
             and current_installation.status == AppInstallation.Status.STALE
         ),
+        "storage_percentage": (
+            current_installation.free_storage_bytes
+            * 100
+            / current_installation.total_storage_bytes
+            if current_installation is not None
+            and current_installation.free_storage_bytes is not None
+            and current_installation.total_storage_bytes
+            else None
+        ),
         "adoption_ready": tablet_adoption_ready(tablet),
         "activity": activity,
         "activity_url": reverse("tablet-api-activity", args=(department_id, tablet.id)),

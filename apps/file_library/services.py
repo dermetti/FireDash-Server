@@ -1,5 +1,6 @@
 import uuid
 from datetime import timedelta
+from functools import wraps
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -23,6 +24,24 @@ class LibraryError(ValueError):
 TEMPORARY_ACCESS_DURATION = timedelta(hours=6)
 ACCESS_NORMAL = "normal"
 ACCESS_TEMPORARY = "temporary"
+
+
+def _library_mutation(function):
+    """Persist expiry cleanup before entering a mutation's rollback boundary."""
+
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        active_temporary_access(kwargs["actor"])
+        try:
+            with transaction.atomic():
+                return function(*args, **kwargs)
+        except PermissionDenied:
+            # The grant may expire between preflight and locked authorization.
+            # Repeat cleanup after rollback so that revocation is durable too.
+            active_temporary_access(kwargs["actor"])
+            raise
+
+    return wrapped
 
 
 def require_scope(actor, *, department_id=None, station_id=None):
@@ -321,7 +340,7 @@ def changed(actor, library, target, operation, **metadata):
         revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
-@transaction.atomic
+@_library_mutation
 def rename_library(*, actor, library_id, name):
     library = locked_library(actor, library_id)
     name = name_value(name)
@@ -331,7 +350,7 @@ def rename_library(*, actor, library_id, name):
     return library
 
 
-@transaction.atomic
+@_library_mutation
 def create_folder(*, actor, library_id, name, parent_id=None):
     library = locked_library(actor, library_id)
     name = name_value(name)
@@ -344,7 +363,7 @@ def create_folder(*, actor, library_id, name, parent_id=None):
     return entry
 
 
-@transaction.atomic
+@_library_mutation
 def edit_entry(*, actor, library_id, entry_id, name=None, parent_id=None, move=False):
     library = locked_library(actor, library_id)
     entry = scoped_entry(library, entry_id)
@@ -366,7 +385,7 @@ def edit_entry(*, actor, library_id, entry_id, name=None, parent_id=None, move=F
     return entry
 
 
-@transaction.atomic
+@_library_mutation
 def delete_entry(*, actor, library_id, entry_id):
     library, access = locked_library(
         actor, library_id, permission="delete", return_access=True
@@ -404,6 +423,8 @@ def delete_entry(*, actor, library_id, entry_id):
 
 
 def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
+    # Expiry revocation must commit even when the following authorization fails.
+    active_temporary_access(actor)
     library = Library.objects.get(pk=library_id)
     require_library(actor, library)
     name = name_value(upload.name, pdf=True)
@@ -434,7 +455,7 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
             validate_location(library, entry.name if entry else name, parent, entry=entry)
             old_size = entry.content.size_bytes if entry else 0
             usage = library.usage_bytes - old_size + size
-            if usage > library.quota_bytes:
+            if usage > library.quota_bytes and usage > library.usage_bytes:
                 raise LibraryError("Library storage quota exceeded.")
             # Set the intended path before promotion so partial promotion failures are cleaned.
             destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / key
@@ -466,6 +487,61 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
         storage.cleanup(source)
         storage.cleanup(output)
         storage.cleanup(accepted)
+
+
+def set_library_quota(*, actor, library_id, quota_bytes):
+    """Set tenant policy without changing source revision or publication state."""
+    active_temporary_access(actor)
+    if (
+        isinstance(quota_bytes, bool)
+        or not isinstance(quota_bytes, int)
+        or quota_bytes < 0
+        or quota_bytes > settings.FILE_LIBRARY_MAX_QUOTA_BYTES
+    ):
+        raise LibraryError(
+            f"Quota must be between 0 and {settings.FILE_LIBRARY_MAX_QUOTA_BYTES} bytes."
+        )
+    with transaction.atomic():
+        # Lock only the library row. PostgreSQL rejects FOR UPDATE across the
+        # nullable side of the department/station scope joins.
+        library = Library.objects.select_for_update().get(pk=library_id)
+        department = library.department or library.station.department
+        from apps.authorization.services import require_department_admin
+
+        require_department_admin(actor, department)
+        old_value = library.quota_bytes
+        if old_value == quota_bytes:
+            return library
+        library.quota_bytes = quota_bytes
+        library.save(update_fields=("quota_bytes",))
+        record_event(
+            action="file_library.quota_changed",
+            actor_user=actor,
+            department=department,
+            station=library.station,
+            target_type="library",
+            target_uuid=library.id,
+            metadata={
+                "library_id": str(library.id),
+                "old_quota_bytes": old_value,
+                "new_quota_bytes": quota_bytes,
+                "usage_bytes": library.usage_bytes,
+            },
+        )
+        revoke_temporary_access(actor=actor, reason="department_mutation")
+        return library
+
+
+def department_quota_libraries(*, actor, department):
+    from apps.authorization.services import require_department_admin
+
+    require_department_admin(actor, department)
+    department_library, _ = Library.objects.get_or_create(department=department)
+    station_libraries = []
+    for station in department.stations.order_by("name", "id"):
+        library, _ = Library.objects.get_or_create(station=station)
+        station_libraries.append(library)
+    return department_library, station_libraries
 
 
 def content_path(content):

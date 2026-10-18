@@ -2,6 +2,7 @@
 
 import uuid
 
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 
 from apps.file_library.models import Content, Library, PublicationContent
@@ -145,8 +146,20 @@ def initialize_library(library):
     return scope
 
 
-@transaction.atomic
 def publish_now(*, actor, library_id):
+    # Commit an expired-grant audit before a denied publication transaction can roll back.
+    from apps.file_library.services import active_temporary_access
+
+    active_temporary_access(actor)
+    try:
+        return _publish_now(actor=actor, library_id=library_id)
+    except PermissionDenied:
+        active_temporary_access(actor)
+        raise
+
+
+@transaction.atomic
+def _publish_now(*, actor, library_id):
     from apps.audit.services import record_event
     from apps.file_library.services import locked_library
     from apps.publications.models import PublicationJob

@@ -2,6 +2,7 @@ from urllib.parse import urlsplit
 
 # ruff: noqa: E501
 from django import forms
+from django.conf import settings
 
 from apps.authorization.models import validate_vehicle_rescue_guides_web_url
 from apps.organizations.presentation import DEPARTMENT_LOCALE_CHOICES, DEPARTMENT_TIMEZONE_CHOICES
@@ -129,6 +130,18 @@ class DepartmentTabletLeaseForm(forms.Form):
         max_value=365,
         label="Maximum offline authorization lease (days)",
         widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+
+
+class FileLibraryQuotaForm(forms.Form):
+    library_id = forms.UUIDField(widget=forms.HiddenInput())
+    quota_bytes = forms.IntegerField(
+        min_value=0,
+        max_value=settings.FILE_LIBRARY_MAX_QUOTA_BYTES,
+        label="Quota (bytes)",
+        widget=forms.NumberInput(
+            attrs={"class": "form-control", "min": 0, "step": 1}
+        ),
     )
 
 

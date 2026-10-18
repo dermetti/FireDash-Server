@@ -1,4 +1,4 @@
-# File libraries (Stages 1–3)
+# File libraries (Stages 1–4)
 
 `apps.file_library` owns department and station source libraries. The existing
 persisted authorization scopes apply; department roles do not inherit station
@@ -11,7 +11,12 @@ reauthentication. The persisted grant is bound to the user and station and has
 an absolute six-hour expiry. It permits browsing, search, preview, download,
 and one successful recursive deletion only. Switching stations, explicit
 release, expiry, loss of department authority, another department-library
-mutation, or that successful deletion revokes the grant. This capability is
+mutation, or that successful deletion revokes the grant. Successful department
+Settings, station/vehicle configuration, administrator lifecycle, and tablet
+management mutations also revoke it at their domain-service boundary. Read-only,
+invalid, and no-op operations preserve valid access. Expiry cleanup commits
+outside the file mutation's rollback boundary, including when deletion is denied.
+This capability is
 separate from normal scope authorization, publication authorization, and tablet
 installation entitlements.
 
@@ -34,7 +39,10 @@ document's sanitized content size; historical/unreferenced content is excluded.
 - `FILE_LIBRARY_MAX_FILE_BYTES`: default 25 MiB, enforced on both input and output.
   The existing `MAX_PDF_INPUT_BYTES` / `MAX_PDF_OUTPUT_BYTES` remain upper bounds.
 - `FILE_LIBRARY_QUOTA_BYTES`: default 1 GiB, copied into newly created libraries.
-  Existing quotas remain persisted; there is no administrator quota interface.
+  Department administrators configure their department and station-library
+  quotas independently in System Settings.
+- `FILE_LIBRARY_MAX_QUOTA_BYTES`: default 1 TiB, the server-side upper bound for
+  administrator-configured quotas.
 - Existing quarantine, broker, sanitizer-output and accepted-storage settings apply.
   Accepted keys are `file-libraries/<library UUID>/<content UUID>.pdf`, beneath the
   private `REFERENCE_DATA_ACCEPTED_ROOT`, never beneath static or public media.
@@ -44,6 +52,12 @@ encryption and active-content validation. The existing Linux broker is mandatory
 there is no unsandboxed production fallback. Downloads/previews require live scope
 authorization and verify size and SHA-256 before serving with private/no-store
 headers. Client filenames never become storage paths.
+
+Quota policy changes lock the same library row used by uploads but do not
+increment the source revision, queue publication work, or alter current usage.
+A quota may be reduced below current usage. In that state, uploads and
+replacements that increase usage are rejected; deletion, metadata changes, and
+replacements that preserve or reduce usage remain available.
 
 ## Publication and retention
 
@@ -125,6 +139,9 @@ current-source quota, so physical disk capacity still needs ordinary monitoring.
 
 ## Deployment validation
 
+Rolling back the Stage 4 quota constraint migration requires first resolving
+any libraries whose current usage exceeds their quota.
+
 Windows tests stub native MIME identification and the Linux sanitizer broker;
 they exercise real pikepdf inspection and the real PostgreSQL/crypto lifecycle.
 Before deployment, run a real Linux upload-to-publication check with libmagic,
@@ -139,7 +156,12 @@ the isolated broker, configured UID/GID boundaries and accepted-storage modes:
 4. Replace/delete source content, exercise retained-history cleanup, and run
    reconciliation with a deliberate aged orphan and an in-progress upload.
 
-No iPad browser or storage telemetry is implemented. The Stage 3 client must
+Stage 4 stores the latest device-reported storage measurement at authenticated
+check-in and displays it in Tablet Management. An expired lease or stale
+installation marks the preserved values as last known capacity. No projected
+post-publication capacity is calculated.
+
+No iPad browser is implemented. The future tablet client must
 support these required types before activating a complete manifest containing
 them, and render the department library with ` (global)` appended for display.
 The suffix is never stored in the configurable name or signed source metadata.
