@@ -162,6 +162,9 @@ jobs:
 
       - name: Run deployment helper tests
         run: |
+          bash deploy/tests/test_application_secret_keyring.sh
+          bash deploy/tests/test_outbound_mail_proxy_env.sh
+          bash deploy/tests/test_postgres_utf8.sh
           bash deploy/tests/test_state.sh
           bash deploy/tests/test_postgres_bootstrap.sh
           bash deploy/tests/test_converge.sh

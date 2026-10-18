@@ -1,7 +1,7 @@
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py", "*_tests.py"]
-testpaths = ["apps", "config"]
+testpaths = ["apps", "config", "tools"]
 # Use the repository's fixed, guarded scratch base instead of pytest's
 # per-user default under %TEMP%.  The latter can be left with sandbox-only
 # ACLs on Windows.  conftest.py removes this base at session start/finish.

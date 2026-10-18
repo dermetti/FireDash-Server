@@ -46,6 +46,54 @@ suite. Publication changes normally need publication, tablet manifest/API, and
 portal tests. API changes should also run `python manage.py spectacular
 --validate`.
 
+## Test selections
+
+Use `config.settings.test` and the local `.env` `TEST_POSTGRES_*` values.
+The complete PostgreSQL/PostGIS suite is the authoritative regression gate;
+no marker filter is configured by default. `tools/` is collected along with
+`apps/` and `config/`, including both fake-iPad protocol/CLI test modules.
+
+```powershell
+# Focused development checks (choose the modules affected by the change).
+python -m pytest --ds=config.settings.test -p no:cacheprovider apps/ingestion/tests/test_services.py apps/publications/tests/test_debounce.py
+# Routine: exclude only explicitly marked extended workloads.
+python -m pytest --ds=config.settings.test -p no:cacheprovider -m "not slow"
+# Complete regression, including extended workloads and tools/.
+python -m pytest --ds=config.settings.test -p no:cacheprovider
+# Extended workloads only.
+python -m pytest --ds=config.settings.test -p no:cacheprovider -m slow
+```
+
+`slow` currently identifies the 50,000-feature accepted GeoJSON import and
+50,000-hydrant summary builder. Rejected-input boundaries remain routine.
+Concurrency, authorization, migration, lifecycle and cryptographic contract
+checks remain in the complete gate; they are not classified as extended merely
+because they require a database. Add `--collect-only -q` to inspect a selection,
+`-ra` to report skip reasons, or `--durations=25` to profile a run.
+
+Use rollback-isolated `django_db` for ordinary persisted-state assertions.
+Request `transaction=True` explicitly for real commits/callback execution,
+separate connections, lock interleavings, flush and migration checks. Do not
+replace a commit guarantee with callback capture. Test registry restoration and
+immutable audit protections in `config/settings/test.py` must remain intact.
+Run pytest serially: root scratch cleanup and PostgreSQL isolation have not
+been assessed for parallel workers.
+
+CI also runs these portable deployment helper checks in its existing Bash step:
+
+```bash
+bash deploy/tests/test_application_secret_keyring.sh
+bash deploy/tests/test_outbound_mail_proxy_env.sh
+bash deploy/tests/test_postgres_utf8.sh
+```
+
+The signing-key rotation test is a **separate privileged integration check**:
+run `bash deploy/tests/test_rotate_publication_signing_key.sh` only in an
+isolated, disposable, root-capable Linux environment with the helper's Python
+cryptography dependencies available. It is not part of ordinary CI. Exit 77
+means the environment is unsupported, not successful verification; report that
+check as unverified. Do not elevate ordinary CI to run it.
+
 ## Windows pytest scratch space
 
 Pytest is configured to use the fixed repository-local `.test-tmp` scratch

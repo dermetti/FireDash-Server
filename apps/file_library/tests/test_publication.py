@@ -55,7 +55,8 @@ from apps.publications.services import (
 from apps.tablets.models import AppInstallation, Tablet
 from apps.tablets.services import generate_credential
 
-pytestmark = pytest.mark.django_db(transaction=True)
+# Real commits are requested explicitly by lifecycle and concurrency tests below.
+pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
@@ -103,6 +104,7 @@ def test_empty_scheduled_and_manual_libraries(scope, crypto):
     assert process_next_job().status == "SUCCEEDED"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_frozen_metadata_reuse_replacement_and_retention(scope, pdf_pipeline, crypto, settings):
     library = library_for(scope)
     common = dict(actor=scope[0], library_id=library.id)
@@ -162,6 +164,7 @@ def test_elevated_deletion_preserves_published_content(scope, pdf_pipeline, cryp
     assert not services.collect_content(content.id)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_revision_race_and_failure_preserve_previous(scope, pdf_pipeline, crypto, monkeypatch):
     library = library_for(scope)
     common = dict(actor=scope[0], library_id=library.id)
@@ -193,6 +196,7 @@ def test_revision_race_and_failure_preserve_previous(scope, pdf_pipeline, crypto
     )
 
 
+@pytest.mark.django_db(transaction=True)
 def test_publication_permissions_and_ui(scope, client, crypto):
     library = library_for(scope)
     station_library = services.get_library(scope[1], station_id=scope[5].id)
@@ -227,6 +231,7 @@ def test_publication_permissions_and_ui(scope, client, crypto):
     assert b"Station files" not in response.content
 
 
+@pytest.mark.django_db(transaction=True)
 def test_orphan_reconciliation_protects_committed_and_recent_files(scope, pdf_pipeline):
     library = library_for(scope)
     doc = services.upload_pdf(actor=scope[0], library_id=library.id, upload=pdf())
@@ -280,6 +285,7 @@ def installation_for(scope, settings):
     return install, private, credential, vehicle
 
 
+@pytest.mark.django_db(transaction=True)
 def test_station_manifest_crypto_and_reassignment(scope, pdf_pipeline, crypto, settings, client):
     install, private, credential, vehicle = installation_for(scope, settings)
     department_library = library_for(scope)
@@ -340,6 +346,7 @@ def test_station_manifest_crypto_and_reassignment(scope, pdf_pipeline, crypto, s
 
 
 @pytest.mark.parametrize("department_scope", [True, False])
+@pytest.mark.django_db(transaction=True)
 def test_both_file_scopes_deliver_signed_individual_pdfs_and_authoritative_empty(
     scope, pdf_pipeline, crypto, settings, client, department_scope
 ):
@@ -436,6 +443,7 @@ def test_database_generation_guards(scope, pdf_pipeline, crypto):
 
 
 @pytest.mark.parametrize("operation", ["replace", "delete"])
+@pytest.mark.django_db(transaction=True)
 def test_active_build_alone_protects_removed_content(scope, pdf_pipeline, crypto, operation):
     library = library_for(scope)
     common = dict(actor=scope[0], library_id=library.id)
@@ -453,6 +461,7 @@ def test_active_build_alone_protects_removed_content(scope, pdf_pipeline, crypto
     assert process_next_job().status == "SUCCEEDED"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_identical_pdf_bytes_do_not_reuse_cross_document_or_scope(scope, pdf_pipeline, crypto):
     library = library_for(scope)
     data = pdf().read()
@@ -481,6 +490,7 @@ def test_identical_pdf_bytes_do_not_reuse_cross_document_or_scope(scope, pdf_pip
     )
 
 
+@pytest.mark.django_db(transaction=True)
 def test_reconciliation_serializes_with_uncommitted_promotion(scope, pdf_pipeline, monkeypatch):
     library = library_for(scope)
     promoted, cleanup_started, release = Event(), Event(), Event()
@@ -523,6 +533,7 @@ def test_reconciliation_serializes_with_uncommitted_promotion(scope, pdf_pipelin
     assert services.content_path(content).exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_claim_serializes_with_source_mutation(scope, pdf_pipeline, crypto, monkeypatch):
     library = library_for(scope)
     services.upload_pdf(actor=scope[0], library_id=library.id, upload=pdf())

@@ -80,7 +80,7 @@ def _build_manifest(department, accepted_root, source_revision=42):
         return json.loads(archive.read("manifest.json"))
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_fire_plan_manifest_publishes_exact_schema(manifest_context):
     admin, department, accepted_root = manifest_context
     plan = _create_plan(admin, department, accepted_root, **FULL_PLAN_FIELDS)
@@ -122,7 +122,7 @@ def test_fire_plan_manifest_publishes_exact_schema(manifest_context):
     }
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_fire_plan_manifest_does_not_swap_coordinates(manifest_context):
     admin, department, accepted_root = manifest_context
     _create_plan(admin, department, accepted_root, location=Point(9.9988, 48.7776, srid=4326))
@@ -134,7 +134,7 @@ def test_fire_plan_manifest_does_not_swap_coordinates(manifest_context):
     assert entry["longitude"] != entry["latitude"]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_fire_plan_missing_fields_publish_null_per_document(manifest_context):
     admin, department, accepted_root = manifest_context
     plan_0 = _create_plan(
@@ -178,7 +178,7 @@ def test_fire_plan_missing_fields_publish_null_per_document(manifest_context):
     assert entry["rwa_info"] is None
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_fire_plan_manifest_preserves_existing_pdf_metadata(manifest_context):
     admin, department, accepted_root = manifest_context
     plan = _create_plan(admin, department, accepted_root)
@@ -191,7 +191,7 @@ def test_fire_plan_manifest_preserves_existing_pdf_metadata(manifest_context):
     assert entry["path"] == f"plans/{plan.id}.pdf"
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_fire_plan_manifest_is_deterministic(manifest_context):
     admin, department, accepted_root = manifest_context
     _create_plan(admin, department, accepted_root, **FULL_PLAN_FIELDS)

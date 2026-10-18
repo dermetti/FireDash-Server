@@ -306,7 +306,7 @@ def test_tablet_receives_required_dangerous_goods_through_generic_encrypted_life
             for key in ("type", "scope", "schema_version", "required", "artifact_format")
         } == {
             "type": "dangerous_goods",
-            "scope": "department",
+            "scope": {"type": "DEPARTMENT", "department_id": str(department.id)},
             "schema_version": 1,
             "required": True,
             "artifact_format": "json",

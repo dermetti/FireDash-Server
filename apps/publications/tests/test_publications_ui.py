@@ -112,7 +112,7 @@ def _record_current_fingerprint(scope, current):
     scope.save(update_fields=("current_source_fingerprint",))
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_primary_list_is_one_row_per_scope_with_current_version_and_detail_link(
     client, publication_ui_context
 ):
@@ -156,7 +156,7 @@ def test_system_publications_is_system_admin_only(client, publication_ui_context
     assert client.get(reverse("system-publications-list")).status_code == 403
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_update_is_separate_from_current_and_building_row_polls_only_itself(
     client, publication_ui_context
 ):
@@ -204,7 +204,7 @@ def test_update_is_separate_from_current_and_building_row_polls_only_itself(
     assert "every 1s" not in failed
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_list_and_building_row_use_stored_fingerprints_without_rebuilding_source(
     client, monkeypatch, publication_ui_context
 ):
@@ -294,7 +294,7 @@ def test_staged_action_modal_is_scope_authorized_and_explains_history(
     assert client.get(modal_url, HTTP_HX_REQUEST="true").status_code == 403
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_htmx_publication_mutations_redirect_to_reauthentication(client, publication_ui_context):
     admin, _, department, _, _ = publication_ui_context
     scope, _ = _current_scope(department=department)
@@ -323,7 +323,7 @@ def test_htmx_publication_mutations_redirect_to_reauthentication(client, publica
     assert staged.status == DatasetPublication.Status.STAGED
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_cancel_modal_reports_a_build_that_finished_first(client, publication_ui_context):
     admin, _, department, _, _ = publication_ui_context
     _scope, current = _current_scope(department=department)
@@ -344,7 +344,7 @@ def test_cancel_modal_reports_a_build_that_finished_first(client, publication_ui
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_scope_detail_has_bounded_history_and_detail_only_successful_delete_actions(
     client, publication_ui_context
 ):
@@ -379,7 +379,7 @@ def test_scope_detail_has_bounded_history_and_detail_only_successful_delete_acti
     assert reverse("publications-lifecycle-modal", args=(failed.id, "rollback")) not in content
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_current_row_does_not_offer_rollback_when_only_newer_superseded_version_exists(
     client, publication_ui_context
 ):
@@ -398,7 +398,7 @@ def test_current_row_does_not_offer_rollback_when_only_newer_superseded_version_
     assert "Roll back" not in content
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_filters_are_server_side_and_count_scopes_not_attempts(client, publication_ui_context):
     admin, _, department, _, station = publication_ui_context
     scope, _ = _current_scope(department=department)
@@ -676,7 +676,7 @@ def test_claim_freeze_wins_over_later_canonical_edit_with_real_scope_lock(
     ).exists()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_noop_hydrant_edit_does_not_mark_scope_or_stage_a_publication(publication_ui_context):
     admin, _, department, _, _ = publication_ui_context
     hydrant = create_hydrant(

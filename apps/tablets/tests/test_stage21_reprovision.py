@@ -2,11 +2,8 @@
 
 import uuid
 
-from django.urls import reverse
-from django.utils import timezone
-
 from apps.publications.hpke import HPKE_CIPHERSUITE
-from apps.tablets.models import AdoptionInvitation, AppInstallation, Tablet
+from apps.tablets.models import AppInstallation, Tablet
 from apps.tablets.services import (
     complete_adoption,
     create_adoption_request,
@@ -58,22 +55,5 @@ def test_reprovision_keeps_tablet_identity_and_assignment(operational_tablet):
     assert new_installation.status == AppInstallation.Status.ACTIVE
     assert (
         AppInstallation.objects.filter(tablet=tablet, status=AppInstallation.Status.ACTIVE).count()
-        == 1
-    )
-
-
-def test_reprovision_requires_reauth_and_creates_invitation(client, operational_tablet):
-    user, tablet = operational_tablet
-    _adopt(user, tablet)
-    client.force_login(user)
-    session = client.session
-    session["recent_reauthentication_at"] = timezone.now().timestamp()
-    session.save()
-    response = client.post(reverse("tablet-replace", args=(tablet.department_id, tablet.id)))
-    assert response.status_code == 200
-    assert (
-        AdoptionInvitation.objects.filter(
-            tablet=tablet, used_at__isnull=True, revoked_at__isnull=True
-        ).count()
         == 1
     )

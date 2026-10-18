@@ -59,7 +59,7 @@ def _artifact_metadata(department_id, publication_id):
     }
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_first_change_creates_one_pending_debounced_job(debounce_context):
     admin, department, station_a, _ = debounce_context
     mark_dirty(
@@ -76,7 +76,7 @@ def test_first_change_creates_one_pending_debounced_job(debounce_context):
     assert job.source_revision == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_repeated_edits_coalesce_and_track_latest_revision(debounce_context):
     admin, department, station_a, _ = debounce_context
     mark_dirty(
@@ -96,7 +96,7 @@ def test_repeated_edits_coalesce_and_track_latest_revision(debounce_context):
     assert job.not_before == first_not_before
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_maximum_deferral_caps_the_debounce_window(debounce_context):
     admin, department, station_a, _ = debounce_context
     mark_dirty(
@@ -116,7 +116,7 @@ def test_maximum_deferral_caps_the_debounce_window(debounce_context):
     assert job.not_before.time().isoformat() == "00:05:00"
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_debounced_job_is_not_claimable_before_eligibility(debounce_context):
     admin, department, station_a, _ = debounce_context
     mark_dirty(
@@ -126,7 +126,7 @@ def test_debounced_job_is_not_claimable_before_eligibility(debounce_context):
     assert claim_next_job() is None
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_debounced_job_is_claimable_after_eligibility(debounce_context):
     admin, department, station_a, _ = debounce_context
     mark_dirty(
@@ -141,7 +141,7 @@ def test_debounced_job_is_claimable_after_eligibility(debounce_context):
     assert job.status == PublicationJob.Status.RUNNING
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_different_scopes_have_independent_debounce_windows(debounce_context):
     admin, department, station_a, station_b = debounce_context
     mark_dirty(
@@ -180,9 +180,17 @@ def test_user_request_makes_existing_pending_job_immediately_eligible(debounce_c
 @pytest.mark.django_db(transaction=True)
 def test_user_request_without_pending_work_is_immediately_claimable(debounce_context):
     admin, department, station_a, _ = debounce_context
-    request_rebuild(
-        actor=admin, department=department, station=station_a, dataset_type_code="station_personnel"
-    )
+    # Keep a real commit: the rebuild must remain unclaimable until its
+    # on_commit enqueue callback runs after the outer transaction exits.
+    with transaction.atomic():
+        request_rebuild(
+            actor=admin,
+            department=department,
+            station=station_a,
+            dataset_type_code="station_personnel",
+        )
+        assert not PublicationJob.objects.filter(department=department).exists()
+        assert claim_next_job() is None
 
     job = claim_next_job()
     assert job is not None

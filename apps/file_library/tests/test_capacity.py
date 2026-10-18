@@ -27,7 +27,8 @@ from apps.organizations.models import Vehicle
 from apps.tablets.models import AppInstallation, Tablet
 from apps.tablets.tests.test_management_ui import _adopted_installation
 
-pytestmark = pytest.mark.django_db(transaction=True)
+# Real commits are requested explicitly by lifecycle and concurrency tests below.
+pytestmark = pytest.mark.django_db
 
 
 def tablet_for(scope, *, station=None, free=1_000_000, total=1_000_000):
@@ -334,6 +335,7 @@ def test_approval_requires_confirmation_recent_reauth_and_review_fingerprint(sco
         )
 
 
+@pytest.mark.django_db(transaction=True)
 def test_cross_scope_concurrent_uploads_share_reservations(scope, pdf_pipeline):
     department_library = library_for(scope)
     station_library = services.get_library(scope[1], station_id=scope[5].id)
@@ -362,6 +364,7 @@ def test_cross_scope_concurrent_uploads_share_reservations(scope, pdf_pipeline):
     assert Entry.objects.filter(is_folder=False).count() == StorageImpact.objects.count() == 1
 
 
+@pytest.mark.django_db(transaction=True)
 def test_failure_after_override_consumption_rolls_back(scope, pdf_pipeline, monkeypatch):
     library = library_for(scope)
     tablet_for(scope, free=10, total=1000)
@@ -430,6 +433,7 @@ def test_reducing_source_replacement_reserves_full_new_ciphertext(scope, pdf_pip
     assert document.content.size_bytes > len(smaller)
 
 
+@pytest.mark.django_db(transaction=True)
 def test_pruned_history_since_measurement_is_unknown(scope, pdf_pipeline, crypto):
     from apps.publications.retention import run_publication_retention
 
@@ -476,6 +480,7 @@ def test_override_does_not_bypass_quota_or_accept_different_bytes(scope, pdf_pip
     assert not Entry.objects.exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_concurrent_override_consumption_is_single_use(scope, pdf_pipeline):
     library = library_for(scope)
     tablet_for(scope, free=10, total=1000)

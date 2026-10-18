@@ -24,7 +24,12 @@ def test_hydrant_location_migration_preserves_point_and_leaves_text_location_nul
     ]
     executor.migrate(before_targets)
     try:
-        old_apps = executor.loader.project_state(before_targets).apps
+        # Latest app targets depend on the geometry rename. Use the state
+        # actually applied after rollback rather than reintroducing those leaves.
+        rolled_back = MigrationExecutor(connection)
+        old_apps = rolled_back.loader.project_state(
+            list(rolled_back.loader.applied_migrations)
+        ).apps
         OldHydrant = old_apps.get_model("reference_data", "Hydrant")
         user = User.objects.create_user("migration@example.test", "Migration", "safe-password")
         department = Department.objects.create(name="Migration", short_code="MIG", created_by=user)

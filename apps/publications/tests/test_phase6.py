@@ -112,7 +112,7 @@ def hydrant_summary(source_revision):
     }
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_registry_and_model_validation_enforce_registered_scopes(publication_context):
     _, _, department, station, other_station = publication_context
 
@@ -149,7 +149,7 @@ def test_registry_and_model_validation_enforce_registered_scopes(publication_con
     }
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_mark_dirty_advances_revision_preserves_first_dirty_time_and_coalesces_jobs(
     publication_context,
 ):
@@ -289,7 +289,7 @@ def test_ready_artifact_publications_can_be_published_after_phase7(publication_c
     assert PublicationActivation.objects.count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_publication_actions_require_department_admin(publication_context):
     admin, outsider, department, _, _ = publication_context
     scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
@@ -307,7 +307,7 @@ def test_publication_actions_require_department_admin(publication_context):
         rollback_publication(actor=admin, publication=publication)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_builders_return_only_registered_summary_fields_without_artifacts(publication_context):
     admin, _, department, station, _ = publication_context
     person = Person.objects.create(department=department)
@@ -366,7 +366,7 @@ def test_flush_restores_dataset_type_registry_projection():
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_expire_temporary_assignments_command_ends_expired_assignments(publication_context, capsys):
     admin, _, department, station, _ = publication_context
     person = Person.objects.create(department=department)
@@ -397,7 +397,7 @@ def test_expire_temporary_assignments_command_ends_expired_assignments(publicati
     assert "Expired 1 temporary assignment(s)." in capsys.readouterr().out
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_registry_projection_trigger_enforces_scope_and_station_ownership(publication_context):
     admin, _, department, station, other_station = publication_context
 
@@ -429,7 +429,7 @@ def test_registry_projection_trigger_enforces_scope_and_station_ownership(public
             )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_department_feature_gate_is_audited_but_does_not_block_preparation(publication_context):
     admin, _, department, _, _ = publication_context
     feature = set_department_feature(
@@ -443,7 +443,7 @@ def test_department_feature_gate_is_audited_but_does_not_block_preparation(publi
     assert scope.source_revision == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_publication_clean_rejects_flat_artifact_path(publication_context):
     admin, _, department, _, _ = publication_context
     scope = DatasetScopeState.objects.create(

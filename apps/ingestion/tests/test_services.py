@@ -142,7 +142,7 @@ def sanitizer_stub(settings, tmp_path, monkeypatch):
     monkeypatch.setattr("apps.ingestion.services.promote_to_accepted", promote)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_preview_is_side_effect_free_and_apply_dirties_one_scope(context):
     actor, department = context
     batch = create_preview(
@@ -173,10 +173,10 @@ def test_preview_is_side_effect_free_and_apply_dirties_one_scope(context):
     assert AuditEvent.objects.filter(action="ingestion.applied", target_uuid=batch.id).exists()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_noop_and_double_confirm_do_not_dirty_twice(context):
     actor, department = context
-    payload = hydrant_csv("H-1,8.1,50.2,,,wet,150,ACTIVE")
+    payload = hydrant_csv("H-1,8.1,50.2,wet,150,ACTIVE")
     first = create_preview(
         actor=actor,
         department=department,
@@ -205,7 +205,7 @@ def test_noop_and_double_confirm_do_not_dirty_twice(context):
         apply_preview(actor=actor, batch_id=second.id)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_hash_mismatch_and_stale_preview_fail_closed(context):
     actor, department = context
     batch = create_preview(
@@ -224,7 +224,7 @@ def test_hash_mismatch_and_stale_preview_fail_closed(context):
     assert not Hydrant.objects.exists()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_absent_hydrant_stays_active_on_geojson_merge(context):
     actor, department = context
     Hydrant.objects.create(
@@ -247,7 +247,7 @@ def test_absent_hydrant_stays_active_on_geojson_merge(context):
     assert Hydrant.objects.get(department=department, external_identifier="OLD").status == "ACTIVE"
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_explicit_inactive_status_deactivates_hydrant(context):
     actor, department = context
     Hydrant.objects.create(
@@ -272,7 +272,7 @@ def test_explicit_inactive_status_deactivates_hydrant(context):
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_chunking_preserves_explicit_deactivate_and_absent_semantics(context, monkeypatch):
     actor, department = context
     monkeypatch.setattr("apps.ingestion.services._INGESTION_BULK_BATCH_SIZE", 2)
@@ -310,7 +310,7 @@ def test_chunking_preserves_explicit_deactivate_and_absent_semantics(context, mo
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_invalid_preview_has_no_staged_canonical_side_effects(context):
     actor, department = context
     batch = create_preview(
@@ -347,7 +347,7 @@ def test_cancelled_preview_never_mutates_canonical_data_or_publication_state(con
         apply_preview(actor=actor, batch_id=batch.id)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_manual_hydrant_uses_same_preview_apply_and_noop_rules(context):
     actor, department = context
     first = create_single_preview(
@@ -389,7 +389,7 @@ def test_manual_hydrant_uses_same_preview_apply_and_noop_rules(context):
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_single_and_batch_personnel_inputs_share_identity_and_noop_rules(context):
     actor, department = context
     station = Station.objects.create(department=department, name="Station", short_code="ST")
@@ -513,7 +513,7 @@ def test_postgresql_stale_preview_from_another_connection_requires_repreview(con
     assert ImportBatch.objects.get(pk=batch.id).status == ImportBatch.Status.PREVIEW_READY
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_single_and_batch_fire_plan_inputs_share_identity_noop_and_dirty_once(
     context, sanitizer_stub
 ):
@@ -562,7 +562,7 @@ def test_single_and_batch_fire_plan_inputs_share_identity_noop_and_dirty_once(
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_address_identity_single_and_zip_inputs_converge_without_sanitizer_churn(
     context, sanitizer_stub, settings
 ):
@@ -605,7 +605,7 @@ def test_address_identity_single_and_zip_inputs_converge_without_sanitizer_churn
     assert FirePlan.objects.get(pk=plan.pk).address == "Wandsbeker Zollstrasse 95"
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_fire_plan_external_identifier_address_change_is_update_but_address_identity_change_is_add(
     context, sanitizer_stub
 ):
@@ -660,7 +660,7 @@ def test_fire_plan_external_identifier_address_change_is_update_but_address_iden
     assert (changed_address.add_count, changed_address.update_count) == (1, 0)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_disabled_klgv_feature_still_prepares_normal_publication_scope(context, sanitizer_stub):
     actor, department = context
     source_pdf = b"test-klgv-pdf"
@@ -688,7 +688,7 @@ def test_disabled_klgv_feature_still_prepares_normal_publication_scope(context, 
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_disabled_klgv_apply_preview_completes_without_server_error(context, sanitizer_stub):
     actor, department = context
     batch = create_single_preview(
@@ -712,15 +712,19 @@ def test_disabled_klgv_apply_preview_completes_without_server_error(context, san
     assert response.status_code == 302
     batch.refresh_from_db()
     assert batch.status == batch.Status.APPLIED
-    assert KlgvPlan.objects.filter(
-        department=department, external_identifier="KLGV-disabled"
-    ).count() == 1
-    assert DatasetScopeState.objects.get(
-        department=department, dataset_type_code="department_klgv_plans"
-    ).source_revision == 1
+    assert (
+        KlgvPlan.objects.filter(department=department, external_identifier="KLGV-disabled").count()
+        == 1
+    )
+    assert (
+        DatasetScopeState.objects.get(
+            department=department, dataset_type_code="department_klgv_plans"
+        ).source_revision
+        == 1
+    )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_personnel_repeat_is_semantic_noop_for_manual_csv_and_json(context):
     actor, department = context
     station = Station.objects.create(department=department, name="Home", short_code="HOM")
@@ -769,7 +773,7 @@ def test_personnel_repeat_is_semantic_noop_for_manual_csv_and_json(context):
     assert PublicationJob.objects.filter(department=department).count() == job_count
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize("domain", [ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS])
 def test_identical_pdf_reimport_skips_sanitizer_and_noop_dirtying(
     context, sanitizer_stub, settings, domain
@@ -815,7 +819,7 @@ def test_identical_pdf_reimport_skips_sanitizer_and_noop_dirtying(
     assert scope.source_revision == revision
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "change",
     [
@@ -868,7 +872,7 @@ def test_personnel_managed_field_changes_are_updates_and_stale_previews_fail(con
     assert PersonnelStationAssignment.objects.filter(person=person, ended_at__isnull=True).exists()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize("domain", [ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS])
 def test_pdf_document_convergence_update_stale_zip_and_lifecycle_matrix(
     context, sanitizer_stub, settings, domain
@@ -995,7 +999,7 @@ def test_pdf_document_convergence_update_stale_zip_and_lifecycle_matrix(
         set_fire_plan_active(actor=actor, fire_plan=document, active=True)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize("domain", [ImportBatch.Domain.FIRE_PLANS, ImportBatch.Domain.KLGV_PLANS])
 def test_pdf_zip_omission_and_lifecycle_noops_have_no_side_effects(
     context, sanitizer_stub, settings, domain
@@ -1124,7 +1128,7 @@ def test_pdf_zip_omission_and_lifecycle_noops_have_no_side_effects(
     ) == after_activate
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_large_hydrant_import_chunks_are_atomic_and_dirty_once(context, monkeypatch):
     actor, department = context
     monkeypatch.setattr("apps.ingestion.services._INGESTION_BULK_BATCH_SIZE", 3)
@@ -1147,7 +1151,7 @@ def test_large_hydrant_import_chunks_are_atomic_and_dirty_once(context, monkeypa
     assert scope.source_revision == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_preview_bounds_update_details_and_reports_truncation(context, settings):
     actor, department = context
     settings.MAX_IMPORT_VALIDATION_ERRORS = 2
@@ -1173,7 +1177,7 @@ def test_preview_bounds_update_details_and_reports_truncation(context, settings)
     assert batch.validation_summary["updates_truncated"] is True
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_multiple_fire_plan_batches_coalesce_into_one_publication_job(context, sanitizer_stub):
     actor, department = context
     for identifier in ("FP-A", "FP-B", "FP-C"):
