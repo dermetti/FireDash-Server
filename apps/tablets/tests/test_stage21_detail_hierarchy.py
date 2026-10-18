@@ -16,29 +16,9 @@ def test_detail_separates_asset_and_installation_sections(client, operational_ta
     assert "Tablet actions" in html
     assert "Current installation" in html
     assert "Installation history" in html
-
-
-def test_reprovision_appears_under_installation_actions(client, operational_tablet):
-    user, tablet = operational_tablet
-    _adopt(user, tablet)
-    client.force_login(user)
-    html = client.get(
-        reverse("tablet-detail", args=(tablet.department_id, tablet.id))
-    ).content.decode()
-
     assert "Re-provision FireDash" in html
     assert "Revoke installation" in html
     assert "Transfer" in html
-
-
-def test_no_forbidden_user_facing_wording(client, operational_tablet):
-    user, tablet = operational_tablet
-    _adopt(user, tablet)
-    client.force_login(user)
-    html = client.get(
-        reverse("tablet-detail", args=(tablet.department_id, tablet.id))
-    ).content.decode()
-
     assert "Move Tablet" not in html
     assert "Remove Tablet" not in html
     assert "Replace installation" not in html

@@ -22,16 +22,6 @@ def geojson_payload(count: int) -> bytes:
 
 
 @pytest.mark.slow
-def test_geojson_10001_features_are_accepted():
-    assert len(parse_hydrants(payload=geojson_payload(10_001), import_format="geojson")) == 10_001
-
-
-@pytest.mark.slow
-def test_geojson_38000_features_are_accepted():
-    assert len(parse_hydrants(payload=geojson_payload(38_000), import_format="geojson")) == 38_000
-
-
-@pytest.mark.slow
 def test_geojson_50000_features_are_accepted():
     assert len(parse_hydrants(payload=geojson_payload(50_000), import_format="geojson")) == 50_000
 

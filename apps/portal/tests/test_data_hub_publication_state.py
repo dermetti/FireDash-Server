@@ -223,10 +223,15 @@ def test_data_hub_publication_state_is_department_scoped(data_hub_scope, client)
 
 
 @pytest.mark.django_db
-def test_data_hub_cards_remain_single_navigation_links(data_hub_scope, client):
+def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, client):
     _admin, department = data_hub_scope
 
-    content = _page(client, department)
+    response = client.get(reverse("portal-data-hub", args=(department.id,)))
+    assert response.status_code == 200
+    modules = {module["name"]: module["icon"] for module in response.context["modules"]}
+    assert modules["Phonebook"] == "phone"
+    assert modules["Personnel"] == "people"
+    content = response.content.decode()
 
     assert '<a class="card h-100 d-block text-decoration-none text-reset shadow-sm"' in content
     assert "Open module" not in content

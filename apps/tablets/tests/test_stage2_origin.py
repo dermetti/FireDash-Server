@@ -41,20 +41,9 @@ def test_list_origin_returns_to_list_and_preserves_query(client, origin_scope):
     )
     assert response.status_code == 302
     assert response.url == list_url
-
-
-@pytest.mark.django_db
-def test_list_origin_shows_feedback_on_list(client, origin_scope):
-    scope = origin_scope
-    tablet = Tablet.objects.create(department=scope.department, display_name="Tablet")
-    _login_with_reauth(client, scope.admin)
-    list_url = reverse("tablet-list", args=(scope.department.id,)) + "?status=ACTIVE"
-    response = client.post(
-        reverse("tablet-mark-lost", args=(scope.department.id, tablet.id)),
-        {"reason": "", "next": list_url},
-        follow=True,
-    )
-    assert "marked lost" in response.content.decode()
+    feedback = client.get(response.url)
+    assert feedback.status_code == 200
+    assert "marked lost" in feedback.content.decode()
 
 
 @pytest.mark.django_db

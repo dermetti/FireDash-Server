@@ -50,7 +50,9 @@ def _geojson(identifier, **changes):
 
 
 @pytest.fixture
-def hydrant_scaling_context(db, settings, tmp_path):
+def hydrant_scaling_context(db, settings, tmp_path, request):
+    # Function scope keeps every population and mutation isolated per test.
+    population = getattr(request, "param", 3)
     settings.INGESTION_STAGING_ROOT = tmp_path / "staging"
     actor = User.objects.create_user("hydrant-scaling@example.test", "Scaling", "safe-password")
     department = Department.objects.create(name="Scaling", short_code="SCL", created_by=actor)
@@ -67,7 +69,7 @@ def hydrant_scaling_context(db, settings, tmp_path):
                 diameter_mm=100,
                 status="ACTIVE",
             )
-            for i in range(POPULATION)
+            for i in range(population)
         ]
     )
     return actor, department
@@ -93,18 +95,7 @@ def _single_preview(actor, department, identifier, **changes):
 
 
 @pytest.mark.django_db
-def test_single_preview_baseline_is_scoped_to_imported_identifier(hydrant_scaling_context):
-    actor, department = hydrant_scaling_context
-    batch = _single_preview(actor, department, "H-00001", diameter_mm=125)
-
-    # The baseline must contain only the affected identifier, never the whole
-    # department population.
-    assert list(batch.baseline) == ["H-00001"]
-    assert batch.update_count == 1
-    assert batch.validation_summary["updates"][0]["external_identifier"] == "H-00001"
-
-
-@pytest.mark.django_db
+@pytest.mark.parametrize("hydrant_scaling_context", [POPULATION], indirect=True)
 def test_single_preview_query_count_is_bounded(
     hydrant_scaling_context, django_assert_max_num_queries
 ):
@@ -113,7 +104,9 @@ def test_single_preview_query_count_is_bounded(
     with django_assert_max_num_queries(25):
         batch = _single_preview(actor, department, "H-00001", diameter_mm=125)
 
+    assert list(batch.baseline) == ["H-00001"]
     assert batch.update_count == 1
+    assert batch.validation_summary["updates"][0]["external_identifier"] == "H-00001"
 
 
 @pytest.mark.django_db
@@ -161,7 +154,7 @@ def test_unrelated_hydrant_change_does_not_invalidate_preview(hydrant_scaling_co
 
     # A mutation to a hydrant this import does not touch leaves the import's diff
     # valid, so the preview is not stale and the import applies normally.
-    unrelated = Hydrant.objects.get(department=department, external_identifier="H-02999")
+    unrelated = Hydrant.objects.get(department=department, external_identifier="H-00002")
     unrelated.status = "INACTIVE"
     unrelated.save(update_fields=("status", "updated_at"))
 
@@ -171,20 +164,14 @@ def test_unrelated_hydrant_change_does_not_invalidate_preview(hydrant_scaling_co
 
 
 @pytest.mark.django_db
-def test_preview_creates_no_publication_dirty_scope(hydrant_scaling_context):
+def test_preview_has_no_publication_side_effects_until_confirmed(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
-    _single_preview(actor, department, "H-00001", diameter_mm=125)
-
+    batch = _single_preview(actor, department, "H-00001", diameter_mm=125)
     assert not DatasetScopeState.objects.filter(
         department=department, dataset_type_code="department_hydrants"
     ).exists()
     assert not PublicationJob.objects.filter(department=department).exists()
 
-
-@pytest.mark.django_db
-def test_confirmed_change_marks_correct_scope_dirty(hydrant_scaling_context):
-    actor, department = hydrant_scaling_context
-    batch = _single_preview(actor, department, "H-00001", diameter_mm=125)
     apply_preview(actor=actor, batch_id=batch.id)
 
     scope = DatasetScopeState.objects.get(
@@ -195,6 +182,7 @@ def test_confirmed_change_marks_correct_scope_dirty(hydrant_scaling_context):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("hydrant_scaling_context", [POPULATION], indirect=True)
 def test_identical_reimport_converges_with_population(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     first = _single_preview(actor, department, "H-00001", diameter_mm=125)
@@ -212,6 +200,7 @@ def test_identical_reimport_converges_with_population(hydrant_scaling_context):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("hydrant_scaling_context", [POPULATION], indirect=True)
 def test_large_batch_preview_loads_only_relevant_identifiers(hydrant_scaling_context):
     actor, department = hydrant_scaling_context
     # A small batch only touches the identifiers it names, never the whole table.

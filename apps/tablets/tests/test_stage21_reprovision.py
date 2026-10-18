@@ -38,13 +38,18 @@ def test_reprovision_keeps_tablet_identity_and_assignment(operational_tablet):
         valid_until__isnull=True, ended_at__isnull=True
     ).first()
 
-    _, token = initiate_installation_replacement(actor=user, tablet=tablet)
+    invitation, token = initiate_installation_replacement(actor=user, tablet=tablet)
+    assert invitation.tablet_id == tablet.id
+    previous.refresh_from_db()
+    assert previous.status == AppInstallation.Status.ACTIVE
     new_installation, _ = _reprovision(user, tablet, token)
 
     tablet.refresh_from_db()
     previous.refresh_from_db()
     # Logical tablet identity and assignment are preserved (no new Tablet asset).
     assert Tablet.objects.filter(department=tablet.department).count() == 1
+    assert Tablet.objects.filter(pk=tablet.pk).count() == 1
+    assert AppInstallation.objects.filter(tablet=tablet).count() == 2
     assignment_after = tablet.vehicle_assignments.filter(
         valid_until__isnull=True, ended_at__isnull=True
     ).first()
@@ -55,17 +60,6 @@ def test_reprovision_keeps_tablet_identity_and_assignment(operational_tablet):
         AppInstallation.objects.filter(tablet=tablet, status=AppInstallation.Status.ACTIVE).count()
         == 1
     )
-
-
-def test_reprovision_user_facing_wording(client, operational_tablet):
-    user, tablet = operational_tablet
-    _adopt(user, tablet)
-    client.force_login(user)
-    html = client.get(
-        reverse("tablet-detail", args=(tablet.department_id, tablet.id))
-    ).content.decode()
-    assert "Re-provision FireDash" in html
-    assert "Replace installation" not in html
 
 
 def test_reprovision_requires_reauth_and_creates_invitation(client, operational_tablet):

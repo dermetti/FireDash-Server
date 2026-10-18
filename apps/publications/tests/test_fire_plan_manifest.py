@@ -135,47 +135,44 @@ def test_fire_plan_manifest_does_not_swap_coordinates(manifest_context):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_fire_plan_without_external_identifier_publishes_null(manifest_context):
+def test_fire_plan_missing_fields_publish_null_per_document(manifest_context):
     admin, department, accepted_root = manifest_context
-    _create_plan(
+    plan_0 = _create_plan(
         admin,
         department,
         accepted_root,
         external_identifier="",
         address="Wandsbeker Zollstraße 95",
     )
-
-    entry = _build_manifest(department, accepted_root)["fire_plans"][0]
-
-    assert entry["external_identifier"] is None
-    assert entry["address"] == "Wandsbeker Zollstraße 95"
-
-
-@pytest.mark.django_db(transaction=True)
-def test_fire_plan_without_coordinates_publishes_null(manifest_context):
-    admin, department, accepted_root = manifest_context
-    _create_plan(admin, department, accepted_root, location=None)
-
-    entry = _build_manifest(department, accepted_root)["fire_plans"][0]
-
-    assert entry["longitude"] is None
-    assert entry["latitude"] is None
-
-
-@pytest.mark.django_db(transaction=True)
-def test_fire_plan_without_operational_locations_publishes_null(manifest_context):
-    admin, department, accepted_root = manifest_context
-    _create_plan(
+    plan_1 = _create_plan(
+        admin, department, accepted_root, external_identifier="SITE-1", location=None
+    )
+    plan_2 = _create_plan(
         admin,
         department,
         accepted_root,
+        external_identifier="SITE-2",
         fsd_location="",
         bmz_location="",
         rwa_info="",
     )
 
-    entry = _build_manifest(department, accepted_root)["fire_plans"][0]
+    manifest = _build_manifest(department, accepted_root)
+    entries = {entry["id"]: entry for entry in manifest["fire_plans"]}
+    assert set(entries) == {str(plan_0.id), str(plan_1.id), str(plan_2.id)}
+    entry = entries[str(plan_0.id)]
+    assert entry["external_identifier"] is None
+    assert entry["address"] == "Wandsbeker Zollstraße 95"
+    assert entry["longitude"] == 10.09873774
+    assert entry["latitude"] == 53.59229519
 
+    entry = entries[str(plan_1.id)]
+    assert entry["external_identifier"] == "SITE-1"
+    assert entry["longitude"] is None
+    assert entry["latitude"] is None
+
+    entry = entries[str(plan_2.id)]
+    assert entry["external_identifier"] == "SITE-2"
     assert entry["fsd_location"] is None
     assert entry["bmz_location"] is None
     assert entry["rwa_info"] is None

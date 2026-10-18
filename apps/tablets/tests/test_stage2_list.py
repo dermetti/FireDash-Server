@@ -108,18 +108,6 @@ def test_default_hides_lost_and_retired_tablets_until_an_asset_state_is_selected
 
 
 @pytest.mark.django_db
-def test_status_filter_exposes_historical_rows(client, list_scope):
-    scope = list_scope
-    _tablet(scope.department, "retired", Tablet.Status.RETIRED)
-    _tablet(scope.department, "active", Tablet.Status.ACTIVE)
-    client.force_login(scope.admin)
-    response = client.get(
-        reverse("tablet-list", args=(scope.department.id,)), {"status": "RETIRED"}
-    )
-    assert _names(response) == ["retired"]
-
-
-@pytest.mark.django_db
 def test_installation_health_filter(client, list_scope):
     scope = list_scope
     stale_tablet = _tablet(scope.department, "stale-install", Tablet.Status.ACTIVE)

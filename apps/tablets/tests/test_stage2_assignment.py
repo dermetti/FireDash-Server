@@ -82,6 +82,9 @@ def test_station_admin_intra_station_move_succeeds(assignment_scope):
     )
     assign_tablet_vehicle(tablet=tablet, vehicle=vehicle_a2, actor=scope.station_admin)
     assert _current_vehicle(tablet) == vehicle_a2
+    assert AuditEvent.objects.filter(
+        action="tablet.vehicle_assigned", actor_user=scope.station_admin
+    ).exists()
 
 
 @pytest.mark.django_db
@@ -101,17 +104,3 @@ def test_station_admin_cannot_pull_tablet_from_another_station(assignment_scope)
     # Target is in the station admin's station, but the source is not.
     with pytest.raises(PermissionDenied):
         assign_tablet_vehicle(tablet=tablet, vehicle=scope.vehicle_a, actor=scope.station_admin)
-
-
-@pytest.mark.django_db
-def test_station_admin_assignment_is_audited(assignment_scope):
-    scope = assignment_scope
-    tablet = _tablet(scope.department)
-    assign_tablet_vehicle(tablet=tablet, vehicle=scope.vehicle_a, actor=scope.admin)
-    vehicle_a2 = Vehicle.objects.create(
-        department=scope.department, station=scope.station_a, display_name="A2"
-    )
-    assign_tablet_vehicle(tablet=tablet, vehicle=vehicle_a2, actor=scope.station_admin)
-    assert AuditEvent.objects.filter(
-        action="tablet.vehicle_assigned", actor_user=scope.station_admin
-    ).exists()

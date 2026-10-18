@@ -275,6 +275,7 @@ def test_mark_stale_installations_transitions_expired_leases(operational_tablet)
     installation.refresh_from_db()
     assert installation.status == AppInstallation.Status.STALE
     assert installation.stale_at is not None
+    assert installation.authorization_valid_until <= timezone.now()
 
 
 @pytest.mark.django_db(transaction=True)

@@ -31,11 +31,19 @@ def test_duplicate_display_name_same_department_rejected(identity_scope):
 
 
 @pytest.mark.django_db
-def test_same_display_name_different_departments_permitted(identity_scope):
+def test_same_display_name_and_asset_number_different_departments_permitted(identity_scope):
     admin, other_admin, department, other = identity_scope
     create_tablet(actor=admin, department=department, display_name="Command iPad")
     tablet = create_tablet(actor=other_admin, department=other, display_name="Command iPad")
     assert tablet.department == other
+
+    # Exercise the asset-number allowance with its original, separate input.
+    create_tablet(actor=admin, department=department, display_name="A", asset_number="TAB-1")
+    other_tablet = create_tablet(
+        actor=other_admin, department=other, display_name="A", asset_number="TAB-1"
+    )
+    assert other_tablet.department == other
+    assert other_tablet.asset_number == "TAB-1"
 
 
 @pytest.mark.django_db
@@ -44,13 +52,6 @@ def test_duplicate_asset_number_same_department_rejected(identity_scope):
     create_tablet(actor=admin, department=department, display_name="A", asset_number="TAB-1")
     with pytest.raises(TabletError, match="asset number"):
         create_tablet(actor=admin, department=department, display_name="B", asset_number="TAB-1")
-
-
-@pytest.mark.django_db
-def test_same_asset_number_different_departments_permitted(identity_scope):
-    admin, other_admin, department, other = identity_scope
-    create_tablet(actor=admin, department=department, display_name="A", asset_number="TAB-1")
-    create_tablet(actor=other_admin, department=other, display_name="A", asset_number="TAB-1")
 
 
 @pytest.mark.django_db
