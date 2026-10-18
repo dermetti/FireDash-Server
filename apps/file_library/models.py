@@ -1,0 +1,83 @@
+"""Stable source identities; immutable content is independent of the source tree."""
+
+import uuid
+
+from django.conf import settings
+from django.db import models
+from django.db.models import Q
+from django.db.models.functions import Lower
+
+
+def default_quota():
+    return settings.FILE_LIBRARY_QUOTA_BYTES
+
+
+class Library(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    department = models.OneToOneField(
+        "organizations.Department", null=True, on_delete=models.PROTECT
+    )
+    station = models.OneToOneField("organizations.Station", null=True, on_delete=models.PROTECT)
+    name = models.CharField(max_length=255, default="Documents")
+    source_revision = models.PositiveBigIntegerField(default=0)
+    usage_bytes = models.PositiveBigIntegerField(default=0)
+    quota_bytes = models.PositiveBigIntegerField(default=default_quota)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(department__isnull=False, station__isnull=True)
+                    | Q(department__isnull=True, station__isnull=False)
+                ),
+                name="file_library_exact_scope",
+            ),
+            models.CheckConstraint(
+                condition=Q(usage_bytes__lte=models.F("quota_bytes")), name="file_library_capacity"
+            ),
+        ]
+
+
+class Content(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    library = models.ForeignKey(Library, on_delete=models.PROTECT)
+    storage_key = models.CharField(max_length=255, unique=True)
+    size_bytes = models.PositiveBigIntegerField()
+    sha256 = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Entry(models.Model):
+    """One namespace for folders and logical PDF documents, including at root."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    library = models.ForeignKey(Library, on_delete=models.PROTECT, related_name="entries")
+    parent = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.CASCADE, related_name="children"
+    )
+    name = models.CharField(max_length=255)
+    is_folder = models.BooleanField(default=False)
+    content = models.ForeignKey(
+        Content, null=True, on_delete=models.PROTECT, related_name="documents"
+    )
+    modified_at = models.DateTimeField(auto_now=True)
+    modified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+
+    class Meta:
+        ordering = ("-is_folder", "name", "id")
+        constraints = [
+            models.UniqueConstraint(
+                Lower("name"),
+                "library",
+                "parent",
+                nulls_distinct=False,
+                name="file_entry_unique_name",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(is_folder=True, content__isnull=True)
+                    | Q(is_folder=False, content__isnull=False)
+                ),
+                name="file_entry_content_kind",
+            ),
+        ]

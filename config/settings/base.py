@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "apps.portal",
     "apps.health",
     "apps.outbound_mail",
+    "apps.file_library",
 ]
 
 MIDDLEWARE = [
@@ -161,6 +162,12 @@ IMPORT_APPLIED_SOURCE_RETENTION_DAYS = get_typed_env(
     "IMPORT_APPLIED_SOURCE_RETENTION_DAYS", int, default=30
 )
 MAX_PDF_INPUT_BYTES = get_typed_env("MAX_PDF_INPUT_BYTES", int, default=100 * 1024 * 1024)
+FILE_LIBRARY_MAX_FILE_BYTES = get_typed_env(
+    "FILE_LIBRARY_MAX_FILE_BYTES", int, default=25 * 1024 * 1024
+)
+FILE_LIBRARY_QUOTA_BYTES = get_typed_env(
+    "FILE_LIBRARY_QUOTA_BYTES", int, default=1024 * 1024 * 1024
+)
 MAX_PDF_OUTPUT_BYTES = get_typed_env("MAX_PDF_OUTPUT_BYTES", int, default=150 * 1024 * 1024)
 MAX_PDF_PAGES = get_typed_env("MAX_PDF_PAGES", int, default=500)
 MAX_HYDRANT_IMPORT_FEATURES = get_typed_env("MAX_HYDRANT_IMPORT_FEATURES", int, default=20_000)

@@ -10,6 +10,7 @@ urlpatterns = [
         name="openapi-docs",
     ),
     path("accounts/", include("apps.accounts.urls")),
+    path("", include("apps.file_library.urls")),
     path("", include("apps.reference_data.urls")),
     path("", include("apps.ingestion.urls")),
     path("", include("apps.portal.urls")),

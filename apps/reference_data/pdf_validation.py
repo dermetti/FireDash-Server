@@ -35,7 +35,9 @@ PROHIBITED_NAMES = {
 }
 
 
-def validate_pdf(path: Path, *, original_filename: str | None = None) -> tuple[int, int, str]:
+def validate_pdf(
+    path: Path, *, original_filename: str | None = None, strict: bool = False
+) -> tuple[int, int, str]:
     if original_filename is not None and not original_filename.casefold().endswith(".pdf"):
         raise PdfValidationError("Only PDF uploads are accepted.", code="unsupported_extension")
     if path.stat().st_size > settings.MAX_PDF_INPUT_BYTES and original_filename is not None:
@@ -51,7 +53,7 @@ def validate_pdf(path: Path, *, original_filename: str | None = None) -> tuple[i
             "Upload does not have a PDF signature.", code="invalid_pdf_signature"
         )
     _validate_mime(path)
-    return _inspect_pdf(path)
+    return _inspect_pdf(path, strict=strict)
 
 
 def _validate_mime(path: Path) -> None:
@@ -73,14 +75,18 @@ def _validate_mime(path: Path) -> None:
         )
 
 
-def _inspect_pdf(path: Path) -> tuple[int, int, str]:
+def _inspect_pdf(path: Path, *, strict: bool = False) -> tuple[int, int, str]:
     try:
         import pikepdf
 
-        with pikepdf.open(path) as document:
+        with pikepdf.open(path, attempt_recovery=not strict) as document:
             if document.is_encrypted:
                 raise PdfValidationError("Encrypted PDFs are not accepted.", code="encrypted_pdf")
             page_count = len(document.pages)
+            if strict and (page_count == 0 or document.check_pdf_syntax()):
+                raise PdfValidationError(
+                    "PDF is empty or structurally invalid.", code="malformed_pdf"
+                )
             if page_count > settings.MAX_PDF_PAGES:
                 raise PdfValidationError("PDF page limit exceeded.", code="page_limit_exceeded")
             if _contains_prohibited_content(document.Root):

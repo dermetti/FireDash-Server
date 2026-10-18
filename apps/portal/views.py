@@ -282,6 +282,10 @@ def _nav_context(request):
                     "label": "Station",
                     "children": [
                         {
+                            "label": "Data Hub",
+                            "url": reverse("station-data-hub", args=(station.id,)),
+                        },
+                        {
                             "label": "Tablets",
                             "url": reverse("tablet-list", args=(station.department_id,)),
                         },

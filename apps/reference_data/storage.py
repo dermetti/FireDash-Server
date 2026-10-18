@@ -16,15 +16,25 @@ class StorageError(RuntimeError):
     pass
 
 
-def write_quarantine(upload: UploadedFile) -> Path:
+def write_quarantine(upload: UploadedFile, *, limit: int | None = None) -> Path:
     _ensure_private_roots()
     job_directory = settings.REFERENCE_DATA_QUARANTINE_ROOT / str(uuid.uuid4())
     # Owner-only creation: the unprivileged process must not request SUID/SGID bits,
     # which RestrictSUIDSGID prohibits. The setgid parent may still propagate group/SGID.
     job_directory.mkdir(mode=0o700)
     path = job_directory / "input.pdf"
-    _write_limited(upload, path, settings.MAX_PDF_INPUT_BYTES)
-    os.chmod(path, 0o640)
+    try:
+        _write_limited(
+            upload,
+            path,
+            min(limit, settings.MAX_PDF_INPUT_BYTES)
+            if limit is not None
+            else settings.MAX_PDF_INPUT_BYTES,
+        )
+        os.chmod(path, 0o640)
+    except Exception:
+        cleanup(path)
+        raise
     return path
 
 
