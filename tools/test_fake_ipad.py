@@ -382,6 +382,11 @@ def test_check_in_sends_bearer_credential(tmp_path: Path):
 
     check_in_calls = [c for c in api.calls if c["path"] == "/api/v1/tablet/check-in"]
     assert check_in_calls[0]["bearer"] == "the-bearer-credential"
+    body = check_in_calls[0]["json_body"]
+    assert type(body["free_storage_bytes"]) is int
+    assert type(body["total_storage_bytes"]) is int
+    assert 0 <= body["free_storage_bytes"] <= body["total_storage_bytes"]
+    assert body["total_storage_bytes"] > 0
     assert state.authorization_valid_until == "2026-08-16T00:00:00+00:00"
 
 
@@ -636,18 +641,21 @@ def _signed_manifest_with_klgv_optional_dataset(*, required: bool):
         / "complete_manifest_contract.json"
     )
     manifest = copy.deepcopy(json.loads(fixture_path.read_text(encoding="utf-8"))["wire_manifest"])
-    dataset = copy.deepcopy(manifest["datasets"][0])
     publication_id = str(uuid.uuid4())
-    dataset.update(
-        {
-            "publication_id": publication_id,
-            "type": "department_klgv_plans",
-            "scope": "department",
-            "required": required,
-            "artifact_format": "zip",
-            "download_url": f"/api/v1/tablet/datasets/{publication_id}/download",
-        }
-    )
+    dataset = {
+        "publication_id": publication_id,
+        "type": "department_klgv_plans",
+        "scope": {
+            "type": "DEPARTMENT",
+            "department_id": manifest["configuration"]["department_id"],
+        },
+        "version": 1,
+        "schema_version": 2,
+        "required": required,
+        "minimum_app_version": None,
+        "artifact_format": "document-manifest-v2",
+        "manifest_url": f"/api/v1/tablet/document-generations/{publication_id}/manifest",
+    }
     manifest["datasets"].append(dataset)
     signer = ed25519.Ed25519PrivateKey.generate()
     manifest["signing_key_version"] = "1"
@@ -728,6 +736,71 @@ def test_verified_manifest_rejects_unknown_required_dataset_before_activation(tm
 
     with pytest.raises(ClientError, match="required dataset is unsupported"):
         client.select_compatible_datasets(manifest)
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "station",
+        {"type": "STATION"},
+        {"type": "STATION", "department_id": str(uuid.uuid4()), "station_id": str(uuid.uuid4())},
+        {"type": "DEPARTMENT", "department_id": str(uuid.uuid4())},
+        {"type": "SYSTEM", "department_id": str(uuid.uuid4())},
+    ],
+)
+def test_explicit_scope_objects_reject_missing_or_cross_tenant_identity(scope):
+    config = {"department_id": str(uuid.uuid4()), "station_id": str(uuid.uuid4())}
+    with pytest.raises(ClientError):
+        FakeIPadClient.scope_for_dataset({"scope": scope, "type": "station_files"}, config)
+
+
+def test_explicit_scope_reconstructs_unchanged_hpke_identity():
+    department, station = str(uuid.uuid4()), str(uuid.uuid4())
+    config = {"department_id": department, "station_id": station}
+    descriptor = {
+        "type": "station_personnel",
+        "scope": {"type": "STATION", "department_id": department, "station_id": station},
+    }
+    assert FakeIPadClient.scope_for_dataset(descriptor, config) == {
+        "dataset_type_code": "station_personnel",
+        "department_id": department,
+        "station_id": station,
+    }
+
+
+def test_current_artifact_signature_scope_uses_explicit_type(tmp_path: Path, monkeypatch):
+    fixture_path = (
+        Path(__file__).resolve().parent.parent
+        / "apps"
+        / "publications"
+        / "tests"
+        / "fixtures"
+        / "complete_manifest_contract.json"
+    )
+    manifest = json.loads(fixture_path.read_text(encoding="utf-8"))["wire_manifest"]
+    dataset = manifest["datasets"][0]
+    signer = ed25519.Ed25519PrivateKey.generate()
+    payload = {
+        "ciphertext_sha256": dataset["ciphertext_sha256"],
+        "ciphertext_size": dataset["encrypted_size"],
+        "encryption_algorithm": dataset["content_encryption_algorithm"],
+        "kek_version": dataset["content_key_kek_version"],
+        "nonce": dataset["content_encryption_nonce"],
+        "schema_version": dataset["schema_version"],
+        "scope": {"dataset_type_code": dataset["type"], **dataset["scope"]},
+        "version_number": dataset["version"],
+        "wrapped_cek": dataset["content_key_wrapped_for_kek"],
+        "wrapping_algorithm": dataset["content_key_wrapping_algorithm"],
+    }
+    dataset["artifact_signature"] = base64.b64encode(
+        signer.sign(canonical_json_bytes(payload))
+    ).decode()
+    client = _client(DeviceState(tmp_path / "state"), StubApi())
+    monkeypatch.setattr(client, "get_signing_key", lambda *_: signer.public_key())
+    client.verify_artifact_signature(dataset, manifest["configuration"], {})
+    config = dict(manifest["configuration"], station_id=str(uuid.uuid4()))
+    with pytest.raises(ClientError, match="scope differs"):
+        client.verify_artifact_signature(dataset, config, {})
 
 
 def test_terminal_matrix_allows_status_only_and_denies_operational_endpoints(tmp_path: Path):

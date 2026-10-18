@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
@@ -128,9 +129,14 @@ class AppInstallation(models.Model):
 
     @property
     def storage_is_stale(self) -> bool:
+        now = timezone.now()
         return (
             self.status != self.Status.ACTIVE
-            or self.authorization_valid_until <= timezone.now()
+            or self.authorization_valid_until <= now
+            or self.storage_observed_at is None
+            or self.storage_observed_at > now
+            or self.storage_observed_at
+            < now - timedelta(seconds=max(1, settings.TABLET_STORAGE_TELEMETRY_MAX_AGE_SECONDS))
         )
 
     @property

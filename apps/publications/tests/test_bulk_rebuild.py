@@ -40,6 +40,7 @@ def _published(department, scope, station=None, version_number=1):
         )
     )
     return DatasetPublication.objects.create(
+        scope_type=scope.scope_type,
         id=publication_id,
         department=department,
         station=station,
@@ -114,7 +115,10 @@ def test_bulk_rebuild_requests_only_affected_scopes(bulk_context):
     )
 
     current_scope = DatasetScopeState.objects.create(
-        department=department, station=station, dataset_type_code="station_personnel"
+        scope_type="STATION",
+        department=department,
+        station=station,
+        dataset_type_code="station_personnel",
     )
     current = _published(department, current_scope, station=station)
     _set_current(current_scope, current)
@@ -144,7 +148,10 @@ def test_bulk_rebuild_requests_only_affected_scopes(bulk_context):
 def test_bulk_rebuild_does_not_request_current_scopes(bulk_context):
     admin, department, station, _ = bulk_context
     current_scope = DatasetScopeState.objects.create(
-        department=department, station=station, dataset_type_code="station_personnel"
+        scope_type="STATION",
+        department=department,
+        station=station,
+        dataset_type_code="station_personnel",
     )
     current = _published(department, current_scope, station=station)
     _set_current(current_scope, current)

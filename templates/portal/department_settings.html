@@ -2,6 +2,10 @@
 {% block title %}{{ department.name }} System Settings{% endblock %}
 {% block content %}
 {% include "components/_page_header.html" with breadcrumb=department.name title="System Settings" description="Supported per-department authorization, retention, Tablet-numbering, and presentation settings." %}
+<section class="card mb-4"><div class="card-body"><h2 class="h5">Tablet capacity reviews</h2>
+<p>Review warnings for specific department or station source operations. Approval does not grant station-library management or change quotas.</p>
+{% for review in capacity_reviews %}<p><a href="{% url 'file-library-capacity-review' review.id %}">{{ review.operation.kind }} {{ review.operation.name }} · {% if review.library.station_id %}{{ review.library.station.name }}{% else %}Department library{% endif %}</a> · Requested by {{ review.requested_by.display_name }} · Expires {{ review.expires_at }}</p>{% empty %}<p class="text-body-secondary">No pending capacity reviews.</p>{% endfor %}
+</div></section>
 
 <section class="card mb-4"><div class="card-body">
   <h2 class="h5">File-library storage quotas</h2>

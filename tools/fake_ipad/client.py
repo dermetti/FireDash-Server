@@ -667,18 +667,6 @@ class FakeIPadClient:
                     "required",
                     "minimum_app_version",
                     "artifact_format",
-                    "encrypted_size",
-                    "ciphertext_sha256",
-                    "content_encryption_algorithm",
-                    "content_encryption_nonce",
-                    "content_key_wrapped_for_kek",
-                    "content_key_wrapping_algorithm",
-                    "content_key_kek_version",
-                    "artifact_signature",
-                    "artifact_signature_algorithm",
-                    "artifact_signing_key_version",
-                    "download_url",
-                    "key_grant",
                 ],
                 label=f"manifest.datasets[{index}]",
             )
@@ -695,8 +683,7 @@ class FakeIPadClient:
                 fail(f"Duplicate publication ID in manifest: {publication_id}")
             seen_publications.add(publication_id)
 
-            if dataset["scope"] not in {"department", "station"}:
-                fail(f"{dataset_type}: invalid scope {dataset['scope']!r}")
+            self.scope_for_dataset(dataset, config)
             if not isinstance(dataset["version"], int) or dataset["version"] <= 0:
                 fail(f"{dataset_type}: version must be positive integer")
             if not isinstance(dataset["schema_version"], int) or dataset["schema_version"] <= 0:
@@ -709,6 +696,31 @@ class FakeIPadClient:
                 fail(f"{dataset_type}: minimum_app_version must be string or null")
             if not isinstance(dataset["artifact_format"], str) or not dataset["artifact_format"]:
                 fail(f"{dataset_type}: artifact_format must be a non-empty string")
+            if dataset["artifact_format"] == "document-manifest-v2":
+                expected = f"/api/v1/tablet/document-generations/{publication_id}/manifest"
+                if dataset_type == "department_fire_plans":
+                    expected = f"/api/v1/tablet/fire-plan-generations/{publication_id}/manifest"
+                if dataset.get("manifest_url") != expected:
+                    fail(f"{dataset_type}: manifest_url mismatch")
+                continue
+            require_keys(
+                dataset,
+                [
+                    "encrypted_size",
+                    "ciphertext_sha256",
+                    "content_encryption_algorithm",
+                    "content_encryption_nonce",
+                    "content_key_wrapped_for_kek",
+                    "content_key_wrapping_algorithm",
+                    "content_key_kek_version",
+                    "artifact_signature",
+                    "artifact_signature_algorithm",
+                    "artifact_signing_key_version",
+                    "download_url",
+                    "key_grant",
+                ],
+                label=f"{dataset_type} artifact descriptor",
+            )
             if not isinstance(dataset["encrypted_size"], int) or dataset["encrypted_size"] <= 0:
                 fail(f"{dataset_type}: encrypted_size must be positive integer")
             if not re.fullmatch(r"[0-9a-f]{64}", dataset["ciphertext_sha256"]):
@@ -770,7 +782,8 @@ class FakeIPadClient:
             self.out.line(
                 f"  - {dataset['type']}: "
                 f"v{dataset['version']} / schema {dataset['schema_version']} / "
-                f"{dataset['publication_id']} / {dataset['encrypted_size']} encrypted bytes"
+                f"{dataset['publication_id']} / "
+                f"{dataset.get('encrypted_size', 'individual documents')} encrypted bytes"
             )
 
     def _unsupported_dataset_reason(self, dataset: dict[str, Any]) -> str | None:
@@ -815,18 +828,28 @@ class FakeIPadClient:
 
     @staticmethod
     def scope_for_dataset(dataset: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-        scope_name = dataset["scope"]
-        if scope_name == "department":
-            station_id = None
-        elif scope_name == "station":
-            station_id = config["station_id"]
+        scope = dataset["scope"]
+        if not isinstance(scope, dict):
+            fail("Dataset scope must be an explicit scope object")
+        scope_type = scope.get("type")
+        if scope_type == "SYSTEM":
+            expected = {"type": "SYSTEM"}
+        elif scope_type == "DEPARTMENT":
+            expected = {"type": "DEPARTMENT", "department_id": config["department_id"]}
+        elif scope_type == "STATION" and config.get("station_id"):
+            expected = {
+                "type": "STATION",
+                "department_id": config["department_id"],
+                "station_id": config["station_id"],
+            }
         else:
-            fail(f"Unsupported dataset scope: {scope_name!r}")
-
+            fail(f"Unsupported dataset scope: {scope!r}")
+        if scope != expected:
+            fail("Dataset scope differs from current installation configuration")
         return {
             "dataset_type_code": dataset["type"],
-            "department_id": config["department_id"],
-            "station_id": station_id,
+            "department_id": scope.get("department_id"),
+            "station_id": scope.get("station_id"),
         }
 
     def verify_artifact_signature(
@@ -835,6 +858,7 @@ class FakeIPadClient:
         config: dict[str, Any],
         key_cache: dict[str, ed25519.Ed25519PublicKey],
     ) -> None:
+        self.scope_for_dataset(dataset, config)
         if dataset["artifact_signature_algorithm"] != "Ed25519":
             fail(
                 f"{dataset['type']}: unexpected artifact signature algorithm "
@@ -853,7 +877,7 @@ class FakeIPadClient:
             "kek_version": dataset["content_key_kek_version"],
             "nonce": dataset["content_encryption_nonce"],
             "schema_version": dataset["schema_version"],
-            "scope": self.scope_for_dataset(dataset, config),
+            "scope": {"dataset_type_code": dataset["type"], **dataset["scope"]},
             "version_number": dataset["version"],
             "wrapped_cek": dataset["content_key_wrapped_for_kek"],
             "wrapping_algorithm": dataset["content_key_wrapping_algorithm"],

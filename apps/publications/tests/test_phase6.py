@@ -409,6 +409,7 @@ def test_registry_projection_trigger_enforces_scope_and_station_ownership(public
     with pytest.raises(DatabaseError, match="Dataset type station scope is invalid"):
         with transaction.atomic():
             DatasetScopeState.objects.create(
+                scope_type="STATION",
                 department=department,
                 station=station,
                 dataset_type_code="test_department_incidents",
@@ -416,7 +417,10 @@ def test_registry_projection_trigger_enforces_scope_and_station_ownership(public
     with pytest.raises(DatabaseError, match="Station must belong to the scope department"):
         with transaction.atomic():
             DatasetScopeState.objects.create(
-                department=department, station=other_station, dataset_type_code="station_personnel"
+                scope_type="STATION",
+                department=department,
+                station=other_station,
+                dataset_type_code="station_personnel",
             )
     with pytest.raises(DatabaseError, match="Unknown dataset type code"):
         with transaction.atomic():
@@ -435,9 +439,7 @@ def test_department_feature_gate_is_audited_but_does_not_block_preparation(publi
     assert AuditEvent.objects.filter(
         action="publication.feature_updated", department=department
     ).exists()
-    scope = mark_dirty(
-        department=department, dataset_type_code="department_hydrants", actor=admin
-    )
+    scope = mark_dirty(department=department, dataset_type_code="department_hydrants", actor=admin)
     assert scope.source_revision == 1
 
 

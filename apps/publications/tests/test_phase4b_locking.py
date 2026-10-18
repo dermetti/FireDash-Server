@@ -77,6 +77,7 @@ def personnel_publication_context(db):
     )
     current_id = uuid.uuid4()
     current = DatasetPublication.objects.create(
+        scope_type=scope.scope_type,
         id=current_id,
         department=department,
         station=station,

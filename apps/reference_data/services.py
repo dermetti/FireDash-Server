@@ -311,7 +311,12 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
         "status",
     ):
         if field in values:
-            setattr(hydrant, field, str(values[field]).strip())
+            # Preserve the nullable location rather than publishing the text "None".
+            value = (
+                None if field == "location" and values[field] is None
+                else str(values[field]).strip()
+            )
+            setattr(hydrant, field, value)
     if "flow_information" in values:
         hydrant.flow_information = str(values["flow_information"]).strip()
     if "diameter_mm" in values:

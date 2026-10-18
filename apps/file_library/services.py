@@ -21,6 +21,15 @@ class LibraryError(ValueError):
     pass
 
 
+class CapacityWarning(LibraryError):
+    def __init__(self, review):
+        self.review = review
+        super().__init__(
+            f"Tablet capacity requires department-admin review {review.id}. "
+            "No file was accepted. Review the warning, then retry the same PDF."
+        )
+
+
 TEMPORARY_ACCESS_DURATION = timedelta(hours=6)
 ACCESS_NORMAL = "normal"
 ACCESS_TEMPORARY = "temporary"
@@ -34,6 +43,15 @@ def _library_mutation(function):
         active_temporary_access(kwargs["actor"])
         try:
             with transaction.atomic():
+                from apps.file_library.capacity import lock_capacity
+
+                library = Library.objects.get(pk=kwargs["library_id"])
+                require_library_access(
+                    kwargs["actor"],
+                    library,
+                    permission="delete" if function.__name__ == "delete_entry" else "manage",
+                )
+                lock_capacity(library)
                 return function(*args, **kwargs)
         except PermissionDenied:
             # The grant may expire between preflight and locked authorization.
@@ -387,9 +405,7 @@ def edit_entry(*, actor, library_id, entry_id, name=None, parent_id=None, move=F
 
 @_library_mutation
 def delete_entry(*, actor, library_id, entry_id):
-    library, access = locked_library(
-        actor, library_id, permission="delete", return_access=True
-    )
+    library, access = locked_library(actor, library_id, permission="delete", return_access=True)
     entry = scoped_entry(library, entry_id)
     ids, frontier = [entry.id], [entry.id]
     while frontier:
@@ -422,7 +438,7 @@ def delete_entry(*, actor, library_id, entry_id):
     return access
 
 
-def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
+def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, approval_id=None):
     # Expiry revocation must commit even when the following authorization fails.
     active_temporary_access(actor)
     library = Library.objects.get(pk=library_id)
@@ -432,6 +448,16 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
         raise LibraryError("PDF exceeds the file size limit.")
     source = output = accepted = None
     content_id = uuid.uuid4()
+    document_id = replace_id or uuid.uuid4()
+    if approval_id:
+        from apps.file_library.models import CapacityReview
+
+        review = CapacityReview.objects.filter(
+            pk=approval_id, library=library, requested_by=actor
+        ).first()
+        if review is None:
+            raise PermissionDenied("Capacity review is unavailable for this operation.")
+        document_id = uuid.UUID(review.operation["document_id"])
     key = f"file-libraries/{library.id}/{content_id}.pdf"
     try:
         source = storage.write_quarantine(upload, limit=settings.FILE_LIBRARY_MAX_FILE_BYTES)
@@ -444,8 +470,10 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
         if size > settings.FILE_LIBRARY_MAX_FILE_BYTES:
             raise LibraryError("Sanitized PDF exceeds the file size limit.")
         with transaction.atomic():
+            from apps.file_library.capacity import lock_capacity, review_upload
             from apps.file_library.reconciliation import lock_storage
 
+            lock_capacity(library)
             library = locked_library(actor, library_id)
             lock_storage(library_id)
             entry = scoped_entry(library, replace_id) if replace_id else None
@@ -457,30 +485,61 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
             usage = library.usage_bytes - old_size + size
             if usage > library.quota_bytes and usage > library.usage_bytes:
                 raise LibraryError("Library storage quota exceeded.")
-            # Set the intended path before promotion so partial promotion failures are cleaned.
-            destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / key
-            if destination.exists():
-                raise LibraryError("Content identity already exists; retry the upload.")
-            accepted = destination
-            storage.promote_to_accepted(output, key)
-            content = Content.objects.create(
-                id=content_id, library=library, storage_key=key, size_bytes=size, sha256=digest
-            )
-            if entry:
-                entry.content, entry.modified_by = content, actor
-                entry.save()
-            else:
-                entry = Entry.objects.create(
-                    library=library, parent=parent, name=name, content=content, modified_by=actor
+            operation = {
+                "kind": "replace" if replace_id else "upload",
+                "document_id": str(document_id),
+                "replace_id": str(replace_id) if replace_id else None,
+                "parent_id": str(parent.id) if parent else None,
+                "name": entry.name if entry else name,
+                "sha256": digest,
+                "size_bytes": size,
+            }
+            storage_increases = entry is None or entry.content.sha256 != digest
+            warning = (
+                review_upload(
+                    actor=actor, library=library, operation=operation, approval_id=approval_id
                 )
-            library.usage_bytes = usage
-            changed(
-                actor,
-                library,
-                entry,
-                "replaced" if replace_id else "uploaded",
-                content_id=str(content.id),
+                if storage_increases or approval_id
+                else None
             )
+            if warning is None:
+                # Set the intended path before promotion so partial promotion failures are cleaned.
+                destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / key
+                if destination.exists():
+                    raise LibraryError("Content identity already exists; retry the upload.")
+                accepted = destination
+                storage.promote_to_accepted(output, key)
+                content = Content.objects.create(
+                    id=content_id, library=library, storage_key=key, size_bytes=size, sha256=digest
+                )
+                if entry:
+                    entry.content, entry.modified_by = content, actor
+                    entry.save()
+                else:
+                    entry = Entry.objects.create(
+                        id=document_id,
+                        library=library,
+                        parent=parent,
+                        name=name,
+                        content=content,
+                        modified_by=actor,
+                    )
+                if storage_increases:
+                    from apps.file_library.models import StorageImpact
+
+                    StorageImpact.objects.create(
+                        library=library, document_id=document_id, sha256=digest, size_bytes=size
+                    )
+                library.usage_bytes = usage
+                changed(
+                    actor,
+                    library,
+                    entry,
+                    "replaced" if replace_id else "uploaded",
+                    content_id=str(content.id),
+                )
+        if warning is not None:
+            raise CapacityWarning(warning)
         accepted = None
         return entry
     finally:

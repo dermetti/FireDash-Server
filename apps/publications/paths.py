@@ -18,7 +18,9 @@ from __future__ import annotations
 ARTIFACT_FILENAME = "artifact.bin"
 
 
-def publication_artifact_relative_path(*, department_id: object | None, publication_id: object, scope_type: str = "DEPARTMENT") -> str:
+def publication_artifact_relative_path(
+    *, department_id: object | None, publication_id: object, scope_type: str = "DEPARTMENT"
+) -> str:
     """Return the canonical forward-slash relative artifact path for a publication."""
     if scope_type == "SYSTEM":
         if department_id is not None:

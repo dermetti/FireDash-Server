@@ -31,7 +31,7 @@ from apps.file_library.tests.test_libraries import (  # noqa: F401
     pdf_pipeline,
     scope,
 )
-from apps.organizations.models import Vehicle
+from apps.organizations.models import Station, Vehicle
 from apps.publications.document_v2 import process_next_generation_key_grant
 from apps.publications.hpke import (
     DocumentGenerationHPKEContext,
@@ -146,9 +146,7 @@ def test_frozen_metadata_reuse_replacement_and_retention(scope, pdf_pipeline, cr
 def test_elevated_deletion_preserves_published_content(scope, pdf_pipeline, crypto):
     admin, station_admin, _other, _department, _outside, station, _second = scope
     library = services.get_library(station_admin, station_id=station.id)
-    document = services.upload_pdf(
-        actor=station_admin, library_id=library.id, upload=pdf()
-    )
+    document = services.upload_pdf(actor=station_admin, library_id=library.id, upload=pdf())
     content = document.content
     generation = publish(station_admin, library)
     assert PublicationContent.objects.filter(
@@ -160,9 +158,7 @@ def test_elevated_deletion_preserves_published_content(scope, pdf_pipeline, cryp
 
     generation.refresh_from_db()
     assert generation.status == "PUBLISHED"
-    assert PublicationContent.objects.filter(
-        publication=generation, content=content
-    ).exists()
+    assert PublicationContent.objects.filter(publication=generation, content=content).exists()
     assert not services.collect_content(content.id)
 
 
@@ -277,6 +273,9 @@ def installation_for(scope, settings):
         hpke_key_verified_at=timezone.now(),
         adopted_at=timezone.now(),
         authorization_valid_until=timezone.now() + timedelta(days=1),
+        free_storage_bytes=1024 * 1024 * 1024,
+        total_storage_bytes=2 * 1024 * 1024 * 1024,
+        storage_observed_at=timezone.now(),
     )
     return install, private, credential, vehicle
 
@@ -338,6 +337,83 @@ def test_station_manifest_crypto_and_reassignment(scope, pdf_pipeline, crypto, s
     install.authorization_valid_until = timezone.now() - timedelta(seconds=1)
     install.save(update_fields=("authorization_valid_until",))
     assert client.get(url, **auth).status_code in {401, 403}
+
+
+@pytest.mark.parametrize("department_scope", [True, False])
+def test_both_file_scopes_deliver_signed_individual_pdfs_and_authoritative_empty(
+    scope, pdf_pipeline, crypto, settings, client, department_scope
+):
+    from apps.publications.manifests import request_manifest
+    from apps.publications.worker_grants import process_next_signed_manifest
+
+    installation, private, credential, _vehicle = installation_for(scope, settings)
+    actor = scope[0] if department_scope else scope[1]
+    library = (
+        library_for(scope)
+        if department_scope
+        else services.get_library(actor, station_id=scope[5].id)
+    )
+    services.rename_library(actor=actor, library_id=library.id, name="Operational manuals")
+    folder = services.create_folder(actor=actor, library_id=library.id, name="Guides")
+    document = services.upload_pdf(
+        actor=actor, library_id=library.id, upload=pdf(), parent_id=folder.id
+    )
+    generation = publish(actor, library)
+    frozen = DocumentGenerationManifest.objects.get(publication=generation)
+    assert frozen.payload["library"]["name"] == "Operational manuals"
+    assert frozen.payload["library"]["id"] == str(library.id)
+    assert frozen.payload["folders"] == [
+        {"id": str(folder.id), "name": "Guides", "parent_id": None}
+    ]
+    assert generation.artifact_path == ""
+    crypto.verify(bytes(frozen.signature), canonical_manifest_payload(frozen.payload))
+    request_manifest(installation=installation)
+    process_next_signed_manifest()
+    auth = {"HTTP_AUTHORIZATION": f"Bearer {credential}"}
+    complete = client.get("/api/v1/tablet/manifest", **auth).json()
+    descriptor = next(
+        entry for entry in complete["datasets"] if entry["publication_id"] == str(generation.id)
+    )
+    assert descriptor["schema_version"] == 2 and descriptor["required"] is True
+    assert descriptor["scope"]["type"] == ("DEPARTMENT" if department_scope else "STATION")
+    url = descriptor["manifest_url"]
+    assert client.get(url, **auth).status_code == 202
+    assert process_next_generation_key_grant().status == "READY"
+    delivered = client.get(url, **auth).json()
+    grant = delivered["generation_key_grant"]
+    generation_key = hpke_open(
+        encapsulated_key=base64.b64decode(grant["encapsulated_key"]),
+        ciphertext=base64.b64decode(grant["wrapped_generation_key"]),
+        recipient_private_key=private,
+        context=DocumentGenerationHPKEContext.from_wire(grant["info"]),
+    )
+    envelope = delivered["documents"][0]
+    assert envelope["file"]["id"] == str(document.id)
+    assert envelope["file"]["folder_id"] == str(folder.id)
+    cek = keywrap.aes_key_unwrap(
+        generation_key, base64.b64decode(envelope["generation_wrapped_cek"])
+    )
+    artifact = DocumentArtifact.objects.get(pk=envelope["artifact_id"])
+    ciphertext = (settings.PUBLICATION_ARTIFACT_ROOT / artifact.artifact_path).read_bytes()
+    assert len(ciphertext) == envelope["ciphertext_size"]
+    assert hashlib.sha256(ciphertext).hexdigest() == envelope["ciphertext_sha256"]
+    plaintext = AESGCM(cek).decrypt(base64.b64decode(envelope["nonce"]), ciphertext, None)
+    assert len(plaintext) == envelope["file"]["size_bytes"]
+    assert hashlib.sha256(plaintext).hexdigest() == envelope["file"]["sha256"]
+    assert client.get(envelope["download_path"], **auth).status_code == 200
+    services.delete_entry(actor=actor, library_id=library.id, entry_id=folder.id)
+    empty = publish(actor, library)
+    payload = DocumentGenerationManifest.objects.get(publication=empty).payload
+    assert payload["documents"] == payload["folders"] == []
+    assert client.get(url, **auth).status_code == 200
+
+    outside_station = Station.objects.create(department=scope[4], name="Outside", short_code="OUT")
+    outside_scope = list(scope)
+    outside_scope[0], outside_scope[3], outside_scope[5] = scope[2], scope[4], outside_station
+    _outside, _key, outside_credential, _vehicle = installation_for(outside_scope, settings)
+    outsider = {"HTTP_AUTHORIZATION": f"Bearer {outside_credential}"}
+    assert client.get(url, **outsider).status_code == 403
+    assert client.get(envelope["download_path"], **outsider).status_code == 403
 
 
 def test_database_generation_guards(scope, pdf_pipeline, crypto):

@@ -70,7 +70,10 @@ def test_successful_manual_rebuild_commits_one_wake_and_coalesces(wake_context):
 def test_successful_bulk_commit_sends_one_wake(wake_context):
     admin, department, station = wake_context
     DatasetScopeState.objects.create(
-        department=department, station=station, dataset_type_code="station_personnel"
+        scope_type="STATION",
+        department=department,
+        station=station,
+        dataset_type_code="station_personnel",
     )
     with patch("apps.publications.services.wake_publication_build_worker") as wake:
         result = bulk_request_rebuilds(actor=admin, department=department)

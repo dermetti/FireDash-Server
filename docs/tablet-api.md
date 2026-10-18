@@ -350,6 +350,11 @@ measurements are never inherited from a replaced installation. Invalid or
 incomplete telemetry returns 400 and does not update storage, contact time, app
 telemetry, installation status, or authorization lease.
 
+Client rollout is coordinated: old empty-body check-ins are incompatible and
+return 400; non-JSON request bodies are unsupported. There is no pre-beta legacy
+fallback. Update the client to send both integer byte counts before relying on
+lease renewal through check-in. Measurements belong only to the current installation.
+
 The measurement is device-reported and is not independently verified by the
 server. Check-in always records activity after request validation. With more
 than 48 hours remaining it leaves `authorization_valid_until` unchanged. With
@@ -431,7 +436,7 @@ public keys while signed material referring to them remains available.
 
 ### Publication scope identity
 
-Every dataset manifest entry has an explicit `scope` object: `{"type":"SYSTEM"}`, `{"type":"DEPARTMENT","department_id":"..."}`, or `{"type":"STATION","department_id":"...","station_id":"..."}`. The same explicit object is part of artifact and HPKE canonical identity. Missing tenant IDs never mean SYSTEM. SYSTEM ownership alone does not authorize delivery; exposure and installation authorization remain separate.
+Every dataset manifest entry has an explicit `scope` object: `{"type":"SYSTEM"}`, `{"type":"DEPARTMENT","department_id":"..."}`, or `{"type":"STATION","department_id":"...","station_id":"..."}`. JSON artifact signature scope adds `dataset_type_code` to that descriptor object. Existing HPKE scope instead has `dataset_type_code`, `department_id`, and nullable `station_id` as specified below; reconstruct its exact canonical shape, rather than substituting the descriptor object. Missing tenant IDs never mean SYSTEM. SYSTEM ownership alone does not authorize delivery; exposure and installation authorization remain separate.
 
 ### Vehicle Rescue Guides capability
 
@@ -472,7 +477,7 @@ Representative complete 200 body (names are exact):
   "configuration":{"installation_id":"11111111-1111-1111-1111-111111111111","tablet_id":"22222222-2222-2222-2222-222222222222","department_id":"33333333-3333-3333-3333-333333333333","station_id":"44444444-4444-4444-4444-444444444444","vehicle_id":"55555555-5555-5555-5555-555555555555","report_delivery_max_attachment_bytes":20971520},
   "capabilities":{"vehicle_rescue_guides":{"provider":"euro_rescue","mode":"web","web_url":"https://rescue.euroncap.com/"}},
   "datasets":[{
-    "publication_id":"66666666-6666-6666-6666-666666666666","type":"station_personnel","scope":"station","version":7,"schema_version":1,"required":true,"minimum_app_version":null,"artifact_format":"json","encrypted_size":1234,"ciphertext_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","content_encryption_algorithm":"AES-256-GCM","content_encryption_nonce":"Base64(12 bytes)","content_key_wrapped_for_kek":"Base64(AES-KW wrapped CEK)","content_key_wrapping_algorithm":"AES-KW-RFC3394","content_key_kek_version":"1","artifact_signature":"Base64(64-byte Ed25519 signature)","artifact_signature_algorithm":"Ed25519","artifact_signing_key_version":"1","download_url":"/api/v1/tablet/datasets/66666666-6666-6666-6666-666666666666/download",
+    "publication_id":"66666666-6666-6666-6666-666666666666","type":"station_personnel","scope":{"type":"STATION","department_id":"33333333-3333-3333-3333-333333333333","station_id":"44444444-4444-4444-4444-444444444444"},"version":7,"schema_version":1,"required":true,"minimum_app_version":null,"artifact_format":"json","encrypted_size":1234,"ciphertext_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","content_encryption_algorithm":"AES-256-GCM","content_encryption_nonce":"Base64(12 bytes)","content_key_wrapped_for_kek":"Base64(AES-KW wrapped CEK)","content_key_wrapping_algorithm":"AES-KW-RFC3394","content_key_kek_version":"1","artifact_signature":"Base64(64-byte Ed25519 signature)","artifact_signature_algorithm":"Ed25519","artifact_signing_key_version":"1","download_url":"/api/v1/tablet/datasets/66666666-6666-6666-6666-666666666666/download",
     "key_grant":{"scheme":"HPKE","ciphersuite":"DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM","encapsulated_key":"Base64(65-byte enc)","wrapped_content_key":"Base64(HPKE ciphertext)"}
   }],
   "signature":"Base64(64-byte Ed25519 signature)"
@@ -502,7 +507,7 @@ as one logical Phonebook. They must not assume either dataset includes the other
 ### Dangerous goods (`dangerous_goods`, `artifact_format: json`)
 
 `dangerous_goods` is a required, department-scoped schema-1 dataset. Its manifest
-entry uses `scope:"department"`, `schema_version:1`, `required:true`, and
+entry uses `scope:{type:"DEPARTMENT",department_id:"<owning UUID>"}`, `schema_version:1`, `required:true`, and
 `artifact_format:"json"`; the HPKE scope binding has the owning `department_id`
 and `station_id:null`. It uses the normal encrypted artifact and generic download
 URL shown above—there is no dangerous-goods-specific Tablet endpoint.
@@ -749,7 +754,7 @@ signature binds the dataset list, grants, configuration, and lease.
 Verify `artifact_signature` over UTF-8, sorted-key, compact JSON exactly:
 
 ```json
-{"ciphertext_sha256":"<64-lowercase-hex>","ciphertext_size":1234,"encryption_algorithm":"AES-256-GCM","kek_version":"1","nonce":"Base64(12 bytes)","schema_version":1,"scope":{"dataset_type_code":"station_personnel","department_id":"33333333-3333-3333-3333-333333333333","station_id":"44444444-4444-4444-4444-444444444444"},"version_number":7,"wrapped_cek":"Base64(AES-KW wrapped CEK)","wrapping_algorithm":"AES-KW-RFC3394"}
+{"ciphertext_sha256":"<64-lowercase-hex>","ciphertext_size":1234,"encryption_algorithm":"AES-256-GCM","kek_version":"1","nonce":"Base64(12 bytes)","schema_version":1,"scope":{"dataset_type_code":"station_personnel","department_id":"33333333-3333-3333-3333-333333333333","station_id":"44444444-4444-4444-4444-444444444444","type":"STATION"},"version_number":7,"wrapped_cek":"Base64(AES-KW wrapped CEK)","wrapping_algorithm":"AES-KW-RFC3394"}
 ```
 
 Use `content_key_wrapped_for_kek` for `wrapped_cek`,
@@ -854,7 +859,7 @@ This is the authoritative Fire Plan v2 contract. It is selected only when the
 normal signed tablet manifest contains this complete dataset descriptor:
 
 ```json
-{"publication_id":"11111111-1111-1111-1111-111111111111","type":"department_fire_plans","scope":"department","version":42,"schema_version":2,"required":true,"minimum_app_version":null,"artifact_format":"document-manifest-v2","manifest_url":"/api/v1/tablet/fire-plan-generations/11111111-1111-1111-1111-111111111111/manifest"}
+{"publication_id":"11111111-1111-1111-1111-111111111111","type":"department_fire_plans","scope":{"type":"DEPARTMENT","department_id":"66666666-6666-6666-6666-666666666666"},"version":42,"schema_version":2,"required":true,"minimum_app_version":null,"artifact_format":"document-manifest-v2","manifest_url":"/api/v1/tablet/fire-plan-generations/11111111-1111-1111-1111-111111111111/manifest"}
 ```
 
 The descriptor is emitted only for the authoritative current publication.
@@ -960,7 +965,7 @@ KLGV begins directly on schema 2 and has no tablet ZIP/v1 compatibility
 contract. Its top-level signed-manifest descriptor is:
 
 ```json
-{"publication_id":"11111111-1111-1111-1111-111111111111","type":"department_klgv_plans","scope":"department","version":42,"schema_version":2,"required":true,"minimum_app_version":null,"artifact_format":"document-manifest-v2","manifest_url":"/api/v1/tablet/document-generations/11111111-1111-1111-1111-111111111111/manifest"}
+{"publication_id":"11111111-1111-1111-1111-111111111111","type":"department_klgv_plans","scope":{"type":"DEPARTMENT","department_id":"66666666-6666-6666-6666-666666666666"},"version":42,"schema_version":2,"required":true,"minimum_app_version":null,"artifact_format":"document-manifest-v2","manifest_url":"/api/v1/tablet/document-generations/11111111-1111-1111-1111-111111111111/manifest"}
 ```
 
 The complete generation manifest has `format:"document-generation-v2"` and
@@ -980,8 +985,8 @@ artifact. Each scope has independent publication versions. The complete signed
 tablet manifest discovers only the installation's current department library
 and assigned vehicle's station library. Both published datasets are `required:true`.
 The existing unsupported-required-type/schema rule applies: a client without
-file-library support must not activate that candidate complete manifest. Stage 3
-adds that client support; this server change does not report tablet installation.
+file-library support must not activate that candidate complete manifest. The future
+iPad implementation must supply that support; this server does not report delivery.
 
 Descriptors use the existing explicit scope object (not a string):
 
@@ -1068,8 +1073,39 @@ current complete manifest. Failed and superseded-in-progress builds do not
 count as retained successful history.
 
 The department library's configurable `name` has no server-added suffix.
-The Stage 3 tablet must display the mandatory ` (global)` suffix for
+The iPad client must display the mandatory ` (global)` suffix for
 `department_files` without modifying the signed name or its local identity.
+The station root displays its configured name without that suffix. The root
+identity is `library.id`; no synthetic folder UUID is inserted into `folders`.
+
+### File-library capacity warnings (server administration only)
+
+File uploads/replacements may be held for explicit department-admin review when
+estimated post-operation free capacity is strictly below 20%, or capacity is
+unknown. Exactly 20% is allowed. Server estimates use authenticated device-reported
+measurements, the expected published baseline, reusable document ciphertexts, and
+outstanding source reservations across the eligible department/station scopes.
+They reserve full new ciphertext bytes without assuming deletion/replacement has
+freed old files. See [file-libraries.md](file-libraries.md#projected-capacity-and-administrative-overrides)
+for the precise model, freshness limit and one-operation review lifecycle.
+
+A fresh measurement requires a current ACTIVE installation with an unexpired lease;
+missing, invalid, future, or older-than-86400-second readings (configurable server
+limit) are capacity unknown. A station assignment beginning after the reading
+also requires a fresh check-in before projecting its new scope. Replaced
+installation values never carry forward.
+A server override is audited administrative acceptance of an estimate/risk. It
+changes neither the measurement, the required datasets, grants, lease, signatures,
+nor tablet authorization. No override flag or capacity prediction is added to the
+tablet check-in response, complete manifest or generation schema. There is no
+per-distribution receipt, acknowledgment or server proof of cached contents.
+
+The iPad must handle actual disk exhaustion during download/decryption/staging,
+retain a verified active generation on failure, and avoid partial activation.
+Keep serving the verified active generation only while its offline authorization
+lease remains valid. On stale recovery, recheck configuration/current scope and
+obtain a fully verified complete manifest before resuming; retained generation IDs
+never bypass current entitlement. Respect revocation/replacement purge rules.
 
 ### `station_personnel` (`artifact_format: json`)
 

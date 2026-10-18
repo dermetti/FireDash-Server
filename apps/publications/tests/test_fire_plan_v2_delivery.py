@@ -20,7 +20,7 @@ from apps.assignments.models import TabletVehicleAssignment
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications import artifacts
-from apps.publications.builders import build_source_payload
+from apps.publications.builders import build_artifact, build_source_payload
 from apps.publications.fire_plan_v2 import build_fire_plan_v2_generation
 from apps.publications.fire_plan_v2_delivery import (
     build_fire_plan_v2_manifest,
@@ -138,6 +138,8 @@ def _plan(user, department, accepted, name, pdf):
 
 
 def _generation(department, scope, version):
+    scope.delivery_format = scope.DeliveryFormat.DOCUMENT_MANIFEST_V2
+    scope.save(update_fields=("delivery_format",))
     snapshot = build_source_payload(
         definition=get_dataset_definition("department_fire_plans"),
         department=department,
@@ -148,7 +150,7 @@ def _generation(department, scope, version):
         dataset_type_code="department_fire_plans",
         scope_state=scope,
         version_number=version,
-        schema_version=1,
+        schema_version=2,
         source_revision=version,
         source_snapshot=snapshot,
         status=DatasetPublication.Status.BUILDING,
@@ -179,6 +181,30 @@ def test_v2_manifest_grant_and_document_delivery(v2_delivery_context):
         )
     protected_key = ensure_generation_key(publication=publication)
     assert len(protected_key.wrapped_key) == 40 and not hasattr(protected_key, "generation_key")
+    # A built candidate is not entitled for delivery until explicitly published.
+    # Legacy Fire Plans retain a companion artifact in the normal worker;
+    # file libraries and KLGV do not use this legacy path.
+    with override_settings(PUBLICATION_ARTIFACT_MAX_BYTES=4096):
+        companion = artifacts.build_encrypted_artifact(
+            publication=publication,
+            plaintext=build_artifact(
+                definition=get_dataset_definition("department_fire_plans"),
+                department=department,
+                station=None,
+                source_revision=publication.source_revision,
+                source_snapshot=publication.source_snapshot,
+            ),
+        )
+    for field, value in companion.items():
+        setattr(publication, field, value)
+    publication.status = publication.Status.PUBLISHED
+    publication.artifact_ready = True
+    publication.artifact_status = publication.ArtifactStatus.READY
+    publication.published_at = timezone.now()
+    publication.save()
+    scope.current_published_publication = publication
+    scope.latest_built_publication = publication
+    scope.save(update_fields=("current_published_publication", "latest_built_publication"))
     from apps.publications.fire_plan_v2_delivery import request_fire_plan_v2_generation_key_grant
 
     request_fire_plan_v2_generation_key_grant(publication=publication, installation=installation)
@@ -206,7 +232,7 @@ def test_v2_manifest_grant_and_document_delivery(v2_delivery_context):
             context=FirePlanGenerationHPKEContext(
                 **{**context.__dict__, "installation_id": uuid.uuid4()}
             ),
-    )
+        )
     original_info = context.info()
     FirePlanGenerationKey.objects.filter(pk=protected_key.pk).update(
         wrapped_key=keywrap.aes_key_wrap(b"r" * 32, generation_key),

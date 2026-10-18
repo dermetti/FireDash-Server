@@ -4,6 +4,7 @@
 {% include "components/_page_header.html" with title=library.name description="File Management / Dateiverwaltung · Manage source files and scheduled publications." %}
 <p><strong>{% if library.department_id %}Department library: {{ library.department.name }}{% else %}Station library: {{ library.station.name }}{% endif %}</strong> · Source revision {{ library.source_revision }}</p>
 <p>Storage: {{ library.usage_bytes|filesizeformat }} of {{ library.quota_bytes|filesizeformat }} · PDF limit: {{ max_file_bytes|filesizeformat }}</p>
+{% if access_mode != "temporary" %}{% for review in capacity_reviews %}<div class="alert alert-warning"><a href="{% url 'file-library-capacity-review' review.id %}">Capacity review: {{ review.operation.name }} · {{ review.decision }}</a> · Expires {{ review.expires_at }}</div>{% endfor %}{% endif %}
 {% if library.usage_bytes > library.quota_bytes %}<div class="alert alert-danger">This library is over quota. Uploads and replacements that increase storage are blocked until usage is reduced or the quota is raised.</div>{% endif %}
 {% if library.department_id and access_mode != "temporary" %}<p><a class="btn btn-outline-secondary btn-sm" href="{% url 'portal-department-settings' library.department_id %}">System Settings</a></p>{% endif %}
 {% if access_mode == "temporary" %}

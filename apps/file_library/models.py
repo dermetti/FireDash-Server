@@ -135,3 +135,54 @@ class Entry(models.Model):
                 name="file_entry_content_kind",
             ),
         ]
+
+
+class StorageImpact(models.Model):
+    """Source-side capacity reservations, never delivery receipts."""
+
+    library = models.ForeignKey(Library, on_delete=models.PROTECT)
+    document_id = models.UUIDField()
+    sha256 = models.CharField(max_length=64)
+    size_bytes = models.PositiveBigIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+
+class CapacityReview(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    library = models.ForeignKey(Library, on_delete=models.PROTECT)
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="capacity_requests"
+    )
+    operation = models.JSONField()
+    projection = models.JSONField()
+    fingerprint = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    decision = models.CharField(max_length=12, default="pending")
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="capacity_decisions",
+    )
+    decided_at = models.DateTimeField(null=True)
+    consumed_at = models.DateTimeField(null=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(decision="pending", decided_by__isnull=True, decided_at__isnull=True)
+                    | Q(
+                        decision__in=("approved", "rejected"),
+                        decided_by__isnull=False,
+                        decided_at__isnull=False,
+                    )
+                ),
+                name="capacity_review_decision_state",
+            ),
+            models.CheckConstraint(
+                condition=Q(consumed_at__isnull=True) | Q(decision="approved"),
+                name="capacity_review_consumed_approved",
+            ),
+        ]

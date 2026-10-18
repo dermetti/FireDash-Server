@@ -32,7 +32,13 @@ def test_scope_migration_preserves_ready_artifacts_and_lazily_resigns_them(tmp_p
     ]
     executor.migrate(before_targets)
     try:
-        old_apps = executor.loader.project_state(before_targets).apps
+        # Other current app leaves depend on newer publication migrations.
+        # Use the state actually applied after rollback, rather than pulling
+        # those dependencies back into this historical model registry.
+        rolled_back = MigrationExecutor(connection)
+        old_apps = rolled_back.loader.project_state(
+            list(rolled_back.loader.applied_migrations)
+        ).apps
         OldScope = old_apps.get_model("publications", "DatasetScopeState")
         OldPublication = old_apps.get_model("publications", "DatasetPublication")
         user = User.objects.create_user(

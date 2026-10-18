@@ -34,6 +34,7 @@ def _department_with_station_scopes(*, total: int):
     DatasetScopeState.objects.bulk_create(
         [
             DatasetScopeState(
+                scope_type=DatasetScopeState.ScopeType.STATION,
                 department=department,
                 station=station,
                 dataset_type_code="station_personnel",
@@ -73,10 +74,12 @@ def test_publication_list_query_count_is_bounded_and_only_enriches_visible_page(
 
     assert context["total_count"] == total
     assert len(context["scope_rows"]) == min(total, 50)
-    assert calls == [min(total, 50)]
+    # The separate SYSTEM panel is also enriched, with no tenant scopes in it.
+    assert calls == [min(total, 50), 0]
+    assert context["system_scope_rows"] == []
     # count + paged scopes + latest publications + active jobs + predecessor
-    # lookup; the total number must not grow with the department's scope count.
-    assert len(queries) == 5
+    # lookup + empty SYSTEM panel; this stays constant as tenant scope count grows.
+    assert len(queries) == 6
     sql = "\n".join(query["sql"].lower() for query in queries.captured_queries)
     # The compact read model may use ``IS NOT NULL`` to annotate retention,
     # but it must not select the JSON payload itself.

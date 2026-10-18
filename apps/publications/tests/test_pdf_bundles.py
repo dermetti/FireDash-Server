@@ -178,6 +178,7 @@ def test_pdf_bundle_plaintext_uses_existing_encryption_and_artifact_signature(
         department_id="department-id",
         station_id=None,
         dataset_type_code="department_klgv_plans",
+        scope_type="DEPARTMENT",
         schema_version=1,
         version_number=4,
     )

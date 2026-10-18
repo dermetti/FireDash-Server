@@ -135,7 +135,10 @@ def test_postgres_scope_guard_accepts_phonebook_and_rejects_invalid_scope(phoneb
     assert station_scope.station_id == first.id
     with pytest.raises(DatabaseError, match="Dataset type station scope is invalid"):
         DatasetScopeState.objects.create(
-            department=department, station=first, dataset_type_code="department_phonebook"
+            scope_type="STATION",
+            department=department,
+            station=first,
+            dataset_type_code="department_phonebook",
         )
     with pytest.raises(DatabaseError, match="Dataset type station scope is invalid"):
         DatasetScopeState.objects.create(
@@ -149,7 +152,10 @@ def test_postgres_scope_guard_accepts_phonebook_and_rejects_invalid_scope(phoneb
     )
     with pytest.raises(DatabaseError, match="Station must belong to the scope department"):
         DatasetScopeState.objects.create(
-            department=department, station=foreign_station, dataset_type_code="station_phonebook"
+            scope_type="STATION",
+            department=department,
+            station=foreign_station,
+            dataset_type_code="station_phonebook",
         )
     with pytest.raises(DatabaseError, match="Unknown dataset type code"):
         DatasetScopeState.objects.create(department=department, dataset_type_code="unknown")
@@ -276,9 +282,12 @@ def test_phonebook_json_artifact_and_hpke_grant_obey_existing_authorization_cont
             ),
         )
         ciphertext = (test_root / "artifacts" / department_publication.artifact_path).read_bytes()
-        assert json.loads(
-            AESGCM(cek).decrypt(bytes(department_publication.artifact_nonce), ciphertext, None)
-        )["entries"][0]["organization_unit"] == "Department control"
+        assert (
+            json.loads(
+                AESGCM(cek).decrypt(bytes(department_publication.artifact_nonce), ciphertext, None)
+            )["entries"][0]["organization_unit"]
+            == "Department control"
+        )
 
         wrong_station_tablet = Tablet.objects.create(
             department=department, display_name="Second tablet", status=Tablet.Status.ACTIVE
@@ -300,7 +309,9 @@ def test_phonebook_json_artifact_and_hpke_grant_obey_existing_authorization_cont
             app_version="1.0.0",
             adopted_app_version="1.0.0",
             app_version_seen_at=timezone.now(),
-            hpke_public_key=serialize_p256_public_key(ec.generate_private_key(ec.SECP256R1()).public_key()),
+            hpke_public_key=serialize_p256_public_key(
+                ec.generate_private_key(ec.SECP256R1()).public_key()
+            ),
             hpke_ciphersuite=HPKE_CIPHERSUITE,
             hpke_key_fingerprint="d" * 64,
             hpke_key_verified_at=timezone.now(),
@@ -345,7 +356,9 @@ def test_phonebook_json_artifact_and_hpke_grant_obey_existing_authorization_cont
             app_version="1.0.0",
             adopted_app_version="1.0.0",
             app_version_seen_at=timezone.now(),
-            hpke_public_key=serialize_p256_public_key(ec.generate_private_key(ec.SECP256R1()).public_key()),
+            hpke_public_key=serialize_p256_public_key(
+                ec.generate_private_key(ec.SECP256R1()).public_key()
+            ),
             hpke_ciphersuite=HPKE_CIPHERSUITE,
             hpke_key_fingerprint="f" * 64,
             hpke_key_verified_at=timezone.now(),

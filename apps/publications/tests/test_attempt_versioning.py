@@ -50,6 +50,7 @@ def _signed_publication(
     validate: bool = True,
 ) -> DatasetPublication:
     publication = DatasetPublication.objects.create(
+        scope_type=scope.scope_type,
         department=department,
         station=scope.station,
         dataset_type_code=dataset_type_code,

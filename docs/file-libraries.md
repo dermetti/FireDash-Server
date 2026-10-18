@@ -1,4 +1,4 @@
-# File libraries (Stages 1–4)
+# File libraries (Stages 1–5)
 
 `apps.file_library` owns department and station source libraries. The existing
 persisted authorization scopes apply; department roles do not inherit station
@@ -137,6 +137,91 @@ write permissions, not by broadening the publication worker's read-only accepted
 storage access. Retained plaintext and encrypted artifacts remain outside the
 current-source quota, so physical disk capacity still needs ordinary monitoring.
 
+## Projected capacity and administrative overrides
+
+Uploads and replacements with changed sanitized hashes pass a capacity guard before
+canonical writes. Unchanged document/hash replacements and metadata edits do not
+create new encrypted PDF bytes and do not require an override. Quotas remain a
+separate mandatory check, including when an override is approved.
+
+Affected tablets are ACTIVE physical assets with current operational vehicle and
+station assignments: all department tablets for `department_files`, and only the
+current station for `station_files`. Inactive/lost/retired assets and unrelated
+departments/stations are excluded. Missing current installations are capacity
+unknown. An eligible current installation must be ACTIVE, have an unexpired lease,
+and have a complete, nonfuture, valid measurement no older than
+`TABLET_STORAGE_TELEMETRY_MAX_AGE_SECONDS` (default 86400). Missing, invalid,
+outdated, replaced, or expired measurements never imply sufficient capacity.
+An assignment beginning after the observation also means capacity unknown until
+a fresh check-in: the earlier reading cannot establish the new scope's baseline.
+
+The estimate uses the latest successful retained publication at or before the
+measurement as an **expected published baseline**, not a cache receipt. It reserves
+the unique ciphertext identities needed for the resulting department and current
+station sources, successful generations published after the measurement, and
+committed source-content changes since the measurement. `StorageImpact` is this
+source-side reservation history; it is not a per-tablet delivery or measurement
+series. Reservations survive source deletion and failed/superseded builds until a
+newer measurement accounts for them. Duplicate logical-document/hash identities
+are counted once. Existing generic artifact identities and actual ciphertext
+sizes are reused; unbuilt content reserves sanitized size plus the 16-byte GCM
+tag. Identical PDFs in different documents or scopes count separately. Replacement
+and deletion never assume that old ciphertext has already been reclaimed. A
+pruned successful snapshot needed since the measurement makes capacity unknown.
+
+Projected free bytes = reported free bytes minus the estimated unique additional
+ciphertext bytes; negative projections are preserved. A warning means projected
+free bytes are **strictly below 20%** of total; exactly 20% is allowed. Estimates
+exclude manifest/key metadata, decrypted working copies, other applications and
+future disk activity. The published baseline may differ from an offline device's
+actual cache. These are conservative estimates of incremental encrypted content,
+never a guarantee of installability or confirmed delivery. The iPad must still
+handle insufficient local capacity and failed staging without partial activation.
+
+Source mutations in either scope serialize on a department advisory lock before
+the established publication-scope/library locks. Capacity evaluation locks current
+installation rows, so check-in/replacement cannot overwrite a reviewed measurement
+mid-commit. Queries are batched, and estimating never builds a publication. Quota
+updates keep their existing library-row lock; publication workers retain the
+existing frozen-snapshot, supersession and reference-protection lifecycle.
+
+A blocked PDF creates a `CapacityReview` and audit event, **not** a document,
+canonical content blob, quota usage, source revision, or publication intent.
+Temporary ingestion files are removed. Bulk uploads report each PDF independently.
+The review page shows scope, operation, all affected tablets, measurements and
+timestamps, reserved bytes, projected free bytes, and warning/unknown reasons.
+
+Department administrators review pending requests in System Settings. They must
+explicitly confirm and recently reauthenticate (the existing reauthentication
+policy) to approve or reject. A review expires **15 minutes after its creation**.
+Approval binds the requesting actor, scope, operation kind, logical document UUID,
+name/folder/replacement target, sanitized hash/size, source revisions, installation
+and assignment identities, telemetry, and calculated projection. It does not
+change telemetry, quotas, publication permissions, or subsequent operations.
+The user retries the same PDF through the review page; the deployed sanitizer uses
+deterministic IDs, and any changed sanitized result requires a fresh review.
+
+Only the original requester, still normally authorized to manage the library,
+can commit an approved operation. Source and telemetry are recomputed under locks;
+a stale/expired/rejected/used approval fails closed even if the old page is open.
+Successful commit consumes approval atomically with the source write, usage,
+revision, dirty intent, reservation and audit. Failure rolls back consumption.
+Audit records include request/decision/consumption, actor and decision maker,
+operation, affected scope/tablet IDs, measurements/timestamps, projections/reasons,
+fingerprint and expiry.
+
+Station administrators **cannot** approve. Their safe escalation is: blocked
+operation -> department administrator decision -> original station administrator
+retries the specific PDF. Department approval gives no station browsing/upload,
+replacement or publication authority. Six-hour temporary station access remains
+read/download/delete only; an administrator must release it before approving or
+using an override. Direct service and URL authorization enforce these boundaries.
+
+Migration `file_library.0007` adds only source-capacity reservations and reviews.
+Safe rollback requires quiescing file writers and resolving pending reviews. It
+removes reservation history; obtain fresh measurements before re-enabling capacity
+guards after a rollback/redeploy. The earlier over-quota rollback caveat still applies.
+
 ## Deployment validation
 
 Rolling back the Stage 4 quota constraint migration requires first resolving
@@ -158,10 +243,89 @@ the isolated broker, configured UID/GID boundaries and accepted-storage modes:
 
 Stage 4 stores the latest device-reported storage measurement at authenticated
 check-in and displays it in Tablet Management. An expired lease or stale
-installation marks the preserved values as last known capacity. No projected
-post-publication capacity is calculated.
+installation, or a measurement older than 24 hours by default, marks the
+preserved values as last known capacity. Stage 5 adds the estimates described above.
 
 No iPad browser is implemented. The future tablet client must
 support these required types before activating a complete manifest containing
 them, and render the department library with ` (global)` appended for display.
 The suffix is never stored in the configurable name or signed source metadata.
+
+### Exact Linux deployment verification (outstanding on Windows)
+
+No real Linux/systemd/libmagic validation was performed on the Windows development
+host. The PostgreSQL/cryptography tests run real database and encryption paths,
+but stub native MIME and broker behavior. Run on the deployed Linux release:
+
+```bash
+sudo /srv/firedash/current/deploy/verify-deployment.sh
+sudo systemd-run --unit=fire-library-sanitizer-smoke --wait --pipe --collect \
+  --property=User=fire_backend --property=Group=fire_backend \
+  --property=WorkingDirectory=/srv/firedash/current \
+  --property=EnvironmentFile=/etc/fire-backend/fire-backend.env \
+  --setenv=DJANGO_SETTINGS_MODULE=config.settings.production \
+  /srv/firedash/current/venv/bin/python manage.py verify_library_pdf_sanitizer
+```
+
+The smoke command uses real native MIME/strict PDF inspection and the real isolated
+broker for a benign PDF, rejects non-PDF/malformed/password-protected cases, and
+cleans temporary files. It creates no library/document/publication records. A
+missing broker, native dependency, or sandbox fails the command. Also complete the
+four upload-to-publication checks above using authorized deployment test accounts;
+the smoke command alone does not verify HTTP authorization, Nginx serving modes,
+or publication-worker accepted-root access. Confirm deterministic sanitized hashes
+when selecting the same PDF twice for an override retry.
+
+Reconciliation is appended to the existing daily
+`fire-import-staging-maintenance.service` as `fire_backend`, the accepted-root
+owner, with a seven-day grace period. The publication role keeps read-only source
+access. Install the updated unit and verify the schedule explicitly:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/fire-import-staging-maintenance.service /etc/systemd/system/fire-import-staging-maintenance.timer
+sudo systemctl enable --now fire-import-staging-maintenance.timer
+sudo systemctl start fire-import-staging-maintenance.service
+sudo systemctl list-timers fire-import-staging-maintenance.timer --all
+sudo journalctl -u fire-import-staging-maintenance.service -n 50 --no-pager
+```
+
+The unit's accepted-root write path is `/var/lib/fire-backend/fire-plans`; adjust
+that narrow `ReadWritePaths` if deployment overrides `REFERENCE_DATA_ACCEPTED_ROOT`.
+Do not grant the publication worker source write access. Inspect a dry run before
+the first cleanup and drain pre-promotion-lock upload workers, as documented above.
+Timer installation, execution, real in-progress-upload exclusion and sandbox/MIME
+checks remain deployment prerequisites until verified on that host.
+
+### Final server-to-iPad handoff inventory
+
+The subsequent iPad PRD must cover mandatory integer storage check-ins and current
+installation identity; explicit department/station scopes and both required schema-2
+file datasets; configured root names and the display-only department ` (global)`
+suffix; complete/generation Ed25519 verification, exact HPKE info, AES-KW and GCM;
+individual ciphertext caching, hashes and immutable document identities; folder
+integrity, authoritative empty generations and atomic complete-manifest activation;
+lease/offline monotonic time, stale recovery, revocation/replacement/reassignment
+and purge; and local capacity/staging failures without receipts or false delivery
+claims. Server capacity overrides are portal-only and confer no tablet privileges.
+
+### Fake-tablet contract regression disposition
+
+The two formerly failing optional/required-dataset tests exposed an obsolete
+string-scope verifier and a fixture advertising KLGV as a ZIP. The verifier now
+validates the server's explicit `SYSTEM`/`DEPARTMENT`/`STATION` scope objects against
+current configuration, recognizes generic v2 descriptor URLs, and reconstructs
+the current JSON artifact-signature scope (including `type`) separately from the
+unchanged HPKE scope. The KLGV fixture now advertises the intentional schema-2
+`document-manifest-v2` contract. Both tests still enforce their original intent:
+an unsupported optional type is ignored after complete-manifest verification;
+an unsupported required type prevents activation. Neither test is skipped or
+removed. Negative cross-tenant/missing-ID scope and signature tests supplement them.
+
+The fake tool remains a protocol harness, not the iPad PDF browser: recognizing a
+v2 descriptor does not advertise support for activating required PDF libraries.
+Publication API tests independently open real generic-v2 grants, decrypt individual
+department/station PDFs, verify signed frozen metadata and hashes, and enforce
+current entitlement for retained URLs. Performance fixtures now declare STATION
+ownership explicitly and retain a fixed six-query bound including the existing
+separate SYSTEM panel; no production constraint was relaxed to accommodate them.

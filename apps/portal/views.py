@@ -10,6 +10,7 @@ from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
@@ -1198,6 +1199,12 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     department_library, station_libraries = department_quota_libraries(
         actor=request.user, department=department
     )
+    from apps.file_library.models import CapacityReview
+
+    capacity_reviews = CapacityReview.objects.filter(
+        library_id__in=[department_library.id, *(item.id for item in station_libraries)],
+        decision="pending", expires_at__gt=timezone.now(),
+    ).select_related("library__station", "requested_by").order_by("created_at")[:50]
     policy = getattr(department, "personnel_retention_policy", None)
     lease_initial = {"tablet_lease_days": department.tablet_lease_days}
     retention_initial = {"retention_days": policy.retention_period.days if policy else 30}
@@ -1377,6 +1384,7 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
             "quota_form": quota_form,
             "department_library": department_library,
             "station_libraries": station_libraries,
+            "capacity_reviews": capacity_reviews,
             "retention_policy": policy,
             "mail": mail,
             "system_managed_allowed": is_system_managed_mail_allowed(department=department),

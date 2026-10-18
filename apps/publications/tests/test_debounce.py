@@ -193,11 +193,15 @@ def test_user_request_without_pending_work_is_immediately_claimable(debounce_con
 def test_historical_terminal_candidate_consumes_its_immutable_attempt_version(debounce_context):
     admin, department, station_a, _ = debounce_context
     scope = DatasetScopeState.objects.create(
-        department=department, station=station_a, dataset_type_code="station_personnel"
+        scope_type="STATION",
+        department=department,
+        station=station_a,
+        dataset_type_code="station_personnel",
     )
     # Historical terminal attempts retain their signed version and it remains
     # part of the monotonically increasing attempt sequence.
     DatasetPublication.objects.create(
+        scope_type="STATION",
         department=department,
         station=station_a,
         dataset_type_code="station_personnel",
