@@ -298,6 +298,30 @@ must never be presented as current. Use readable states such as:
 - `v17 · Update failed`;
 - `Not published` when there is no active publication.
 
+### Template-owned module metadata
+
+Keep static titles, descriptions, icon choices, count labels and accessible
+navigation text in Django templates. `portal/_data_hub_module.html` selects
+metadata by an explicit stable `module.id`; `_data_hub_card.html` owns the
+shared card markup and uses the local `_data_hub_icon.html` SVG partial.
+Do not select cards or key tests by mutable display titles.
+
+Department module IDs, in card order, are `dangerous_goods`,
+`department_phonebook`, `department_hydrants`, `station_personnel`,
+`department_fire_plans` and `department_klgv_plans`. File Management remains
+the first, template-owned navigation card. System IDs are
+`system_vehicle_rescue_guides` and `system_outbound_email`; inherited rescue
+configuration uses the same `system_vehicle_rescue_guides` ID in a read-only
+article, with its department-specific description owned by the template.
+
+Views retain authorization, module visibility/order, tenant-scoped counts,
+URLs, capability/configuration values, dynamic provider/delivery/status values
+and configuration-derived styling. Publication summaries remain authoritative
+Python state; the template renders the unpublished fallback. Template branches
+never grant access. Test IDs in context and labels, distinct icons, accessible
+text and navigation structure in rendered HTML. Preserve external-link safety
+attributes and never nest links or buttons inside navigation cards.
+
 ## 7.3 System-managed configuration cards
 
 SYSTEM-managed configuration is not a SYSTEM publication. It has no source

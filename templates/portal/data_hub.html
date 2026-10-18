@@ -5,24 +5,7 @@
 <section class="row row-cols-1 row-cols-md-2 g-3" aria-label="Distributed data modules">
   <div class="col"><a class="card h-100 d-block text-decoration-none text-reset shadow-sm" href="{% url 'file-library-index' %}"><div class="card-body"><h2 class="h5">File Management / Dateiverwaltung</h2><p class="text-body-secondary">Manage the department PDF library. Prepare signed publications for compatible tablets.</p></div></a></div>
   {% for module in modules %}
-    <div class="col">
-      <a class="card h-100 d-block text-decoration-none text-reset shadow-sm" href="{{ module.url }}">
-        <div class="card-body d-flex flex-column">
-          <div class="d-flex align-items-center gap-3 mb-3">
-            <span class="firedash-module-icon text-primary" aria-hidden="true">{% include "components/_data_hub_icon.html" with icon=module.icon %}</span>
-            <h2 class="h5 mb-0">{{ module.name }}</h2>
-          </div>
-          <p class="text-body-secondary">{{ module.description }}</p>
-          <dl class="row small mb-0">
-            <dt class="col-7">{{ module.count_label|capfirst }}</dt>
-            <dd class="col-5 text-end">{{ module.count }}</dd>
-            <dt class="col-7">Publication</dt>
-            <dd class="col-5 text-end text-body-secondary">{% if module.publication_version %}v{{ module.publication_version }} &middot; {{ module.publication_state }}{% else %}{{ module.publication_state }}{% endif %}</dd>
-          </dl>
-          <span class="visually-hidden">Open {{ module.name }}</span>
-        </div>
-      </a>
-    </div>
+    {% include "portal/_data_hub_module.html" %}
   {% endfor %}
 </section>
 {% if inherited_system_configurations %}
@@ -31,24 +14,26 @@
   <p class="text-body-secondary">These settings are administered globally and inherited read-only. They are not publications.</p>
   <div class="row row-cols-1 row-cols-md-2 g-3">
     {% for configuration in inherited_system_configurations %}
+      {% if configuration.id == "system_vehicle_rescue_guides" %}
       <div class="col">
-        <article class="card h-100 shadow-sm">
+        <article class="card h-100 shadow-sm" data-module-id="{{ configuration.id }}">
           <div class="card-body d-flex flex-column">
             <div class="d-flex align-items-center gap-3 mb-3">
-              <span class="firedash-module-icon text-primary" aria-hidden="true">{% include "components/_data_hub_icon.html" with icon=configuration.icon %}</span>
-              <h3 class="h5 mb-0">{{ configuration.name }}</h3>
+              <span class="firedash-module-icon text-primary" aria-hidden="true">{% include "components/_data_hub_icon.html" with icon="vehicle" %}</span>
+              <h3 class="h5 mb-0">Vehicle Rescue Guides</h3>
             </div>
-            <p class="text-body-secondary">{{ configuration.description }}</p>
+            <p class="text-body-secondary">Euro RESCUE web application available through system-managed configuration.</p>
             <dl class="row small mb-0">
               <dt class="col-7">Status</dt><dd class="col-5 text-end"><span class="badge text-bg-success">Enabled</span></dd>
-              <dt class="col-7">Provider</dt><dd class="col-5 text-end">Euro RESCUE</dd>
-              <dt class="col-7">Delivery</dt><dd class="col-5 text-end">Web</dd>
+              <dt class="col-7">Provider</dt><dd class="col-5 text-end">{% if configuration.provider == "euro_rescue" %}Euro RESCUE{% endif %}</dd>
+              <dt class="col-7">Delivery</dt><dd class="col-5 text-end">{% if configuration.mode == "web" %}Web{% endif %}</dd>
               <dt class="col-7">Ownership</dt><dd class="col-5 text-end text-body-secondary">System managed</dd>
               <dt class="col-7">Web application</dt><dd class="col-5 text-end text-break"><a href="{{ configuration.web_url }}" rel="noopener noreferrer" target="_blank">{{ configuration.web_url }}</a></dd>
             </dl>
           </div>
         </article>
       </div>
+      {% endif %}
     {% endfor %}
   </div>
 </section>

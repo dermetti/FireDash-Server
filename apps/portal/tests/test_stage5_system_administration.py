@@ -246,8 +246,12 @@ def test_system_data_hub_vehicle_rescue_guides_is_system_only_and_uses_audited_s
     assert "Enabled" in content and "Euro RESCUE" in content and "Web" in content
     assert "https://rescue.euroncap.com/" in content
     assert configuration_url in content
-    modules = {module["name"]: module["icon"] for module in hub.context["modules"]}
-    assert modules["Vehicle Rescue Guides"] == "vehicle"
+    assert [module["id"] for module in hub.context["modules"]] == [
+        "system_vehicle_rescue_guides",
+        "system_outbound_email",
+    ]
+    assert 'data-module-id="system_vehicle_rescue_guides"' in content
+    assert '<circle cx="7" cy="17" r="2"/>' in content
 
     invalid = client.post(configuration_url, {"web_url": "http://example.test"})
     assert invalid.status_code == 200
@@ -286,10 +290,11 @@ def test_department_data_hub_renders_vehicle_rescue_guides_as_read_only_system_c
     assert "Enabled" in content and "Euro RESCUE" in content and "Web" in content
     assert "System managed" in content
     assert "https://rescue.euroncap.com/" in content
-    assert {
-        configuration["name"]: configuration["icon"]
-        for configuration in response.context["inherited_system_configurations"]
-    }["Vehicle Rescue Guides"] == "vehicle"
+    assert [
+        configuration["id"] for configuration in response.context["inherited_system_configurations"]
+    ] == ["system_vehicle_rescue_guides"]
+    assert 'data-module-id="system_vehicle_rescue_guides"' in content
+    assert '<circle cx="7" cy="17" r="2"/>' in content
     assert "Save web application URL" not in content
     assert "Publish" not in content and "Rollback" not in content and "Build" not in content
     assert VehicleRescueGuidesConfiguration.objects.count() == 1

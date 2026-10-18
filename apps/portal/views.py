@@ -553,20 +553,12 @@ def system_data_hub(request: HttpRequest) -> HttpResponse:
     mail = get_system_mail_configuration()
     modules = (
         {
-            "name": "Vehicle Rescue Guides",
-            "description": "System-managed Euro RESCUE web application configuration.",
-            "icon": "vehicle",
+            "id": "system_vehicle_rescue_guides",
             "url": reverse("portal-system-vehicle-rescue-guides"),
-            "web_url": capability["web_url"],
-            "status": "Enabled",
-            "status_css": "success",
-            "provider": "Euro RESCUE",
-            "delivery": "Web",
+            **capability,
         },
         {
-            "name": "Outbound Email",
-            "description": "System-level transactional email delivery configuration.",
-            "icon": "mail",
+            "id": "system_outbound_email",
             "url": reverse("portal-system-outbound-email"),
             "status": mail.delivery_mode.replace("_", " ").title(),
             "status_css": "secondary" if mail.delivery_mode == "DISABLED" else "success",
@@ -1557,13 +1549,14 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     )
 
     def module(*, dataset_type_code: str, **values):
+        values["id"] = dataset_type_code
         state = publication_states.get(dataset_type_code)
         # Gateway cards show only the currently distributed version. Candidate
         # work is secondary context and never becomes the displayed version
         # until the publication lifecycle activates it.
         if state is None or state["distributed_version"] is None:
             values["publication_version"] = None
-            values["publication_state"] = "Not published"
+            values["publication_state"] = None
         else:
             values["publication_version"] = state["distributed_version"]
             values["publication_state"] = state["current_update_label"] or state["state_label"]
@@ -1572,65 +1565,41 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     modules = (
         module(
             dataset_type_code="dangerous_goods",
-            name="Dangerous Goods",
-            description="Curated ADR dangerous-goods and ERI card reference data.",
             count=DatasetScopeState.objects.filter(
                 department=department, dataset_type_code="dangerous_goods"
             )
             .values_list("source_revision", flat=True)
             .first()
             or 0,
-            count_label="source revision",
-            icon="warning",
             url=reverse("ingestion-dangerous-goods", args=(department.id,)),
         ),
         module(
             dataset_type_code="department_phonebook",
-            name="Phonebook",
-            description="Canonical department and station contact entries.",
             count=PhonebookEntry.objects.filter(department=department).count(),
-            count_label="entries",
-            icon="phone",
             url=reverse("reference-data-phonebook", args=(department.id,)),
         ),
         module(
             dataset_type_code="department_hydrants",
-            name="Hydrants",
-            description="Water supply reference points distributed to operational tablets.",
             count=Hydrant.objects.filter(
                 department=department, status=Hydrant.Status.ACTIVE
             ).count(),
-            count_label="active records",
-            icon="water",
             url=reverse("reference-data-hydrants", args=(department.id,)),
         ),
         module(
             dataset_type_code="station_personnel",
-            name="Personnel",
-            description="Active personnel reference records and station context.",
             count=Person.objects.filter(
                 department=department, lifecycle_status=Person.LifecycleStatus.ACTIVE
             ).count(),
-            count_label="active records",
-            icon="people",
             url=reverse("personnel-list", args=(department.id,)),
         ),
         module(
             dataset_type_code="department_fire_plans",
-            name="Fire Plans",
-            description="Current operational fire-plan PDFs and their canonical metadata.",
             count=FirePlan.objects.filter(department=department, active=True).count(),
-            count_label="active plans",
-            icon="building",
             url=reverse("reference-data-fire-plans", args=(department.id,)),
         ),
         module(
             dataset_type_code="department_klgv_plans",
-            name="KLGV Plans",
-            description="Optional Kleingartenverein / allotment-garden operational plans.",
             count=KlgvPlan.objects.filter(department=department, active=True).count(),
-            count_label="active plans",
-            icon="garden",
             url=reverse("reference-data-klgv-plans", args=(department.id,)),
         ),
     )
@@ -1642,10 +1611,8 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
             "modules": modules,
             "inherited_system_configurations": (
                 {
-                    "name": "Vehicle Rescue Guides",
-                    "description": "Euro RESCUE web application available through system-managed configuration.",
-                    "icon": "vehicle",
-                    "web_url": vehicle_rescue_guides_capability()["web_url"],
+                    "id": "system_vehicle_rescue_guides",
+                    **vehicle_rescue_guides_capability(),
                 },
             ),
         },

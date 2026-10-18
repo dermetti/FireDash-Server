@@ -1,0 +1,18 @@
+{# Static module metadata belongs here; views provide IDs and authoritative state. #}
+{% if module.id == "dangerous_goods" %}
+  {% include "portal/_data_hub_card.html" with name="Dangerous Goods" description="Curated ADR dangerous-goods and ERI card reference data." icon="warning" count_label="Source revision" %}
+{% elif module.id == "department_phonebook" %}
+  {% include "portal/_data_hub_card.html" with name="Phonebook" description="Canonical department and station contact entries." icon="phone" count_label="Entries" %}
+{% elif module.id == "department_hydrants" %}
+  {% include "portal/_data_hub_card.html" with name="Hydrants" description="Water supply reference points distributed to operational tablets." icon="water" count_label="Active records" %}
+{% elif module.id == "station_personnel" %}
+  {% include "portal/_data_hub_card.html" with name="Personnel" description="Active personnel reference records and station context." icon="people" count_label="Active records" %}
+{% elif module.id == "department_fire_plans" %}
+  {% include "portal/_data_hub_card.html" with name="Fire Plans" description="Current operational fire-plan PDFs and their canonical metadata." icon="building" count_label="Active plans" %}
+{% elif module.id == "department_klgv_plans" %}
+  {% include "portal/_data_hub_card.html" with name="KLGV Plans" description="Optional Kleingartenverein / allotment-garden operational plans." icon="garden" count_label="Active plans" %}
+{% elif module.id == "system_vehicle_rescue_guides" %}
+  {% include "portal/_data_hub_card.html" with name="Vehicle Rescue Guides" description="System-managed Euro RESCUE web application configuration." icon="vehicle" count_label="" status="Enabled" status_css="success" %}
+{% elif module.id == "system_outbound_email" %}
+  {% include "portal/_data_hub_card.html" with name="Outbound Email" description="System-level transactional email delivery configuration." icon="mail" count_label="" status=module.status status_css=module.status_css %}
+{% endif %}
