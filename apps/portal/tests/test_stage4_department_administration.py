@@ -282,6 +282,79 @@ def test_htmx_administrator_revoke_uses_the_shared_reauthentication_redirect(cli
 
 
 @pytest.mark.django_db
+def test_administrator_provision_modal_fragments_and_role_assignment(client, stage4_scope):
+    department = stage4_scope["department"]
+    station = stage4_scope["station"]
+    department_url = reverse("portal-administrator-provision", args=(department.id,))
+    station_url = reverse(
+        "portal-station-administrator-provision", args=(department.id, station.id)
+    )
+
+    for url, label in ((department_url, b"Department Admin"), (station_url, b"Station Admin")):
+        response = client.get(url, HTTP_HX_REQUEST="true")
+        assert response.status_code == 200
+        assert b'<div class="modal fade show"' in response.content
+        assert label in response.content
+
+    invalid = client.post(
+        station_url,
+        {"email": "invalid", "display_name": ""},
+        HTTP_HX_REQUEST="true",
+    )
+    assert invalid.status_code == 200
+    assert b"Enter a valid email address" in invalid.content
+    assert b'<div class="modal fade show"' in invalid.content
+
+    invalid_full_page = client.post(
+        department_url, {"email": "invalid", "display_name": ""}
+    )
+    assert invalid_full_page.status_code == 200
+    assert b"<html" in invalid_full_page.content.lower()
+    assert b"Enter a valid email address" in invalid_full_page.content
+
+    response = client.post(
+        department_url,
+        {"email": "new-department@example.test", "display_name": "New Department"},
+        HTTP_HX_REQUEST="true",
+    )
+    assert response.status_code == 200
+    assert response["HX-Redirect"].startswith(reverse("accounts-reauthenticate"))
+    assert client.session["pending_reauth"]["return_url"] == reverse(
+        "portal-department-manage", args=(department.id,)
+    )
+    assert not User.objects.filter(email="new-department@example.test").exists()
+
+    _recent_reauth(client)
+    success = client.post(
+        department_url,
+        {"email": "new-department@example.test", "display_name": "New Department"},
+        HTTP_HX_REQUEST="true",
+    )
+    assert success.status_code == 200
+    assert [template.name for template in success.templates] == [
+        "portal/_administrator_setup_link_modal.html"
+    ]
+    assert b"single-use setup link" in success.content
+    assert b"<html" not in success.content.lower()
+    department_user = User.objects.get(email="new-department@example.test")
+    assert DepartmentMembership.objects.filter(
+        user=department_user, department=department, status="ACTIVE"
+    ).exists()
+
+    full_page = client.post(
+        station_url,
+        {"email": "new-station@example.test", "display_name": "New Station"},
+    )
+    assert full_page.status_code == 200
+    assert "portal/setup_link.html" in [template.name for template in full_page.templates]
+    assert b"<html" in full_page.content.lower()
+    station_user = User.objects.get(email="new-station@example.test")
+    assert StationAdminAssignment.objects.filter(
+        user=station_user, station=station, status="ACTIVE"
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_department_search_lists_use_personnel_live_contract_and_results_fragments(
     client, stage4_scope
 ):

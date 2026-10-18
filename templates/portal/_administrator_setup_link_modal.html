@@ -1,0 +1,10 @@
+<div class="modal fade show" id="department-admin-modal" tabindex="-1" style="display:block" aria-modal="true" role="dialog">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h2 class="modal-title fs-5">{% if station %}Station{% else %}Department{% endif %} administrator setup link</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body">
+      <p>Share this single-use setup link with the new administrator:</p>
+      <div class="alert alert-info text-break"><strong>{{ setup_url }}</strong></div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-primary" data-bs-dismiss="modal">Done</button></div>
+  </div></div>
+</div>

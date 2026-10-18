@@ -143,6 +143,29 @@ def test_frozen_metadata_reuse_replacement_and_retention(scope, pdf_pipeline, cr
     assert third.document_artifact_references.exists()
 
 
+def test_elevated_deletion_preserves_published_content(scope, pdf_pipeline, crypto):
+    admin, station_admin, _other, _department, _outside, station, _second = scope
+    library = services.get_library(station_admin, station_id=station.id)
+    document = services.upload_pdf(
+        actor=station_admin, library_id=library.id, upload=pdf()
+    )
+    content = document.content
+    generation = publish(station_admin, library)
+    assert PublicationContent.objects.filter(
+        publication=generation, content=content, document_id=document.id
+    ).exists()
+
+    services.activate_temporary_access(actor=admin, station=station)
+    services.delete_entry(actor=admin, library_id=library.id, entry_id=document.id)
+
+    generation.refresh_from_db()
+    assert generation.status == "PUBLISHED"
+    assert PublicationContent.objects.filter(
+        publication=generation, content=content
+    ).exists()
+    assert not services.collect_content(content.id)
+
+
 def test_revision_race_and_failure_preserve_previous(scope, pdf_pipeline, crypto, monkeypatch):
     library = library_for(scope)
     common = dict(actor=scope[0], library_id=library.id)

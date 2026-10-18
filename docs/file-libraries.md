@@ -1,9 +1,19 @@
-# File libraries (Stages 1–2)
+# File libraries (Stages 1–3)
 
 `apps.file_library` owns department and station source libraries. The existing
 persisted authorization scopes apply; department roles do not inherit station
 library access, including when a department administrator has a station assignment.
 System administrators have no library access. Suspended resources fail closed.
+
+Department administrators may activate one audited temporary station-library
+grant from their department library after explicit confirmation and recent
+reauthentication. The persisted grant is bound to the user and station and has
+an absolute six-hour expiry. It permits browsing, search, preview, download,
+and one successful recursive deletion only. Switching stations, explicit
+release, expiry, loss of department authority, another department-library
+mutation, or that successful deletion revokes the grant. This capability is
+separate from normal scope authorization, publication authorization, and tablet
+installation entitlements.
 
 Libraries are created lazily on first authorized access. A library has exactly one
 department or station owner. `Entry` gives folders and logical documents a shared,

@@ -1052,7 +1052,10 @@ def administrator_provision_modal(
         station = get_object_or_404(Station, pk=station_id, department=department, active=True)
     form = AdministratorForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        require_recent_reauthentication(request, return_url=request.path)
+        require_recent_reauthentication(
+            request,
+            return_url=reverse("portal-department-manage", args=(department.id,)),
+        )
         token = (
             provision_station_admin(actor=request.user, station=station, **form.cleaned_data)
             if station is not None
@@ -1060,14 +1063,27 @@ def administrator_provision_modal(
                 actor=request.user, department=department, **form.cleaned_data
             )
         )
+        context = {
+            "setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,))),
+            "department": department,
+            "station": station,
+        }
         return render(
             request,
-            "portal/setup_link.html",
-            {"setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,)))},
+            (
+                "portal/_administrator_setup_link_modal.html"
+                if request.headers.get("HX-Request") == "true"
+                else "portal/setup_link.html"
+            ),
+            context,
         )
     return render(
         request,
-        "portal/_administrator_provision_modal.html",
+        (
+            "portal/_administrator_provision_modal.html"
+            if request.headers.get("HX-Request") == "true"
+            else "portal/administrator_provision.html"
+        ),
         {"form": form, "department": department, "station": station},
     )
 

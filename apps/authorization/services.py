@@ -405,6 +405,10 @@ def change_department_status(*, actor, department: Department, status: str) -> D
         raise ValueError("Invalid department status.")
     department.status = status
     department.save(update_fields=("status",))
+    if status != Department.Status.ACTIVE:
+        from apps.file_library.services import revoke_department_temporary_accesses
+
+        revoke_department_temporary_accesses(department=department, actor=actor)
     record_event(
         action="organization.department_status_changed",
         actor_user=actor,
@@ -511,6 +515,9 @@ def suspend_department_admin(*, actor, membership: DepartmentMembership) -> None
     membership.suspended_at = timezone.now()
     membership.suspended_by = actor
     membership.save(update_fields=("status", "suspended_at", "suspended_by"))
+    from apps.file_library.services import revoke_temporary_access_for_user
+
+    revoke_temporary_access_for_user(user=membership.user, actor=actor)
     record_event(
         action="authorization.department_admin_suspended",
         actor_user=actor,
@@ -565,6 +572,9 @@ def revoke_department_admin(*, actor, membership: DepartmentMembership) -> None:
     membership.revoked_at = timezone.now()
     membership.revoked_by = actor
     membership.save(update_fields=("status", "revoked_at", "revoked_by"))
+    from apps.file_library.services import revoke_temporary_access_for_user
+
+    revoke_temporary_access_for_user(user=membership.user, actor=actor)
     record_event(
         action="authorization.department_admin_revoked",
         actor_user=actor,
@@ -728,6 +738,9 @@ def permanently_remove_administrator(*, actor, user, department: Department) -> 
             assignment.revoked_at = timezone.now()
             assignment.revoked_by = actor
             assignment.save(update_fields=("status", "revoked_at", "revoked_by"))
+    from apps.file_library.services import revoke_temporary_access_for_user
+
+    revoke_temporary_access_for_user(user=user, actor=actor)
     permanently_deactivate_and_anonymize_user(user=user)
     record_event(
         action="authorization.administrator_permanently_removed",

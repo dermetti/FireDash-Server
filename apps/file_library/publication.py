@@ -168,6 +168,10 @@ def publish_now(*, actor, library_id):
         target_type="library",
         target_uuid=library.id,
     )
+    if library.department_id:
+        from apps.file_library.services import revoke_temporary_access
+
+        revoke_temporary_access(actor=actor, reason="department_mutation")
     return job
 
 

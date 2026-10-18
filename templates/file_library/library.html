@@ -4,6 +4,21 @@
 {% include "components/_page_header.html" with title=library.name description="File Management / Dateiverwaltung · Manage source files and scheduled publications." %}
 <p><strong>{% if library.department_id %}Department library: {{ library.department.name }}{% else %}Station library: {{ library.station.name }}{% endif %}</strong> · Source revision {{ library.source_revision }}</p>
 <p>Storage: {{ library.usage_bytes|filesizeformat }} of {{ library.quota_bytes|filesizeformat }} · PDF limit: {{ max_file_bytes|filesizeformat }}</p>
+{% if access_mode == "temporary" %}
+<div class="alert alert-warning">
+  <h2 class="h5">Temporary station access: {{ library.station.name }}</h2>
+  <p class="mb-2">View, download, and delete only. Valid until {{ temporary_access.expires_at }} ({{ temporary_access.expires_at|timeuntil }} remaining). A successful deletion releases access.</p>
+  <form method="post" action="{% url 'file-library-station-access-release' %}">{% csrf_token %}<button class="btn btn-outline-danger">Release Access</button></form>
+</div>
+{% elif library.department_id %}
+<div class="card card-body mb-3">
+  <h2 class="h5">Temporary station-file access</h2>
+  {% if temporary_access %}<p>Active for <strong>{{ temporary_access.station.name }}</strong> until {{ temporary_access.expires_at }} ({{ temporary_access.expires_at|timeuntil }} remaining). <a href="{% url 'file-library' temporary_access.station.library.id %}">Open station library</a></p><form method="post" action="{% url 'file-library-station-access-release' %}" class="mb-3">{% csrf_token %}<button class="btn btn-outline-danger">Release Access</button></form>{% endif %}
+  <p class="text-body-secondary">Activation requires recent reauthentication and replaces any current station access. Access permits browsing, downloading, and one successful deletion for up to six hours.</p>
+  {% for station in available_stations %}<form method="post" action="{% url 'file-library-station-access-activate' station.id %}" class="border rounded p-2 mb-2">{% csrf_token %}<label class="d-block mb-2"><input type="checkbox" name="confirm" value="yes" required> Confirm temporary view-and-delete access to {{ station.name }}.</label><button class="btn btn-outline-primary">{% if temporary_access.station_id == station.id %}Keep access to{% else %}Activate access to{% endif %} {{ station.name }}</button></form>{% empty %}<p>No active stations are available.</p>{% endfor %}
+</div>
+{% endif %}
+{% if access_mode != "temporary" %}
 <div class="card card-body mb-3">
   <p><strong>{{ publication.label }}</strong>{% if publication.unpublished %} · Unpublished changes{% endif %}</p>
   {% if publication.current %}<p>Published generation {{ publication.current.version_number }} · Source revision {{ publication.current.source_revision }}</p>{% else %}<p>No successful publication yet.</p>{% endif %}
@@ -12,19 +27,20 @@
   <form method="post">{% csrf_token %}<input type="hidden" name="action" value="publish"><button class="btn btn-primary">Publish Now</button></form>
 </div>
 <details class="mb-3"><summary>Edit library display name</summary><form method="post" class="d-flex gap-2 mt-2">{% csrf_token %}<input type="hidden" name="action" value="library_name"><input class="form-control" aria-label="Library name" name="name" value="{{ library.name }}" maxlength="255" required><button class="btn btn-outline-primary">Save name</button></form></details>
+{% endif %}
 <nav aria-label="Folder breadcrumb" class="mb-3"><a href="{% url 'file-library' library.id %}">Library root</a>{% for folder in breadcrumbs %} / <a href="?folder={{ folder.id }}">{{ folder.name }}</a>{% endfor %}</nav>
-<div class="card card-body mb-3"><div class="row g-3">
+{% if access_mode != "temporary" %}<div class="card card-body mb-3"><div class="row g-3">
 <form method="post" enctype="multipart/form-data" class="col-md-6">{% csrf_token %}<input type="hidden" name="action" value="upload"><label class="form-label" for="pdfs">Upload PDFs to {% if current %}{{ current.name }}{% else %}library root{% endif %}</label><input id="pdfs" class="form-control mb-2" name="pdfs" type="file" accept="application/pdf,.pdf" multiple required><button class="btn btn-primary">Upload PDFs</button></form>
 <form method="post" class="col-md-6">{% csrf_token %}<input type="hidden" name="action" value="folder"><label class="form-label" for="folder-name">New folder</label><input id="folder-name" class="form-control mb-2" name="name" maxlength="255" required><button class="btn btn-outline-primary">Create folder</button></form>
-</div></div>
+</div></div>{% endif %}
 <form method="get" class="d-flex gap-2 mb-3"><label class="visually-hidden" for="search">Search library filenames and folders</label><input id="search" type="search" class="form-control" name="q" value="{{ query }}" placeholder="Search filenames and folders throughout this library"><button class="btn btn-outline-secondary">Search</button></form>
 <div class="table-responsive"><table class="table align-middle"><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead><tbody>
 {% for entry in entries %}<tr><td>{% if entry.is_folder %}<a href="?folder={{ entry.id }}">📁 {{ entry.name }}</a>{% else %}<a href="{% url 'file-library-document' library.id entry.id %}" target="_blank" rel="noopener">{{ entry.name }}</a>{% endif %}{% if query %}<small class="d-block text-body-secondary">{% if entry.parent %}In {{ entry.parent.name }}{% else %}Library root{% endif %}</small>{% endif %}</td><td>{% if entry.content %}{{ entry.content.size_bytes|filesizeformat }}{% else %}Folder{% endif %}</td><td>{{ entry.modified_at }}<small class="d-block">{{ entry.modified_by.display_name }}</small></td><td>
 {% if not entry.is_folder %}<a class="btn btn-sm btn-outline-primary" href="{% url 'file-library-document' library.id entry.id %}" target="_blank" rel="noopener">Preview</a> <a class="btn btn-sm btn-outline-secondary" href="{% url 'file-library-document' library.id entry.id %}?download=1">Download</a>{% endif %}
 <details class="mt-2"><summary>Manage {{ entry.name }}</summary>
-<form method="post" class="d-flex gap-2 my-2">{% csrf_token %}<input type="hidden" name="action" value="rename"><input type="hidden" name="entry" value="{{ entry.id }}"><input class="form-control" aria-label="New name for {{ entry.name }}" name="name" value="{{ entry.name }}" maxlength="255" required><button class="btn btn-outline-secondary">Rename</button></form>
+{% if access_mode != "temporary" %}<form method="post" class="d-flex gap-2 my-2">{% csrf_token %}<input type="hidden" name="action" value="rename"><input type="hidden" name="entry" value="{{ entry.id }}"><input class="form-control" aria-label="New name for {{ entry.name }}" name="name" value="{{ entry.name }}" maxlength="255" required><button class="btn btn-outline-secondary">Rename</button></form>
 <form method="post" class="d-flex gap-2 my-2">{% csrf_token %}<input type="hidden" name="action" value="move"><input type="hidden" name="entry" value="{{ entry.id }}"><select class="form-select" aria-label="Destination for {{ entry.name }}" name="destination"><option value="">Library root</option>{% for folder in folders %}{% if folder.id != entry.id %}<option value="{{ folder.id }}" {% if folder.id == entry.parent_id %}selected{% endif %}>{{ folder.display_path }}</option>{% endif %}{% endfor %}</select><button class="btn btn-outline-secondary">Move</button></form>
-{% if not entry.is_folder %}<form method="post" enctype="multipart/form-data" class="my-2">{% csrf_token %}<input type="hidden" name="action" value="replace"><input type="hidden" name="entry" value="{{ entry.id }}"><label class="form-label" for="replace-{{ entry.id }}">Replace PDF (keeps document identity and name)</label><input id="replace-{{ entry.id }}" class="form-control mb-2" type="file" name="pdf" accept="application/pdf,.pdf" required><button class="btn btn-outline-secondary">Replace PDF</button></form>{% endif %}
+{% if not entry.is_folder %}<form method="post" enctype="multipart/form-data" class="my-2">{% csrf_token %}<input type="hidden" name="action" value="replace"><input type="hidden" name="entry" value="{{ entry.id }}"><label class="form-label" for="replace-{{ entry.id }}">Replace PDF (keeps document identity and name)</label><input id="replace-{{ entry.id }}" class="form-control mb-2" type="file" name="pdf" accept="application/pdf,.pdf" required><button class="btn btn-outline-secondary">Replace PDF</button></form>{% endif %}{% endif %}
 <form method="post" class="border border-danger rounded p-2 mt-3">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="entry" value="{{ entry.id }}"><label class="d-block mb-2"><input type="checkbox" name="confirm" value="yes" required> Confirm deleting “{{ entry.name }}”{% if entry.is_folder %} and all files and folders inside it{% endif %} from this library.</label><button class="btn btn-danger">Delete{% if entry.is_folder %} recursively{% endif %}</button></form>
 </details></td></tr>{% empty %}<tr><td colspan="4" class="text-body-secondary">{% if query %}No matching files or folders.{% else %}This folder is empty.{% endif %}</td></tr>{% endfor %}
 </tbody></table></div>

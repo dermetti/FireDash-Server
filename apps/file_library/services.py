@@ -1,13 +1,16 @@
 import uuid
+from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
+from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.scopes import active_department_ids, active_station_ids, is_system_admin
-from apps.file_library.models import Content, Entry, Library
+from apps.file_library.models import Content, Entry, Library, TemporaryStationAccess
 from apps.organizations.models import Department, Station
 from apps.reference_data import pdf_sandbox, storage
 from apps.reference_data.pdf_validation import validate_pdf
@@ -15,6 +18,11 @@ from apps.reference_data.pdf_validation import validate_pdf
 
 class LibraryError(ValueError):
     pass
+
+
+TEMPORARY_ACCESS_DURATION = timedelta(hours=6)
+ACCESS_NORMAL = "normal"
+ACCESS_TEMPORARY = "temporary"
 
 
 def require_scope(actor, *, department_id=None, station_id=None):
@@ -35,6 +43,166 @@ def require_scope(actor, *, department_id=None, station_id=None):
 
 def require_library(actor, library):
     require_scope(actor, department_id=library.department_id, station_id=library.station_id)
+
+
+def _revoke_access(
+    access,
+    *,
+    reason,
+    actor=None,
+    target_uuid=None,
+    target_type="temporary_station_access",
+    audit=True,
+):
+    if access.revoked_at is not None:
+        return access
+    now = timezone.now()
+    access.revoked_at = now
+    access.revocation_reason = reason
+    access.save(update_fields=("revoked_at", "revocation_reason"))
+    if not audit:
+        return access
+    record_event(
+        action=f"file_library.temporary_access_{reason}",
+        actor_user=actor or access.user,
+        department=access.department,
+        station=access.station,
+        target_type=target_type,
+        target_uuid=target_uuid or access.id,
+        metadata={
+            "access_id": str(access.id),
+            "access_user_id": str(access.user_id),
+            "activated_at": access.activated_at.isoformat(),
+            "expires_at": access.expires_at.isoformat(),
+            "revoked_at": now.isoformat(),
+        },
+    )
+    return access
+
+
+@transaction.atomic
+def active_temporary_access(actor, *, lock=False):
+    query = TemporaryStationAccess.objects.select_related("department", "station")
+    if lock:
+        query = query.select_for_update()
+    access = query.filter(user=actor, revoked_at__isnull=True).first()
+    if access is None:
+        return None
+    now = timezone.now()
+    if access.expires_at <= now:
+        _revoke_access(access, reason="expired")
+        return None
+    if (
+        access.department_id not in active_department_ids(actor)
+        or not access.station.active
+        or access.station.department_id != access.department_id
+    ):
+        _revoke_access(access, reason="authority_revoked")
+        return None
+    return access
+
+
+@transaction.atomic
+def activate_temporary_access(*, actor, station):
+    if station.department_id not in active_department_ids(actor) or not station.active:
+        raise PermissionDenied
+    # Serialize activation/switching for one user. The partial unique constraint is
+    # the final defense against concurrent requests.
+    get_user_model().objects.select_for_update().get(pk=actor.pk)
+    previous = active_temporary_access(actor, lock=True)
+    if previous and previous.station_id == station.id:
+        return previous
+    switched_from = previous.station_id if previous else None
+    switched_access_id = previous.id if previous else None
+    if previous:
+        _revoke_access(previous, reason="switched", actor=actor, audit=False)
+    now = timezone.now()
+    access = TemporaryStationAccess.objects.create(
+        user=actor,
+        department=station.department,
+        station=station,
+        activated_at=now,
+        expires_at=now + TEMPORARY_ACCESS_DURATION,
+    )
+    record_event(
+        action=(
+            "file_library.temporary_access_switched"
+            if switched_from
+            else "file_library.temporary_access_activated"
+        ),
+        actor_user=actor,
+        department=station.department,
+        station=station,
+        target_type="temporary_station_access",
+        target_uuid=access.id,
+        metadata={
+            "station_id": str(station.id),
+            "previous_station_id": str(switched_from) if switched_from else None,
+            "previous_access_id": str(switched_access_id) if switched_access_id else None,
+            "activated_at": now.isoformat(),
+            "expires_at": access.expires_at.isoformat(),
+        },
+    )
+    library, _ = Library.objects.get_or_create(station=station)
+    from apps.file_library.publication import initialize_library
+
+    initialize_library(library)
+    return access
+
+
+@transaction.atomic
+def revoke_temporary_access(
+    *, actor, reason="released", target_uuid=None, target_type="temporary_station_access"
+):
+    access = active_temporary_access(actor, lock=True)
+    if access:
+        _revoke_access(
+            access,
+            reason=reason,
+            actor=actor,
+            target_uuid=target_uuid,
+            target_type=target_type,
+        )
+    return access
+
+
+@transaction.atomic
+def revoke_temporary_access_for_user(*, user, actor, reason="authority_revoked"):
+    access = (
+        TemporaryStationAccess.objects.select_for_update()
+        .select_related("department", "station")
+        .filter(user=user, revoked_at__isnull=True)
+        .first()
+    )
+    if access:
+        _revoke_access(access, reason=reason, actor=actor)
+    return access
+
+
+@transaction.atomic
+def revoke_department_temporary_accesses(*, department, actor, reason="authority_revoked"):
+    accesses = list(
+        TemporaryStationAccess.objects.select_for_update()
+        .select_related("department", "station", "user")
+        .filter(department=department, revoked_at__isnull=True)
+        .order_by("id")
+    )
+    for access in accesses:
+        _revoke_access(access, reason=reason, actor=actor)
+    return len(accesses)
+
+
+def require_library_access(actor, library, *, permission):
+    try:
+        require_library(actor, library)
+        return ACCESS_NORMAL
+    except PermissionDenied:
+        if permission not in {"read", "delete"} or not library.station_id:
+            raise
+    access = active_temporary_access(actor, lock=permission == "delete")
+    if access is None or access.station_id != library.station_id:
+        raise PermissionDenied
+    return ACCESS_TEMPORARY
 
 
 @transaction.atomic
@@ -60,15 +228,15 @@ def authorized_libraries(actor):
     ]
 
 
-def locked_library(actor, library_id):
+def locked_library(actor, library_id, *, permission="manage", return_access=False):
     from apps.file_library.publication import lock_scope
 
     preview = Library.objects.get(pk=library_id)
-    require_library(actor, preview)
+    access = require_library_access(actor, preview, permission=permission)
     lock_scope(preview)
     library = Library.objects.select_for_update().get(pk=library_id)
-    require_library(actor, library)
-    return library
+    access = require_library_access(actor, library, permission=permission)
+    return (library, access) if return_access else library
 
 
 def name_value(value, *, pdf=False):
@@ -149,6 +317,8 @@ def changed(actor, library, target, operation, **metadata):
     kwargs = scope_kwargs(library)
     kwargs.pop("scope_type")
     mark_dirty(**kwargs, actor=actor)
+    if library.department_id:
+        revoke_temporary_access(actor=actor, reason="department_mutation")
 
 
 @transaction.atomic
@@ -198,7 +368,9 @@ def edit_entry(*, actor, library_id, entry_id, name=None, parent_id=None, move=F
 
 @transaction.atomic
 def delete_entry(*, actor, library_id, entry_id):
-    library = locked_library(actor, library_id)
+    library, access = locked_library(
+        actor, library_id, permission="delete", return_access=True
+    )
     entry = scoped_entry(library, entry_id)
     ids, frontier = [entry.id], [entry.id]
     while frontier:
@@ -218,8 +390,17 @@ def delete_entry(*, actor, library_id, entry_id):
         is_folder=entry.is_folder,
         item_count=len(items),
         removed_ids=",".join(str(item.id) for item in items),
+        elevated=access == ACCESS_TEMPORARY,
     )
+    if access == ACCESS_TEMPORARY:
+        revoke_temporary_access(
+            actor=actor,
+            reason="consumed_by_deletion",
+            target_uuid=target_id,
+            target_type="library_entry",
+        )
     # Immutable content remains until explicit reference-aware collection.
+    return access
 
 
 def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
