@@ -32,6 +32,6 @@
   </ul>{% endif %}
 </div></section>
 {% if nav_role == "station" or nav_role == "department" %}
-<a class="card card-body mt-3 text-decoration-none text-reset shadow-sm" href="{% url 'file-library-index' %}"><h2 class="h5">File Management / Dateiverwaltung</h2><p class="mb-0">Manage your {% if nav_role == "station" %}station{% else %}department{% endif %} PDF library. Server storage only.</p></a>
+<a class="card card-body mt-3 text-decoration-none text-reset shadow-sm" href="{% url 'file-library-index' %}"><h2 class="h5">File Management / Dateiverwaltung</h2><p class="mb-0">Manage your {% if nav_role == "station" %}station{% else %}department{% endif %} PDF library. Manage scheduled publications.</p></a>
 {% endif %}
 {% endblock %}

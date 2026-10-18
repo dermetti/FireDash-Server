@@ -2,5 +2,5 @@
 {% block title %}{{ library.station.name }} Data Hub{% endblock %}
 {% block content %}
 {% include "components/_page_header.html" with title="Data Hub" breadcrumb=library.station.name description="Station data management." %}
-<a class="card card-body shadow-sm text-decoration-none text-reset" href="{% url 'file-library' library.id %}"><h2 class="h5">File Management / Dateiverwaltung</h2><p>{{ library.name }} · Station library: {{ library.station.name }}</p><p>Server storage only; files are not available on tablets.</p></a>
+<a class="card card-body shadow-sm text-decoration-none text-reset" href="{% url 'file-library' library.id %}"><h2 class="h5">File Management / Dateiverwaltung</h2><p>{{ library.name }} · Station library: {{ library.station.name }}</p><p>Prepare signed publications for compatible tablets.</p></a>
 {% endblock %}

@@ -37,10 +37,14 @@ def require_library(actor, library):
     require_scope(actor, department_id=library.department_id, station_id=library.station_id)
 
 
+@transaction.atomic
 def get_library(actor, *, department_id=None, station_id=None):
     require_scope(actor, department_id=department_id, station_id=station_id)
     scope = {"department_id": department_id} if department_id else {"station_id": station_id}
     library, _ = Library.objects.get_or_create(**scope)
+    from apps.file_library.publication import initialize_library
+
+    initialize_library(library)
     return library
 
 
@@ -57,6 +61,11 @@ def authorized_libraries(actor):
 
 
 def locked_library(actor, library_id):
+    from apps.file_library.publication import lock_scope
+
+    preview = Library.objects.get(pk=library_id)
+    require_library(actor, preview)
+    lock_scope(preview)
     library = Library.objects.select_for_update().get(pk=library_id)
     require_library(actor, library)
     return library
@@ -134,6 +143,12 @@ def changed(actor, library, target, operation, **metadata):
             **metadata,
         },
     )
+    from apps.file_library.publication import scope_kwargs
+    from apps.publications.services import mark_dirty
+
+    kwargs = scope_kwargs(library)
+    kwargs.pop("scope_type")
+    mark_dirty(**kwargs, actor=actor)
 
 
 @transaction.atomic
@@ -191,7 +206,10 @@ def delete_entry(*, actor, library_id, entry_id):
         ids.extend(frontier)
     items = list(Entry.objects.filter(pk__in=ids).select_related("content"))
     library.usage_bytes -= sum(item.content.size_bytes for item in items if item.content_id)
-    # Audit every removed identity; one source revision for this atomic recursive operation.
+    # Snapshot the complete post-deletion source, preserving the audit identity.
+    target_id = entry.id
+    entry.delete()
+    entry.id = target_id
     changed(
         actor,
         library,
@@ -201,7 +219,6 @@ def delete_entry(*, actor, library_id, entry_id):
         item_count=len(items),
         removed_ids=",".join(str(item.id) for item in items),
     )
-    entry.delete()
     # Immutable content remains until explicit reference-aware collection.
 
 
@@ -225,7 +242,10 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
         if size > settings.FILE_LIBRARY_MAX_FILE_BYTES:
             raise LibraryError("Sanitized PDF exceeds the file size limit.")
         with transaction.atomic():
+            from apps.file_library.reconciliation import lock_storage
+
             library = locked_library(actor, library_id)
+            lock_storage(library_id)
             entry = scoped_entry(library, replace_id) if replace_id else None
             if entry and entry.is_folder:
                 raise LibraryError("Only PDFs can be replaced.")
@@ -236,7 +256,10 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None):
             if usage > library.quota_bytes:
                 raise LibraryError("Library storage quota exceeded.")
             # Set the intended path before promotion so partial promotion failures are cleaned.
-            accepted = settings.REFERENCE_DATA_ACCEPTED_ROOT / key
+            destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / key
+            if destination.exists():
+                raise LibraryError("Content identity already exists; retry the upload.")
+            accepted = destination
             storage.promote_to_accepted(output, key)
             content = Content.objects.create(
                 id=content_id, library=library, storage_key=key, size_bytes=size, sha256=digest

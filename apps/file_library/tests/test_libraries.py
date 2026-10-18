@@ -541,13 +541,19 @@ def test_concurrent_capacity_changes(scope, pdf_pipeline, monkeypatch, race):
 @pytest.mark.django_db(transaction=True)
 def test_migrations_reverse_and_reapply():
     executor = MigrationExecutor(connection)
-    target = [("file_library", "0002_integrity_guards")]
+    target = executor.loader.graph.leaf_nodes()
     try:
         executor.migrate([("file_library", None)])
         assert "file_library_library" not in connection.introspection.table_names()
+        MigrationExecutor(connection).migrate([("publications", "0027_publication_scope_types")])
+        from apps.publications.models import DatasetTypeRegistry
+
+        assert not DatasetTypeRegistry.objects.filter(
+            code__in=("department_files", "station_files")
+        ).exists()
     finally:
         MigrationExecutor(connection).migrate(target)
     assert "file_library_library" in connection.introspection.table_names()
     with connection.cursor() as cursor:
         cursor.execute("SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'file_library_%'")
-        assert cursor.fetchone()[0] == 3
+        assert cursor.fetchone()[0] >= 6

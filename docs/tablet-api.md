@@ -955,6 +955,104 @@ document canonical JSON HPKE context and protocol discriminator
 `firedash-document-generation-hpke-v2`; Fire Plan retains its separate frozen
 discriminator.
 
+### `department_files` and `station_files` (`artifact_format: document-manifest-v2`)
+
+Both file-library datasets start at schema version **2**, with no ZIP or v1
+artifact. Each scope has independent publication versions. The complete signed
+tablet manifest discovers only the installation's current department library
+and assigned vehicle's station library. Both published datasets are `required:true`.
+The existing unsupported-required-type/schema rule applies: a client without
+file-library support must not activate that candidate complete manifest. Stage 3
+adds that client support; this server change does not report tablet installation.
+
+Descriptors use the existing explicit scope object (not a string):
+
+```json
+{"publication_id":"11111111-1111-1111-1111-111111111111","type":"department_files","scope":{"type":"DEPARTMENT","department_id":"22222222-2222-2222-2222-222222222222"},"version":1,"schema_version":2,"required":true,"minimum_app_version":null,"artifact_format":"document-manifest-v2","manifest_url":"/api/v1/tablet/document-generations/11111111-1111-1111-1111-111111111111/manifest"}
+```
+
+For `station_files`, `scope.type` is `STATION`, with both `department_id` and
+`station_id`. Both types use the generic document-generation manifest and
+individual artifact download endpoints above. Every request rechecks current
+installation entitlement, assignment, lease, revocation and app compatibility.
+Old station publication/artifact IDs and previously READY grants do not grant
+access after station reassignment. Required datasets are discovered only after
+a successful publication; no placeholder implies delivery.
+
+The signed generation payload has exactly these top-level fields, before the
+standard response-only signature and grant fields are attached:
+
+| Field | Contract |
+| --- | --- |
+| `format` | `document-generation-v2` |
+| `dataset_type` | `department_files` or `station_files` |
+| `publication_id`, `version`, `schema_version` | Match the signed complete-manifest descriptor; schema is 2. |
+| `source_revision` | Nonnegative integer identifying the frozen source revision. |
+| `library` | `{id, name, scope}`: stable library UUID, configured display name, and the same explicit scope object as the descriptor. |
+| `folders` | Complete array of `{id, name, parent_id}`, ordered by UUID. `parent_id:null` means root. |
+| `documents` | Complete array ordered by logical document UUID, using the shared v2 artifact envelope and the `file` metadata object below. |
+
+Every document's `file` object has exactly `id`, `name`, `folder_id`,
+`size_bytes`, and `sha256`. `id` is the logical document UUID, preserved through
+rename, move and content replacement. `folder_id:null` means root; otherwise it
+must identify a folder in this generation. `size_bytes` and `sha256` describe
+the sanitized plaintext PDF; `sha256` must equal `sanitized_pdf_sha256` in the
+artifact envelope. Names are display metadata, never filesystem paths or
+download addresses. UUIDs are canonical strings, hashes lowercase hexadecimal,
+and size/revision/version fields are JSON integers. Folder parents must exist
+in the same generation, be acyclic, and have at most five folder levels. All
+folder and document UUIDs are unique within the generation.
+
+The artifact envelope is the unchanged generic v2 envelope: `artifact_id`,
+`sanitized_pdf_sha256`, `ciphertext_sha256`, `ciphertext_size`, `nonce`,
+`encryption_algorithm`, `wrapping_algorithm`, `kek_version`, `signature`,
+`signature_algorithm`, `signing_key_version`, `generation_wrapped_cek`,
+`generation_key_wrapping_algorithm`, and `download_path`, plus `file`.
+The download path is `/api/v1/tablet/document-generations/{publication_id}/artifacts/{artifact_id}/download`.
+No internal content IDs or accepted-storage paths are exposed.
+
+Verify the **entire** generation payload, including library/folder metadata,
+with the existing Ed25519 canonical-JSON rules before using it. The generic
+HPKE info discriminator remains `firedash-document-generation-hpke-v2`.
+Its `scope.dataset_type_code`, `department_id`, and nullable `station_id` must
+match the descriptor, generation, and local installation entitlement. Apply
+the complete shared v2 acceptance chain unchanged: exact signing-key version,
+manifest verification, HPKE generation-key opening, AES-KW CEK unwrap,
+ciphertext size/hash verification, AES-256-GCM with no AAD, and plaintext
+hash verification. Also require plaintext length to match `file.size_bytes`.
+The independent artifact signature remains server integrity metadata, not an
+additional client-verifiable signature. Generic artifact signatures bind
+`dataset_type_code` and `canonical_document_id` instead of `fire_plan_id`.
+
+Metadata-only changes produce a new signed authoritative generation and key,
+while unchanged logical-document/content pairs reuse their immutable encrypted
+artifacts. Clients may reuse a verified cached artifact only after validating
+its binding in the new manifest. Equal filenames or PDF hashes in other
+documents or scopes do not authorize reuse.
+
+Empty `documents` and empty `folders` arrays are valid, including the first
+publication of an empty library. A library with only empty folders is also
+valid. A successful empty generation removes the previous local document set;
+an empty array is never a missing-response/error signal. Source deletion does
+not change the previous published manifest: it takes effect only when a newer
+generation succeeds. Activate the complete generation atomically after all
+required content verifies, preserving the existing complete-manifest sync
+contract. Never merge current source metadata or a partially downloaded
+candidate into the active generation.
+
+The current successful generation plus the last two obsolete successful
+generations retain their immutable payloads, keys and content references until
+normal retention retires them. While retained, historical file-library URLs
+remain authorized only within the installation's **current** scope. Discovery
+still advertises only the current generation. A retained historical manifest
+is not permission for a client to roll back the version advertised by the
+current complete manifest. Failed and superseded-in-progress builds do not
+count as retained successful history.
+
+The department library's configurable `name` has no server-added suffix.
+The Stage 3 tablet must display the mandatory ` (global)` suffix for
+`department_files` without modifying the signed name or its local identity.
+
 ### `station_personnel` (`artifact_format: json`)
 
 The plaintext is:

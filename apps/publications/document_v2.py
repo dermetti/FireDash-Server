@@ -91,7 +91,8 @@ def get_or_create_document_artifact(*, dataset_type_code, canonical_document_id,
     for field, value in metadata.items():
         setattr(candidate, field, value)
     try:
-        candidate.save(force_insert=True)
+        with transaction.atomic():
+            candidate.save(force_insert=True)
     except IntegrityError:
         from apps.publications.artifacts import remove_artifact_path
 
@@ -221,6 +222,13 @@ def build_document_v2_manifest(*, publication):
         "schema_version": 2,
         "documents": documents,
     }
+    if publication.dataset_type_code in {"department_files", "station_files"}:
+        payload.update(
+            {
+                key: publication.source_snapshot[key]
+                for key in ("library", "folders", "source_revision")
+            }
+        )
     signature = sign_manifest_payload(payload=payload)
     manifest, created = DocumentGenerationManifest.objects.get_or_create(
         publication=publication,

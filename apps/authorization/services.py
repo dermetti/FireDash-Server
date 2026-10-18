@@ -209,6 +209,20 @@ def classify_system_admin_state(roles: list[Any]) -> str:
     return "active" if roles[0].user.is_active else "inactive"
 
 
+def require_publication_scope(actor, *, department, station, dataset_type_code):
+    """File-library capability does not confer general publication administration."""
+    if dataset_type_code in {"department_files", "station_files"}:
+        from apps.file_library.services import require_scope
+
+        require_scope(
+            actor,
+            department_id=department.id if dataset_type_code == "department_files" else None,
+            station_id=station.id if dataset_type_code == "station_files" and station else None,
+        )
+    else:
+        require_department_admin(actor, department)
+
+
 def require_department_admin(actor, department: Department) -> None:
     if department.status != Department.Status.ACTIVE or department.id not in active_department_ids(
         actor

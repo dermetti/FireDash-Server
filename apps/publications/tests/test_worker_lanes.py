@@ -15,7 +15,20 @@ from apps.publications.work_cycle import (
 )
 
 
-def test_delivery_cycle_processes_grants_and_manifests_but_never_builds():
+@pytest.fixture(autouse=True)
+def isolated_document_work():
+    with (
+        patch(
+            "apps.publications.work_cycle.process_next_fire_plan_v2_generation_key_grant",
+            return_value=None,
+        ),
+        patch("apps.publications.work_cycle.process_next_generation_key_grant", return_value=None),
+        patch("apps.file_library.publication.initialize_missing_libraries") as initialize,
+    ):
+        yield initialize
+
+
+def test_delivery_cycle_processes_grants_and_manifests_but_never_builds(isolated_document_work):
     with (
         patch(
             "apps.publications.work_cycle.process_next_dataset_key_grant",
@@ -35,9 +48,10 @@ def test_delivery_cycle_processes_grants_and_manifests_but_never_builds():
     assert grants.call_count == manifests.call_count == 2
     builds.assert_not_called()
     recovery.assert_not_called()
+    isolated_document_work.assert_not_called()
 
 
-def test_build_cycle_processes_builds_but_never_delivery_work():
+def test_build_cycle_processes_builds_but_never_delivery_work(isolated_document_work):
     with (
         patch("apps.publications.work_cycle.recover_stale_jobs", return_value=1) as recovery,
         patch(
@@ -51,6 +65,7 @@ def test_build_cycle_processes_builds_but_never_delivery_work():
     assert result.dataset_builds == 1
     assert result.recovered == 1
     recovery.assert_called_once()
+    isolated_document_work.assert_called_once()
     assert builds.call_count == 2
     grants.assert_not_called()
     manifests.assert_not_called()

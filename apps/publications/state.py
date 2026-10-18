@@ -123,7 +123,11 @@ def publication_scope_queryset(department, *, include_station: bool = True):
     ]
     if include_station:
         fields.extend(("station__id", "station__name", "station__short_code"))
-    queryset = DatasetScopeState.objects.filter(department=department).only(*fields)
+    queryset = (
+        DatasetScopeState.objects.filter(department=department)
+        .exclude(dataset_type_code="station_files")
+        .only(*fields)
+    )
     if include_station:
         queryset = queryset.select_related("station")
         return queryset.order_by("dataset_type_code", "station__name", "id")
@@ -153,9 +157,12 @@ def _state_publications_and_jobs(
         "created_at",
         "published_at",
     )
-    latest_publications = DatasetPublication.objects.filter(scope_state_id__in=scope_ids).order_by(
-        "scope_state_id", "-version_number"
-    ).distinct("scope_state_id").only(*publication_fields)
+    latest_publications = (
+        DatasetPublication.objects.filter(scope_state_id__in=scope_ids)
+        .order_by("scope_state_id", "-version_number")
+        .distinct("scope_state_id")
+        .only(*publication_fields)
+    )
     if include_snapshot_retention:
         latest_publications = latest_publications.annotate(
             source_snapshot_retained=Case(
@@ -165,8 +172,7 @@ def _state_publications_and_jobs(
             )
         )
     latest_by_scope = {
-        publication.scope_state_id: publication
-        for publication in latest_publications
+        publication.scope_state_id: publication for publication in latest_publications
     }
     active_jobs = {
         job.scope_state_id: job
@@ -207,10 +213,7 @@ def _state_publications_and_jobs(
                 output_field=BooleanField(),
             )
         )
-    linked_publications = {
-        publication.id: publication
-        for publication in linked_queryset
-    }
+    linked_publications = {publication.id: publication for publication in linked_queryset}
     return latest_by_scope, active_jobs, linked_publications
 
 

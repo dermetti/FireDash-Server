@@ -321,10 +321,30 @@ BUILDERS.update(
             "incident_count": 0,
             "source_revision": source_revision,
         },
-        "test_system_dataset": lambda *, source_revision, **_: {"item_count": 0, "source_revision": source_revision},
+        "test_system_dataset": lambda *, source_revision, **_: {
+            "item_count": 0,
+            "source_revision": source_revision,
+        },
     }
 )
 VALIDATORS["summary"] = validate_summary
+
+
+def _file_library_source(**kwargs):
+    from apps.file_library.publication import source_payload
+
+    return source_payload(**kwargs)
+
+
+def _file_library_summary(**kwargs):
+    from apps.file_library.publication import build_summary
+
+    return build_summary(**kwargs)
+
+
+for _code in ("department_files", "station_files"):
+    SOURCE_BUILDERS[_code] = _file_library_source
+    BUILDERS[_code] = _file_library_summary
 
 
 def _hydrant_source_payload(*, department, station) -> dict[str, object]:

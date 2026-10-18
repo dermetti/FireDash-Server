@@ -29,14 +29,16 @@ class DocumentDatasetAdapter:
         if not isinstance(entries, list):
             raise PublicationBuildError("Frozen document source is unavailable.")
         identities = [
-            (entry.get("id"), entry.get("sha256"))
-            for entry in entries
-            if isinstance(entry, dict)
+            (entry.get("id"), entry.get("sha256")) for entry in entries if isinstance(entry, dict)
         ]
-        if len(identities) != len(entries) or any(
-            not isinstance(document_id, str) or not isinstance(digest, str) or len(digest) != 64
-            for document_id, digest in identities
-        ) or len({document_id for document_id, _ in identities}) != len(identities):
+        if (
+            len(identities) != len(entries)
+            or any(
+                not isinstance(document_id, str) or not isinstance(digest, str) or len(digest) != 64
+                for document_id, digest in identities
+            )
+            or len({document_id for document_id, _ in identities}) != len(identities)
+        ):
             raise PublicationBuildError("Frozen document source is invalid.")
         plans = {
             str(plan.id): plan
@@ -59,8 +61,7 @@ class DocumentDatasetAdapter:
                 canonical_document_id=plans[document_id].id,
                 sanitized_pdf_sha256=digest,
                 metadata={
-                    field: metadata[document_id][field]
-                    for field in self.manifest_metadata_fields
+                    field: metadata[document_id][field] for field in self.manifest_metadata_fields
                 },
                 accepted_document_key=plans[document_id].path,
             )
@@ -88,6 +89,10 @@ _KLGV_ADAPTER = DocumentDatasetAdapter(
 
 
 def document_dataset_adapter(*, dataset_type_code: str) -> DocumentDatasetAdapter:
+    if dataset_type_code in {"department_files", "station_files"}:
+        from apps.file_library.publication import FileLibraryAdapter
+
+        return FileLibraryAdapter()
     if dataset_type_code == _KLGV_ADAPTER.dataset_type_code:
         return _KLGV_ADAPTER
     raise PublicationBuildError("No document-manifest-v2 adapter is registered for this dataset.")

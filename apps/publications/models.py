@@ -34,6 +34,7 @@ class DatasetScopeState(models.Model):
         SYSTEM = "SYSTEM", "System"
         DEPARTMENT = "DEPARTMENT", "Department"
         STATION = "STATION", "Station"
+
     class DeliveryFormat(models.TextChoices):
         V1_ARTIFACT = "V1_ARTIFACT", "V1 artifact"
         DOCUMENT_MANIFEST_V2 = "DOCUMENT_MANIFEST_V2", "Document manifest v2"
@@ -80,9 +81,11 @@ class DatasetScopeState(models.Model):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                condition=(Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
+                condition=(
+                    Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
                     | Q(scope_type="DEPARTMENT", department__isnull=False, station__isnull=True)
-                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)),
+                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)
+                ),
                 name="dataset_scope_owner_shape",
             ),
             models.UniqueConstraint(
@@ -160,11 +163,16 @@ class DatasetPublication(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     scope_type = models.CharField(
-        max_length=16, choices=DatasetScopeState.ScopeType.choices,
+        max_length=16,
+        choices=DatasetScopeState.ScopeType.choices,
         default=DatasetScopeState.ScopeType.DEPARTMENT,
     )
     department = models.ForeignKey(
-        Department, null=True, blank=True, on_delete=models.PROTECT, related_name="dataset_publications"
+        Department,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="dataset_publications",
     )
     station = models.ForeignKey(
         Station,
@@ -235,13 +243,21 @@ class DatasetPublication(models.Model):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                condition=(Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
+                condition=(
+                    Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
                     | Q(scope_type="DEPARTMENT", department__isnull=False, station__isnull=True)
-                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)),
+                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)
+                ),
                 name="dataset_publication_owner_shape",
             ),
             models.UniqueConstraint(
-                fields=("scope_type", "department", "station", "dataset_type_code", "version_number"),
+                fields=(
+                    "scope_type",
+                    "department",
+                    "station",
+                    "dataset_type_code",
+                    "version_number",
+                ),
                 # PostgreSQL treats department-scoped NULL station values as
                 # equal here, so every assigned version is unique per scope.
                 nulls_distinct=False,
@@ -273,8 +289,10 @@ class DatasetPublication(models.Model):
     def clean(self) -> None:
         try:
             definition = validate_dataset_scope(
-                dataset_type_code=self.dataset_type_code, scope_type=self.scope_type,
-                department=self.department, station=self.station,
+                dataset_type_code=self.dataset_type_code,
+                scope_type=self.scope_type,
+                department=self.department,
+                station=self.station,
             )
         except DatasetRegistryError as error:
             raise ValidationError({"dataset_type_code": str(error)}) from error
@@ -284,6 +302,8 @@ class DatasetPublication(models.Model):
         document_v2 = self.schema_version == 2 and self.dataset_type_code in {
             "department_fire_plans",
             "department_klgv_plans",
+            "department_files",
+            "station_files",
         }
         if self.schema_version != definition.current_schema_version and not document_v2:
             errors["schema_version"] = "Schema version is not supported for this dataset."
@@ -691,7 +711,8 @@ class PublicationJob(models.Model):
         DatasetScopeState, on_delete=models.PROTECT, related_name="publication_jobs"
     )
     scope_type = models.CharField(
-        max_length=16, choices=DatasetScopeState.ScopeType.choices,
+        max_length=16,
+        choices=DatasetScopeState.ScopeType.choices,
         default=DatasetScopeState.ScopeType.DEPARTMENT,
     )
     department = models.ForeignKey(
@@ -730,9 +751,11 @@ class PublicationJob(models.Model):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                condition=(Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
+                condition=(
+                    Q(scope_type="SYSTEM", department__isnull=True, station__isnull=True)
                     | Q(scope_type="DEPARTMENT", department__isnull=False, station__isnull=True)
-                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)),
+                    | Q(scope_type="STATION", department__isnull=False, station__isnull=False)
+                ),
                 name="publication_job_owner_shape",
             ),
             models.UniqueConstraint(
@@ -747,8 +770,10 @@ class PublicationJob(models.Model):
     def clean(self) -> None:
         try:
             validate_dataset_scope(
-                dataset_type_code=self.dataset_type_code, scope_type=self.scope_type,
-                department=self.department, station=self.station,
+                dataset_type_code=self.dataset_type_code,
+                scope_type=self.scope_type,
+                department=self.department,
+                station=self.station,
             )
         except DatasetRegistryError as error:
             raise ValidationError({"dataset_type_code": str(error)}) from error

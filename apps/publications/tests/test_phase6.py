@@ -133,6 +133,7 @@ def test_registry_and_model_validation_enforce_registered_scopes(publication_con
         scope.full_clean()
 
     invalid_publication = DatasetPublication(
+        scope_type="STATION",
         department=department,
         station=other_station,
         dataset_type_code="station_personnel",

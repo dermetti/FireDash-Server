@@ -90,6 +90,9 @@ def process_delivery_cycle(*, batch_size: int | None = None) -> DeliveryCycleRes
 def process_build_cycle(*, batch_size: int | None = None) -> BuildCycleResult:
     """Recover and process only dataset publication build jobs."""
     started = monotonic()
+    from apps.file_library.publication import initialize_missing_libraries
+
+    initialize_missing_libraries()
     limit = batch_size or settings.PUBLICATION_WORKER_BATCH_SIZE
     recovered = recover_stale_jobs(
         timeout=timedelta(seconds=settings.PUBLICATION_JOB_HEARTBEAT_TIMEOUT_SECONDS),

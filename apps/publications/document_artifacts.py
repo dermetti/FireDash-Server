@@ -100,6 +100,10 @@ def release_terminal_document_artifact_references(*, publication) -> int:
     }
     if publication.status not in terminal_statuses:
         raise ValueError("Only terminal publications can release document artifacts.")
+    if publication.dataset_type_code in {"department_files", "station_files"}:
+        from apps.file_library.models import PublicationContent
+
+        PublicationContent.objects.filter(publication=publication).delete()
     references = list(
         PublicationFirePlanArtifactReference.objects.select_for_update()
         .filter(publication=publication)
@@ -117,15 +121,11 @@ def release_terminal_document_artifact_references(*, publication) -> int:
     for artifact in artifacts:
         # This recheck happens in the same transaction while the artifact row
         # is locked.  A concurrent reference creator must serialize on it.
-        if PublicationFirePlanArtifactReference.objects.filter(
-            document_artifact=artifact
-        ).exists():
+        if PublicationFirePlanArtifactReference.objects.filter(document_artifact=artifact).exists():
             continue
         artifact_id, artifact_path = artifact.id, artifact.artifact_path
         artifact.delete()
-        _schedule_document_artifact_removal(
-            artifact_id=artifact_id, artifact_path=artifact_path
-        )
+        _schedule_document_artifact_removal(artifact_id=artifact_id, artifact_path=artifact_path)
         queued += 1
     return queued + _release_generic_document_artifact_references(publication=publication)
 
@@ -136,7 +136,8 @@ def _release_generic_document_artifact_references(*, publication) -> int:
 
     ids = list(
         PublicationDocumentArtifactReference.objects.select_for_update()
-        .filter(publication=publication).values_list("document_artifact_id", flat=True)
+        .filter(publication=publication)
+        .values_list("document_artifact_id", flat=True)
     )
     if not ids:
         return 0
@@ -179,25 +180,33 @@ def cleanup_unreferenced_document_artifacts(*, batch_size: int = 500) -> int:
             artifact = (
                 FirePlanDocumentArtifact.objects.select_for_update().filter(pk=artifact_id).first()
             )
-            if artifact is None or PublicationFirePlanArtifactReference.objects.filter(
-                document_artifact=artifact
-            ).exists():
+            if (
+                artifact is None
+                or PublicationFirePlanArtifactReference.objects.filter(
+                    document_artifact=artifact
+                ).exists()
+            ):
                 continue
             path = artifact.artifact_path
             artifact.delete()
             _schedule_document_artifact_removal(artifact_id=artifact_id, artifact_path=path)
             removed += 1
     from apps.publications.models import DocumentArtifact, PublicationDocumentArtifactReference
+
     generic_ids = list(
         DocumentArtifact.objects.filter(publication_references__isnull=True)
-        .order_by("created_at").values_list("id", flat=True)[:batch_size]
+        .order_by("created_at")
+        .values_list("id", flat=True)[:batch_size]
     )
     for artifact_id in generic_ids:
         with transaction.atomic():
             artifact = DocumentArtifact.objects.select_for_update().filter(pk=artifact_id).first()
-            if artifact is None or PublicationDocumentArtifactReference.objects.filter(
-                document_artifact=artifact
-            ).exists():
+            if (
+                artifact is None
+                or PublicationDocumentArtifactReference.objects.filter(
+                    document_artifact=artifact
+                ).exists()
+            ):
                 continue
             path = artifact.artifact_path
             artifact.delete()

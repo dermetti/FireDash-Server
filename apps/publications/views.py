@@ -12,8 +12,11 @@ from django.views.decorators.http import require_http_methods
 
 from apps.accounts.reauth import require_recent_reauthentication
 from apps.authorization.scopes import active_department_ids
-from apps.authorization.services import require_department_admin
-from apps.authorization.services import require_system_admin
+from apps.authorization.services import (
+    require_department_admin,
+    require_publication_scope,
+    require_system_admin,
+)
 from apps.organizations.models import Department
 from apps.publications.builders import build_source_payload
 from apps.publications.diffs import source_diff
@@ -64,7 +67,12 @@ def _scope_or_403(request: HttpRequest, scope_id) -> DatasetScopeState:
     scope = get_object_or_404(
         DatasetScopeState.objects.select_related("department", "station"), pk=scope_id
     )
-    require_department_admin(request.user, scope.department)
+    require_publication_scope(
+        request.user,
+        department=scope.department,
+        station=scope.station,
+        dataset_type_code=scope.dataset_type_code,
+    )
     return scope
 
 
@@ -142,7 +150,7 @@ def _filtered_scope_queryset(department: Department, selected_filter: str):
     need a small number of boolean/latest-status predicates for an accurate
     count, but intentionally never project a publication's heavy payload.
     """
-    queryset = publication_scope_queryset(department)
+    queryset = publication_scope_queryset(department).exclude(dataset_type_code="station_files")
     if not selected_filter:
         return queryset
 
@@ -557,7 +565,12 @@ def publication_lifecycle_modal(request: HttpRequest, publication_id, action: st
         DatasetPublication.objects.select_related("department", "station", "scope_state"),
         pk=publication_id,
     )
-    require_department_admin(request.user, publication.department)
+    require_publication_scope(
+        request.user,
+        department=publication.department,
+        station=publication.station,
+        dataset_type_code=publication.dataset_type_code,
+    )
     config = action_config[action]
     context = {
         "publication": publication,
@@ -598,5 +611,10 @@ def publication_review(request: HttpRequest, publication_id) -> HttpResponse:
         pk=publication_id,
         department_id__in=active_department_ids(request.user),
     )
-    require_department_admin(request.user, publication.department)
+    require_publication_scope(
+        request.user,
+        department=publication.department,
+        station=publication.station,
+        dataset_type_code=publication.dataset_type_code,
+    )
     return redirect("publications-scope-detail", scope_id=publication.scope_state_id)

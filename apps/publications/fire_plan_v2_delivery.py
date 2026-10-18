@@ -170,16 +170,30 @@ def _authorized_generation(*, publication, installation):
 
     active_installation, vehicle, publications = authorized_publications(installation=installation)
     if publication.dataset_type_code not in {
-        "department_fire_plans", "department_klgv_plans"
-    } or publication.station_id:
+        "department_fire_plans",
+        "department_klgv_plans",
+        "department_files",
+        "station_files",
+    }:
         raise ManifestError("Publication is not an eligible document generation.")
     if publication.department_id != active_installation.tablet.department_id or vehicle is None:
         raise ManifestError("Installation is not authorized for this publication.")
+    if publication.station_id and publication.station_id != vehicle.station_id:
+        raise ManifestError("Installation is not authorized for this station.")
     # ``authorized_publications`` is the delivery boundary: it filters both
     # scope and the department feature gate. A guessed document-generation URL
     # must not bypass an otherwise hidden disabled dataset.
     if publication.pk not in {candidate.pk for candidate in publications}:
-        raise ManifestError("Installation is not authorized for this publication.")
+        retained_library = (
+            publication.dataset_type_code in {"department_files", "station_files"}
+            and publication.status == publication.Status.SUPERSEDED
+            and publication.artifact_ready
+            and any(
+                candidate.scope_state_id == publication.scope_state_id for candidate in publications
+            )
+        )
+        if not retained_library:
+            raise ManifestError("Installation is not authorized for this publication.")
     return active_installation
 
 

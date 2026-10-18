@@ -47,6 +47,21 @@ class Content(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+class PublicationContent(models.Model):
+    """Pins frozen source bytes from worker claim until publication retirement."""
+
+    publication = models.ForeignKey("publications.DatasetPublication", on_delete=models.PROTECT)
+    content = models.ForeignKey(Content, on_delete=models.PROTECT, related_name="publications")
+    document_id = models.UUIDField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("publication", "document_id"), name="library_publication_document"
+            )
+        ]
+
+
 class Entry(models.Model):
     """One namespace for folders and logical PDF documents, including at root."""
 

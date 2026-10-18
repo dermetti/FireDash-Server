@@ -30,7 +30,35 @@ class DatasetTypeDefinition:
     system_exposure: bool = False
 
 
-_DEFINITIONS = (
+_DEFINITIONS = tuple(
+    DatasetTypeDefinition(
+        code=code,
+        display_name=label,
+        scope=scope,
+        artifact_format="document-manifest-v2",
+        current_schema_version=2,
+        encryption_required=True,
+        minimum_app_version=None,
+        builder_service=code,
+        validator_service="summary",
+        summary_schema=MappingProxyType(
+            {
+                "document_count": "item_count",
+                "total_accepted_bytes": "non_negative_integer",
+                "source_revision": "non_negative_integer",
+            }
+        ),
+        required=True,
+        supported_schema_versions=(2,),
+        minimum_supported_schema_version=2,
+        maximum_supported_schema_version=2,
+        feature_code="publications",
+    )
+    for code, label, scope in (
+        ("department_files", "Department files", "department"),
+        ("station_files", "Station files", "station"),
+    )
+) + (
     DatasetTypeDefinition(
         code="dangerous_goods",
         display_name="Dangerous goods",
@@ -233,7 +261,9 @@ _DEFINITIONS = (
         minimum_app_version=None,
         builder_service="test_system_dataset",
         validator_service="summary",
-        summary_schema=MappingProxyType({"item_count": "item_count", "source_revision": "non_negative_integer"}),
+        summary_schema=MappingProxyType(
+            {"item_count": "item_count", "source_revision": "non_negative_integer"}
+        ),
         required=False,
         supported_schema_versions=(1,),
         minimum_supported_schema_version=1,
@@ -257,7 +287,9 @@ def get_dataset_definition(code: str) -> DatasetTypeDefinition:
         raise DatasetRegistryError("Unknown dataset type code.") from error
 
 
-def validate_dataset_scope(*, dataset_type_code: str, scope_type: str | None = None, department=None, station=None) -> DatasetTypeDefinition:
+def validate_dataset_scope(
+    *, dataset_type_code: str, scope_type: str | None = None, department=None, station=None
+) -> DatasetTypeDefinition:
     definition = get_dataset_definition(dataset_type_code)
     expected_scope = definition.scope.upper()
     # Registry-only callers may ask whether a type accepts a station. Persisted
@@ -272,10 +304,14 @@ def validate_dataset_scope(*, dataset_type_code: str, scope_type: str | None = N
         raise DatasetRegistryError("Dataset type is not registered for this publication scope.")
     if scope_type == "SYSTEM":
         if department is not None or station is not None:
-            raise DatasetRegistryError("System-scoped datasets cannot have a department or station.")
+            raise DatasetRegistryError(
+                "System-scoped datasets cannot have a department or station."
+            )
     elif scope_type == "DEPARTMENT":
         if department is None or station is not None:
-            raise DatasetRegistryError("Department-scoped datasets cannot have a station and require a department.")
+            raise DatasetRegistryError(
+                "Department-scoped datasets cannot have a station and require a department."
+            )
     elif scope_type == "STATION":
         if department is None or station is None:
             raise DatasetRegistryError("Station scope requires a department and station.")

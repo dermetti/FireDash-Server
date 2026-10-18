@@ -38,6 +38,7 @@ def _publication_attention(department: Department) -> list[AttentionItem]:
     """Return one actionable item per scope from the narrow publication read model."""
     scopes = (
         DatasetScopeState.objects.filter(department=department)
+        .exclude(dataset_type_code="station_files")
         .select_related("station")
         .only(
             "id",
@@ -163,6 +164,11 @@ def operational_summary(*, department: Department | None = None, station: Statio
         operational_tablets = Tablet.objects.filter(
             department=department, status__in=(Tablet.Status.ACTIVE, Tablet.Status.INACTIVE)
         ).count()
+        publication_scopes = (
+            DatasetScopeState.objects.filter(department=department)
+            .exclude(dataset_type_code="station_files")
+            .count()
+        )
         return [
             OperationalMetric(
                 f"{department.stations.filter(active=True).count()} active station(s)",
@@ -173,8 +179,7 @@ def operational_summary(*, department: Department | None = None, station: Statio
                 reverse("tablet-list", args=[department.id]),
             ),
             OperationalMetric(
-                f"{DatasetScopeState.objects.filter(department=department).count()} "
-                "publication scope(s)",
+                f"{publication_scopes} publication scope(s)",
                 reverse("publications-list", args=[department.id]),
             ),
         ]

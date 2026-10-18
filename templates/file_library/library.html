@@ -1,9 +1,16 @@
 {% extends "base.html" %}
 {% block title %}{{ library.name }} · File Management{% endblock %}
 {% block content %}
-{% include "components/_page_header.html" with title=library.name description="File Management / Dateiverwaltung · Server storage only. These files are not available on tablets." %}
+{% include "components/_page_header.html" with title=library.name description="File Management / Dateiverwaltung · Manage source files and scheduled publications." %}
 <p><strong>{% if library.department_id %}Department library: {{ library.department.name }}{% else %}Station library: {{ library.station.name }}{% endif %}</strong> · Source revision {{ library.source_revision }}</p>
 <p>Storage: {{ library.usage_bytes|filesizeformat }} of {{ library.quota_bytes|filesizeformat }} · PDF limit: {{ max_file_bytes|filesizeformat }}</p>
+<div class="card card-body mb-3">
+  <p><strong>{{ publication.label }}</strong>{% if publication.unpublished %} · Unpublished changes{% endif %}</p>
+  {% if publication.current %}<p>Published generation {{ publication.current.version_number }} · Source revision {{ publication.current.source_revision }}</p>{% else %}<p>No successful publication yet.</p>{% endif %}
+  {% if publication.job.build_publication %}<p>Latest attempt: generation {{ publication.job.build_publication.version_number }} · {{ publication.job.get_status_display }}</p>{% endif %}
+  <p class="text-body-secondary">Publication prepares a signed library for compatible tablets. This does not confirm tablet delivery.</p>
+  <form method="post">{% csrf_token %}<input type="hidden" name="action" value="publish"><button class="btn btn-primary">Publish Now</button></form>
+</div>
 <details class="mb-3"><summary>Edit library display name</summary><form method="post" class="d-flex gap-2 mt-2">{% csrf_token %}<input type="hidden" name="action" value="library_name"><input class="form-control" aria-label="Library name" name="name" value="{{ library.name }}" maxlength="255" required><button class="btn btn-outline-primary">Save name</button></form></details>
 <nav aria-label="Folder breadcrumb" class="mb-3"><a href="{% url 'file-library' library.id %}">Library root</a>{% for folder in breadcrumbs %} / <a href="?folder={{ folder.id }}">{{ folder.name }}</a>{% endfor %}</nav>
 <div class="card card-body mb-3"><div class="row g-3">

@@ -12,6 +12,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.file_library import services
 from apps.file_library.models import Entry, Library
+from apps.file_library.publication import publication_state, publish_now
 from apps.reference_data.pdf_sandbox import PdfSanitizerError
 from apps.reference_data.pdf_validation import PdfValidationError
 from apps.reference_data.storage import StorageError
@@ -55,7 +56,12 @@ def library_view(request, library_id):
         try:
             action = request.POST.get("action")
             common = {"actor": request.user, "library_id": library.id}
-            if action == "upload":
+            if action == "publish":
+                publish_now(**common)
+                messages.success(
+                    request, "Publication requested. Tablet delivery is not confirmed."
+                )
+            elif action == "upload":
                 uploads = request.FILES.getlist("pdfs")
                 if not uploads:
                     raise services.LibraryError("Select at least one PDF.")
@@ -105,7 +111,7 @@ def library_view(request, library_id):
                     services.upload_pdf(**common, upload=upload, replace_id=entry_id)
             else:
                 raise services.LibraryError("Unknown file operation.")
-            if action != "upload":
+            if action not in {"upload", "publish"}:
                 messages.success(request, "Library updated.")
         except (services.LibraryError, PdfValidationError, ValidationError) as error:
             messages.error(request, str(error))
@@ -139,6 +145,7 @@ def library_view(request, library_id):
             "folders": sorted(folders, key=lambda folder: folder.display_path),
             "query": query,
             "max_file_bytes": settings.FILE_LIBRARY_MAX_FILE_BYTES,
+            "publication": publication_state(library),
         },
     )
 

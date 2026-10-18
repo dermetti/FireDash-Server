@@ -1,4 +1,4 @@
-# File libraries (Stage 1)
+# File libraries (Stages 1–2)
 
 `apps.file_library` owns department and station source libraries. The existing
 persisted authorization scopes apply; department roles do not inherit station
@@ -11,9 +11,10 @@ case-insensitive sibling namespace, including at root. UUIDs survive renames,
 moves and PDF replacements. PostgreSQL constraints and triggers enforce scope,
 immutable identities/content metadata, parent kind, cycles and five folder levels.
 
-Every source mutation goes through the services and locks its library row. The
-transaction covers canonical entries, current usage, one revision increment and
-the audit event. Bulk uploads are independent per-file transactions with individual
+Every source mutation goes through the services and locks its publication scope
+before its library row. The transaction covers canonical entries, current usage,
+one revision increment, the audit event and the coalesced publication intent.
+The scope revision is synchronized to the library revision. Bulk uploads are independent per-file transactions with individual
 feedback. Recursive deletion is one mutation and its audit records every removed
 identity. No-op edits do not advance revisions. Current usage counts each logical
 document's sanitized content size; historical/unreferenced content is excluded.
@@ -34,7 +35,41 @@ there is no unsandboxed production fallback. Downloads/previews require live sco
 authorization and verify size and SHA-256 before serving with private/no-store
 headers. Client filenames never become storage paths.
 
-## Retention and later integration
+## Publication and retention
+
+`department_files` and `station_files` are required, schema-2
+`document-manifest-v2` datasets. The existing build worker discovers active
+departments/stations lacking scopes, including libraries never opened in the
+portal. Initial empty libraries publish normally. Existing Stage 1 revisions
+are preserved when their publication scopes are initialized. Source edits queue
+the normal next nightly build window; Publish Now expedites the same intent.
+Neither UI state nor a published generation confirms tablet receipt.
+
+The worker freezes the complete source tree under the publication scope lock,
+then creates `PublicationContent` protected references before committing its
+BUILDING transition. Source edits take that lock first, so a frozen tree cannot
+combine revisions. In-progress builds and retained successful generations pin
+immutable sanitized content independently of current entries. A source revision
+change during encryption retires the candidate without activating it and queues
+a fresh intent. Failures preserve the current successful generation.
+
+The generic document adapter uses frozen logical UUIDs, metadata and pinned
+content, never a current-document lookup. Unchanged document/hash pairs reuse
+the existing per-document encrypted artifact. Library/folder/name changes still
+produce new signed authoritative manifests. PostgreSQL guards validate scope,
+frozen references, ready-generation completeness and immutable source/crypto
+metadata. No monolithic archive is created. The wire contract is specified in
+`docs/tablet-api.md`.
+
+Normal publication retention keeps the current generation and the two most recent
+successful predecessors (`PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS=2`). Terminal
+unsuccessful attempts do not count. Retiring a generation releases its content
+pins and standard encrypted-artifact references; the existing artifact cleanup
+infrastructure handles final-reference removal. Historical file-library downloads
+and grants remain usable while retained, but every request rechecks the current
+installation/department/station entitlement. Station reassignment immediately
+denies old station-library identifiers. Administrative scope checks also apply
+to direct generic publication lifecycle URLs and services.
 
 Replacements create new immutable `Content` objects. Deletion unlinks logical
 documents immediately. Old content remains until explicit maintenance:
@@ -44,20 +79,57 @@ python manage.py collect_library_content --older-than-days 7
 ```
 
 Collection locks content and uses Django's protected-reference deletion plus
-database foreign keys; physical removal happens only after commit. Future retained
-publications must reference `Content` with `on_delete=PROTECT`. Current document
+database foreign keys; physical removal happens only after commit. Publication
+content pins reference `Content` with `on_delete=PROTECT`. Current document
 references use this same rule. Do not delete files independently of that lifecycle.
 Content may be shared by multiple documents within a library; quota counts logical
 current content, not unique physical bytes. Stage 1 does not deduplicate uploads.
 
-Filesystem promotion precedes database commit, so ordinary failures clean up newly
-promoted files. A process crash or a caller's enclosing transaction rollback can
-leave an unreferenced file without a content row. Such files are never served or
-counted toward quota; the collector deliberately does not guess whether unknown
-filesystem objects are safe to delete. Likewise a failed post-commit unlink can
-leave an orphan. Disk monitoring and offline reconciliation remain operational
-responsibilities. Retained content is not constrained by the current-library quota.
+## Accepted-storage reconciliation
 
-No publication registry, build, manifest, encryption or tablet integration is
-introduced. The source revision and immutable content identities are the future
-integration points. Tablet display suffixes are not added to stored library names.
+Filesystem promotion still precedes database commit. Ordinary failures remove
+newly promoted files; crashes, an enclosing transaction rollback, or failed
+post-commit unlink can leave an orphan. Run the narrow reconciliation command
+as the accepted-storage owner, alongside the existing maintenance jobs:
+
+```
+python manage.py reconcile_library_storage --older-than-days 7 --dry-run
+python manage.py reconcile_library_storage --older-than-days 7
+```
+
+It scans only `file-libraries/<UUID>/<UUID>.pdf`, skips symlinks and noncanonical
+paths, and keeps every file with a durable `Content` row, whether current,
+unreferenced, building or retained. It requires at least one day's grace (seven
+days by default), rechecks references while holding the same per-library
+PostgreSQL transaction advisory lock as promotion, and is idempotent. This lock
+also protects an uncommitted library/content insertion: cleanup waits for commit
+or rollback, even if the library row itself is not yet visible. It safely handles
+directories left by rolled-back library creation. Quarantine and sanitizer output
+remain governed by their existing cleanup lifecycle. Unknown layouts are ignored.
+
+Deploy the promotion lock and reconciliation code together; drain old upload
+workers before the first cleanup pass. Schedule the command with accepted-root
+write permissions, not by broadening the publication worker's read-only accepted
+storage access. Retained plaintext and encrypted artifacts remain outside the
+current-source quota, so physical disk capacity still needs ordinary monitoring.
+
+## Deployment validation
+
+Windows tests stub native MIME identification and the Linux sanitizer broker;
+they exercise real pikepdf inspection and the real PostgreSQL/crypto lifecycle.
+Before deployment, run a real Linux upload-to-publication check with libmagic,
+the isolated broker, configured UID/GID boundaries and accepted-storage modes:
+
+1. Upload a benign PDF through each role's library endpoint and verify sanitized
+   bytes are readable by the publication worker but never publicly served.
+2. Verify non-PDF, malformed, encrypted/password-protected and sanitizer-failure
+   inputs fail without canonical entries, quota usage or publication mutations.
+3. Publish through the worker, obtain a grant through an authorized test installation,
+   and verify signed metadata, ciphertext hash and decrypted sanitized PDF hash.
+4. Replace/delete source content, exercise retained-history cleanup, and run
+   reconciliation with a deliberate aged orphan and an in-progress upload.
+
+No iPad browser or storage telemetry is implemented. The Stage 3 client must
+support these required types before activating a complete manifest containing
+them, and render the department library with ` (global)` appended for display.
+The suffix is never stored in the configurable name or signed source metadata.

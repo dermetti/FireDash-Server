@@ -40,9 +40,9 @@ from apps.publications.hpke import (
 )
 from apps.publications.manifests import manifest_publications, request_manifest
 from apps.publications.models import (
-    DepartmentFeature,
     DatasetPublication,
     DatasetScopeState,
+    DepartmentFeature,
     DocumentArtifact,
     DocumentGenerationKeyGrant,
     PublicationDocumentArtifactReference,
@@ -248,6 +248,7 @@ def _ready_artifact_publication(*, department, scope, dataset_type_code, version
         id=publication_id,
         department=department,
         station=scope.station,
+        scope_type=scope.scope_type,
         scope_state=scope,
         dataset_type_code=dataset_type_code,
         version_number=version,
@@ -291,7 +292,7 @@ def test_station_assigned_manifest_uses_default_feature_delivery_and_keeps_stati
     fire_scope.save(update_fields=("current_published_publication",))
 
     personnel_scope = DatasetScopeState.objects.create(
-        department=department, station=vehicle.station, dataset_type_code="station_personnel"
+        department=department, station=vehicle.station, dataset_type_code="station_personnel", scope_type="STATION"
     )
     personnel = _ready_artifact_publication(
         department=department,
@@ -438,7 +439,7 @@ def test_klgv_v2_delivery_is_discoverable_and_client_decryptable(klgv_delivery_c
     discovered = client.get("/api/v1/tablet/manifest", **auth)
     assert discovered.status_code == 200
     assert any(entry == {
-        "publication_id": str(publication.id), "type": "department_klgv_plans", "scope": "department",
+        "publication_id": str(publication.id), "type": "department_klgv_plans", "scope": {"type": "DEPARTMENT", "department_id": str(department.id)},
         "version": 1, "schema_version": 2, "required": True, "minimum_app_version": None,
         "artifact_format": "document-manifest-v2",
         "manifest_url": f"/api/v1/tablet/document-generations/{publication.id}/manifest",
@@ -541,7 +542,7 @@ def test_klgv_normal_lifecycle_rollback_and_feature_gate(klgv_delivery_context):
     assert first_entry == {
         "publication_id": str(first.id),
         "type": "department_klgv_plans",
-        "scope": "department",
+        "scope": {"type": "DEPARTMENT", "department_id": str(department.id)},
         "version": 1,
         "schema_version": 2,
         "required": True,

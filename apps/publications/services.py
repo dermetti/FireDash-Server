@@ -7,7 +7,7 @@ from django.db.models import Max, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from apps.audit.services import record_event
-from apps.authorization.services import require_department_admin
+from apps.authorization.services import require_department_admin, require_publication_scope
 from apps.publications.artifacts import (
     ArtifactError,
     build_encrypted_artifact,
@@ -66,7 +66,9 @@ def _registered_scope_type(dataset_type_code: str) -> str:
     return get_dataset_definition(dataset_type_code).scope.upper()
 
 
-def _scope_filter(*, department, station, dataset_type_code: str, scope_type=None) -> dict[str, object]:
+def _scope_filter(
+    *, department, station, dataset_type_code: str, scope_type=None
+) -> dict[str, object]:
     scope_type = scope_type or _registered_scope_type(dataset_type_code)
     return {
         "scope_type": scope_type,
@@ -79,20 +81,30 @@ def _scope_filter(*, department, station, dataset_type_code: str, scope_type=Non
 def _validate_scope(*, department, station, dataset_type_code: str, scope_type=None) -> None:
     scope_type = scope_type or _registered_scope_type(dataset_type_code)
     try:
-        validate_dataset_scope(dataset_type_code=dataset_type_code, scope_type=scope_type, department=department, station=station)
+        validate_dataset_scope(
+            dataset_type_code=dataset_type_code,
+            scope_type=scope_type,
+            department=department,
+            station=station,
+        )
     except DatasetRegistryError as error:
         raise PublicationError(str(error)) from error
     if station is not None and (department is None or station.department_id != department.id):
         raise PublicationError("Station must belong to the scope department.")
 
 
-def _locked_scope(*, department, station, dataset_type_code: str, scope_type=None) -> DatasetScopeState:
+def _locked_scope(
+    *, department, station, dataset_type_code: str, scope_type=None
+) -> DatasetScopeState:
     scope_type = scope_type or _registered_scope_type(dataset_type_code)
     scope = (
         DatasetScopeState.objects.select_for_update()
         .filter(
             **_scope_filter(
-                scope_type=scope_type, department=department, station=station, dataset_type_code=dataset_type_code
+                scope_type=scope_type,
+                department=department,
+                station=station,
+                dataset_type_code=dataset_type_code,
             )
         )
         .first()
@@ -144,7 +156,12 @@ def cut_over_fire_plan_scope_to_document_manifest(
     *, actor, scope: DatasetScopeState
 ) -> DatasetScopeState:
     """Explicitly select v2 delivery and queue its first normal build."""
-    require_department_admin(actor, scope.department)
+    require_publication_scope(
+        actor,
+        department=scope.department,
+        station=scope.station,
+        dataset_type_code=scope.dataset_type_code,
+    )
     locked = _locked_scope(
         department=scope.department,
         station=scope.station,
@@ -158,15 +175,23 @@ def cut_over_fire_plan_scope_to_document_manifest(
         current = locked.current_published_publication
         if current is not None and current.schema_version == 2:
             return locked
-        if PublicationJob.objects.select_for_update().filter(
+        if (
+            PublicationJob.objects.select_for_update()
+            .filter(
+                scope_state=locked,
+                status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
+            )
+            .exists()
+        ):
+            return locked
+    if (
+        PublicationJob.objects.select_for_update()
+        .filter(
             scope_state=locked,
             status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
-        ).exists():
-            return locked
-    if PublicationJob.objects.select_for_update().filter(
-        scope_state=locked,
-        status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
-    ).exists():
+        )
+        .exists()
+    ):
         raise PublicationError("A publication update is already staged or building.")
     if locked.delivery_format != DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2:
         locked.delivery_format = DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
@@ -203,6 +228,12 @@ def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, object]:
 
 def _current_source_state(*, scope: DatasetScopeState) -> tuple[dict[str, object], str]:
     snapshot = _current_source_snapshot(scope=scope)
+    if (
+        scope.dataset_type_code in {"department_files", "station_files"}
+        and scope.source_revision != snapshot["source_revision"]
+    ):
+        scope.source_revision = snapshot["source_revision"]
+        scope.save(update_fields=("source_revision", "updated_at"))
     return snapshot, source_fingerprint_for_payload(snapshot)
 
 
@@ -277,6 +308,8 @@ def mark_dirty(
             )
     scope.source_revision += 1
     snapshot, fingerprint = _current_source_state(scope=scope)
+    if dataset_type_code in {"department_files", "station_files"}:
+        scope.source_revision = snapshot["source_revision"]
     scope.current_source_fingerprint = fingerprint
     dirty = _scope_is_dirty(scope=scope, fingerprint=fingerprint)
     if dirty and scope.dirty_since is None:
@@ -522,10 +555,10 @@ def claim_next_job() -> PublicationJob | None:
         job.save(update_fields=("status", "completed_at", "error_category", "error_message"))
         return job
     now = timezone.now()
-    job.source_revision = scope.source_revision
     # The scope lock makes one current source read sufficient for both a
     # legacy staged-attempt allocation and the STAGED -> BUILDING freeze.
     snapshot, fingerprint = _current_source_state(scope=scope)
+    job.source_revision = scope.source_revision
     if scope.current_source_fingerprint != fingerprint:
         scope.current_source_fingerprint = fingerprint
         scope.save(update_fields=("current_source_fingerprint", "updated_at"))
@@ -556,6 +589,10 @@ def claim_next_job() -> PublicationJob | None:
     publication.save(
         update_fields=("source_revision", "source_snapshot", "source_fingerprint", "status")
     )
+    if publication.dataset_type_code in {"department_files", "station_files"}:
+        from apps.file_library.publication import pin_source
+
+        pin_source(publication)
     job.status = PublicationJob.Status.RUNNING
     job.started_at = now
     job.heartbeat_at = now
@@ -619,21 +656,29 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             # current canonical data here would break that immutable boundary.
             raise PublicationBuildError("Frozen publication source is unavailable.")
         source_fingerprint_value = publication.source_fingerprint
-        summary = build_summary(
-            definition=definition,
-            department=job.department,
-            station=job.station,
-            source_revision=job.source_revision,
-        )
+        if publication.dataset_type_code in {"department_files", "station_files"}:
+            from apps.file_library.publication import summary as library_summary
+
+            summary = library_summary(publication.source_snapshot, publication.source_revision)
+        else:
+            summary = build_summary(
+                definition=definition,
+                department=job.department,
+                station=job.station,
+                source_revision=job.source_revision,
+            )
         # This is a cooperative early cancellation checkpoint. The final
         # transaction below remains authoritative for a cancellation that races
         # after this read and before publication activation.
         if not _build_is_still_running(job_id=job.id):
             return PublicationJob.objects.get(pk=job.id)
         is_document_v2 = publication.schema_version == 2 and publication.dataset_type_code in {
-            "department_fire_plans", "department_klgv_plans"
+            "department_fire_plans",
+            "department_klgv_plans",
+            "department_files",
+            "station_files",
         }
-        if is_document_v2 and publication.dataset_type_code == "department_klgv_plans":
+        if is_document_v2 and publication.dataset_type_code != "department_fire_plans":
             # KLGV starts on v2: a legacy ZIP has no lifecycle or protocol purpose.
             artifact = {}
         else:
@@ -655,13 +700,28 @@ def build_claimed_job(*, job_id) -> PublicationJob:
                 build_fire_plan_v2_generation(publication=publication)
                 build_fire_plan_v2_manifest(publication=publication)
             else:
+                from cryptography.hazmat.primitives.keywrap import InvalidUnwrap
+
                 from apps.publications.document_v2 import (
+                    DocumentV2Error,
                     build_document_v2_generation,
                     build_document_v2_manifest,
                 )
+                from apps.publications.worker_grants import KeyGrantError
 
-                build_document_v2_generation(publication=publication)
-                build_document_v2_manifest(publication=publication)
+                with transaction.atomic():
+                    publication = DatasetPublication.objects.select_for_update().get(
+                        pk=publication.pk
+                    )
+                    if publication.status != DatasetPublication.Status.BUILDING:
+                        return PublicationJob.objects.get(pk=job.id)
+                    try:
+                        build_document_v2_generation(publication=publication)
+                        build_document_v2_manifest(publication=publication)
+                    except (DocumentV2Error, KeyGrantError, InvalidUnwrap) as error:
+                        raise PublicationBuildError(
+                            "Document encryption or signing failed."
+                        ) from error
             if not _build_is_still_running(job_id=job.id):
                 terminal_publication = DatasetPublication.objects.get(pk=publication.id)
                 if terminal_publication.status in (
@@ -809,6 +869,35 @@ def finalize_publication_job(
     publication.artifact_status = DatasetPublication.ArtifactStatus.READY
     publication.artifact_ready = True
     previous_current = scope.current_published_publication
+    if (
+        publication.dataset_type_code in {"department_files", "station_files"}
+        and scope.source_revision != publication.source_revision
+    ):
+        publication.status = DatasetPublication.Status.OBSOLETE
+        publication.source_snapshot = None
+        publication.save(update_fields=("status", "source_snapshot"))
+        release_terminal_document_artifact_references(publication=publication)
+        job.status = PublicationJob.Status.OBSOLETE
+        job.completed_at = now
+        job.save(update_fields=("status", "completed_at"))
+        record_event(
+            action="publication.job_obsolete",
+            department=job.department,
+            station=job.station,
+            target_type="publication_job",
+            target_uuid=job.id,
+            metadata={
+                "dataset_type_code": job.dataset_type_code,
+                "reason": "source_revision_changed",
+            },
+        )
+        enqueue_publication_job(
+            department=job.department,
+            station=job.station,
+            dataset_type_code=job.dataset_type_code,
+            trigger_type=job.trigger_type,
+        )
+        return job
     delivery_transition = (
         publication.schema_version == 2
         and previous_current is not None
@@ -1034,7 +1123,12 @@ def publish_publication(*, actor, publication: DatasetPublication) -> DatasetPub
     publication = DatasetPublication.objects.select_related("department", "station").get(
         pk=publication.pk
     )
-    require_department_admin(actor, publication.department)
+    require_publication_scope(
+        actor,
+        department=publication.department,
+        station=publication.station,
+        dataset_type_code=publication.dataset_type_code,
+    )
     if publication.status != DatasetPublication.Status.READY_FOR_REVIEW:
         raise PublicationError("Only a review-ready publication can be published.")
     _validate_scope(
@@ -1089,7 +1183,12 @@ def reject_publication(*, actor, publication: DatasetPublication) -> DatasetPubl
         .select_related("department", "station")
         .get(pk=publication.pk)
     )
-    require_department_admin(actor, publication.department)
+    require_publication_scope(
+        actor,
+        department=publication.department,
+        station=publication.station,
+        dataset_type_code=publication.dataset_type_code,
+    )
     if publication.status != DatasetPublication.Status.READY_FOR_REVIEW:
         raise PublicationError("Only a review-ready publication can be rejected.")
     _validate_scope(
@@ -1115,7 +1214,9 @@ def reject_publication(*, actor, publication: DatasetPublication) -> DatasetPubl
 def request_rebuild(
     *, actor, department, station=None, dataset_type_code: str
 ) -> DatasetScopeState:
-    require_department_admin(actor, department)
+    require_publication_scope(
+        actor, department=department, station=station, dataset_type_code=dataset_type_code
+    )
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
     with transaction.atomic():
         scope = (
@@ -1166,7 +1267,9 @@ def stage_publication_update(
     *, actor, department, station=None, dataset_type_code: str
 ) -> DatasetScopeState:
     """Create one new staged attempt only for logically unpublished source content."""
-    require_department_admin(actor, department)
+    require_publication_scope(
+        actor, department=department, station=station, dataset_type_code=dataset_type_code
+    )
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
     scope = _locked_scope(
         department=department, station=station, dataset_type_code=dataset_type_code
@@ -1203,7 +1306,12 @@ def stage_publication_update(
 @transaction.atomic
 def build_staged_publication(*, actor, scope: DatasetScopeState) -> PublicationJob:
     """Promote exactly the existing staged attempt; never allocate another version."""
-    require_department_admin(actor, scope.department)
+    require_publication_scope(
+        actor,
+        department=scope.department,
+        station=scope.station,
+        dataset_type_code=scope.dataset_type_code,
+    )
     locked_scope = _locked_scope(
         department=scope.department,
         station=scope.station,
@@ -1253,7 +1361,12 @@ def delete_staged_publication(*, actor, publication: DatasetPublication) -> Data
     candidate = DatasetPublication.objects.select_related("department", "station").get(
         pk=publication.pk
     )
-    require_department_admin(actor, candidate.department)
+    require_publication_scope(
+        actor,
+        department=candidate.department,
+        station=candidate.station,
+        dataset_type_code=candidate.dataset_type_code,
+    )
     scope = _locked_scope(
         department=candidate.department,
         station=candidate.station,
@@ -1300,7 +1413,12 @@ def cancel_publication_build(*, actor, publication: DatasetPublication) -> Datas
     candidate = DatasetPublication.objects.select_related("department", "station").get(
         pk=publication.pk
     )
-    require_department_admin(actor, candidate.department)
+    require_publication_scope(
+        actor,
+        department=candidate.department,
+        station=candidate.station,
+        dataset_type_code=candidate.dataset_type_code,
+    )
     scope = _locked_scope(
         department=candidate.department,
         station=candidate.station,
@@ -1373,7 +1491,12 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
     publication = DatasetPublication.objects.select_related("department", "station").get(
         pk=publication.pk
     )
-    require_department_admin(actor, publication.department)
+    require_publication_scope(
+        actor,
+        department=publication.department,
+        station=publication.station,
+        dataset_type_code=publication.dataset_type_code,
+    )
     _validate_scope(
         department=publication.department,
         station=publication.station,
@@ -1394,7 +1517,13 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
         not publication.artifact_path
         and not (
             publication.schema_version == 2
-            and publication.dataset_type_code in {"department_fire_plans", "department_klgv_plans"}
+            and publication.dataset_type_code
+            in {
+                "department_fire_plans",
+                "department_klgv_plans",
+                "department_files",
+                "station_files",
+            }
         )
     ):
         raise PublicationError("Rollback target has no usable artifact.")
@@ -1426,7 +1555,12 @@ def delete_publication(*, actor, publication: DatasetPublication) -> DatasetPubl
     candidate = DatasetPublication.objects.select_related("department", "station").get(
         pk=publication.pk
     )
-    require_department_admin(actor, candidate.department)
+    require_publication_scope(
+        actor,
+        department=candidate.department,
+        station=candidate.station,
+        dataset_type_code=candidate.dataset_type_code,
+    )
     _validate_scope(
         department=candidate.department,
         station=candidate.station,
@@ -1519,9 +1653,9 @@ def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
     """
     require_department_admin(actor, department)
     scopes = list(
-        DatasetScopeState.objects.filter(department=department).select_related(
-            "station", "latest_built_publication"
-        )
+        DatasetScopeState.objects.filter(department=department)
+        .exclude(dataset_type_code="station_files")
+        .select_related("station", "latest_built_publication")
     )
     running_scope_ids = set(
         PublicationJob.objects.filter(
