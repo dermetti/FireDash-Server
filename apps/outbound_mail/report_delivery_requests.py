@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import BinaryIO
 from uuid import UUID
 
@@ -23,6 +24,8 @@ from apps.tablets.models import AppInstallation
 class TabletReportDeliveryResult:
     state: str
     code: str
+    recipient_email: str | None = None
+    accepted_at: datetime | None = None
 
     @property
     def delivered(self) -> bool:
@@ -57,9 +60,15 @@ def submit_tablet_report_delivery(
         request = TabletReportDeliveryRequest.objects.select_for_update().get(pk=request.pk)
         request.state = state
         request.result_code = outcome.code
+        request.recipient_email = outcome.recipient_email or ""
         request.completed_at = timezone.now()
-        request.save(update_fields=("state", "result_code", "completed_at"))
-    return TabletReportDeliveryResult(state=state, code=outcome.code)
+        request.save(update_fields=("state", "result_code", "recipient_email", "completed_at"))
+    return TabletReportDeliveryResult(
+        state=state,
+        code=outcome.code,
+        recipient_email=request.recipient_email or None,
+        accepted_at=request.completed_at,
+    )
 
 
 def _claim_or_replay(*, installation, delivery_request_id, recipient_personnel_id):
@@ -89,7 +98,12 @@ def _replay(*, request, recipient_personnel_id) -> TabletReportDeliveryResult:
         return TabletReportDeliveryResult(state="CONFLICT", code="idempotency_conflict")
     if request.state == TabletReportDeliveryRequest.State.PROCESSING:
         return TabletReportDeliveryResult(state="UNKNOWN", code="delivery_indeterminate")
-    return TabletReportDeliveryResult(state=request.state, code=request.result_code)
+    return TabletReportDeliveryResult(
+        state=request.state,
+        code=request.result_code,
+        recipient_email=(request.recipient_email or None) if request.state == "SUCCESS" else None,
+        accepted_at=request.completed_at if request.state == "SUCCESS" else None,
+    )
 
 
 def _terminal_state(outcome: ReportDeliveryOutcome) -> str:

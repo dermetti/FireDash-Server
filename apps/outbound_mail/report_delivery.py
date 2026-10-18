@@ -51,6 +51,7 @@ class ReportDeliveryOutcome:
 
     code: str
     delivered: bool = False
+    recipient_email: str | None = None
 
     def __repr__(self) -> str:
         return f"ReportDeliveryOutcome(code={self.code!r}, delivered={self.delivered})"
@@ -118,7 +119,11 @@ def deliver_outbound_report(
         # An unexpected or ambiguous provider exception has no safe retry.
         outcome = ReportDeliveryOutcome(code=ReportDeliveryCode.PROVIDER_UNAVAILABLE)
     else:
-        outcome = ReportDeliveryOutcome(code=ReportDeliveryCode.DELIVERED, delivered=True)
+        outcome = ReportDeliveryOutcome(
+            code=ReportDeliveryCode.DELIVERED,
+            delivered=True,
+            recipient_email=recipient.email,
+        )
 
     record_event(
         action="outbound_mail.report_delivery_attempted",

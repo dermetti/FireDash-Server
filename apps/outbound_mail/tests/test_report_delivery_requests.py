@@ -64,7 +64,11 @@ def test_first_submission_calls_delivery_once_then_replays_terminal_outcome(
 
     def deliver(**kwargs):
         calls.append(kwargs)
-        return ReportDeliveryOutcome(code=ReportDeliveryCode.DELIVERED, delivered=True)
+        return ReportDeliveryOutcome(
+            code=ReportDeliveryCode.DELIVERED,
+            delivered=True,
+            recipient_email="commander@example.test",
+        )
 
     monkeypatch.setattr(
         "apps.outbound_mail.report_delivery_requests.deliver_outbound_report", deliver
@@ -84,9 +88,12 @@ def test_first_submission_calls_delivery_once_then_replays_terminal_outcome(
     )
     assert first.state == second.state == TabletReportDeliveryRequest.State.SUCCESS
     assert first.code == second.code == ReportDeliveryCode.DELIVERED
+    assert first.recipient_email == second.recipient_email == "commander@example.test"
+    assert first.accepted_at == second.accepted_at
     assert len(calls) == 1
     stored = TabletReportDeliveryRequest.objects.get()
     assert stored.recipient_personnel_id == person.id
+    assert stored.recipient_email == "commander@example.test"
     assert not hasattr(stored, "pdf") and stored.result_code == ReportDeliveryCode.DELIVERED
 
 
@@ -191,9 +198,12 @@ def test_postgresql_concurrent_claims_send_at_most_once(request_context, monkeyp
         (TabletReportDeliveryRequest.State.SUCCESS, ReportDeliveryCode.DELIVERED),
         ("UNKNOWN", "delivery_indeterminate"),
     }
-    assert TabletReportDeliveryRequest.objects.filter(
-        installation=installation, delivery_request_id=request_id
-    ).count() == 1
+    assert (
+        TabletReportDeliveryRequest.objects.filter(
+            installation=installation, delivery_request_id=request_id
+        ).count()
+        == 1
+    )
     replay = submit_tablet_report_delivery(
         installation=installation,
         delivery_request_id=request_id,
@@ -210,10 +220,21 @@ def test_postgresql_concurrent_claims_send_at_most_once(request_context, monkeyp
 def test_authenticated_multipart_endpoint_uses_idempotency_service(request_context, monkeypatch):
     installation, person, credential = request_context
     calls = []
+    accepted_at = timezone.now()
     monkeypatch.setattr(
         "apps.tablets.api.submit_tablet_report_delivery",
         lambda **kwargs: calls.append(kwargs)
-        or type("Result", (), {"state": "SUCCESS", "code": "delivered"})(),
+        or type(
+            "Result",
+            (),
+            {
+                "state": "SUCCESS",
+                "code": "delivered",
+                "delivered": True,
+                "recipient_email": "commander@example.test",
+                "accepted_at": accepted_at,
+            },
+        )(),
     )
     request_id = uuid4()
     client = Client()
@@ -227,7 +248,12 @@ def test_authenticated_multipart_endpoint_uses_idempotency_service(request_conte
         HTTP_AUTHORIZATION=f"Bearer {credential}",
     )
     assert response.status_code == 200
-    assert response.json() == {"state": "SUCCESS", "code": "delivered"}
+    assert response.json() == {
+        "state": "SUCCESS",
+        "code": "delivered",
+        "recipient_email": "commander@example.test",
+        "accepted_at": accepted_at.isoformat().replace("+00:00", "Z"),
+    }
     assert len(calls) == 1
 
 
@@ -270,8 +296,11 @@ def _usable(provider):
 def _endpoint_post(client, credential, request_id, recipient_id, content, filename="client.pdf"):
     return client.post(
         "/api/v1/tablet/report-delivery",
-        {"delivery_request_id": str(request_id), "recipient_personnel_id": str(recipient_id),
-         "pdf": SimpleUploadedFile(filename, content, "application/pdf")},
+        {
+            "delivery_request_id": str(request_id),
+            "recipient_personnel_id": str(recipient_id),
+            "pdf": SimpleUploadedFile(filename, content, "application/pdf"),
+        },
         HTTP_AUTHORIZATION=f"Bearer {credential}",
     )
 
@@ -324,7 +353,11 @@ def test_endpoint_replay_conflict_and_cross_department_are_fail_closed(
     person.incident_commander_eligible = False
     person.save(update_fields=("incident_commander_eligible",))
     ineligible = _endpoint_post(client, credential, uuid4(), person.id, payload)
-    assert first.json() == replay.json() == {"state": "SUCCESS", "code": "delivered"}
+    assert first.json() == replay.json()
+    assert first.json()["state"] == "SUCCESS"
+    assert first.json()["code"] == "delivered"
+    assert first.json()["recipient_email"] == "commander@example.test"
+    assert first.json()["accepted_at"]
     assert conflict.json() == {"state": "CONFLICT", "code": "idempotency_conflict"}
     assert foreign_request.json() == {"state": "FAILED", "code": "recipient_not_authorized"}
     assert ineligible.json() == {"state": "FAILED", "code": "recipient_not_authorized"}

@@ -264,6 +264,7 @@ class TabletReportDeliveryRequest(models.Model):
     recipient_personnel_id = models.UUIDField()
     state = models.CharField(max_length=16, choices=State.choices, default=State.PROCESSING)
     result_code = models.CharField(max_length=64, blank=True, default="")
+    recipient_email = models.EmailField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 

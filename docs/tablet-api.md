@@ -75,7 +75,7 @@ Every request that reaches report-delivery processing returns HTTP 200 with
 only this sanitized JSON shape:
 
 ```json
-{"state":"SUCCESS","code":"delivered"}
+{"state":"SUCCESS","code":"delivered","recipient_email":"commander@example.org","accepted_at":"2026-09-12T12:34:56Z"}
 ```
 
 | `state` | `code` values | Meaning and client action |
@@ -84,6 +84,13 @@ only this sanitized JSON shape:
 | `FAILED` | `recipient_not_authorized`, `recipient_email_unavailable`, `recipient_domain_not_allowed`, `invalid_attachment`, `attachment_too_large`, `invalid_pdf`, `unsupported_pdf_encryption`, `pdf_inspection_unavailable`, `message_rejected`, `provider_configuration`, `delivery_unavailable` | Terminal failure for this UUID. No provider attempt occurs for admission/readiness failures. A user may intentionally make a later logical send with a new UUID; it may use the same encrypted PDF if it remains valid. `invalid_attachment`, `attachment_too_large`, `invalid_pdf`, `unsupported_pdf_encryption`, and `pdf_inspection_unavailable` require correction before a later send. |
 | `UNKNOWN` | `provider_unavailable`, `delivery_indeterminate` | Delivery may already have occurred. Never automatically resend, including with a new UUID; require an explicit user decision/workflow outside this protocol. `delivery_indeterminate` is also returned when a prior request was left processing after interruption. |
 | `CONFLICT` | `idempotency_conflict` | This installation already used the UUID with a different `recipient_personnel_id`. Nothing is sent; create a new UUID only for a new intentional send. |
+
+Only `SUCCESS` includes `recipient_email` and `accepted_at`. They are the exact
+server-resolved address used for the provider attempt and its persisted server
+completion time. An idempotent replay returns the same values. The tablet may
+retain this delivery receipt and its locally generated password in protected
+local storage for at most 48 hours; the password remains client-only and is
+never part of this response.
 
 Persist the UUID and encrypted report before the first request, and retain both
 until a terminal report-delivery state is received or the user resolves an
@@ -153,7 +160,7 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 | `POST /api/v1/tablet/check-in` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE operational; eligible current STALE recovers automatically; INACTIVE records control-plane contact without operational renewal |
 | `POST /api/v1/tablet/refresh` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
 | `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
-| `POST /api/v1/tablet/report-delivery` | Bearer | `multipart/form-data`: UUID `delivery_request_id`, UUID `recipient_personnel_id`, binary `pdf` | 200 `{state,code}` | 400, 403, 426 | Current authenticated installation; recipient authorization and delivery readiness are evaluated server-side |
+| `POST /api/v1/tablet/report-delivery` | Bearer | `multipart/form-data`: UUID `delivery_request_id`, UUID `recipient_personnel_id`, binary `pdf` | 200 `{state,code}`; `SUCCESS` also includes `{recipient_email,accepted_at}` | 400, 403, 426 | Current authenticated installation; recipient authorization and delivery readiness are evaluated server-side |
 | `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403 | ACTIVE or INACTIVE current installation with a valid assignment |
 | `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | ACTIVE or INACTIVE current installation; exact configured public key version |
 | `GET /api/v1/tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403 | ACTIVE returns assigned publications; INACTIVE returns a signed empty dataset list |
