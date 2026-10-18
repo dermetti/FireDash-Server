@@ -9,6 +9,7 @@ from apps.assignments.models import PersonnelStationAssignment, TabletVehicleAss
 from apps.audit.services import record_event
 from apps.authorization.scopes import active_department_ids, active_station_ids
 from apps.authorization.services import require_department_admin
+from apps.file_library.capacity import lock_department_capacity
 from apps.organizations.models import Department, Station, Vehicle
 from apps.personnel.models import Person
 from apps.publications.services import mark_dirty
@@ -232,6 +233,9 @@ def _authorize_tablet_vehicle_assignment(actor, tablet: Tablet, vehicle: Vehicle
 def assign_tablet_vehicle(
     *, tablet: Tablet, vehicle: Vehicle, actor, effective_at: datetime | None = None
 ) -> TabletVehicleAssignment:
+    lock_department_capacity(
+        Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
+    )
     # Match vehicle retirement's Vehicle -> Tablet -> assignment lock order and
     # validate persisted operational state rather than a potentially stale
     # caller-held Vehicle instance.

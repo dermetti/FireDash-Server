@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
+from apps.file_library.capacity import lock_department_capacity
 from apps.organizations.models import Department
 from apps.publications.hpke import (
     HPKE_CIPHERSUITE,
@@ -1006,6 +1007,9 @@ def _revoke_tablet_installations(*, tablet: Tablet, reason: str, now) -> None:
 @transaction.atomic
 def activate_tablet(*, actor, tablet: Tablet) -> Tablet:
     """INACTIVE → ACTIVE: commission a known asset back into operational service."""
+    lock_department_capacity(
+        Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
+    )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
     require_department_admin(actor, tablet.department)
     _require_asset_transition(tablet, Tablet.Status.ACTIVE)
@@ -1043,6 +1047,9 @@ def activate_tablet(*, actor, tablet: Tablet) -> Tablet:
 @transaction.atomic
 def deactivate_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
     """ACTIVE → INACTIVE: withdraw operational access without revoking identity."""
+    lock_department_capacity(
+        Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
+    )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
     require_department_admin(actor, tablet.department)
     _require_asset_transition(tablet, Tablet.Status.INACTIVE)
@@ -1080,6 +1087,9 @@ def deactivate_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
 @transaction.atomic
 def mark_tablet_lost(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
     """ACTIVE/INACTIVE → LOST: hardware unaccounted for; revoke installation access."""
+    lock_department_capacity(
+        Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
+    )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
     require_department_admin(actor, tablet.department)
     _require_asset_transition(tablet, Tablet.Status.LOST)
@@ -1104,6 +1114,9 @@ def mark_tablet_lost(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
 @transaction.atomic
 def recover_tablet(*, actor, tablet: Tablet) -> Tablet:
     """LOST → INACTIVE: a found tablet returns to stock/inspection, never directly ACTIVE."""
+    lock_department_capacity(
+        Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
+    )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
     require_department_admin(actor, tablet.department)
     _require_asset_transition(tablet, Tablet.Status.INACTIVE)
@@ -1126,6 +1139,9 @@ def recover_tablet(*, actor, tablet: Tablet) -> Tablet:
 @transaction.atomic
 def retire_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
     """ACTIVE/INACTIVE → RETIRED: permanent withdrawal; revoke installation access."""
+    lock_department_capacity(
+        Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
+    )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
     require_department_admin(actor, tablet.department)
     _require_asset_transition(tablet, Tablet.Status.RETIRED)

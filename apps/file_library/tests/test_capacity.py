@@ -2,7 +2,9 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Barrier
+from queue import Queue
+from threading import Barrier, Event
+from time import monotonic
 
 import pytest
 from django.core.exceptions import PermissionDenied
@@ -13,6 +15,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.assignments.models import TabletVehicleAssignment
+from apps.assignments.services import assign_tablet_vehicle
 from apps.audit.models import AuditEvent
 from apps.file_library import capacity, services
 from apps.file_library.models import CapacityReview, Content, Entry, StorageImpact
@@ -23,7 +26,9 @@ from apps.file_library.tests.test_libraries import (  # noqa: F401
     scope,
 )
 from apps.file_library.tests.test_publication import crypto, publish  # noqa: F401
+from apps.organizations import services as organization_services
 from apps.organizations.models import Vehicle
+from apps.tablets import services as tablet_services
 from apps.tablets.models import AppInstallation, Tablet
 from apps.tablets.tests.test_management_ui import _adopted_installation
 
@@ -510,3 +515,295 @@ def test_concurrent_override_consumption_is_single_use(scope, pdf_pipeline):
         assert sorted(f.result(timeout=30) for f in futures) == ["accepted", "rejected"]
     assert Entry.objects.count() == StorageImpact.objects.count() == 1
     assert AuditEvent.objects.filter(action="file_library.capacity_override_consumed").count() == 1
+
+
+def serialized_operations(first, second, *, while_blocked=None):
+    """Hold the first commit and prove the second waits on its advisory lock.
+
+    Each worker owns a real connection. Observing pg_locks (rather than merely
+    starting a thread) establishes that the competing operation reached the DB.
+    Timeouts bound failures, including a regression to row-lock inversion.
+    """
+    assert connection.vendor == "postgresql"
+    held, release = Event(), Event()
+    second_pid = Queue()
+
+    def run(action, *, hold=False):
+        close_old_connections()
+        try:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL statement_timeout = '15s'")
+                    cursor.execute("SELECT pg_backend_pid()")
+                    pid = cursor.fetchone()[0]
+                if not hold:
+                    second_pid.put(pid)
+                result = action()
+                if hold:
+                    held.set()
+                    assert release.wait(10), "First transaction was never released"
+                return result
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        holding = pool.submit(run, first, hold=True)
+        waiting = None
+        try:
+            assert held.wait(10), "First operation did not complete"
+            waiting = pool.submit(run, second)
+            pid = second_pid.get(timeout=10)
+            deadline = monotonic() + 8
+            while True:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks "
+                        "WHERE pid = %s AND locktype = 'advisory' AND NOT granted)",
+                        [pid],
+                    )
+                    blocked = cursor.fetchone()[0]
+                if blocked:
+                    break
+                if waiting.done():
+                    waiting.result()  # Surface errors before reporting missing synchronization.
+                    pytest.fail("Competing operation bypassed the capacity lock")
+                assert monotonic() < deadline, "No advisory lock wait observed"
+                release.wait(0.01)
+            if while_blocked:
+                while_blocked()
+        finally:
+            release.set()
+        return holding.result(timeout=20), waiting.result(timeout=20)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("movement", ["same_station", "outbound", "inbound"])
+def test_projection_serializes_reassignment_between_station_scopes(scope, movement):
+    library = services.get_library(scope[1], station_id=scope[5].id)
+    source_station = scope[6] if movement == "inbound" else scope[5]
+    target_station = scope[6] if movement == "outbound" else scope[5]
+    tablet, _ = tablet_for(scope, station=source_station)
+    original = TabletVehicleAssignment.objects.get(tablet=tablet)
+    target = Vehicle.objects.create(
+        department=scope[3], station=target_station, display_name="Target"
+    )
+    proposed = operation()
+    before, assigned = serialized_operations(
+        lambda: projection(library, proposed),
+        lambda: assign_tablet_vehicle(tablet=tablet, vehicle=target, actor=scope[0]),
+    )
+    assert bool(before["tablets"]) == (movement != "inbound")
+    original.refresh_from_db()
+    assert original.ended_at is not None
+    assert original.end_reason == "REASSIGNED"
+    assert TabletVehicleAssignment.objects.get(tablet=tablet, ended_at=None).pk == assigned.pk
+    after = projection(library, proposed)
+    assert bool(after["tablets"]) == (movement != "outbound")
+    if after["tablets"]:
+        assert after["tablets"][0]["assignment_id"] == str(assigned.id)
+        assert after["tablets"][0]["reason"] == "assignment_changed_since_telemetry"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "transition,initial,expected,eligible",
+    [
+        ("activate_tablet", "INACTIVE", "ACTIVE", True),
+        ("deactivate_tablet", "ACTIVE", "INACTIVE", False),
+        ("mark_tablet_lost", "ACTIVE", "LOST", False),
+        ("recover_tablet", "LOST", "INACTIVE", False),
+        ("retire_tablet", "ACTIVE", "RETIRED", False),
+    ],
+)
+def test_projection_serializes_tablet_lifecycle(scope, transition, initial, expected, eligible):
+    library = library_for(scope)
+    tablet, installation = tablet_for(scope)
+    Tablet.objects.filter(pk=tablet.pk).update(status=initial, active=initial != "LOST")
+    proposed = operation()
+    before, _ = serialized_operations(
+        lambda: projection(library, proposed),
+        lambda: getattr(tablet_services, transition)(actor=scope[0], tablet=tablet),
+    )
+    assert bool(before["tablets"]) == (initial == "ACTIVE")
+    tablet.refresh_from_db()
+    assert tablet.status == expected
+    assert bool(projection(library, proposed)["tablets"]) == eligible
+    installation.refresh_from_db()
+    if expected in ("LOST", "RETIRED"):
+        assert installation.status == "REVOKED"
+
+
+def capacity_mutation(scope, tablet, change):
+    vehicle = TabletVehicleAssignment.objects.get(tablet=tablet, ended_at=None).vehicle
+    if change == "retire_vehicle":
+        return lambda: organization_services.retire_vehicle(actor=scope[0], vehicle=vehicle)
+    if change == "update_vehicle":
+        return lambda: organization_services.update_vehicle(
+            actor=scope[0],
+            vehicle=vehicle,
+            display_name=vehicle.display_name,
+            call_sign=vehicle.call_sign,
+            asset_identifier=vehicle.asset_identifier,
+            active=False,
+        )
+    if change == "reassign":
+        target = Vehicle.objects.create(
+            department=scope[3], station=scope[6], display_name="Target"
+        )
+        return lambda: assign_tablet_vehicle(tablet=tablet, vehicle=target, actor=scope[0])
+    if change == "legacy_deactivate":
+        return lambda: organization_services.deactivate_tablet(actor=scope[0], tablet=tablet)
+    return lambda: getattr(tablet_services, change)(actor=scope[0], tablet=tablet)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("phase", ["confirm", "consume"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "retire_vehicle",
+        "update_vehicle",
+        "reassign",
+        "deactivate_tablet",
+        "activate_tablet",
+        "mark_tablet_lost",
+        "retire_tablet",
+        "legacy_deactivate",
+    ],
+)
+def test_review_rechecks_population_after_concurrent_mutation(scope, pdf_pipeline, phase, change):
+    library = library_for(scope)
+    tablet, _ = tablet_for(scope, free=10, total=1000)
+    if change == "activate_tablet":
+        # Keep one warning tablet and add a second eligible asset after review.
+        tablet, _ = tablet_for(scope)
+        Tablet.objects.filter(pk=tablet.pk).update(status="INACTIVE")
+    data = pdf().read()
+    review = warning(scope[0], library, data)
+    if phase == "consume":
+        approve(scope[0], review)
+    mutation = capacity_mutation(scope, tablet, change)
+
+    def use_review():
+        with pytest.raises(services.LibraryError, match="changed|stale"):
+            if phase == "confirm":
+                approve(scope[0], review)
+            else:
+                services.upload_pdf(
+                    actor=scope[0],
+                    library_id=library.id,
+                    upload=upload_bytes(data),
+                    approval_id=review.id,
+                )
+
+    outside = services.get_library(scope[2], department_id=scope[4].id)
+
+    def independent_department():
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout = '2s'")
+            assert projection(outside, operation())["tablets"] == []
+
+    serialized_operations(mutation, use_review, while_blocked=independent_department)
+    review.refresh_from_db()
+    assert review.consumed_at is None
+    assert review.decision == ("pending" if phase == "confirm" else "approved")
+    assert not Entry.objects.exists()
+    assert not StorageImpact.objects.exists()
+    assert not AuditEvent.objects.filter(action="file_library.capacity_override_consumed").exists()
+    current = projection(library, review.operation)
+    assert capacity.fingerprint(current) != review.fingerprint
+    if change in ("retire_vehicle", "update_vehicle", "legacy_deactivate"):
+        assert not TabletVehicleAssignment.objects.filter(tablet=tablet, ended_at=None).exists()
+    if change in ("retire_vehicle", "update_vehicle"):
+        assert not Vehicle.objects.get(tablet_assignments__tablet=tablet).active
+        assert AuditEvent.objects.filter(action="organization.vehicle_retired").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("retirement_first", [True, False])
+def test_vehicle_retirement_and_reassignment_serialize_under_capacity_lock(scope, retirement_first):
+    tablet, _ = tablet_for(scope)
+    original = TabletVehicleAssignment.objects.get(tablet=tablet)
+    target = Vehicle.objects.create(department=scope[3], station=scope[6], display_name="Target")
+
+    def retirement():
+        return organization_services.retire_vehicle(actor=scope[0], vehicle=original.vehicle)
+
+    def reassignment():
+        return assign_tablet_vehicle(actor=scope[0], tablet=tablet, vehicle=target)
+
+    serialized_operations(
+        retirement if retirement_first else reassignment,
+        reassignment if retirement_first else retirement,
+    )
+    original.refresh_from_db()
+    assert original.ended_at is not None
+    assert not Vehicle.objects.get(pk=original.vehicle_id).active
+    assert TabletVehicleAssignment.objects.get(tablet=tablet, ended_at=None).vehicle_id == target.id
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("phase", ["confirm", "consume"])
+def test_review_commits_before_waiting_vehicle_retirement(scope, pdf_pipeline, phase):
+    library = library_for(scope)
+    tablet, _ = tablet_for(scope, free=10, total=1000)
+    assignment = TabletVehicleAssignment.objects.get(tablet=tablet)
+    data = pdf().read()
+    review = warning(scope[0], library, data)
+    if phase == "consume":
+        approve(scope[0], review)
+
+    def use_review():
+        if phase == "confirm":
+            return approve(scope[0], review)
+        return services.upload_pdf(
+            actor=scope[0], library_id=library.id, upload=upload_bytes(data), approval_id=review.id
+        )
+
+    serialized_operations(
+        use_review,
+        lambda: organization_services.retire_vehicle(actor=scope[0], vehicle=assignment.vehicle),
+    )
+    review.refresh_from_db()
+    assignment.refresh_from_db()
+    library.refresh_from_db()
+    assert assignment.ended_at is not None
+    assert not Vehicle.objects.get(pk=assignment.vehicle_id).active
+    assert review.decision == "approved"
+    assert (review.consumed_at is not None) == (phase == "consume")
+    assert Entry.objects.count() == StorageImpact.objects.count() == (phase == "consume")
+    assert library.source_revision == (phase == "consume")
+    if phase == "confirm":
+        with pytest.raises(services.LibraryError, match="stale"):
+            services.upload_pdf(
+                actor=scope[0],
+                library_id=library.id,
+                upload=upload_bytes(data),
+                approval_id=review.id,
+            )
+        review.refresh_from_db()
+        assert review.consumed_at is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_station_reactivation_shares_capacity_boundary(scope):
+    library = library_for(scope)
+    tablet_for(scope)
+    station = scope[5]
+    type(station).objects.filter(pk=station.pk).update(active=False)
+    proposed = operation()
+    before, _ = serialized_operations(
+        lambda: projection(library, proposed),
+        lambda: organization_services.update_station(
+            actor=scope[0],
+            station=station,
+            name=station.name,
+            short_code=station.short_code,
+            active=True,
+        ),
+    )
+    assert before["tablets"] == []
+    station.refresh_from_db()
+    assert station.active
+    assert len(projection(library, proposed)["tablets"]) == 1

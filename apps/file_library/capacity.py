@@ -30,10 +30,21 @@ def department_for(library):
 
 
 def lock_capacity(library):
-    """Serialize source reservations across both scopes without changing lock roles."""
-    department = department_for(library)
+    """Serialize source reservations and eligibility mutations across both scopes."""
+    lock_department_capacity(department_for(library).id)
+
+
+def lock_department_capacity(department_id):
+    """Acquire inside atomic(), before any conflicting row locks.
+
+    Source operations take this lock before scope/library/review/installation
+    locks. Eligibility mutations take it before Vehicle -> Tablet (ascending PK)
+    -> assignment -> installation locks, skipping rows they do not need.
+    Resolve the department from persisted state before entering this boundary;
+    department ownership is immutable in these services.
+    """
     key = int.from_bytes(
-        hashlib.sha256(f"library-capacity:{department.id}".encode()).digest()[:8],
+        hashlib.sha256(f"library-capacity:{department_id}".encode()).digest()[:8],
         "big",
         signed=True,
     )
@@ -49,8 +60,10 @@ def project(library, operation):
     """Called within a transaction under the department capacity/source lock.
 
     Lock current installations to keep telemetry/replacement stable until this
-    source operation or review decision commits. Assignment identities are bound
-    into confirmations; subsequent assignment changes follow their own lifecycle.
+    source operation or review decision commits. Eligibility and assignment
+    mutations share the department lock, keeping this population authoritative
+    through confirmation and consumption. Assignment identities are also bound
+    into confirmations to detect changes between transactions.
     Queries are batched; no sanitizer or publication builder runs here.
     """
     now = timezone.now()

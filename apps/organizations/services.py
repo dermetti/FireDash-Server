@@ -6,6 +6,7 @@ from apps.assignments.models import PersonnelStationAssignment, TabletVehicleAss
 from apps.assignments.services import AssignmentError
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
+from apps.file_library.capacity import lock_department_capacity
 from apps.organizations.models import Station, Vehicle
 from apps.personnel.models import Person
 from apps.publications.manifests import revoke_dataset_key_grants
@@ -63,6 +64,9 @@ def update_station(
     city: str = "",
     active: bool,
 ) -> Station:
+    lock_department_capacity(
+        Station.objects.values_list("department_id", flat=True).get(pk=station.pk)
+    )
     station = Station.objects.select_for_update().select_related("department").get(pk=station.pk)
     require_department_admin(actor, station.department)
     normalized = {
@@ -160,6 +164,9 @@ def update_vehicle(
     asset_identifier: str,
     active: bool,
 ) -> Vehicle:
+    lock_department_capacity(
+        Vehicle.objects.values_list("department_id", flat=True).get(pk=vehicle.pk)
+    )
     vehicle = Vehicle.objects.select_for_update().select_related("department").get(pk=vehicle.pk)
     require_department_admin(actor, vehicle.department)
     if (
@@ -199,10 +206,13 @@ def update_vehicle(
 def retire_vehicle(*, actor, vehicle: Vehicle) -> Vehicle:
     """Terminally retire a Vehicle and end its open Tablet assignments.
 
-    Lock ordering is Vehicle, then Tablet (ascending primary key), then the
+    Lock ordering is department capacity, Vehicle, Tablet (ascending primary key), then the
     corresponding assignment. Reassignment locks the Tablet before its open
     assignment as well, preventing a retirement/reassignment deadlock.
     """
+    lock_department_capacity(
+        Vehicle.objects.values_list("department_id", flat=True).get(pk=vehicle.pk)
+    )
     vehicle = (
         Vehicle.objects.select_for_update()
         .select_related("department", "station")
@@ -298,6 +308,9 @@ def delete_station(*, actor, station: Station) -> None:
 
 @transaction.atomic
 def deactivate_station(*, station: Station) -> None:
+    lock_department_capacity(
+        Station.objects.values_list("department_id", flat=True).get(pk=station.pk)
+    )
     station = Station.objects.select_for_update().get(pk=station.pk)
     if Vehicle.objects.filter(station=station, active=True).exists():
         raise AssignmentError("Deactivate or move active vehicles before deactivating a station.")
@@ -324,6 +337,9 @@ def deactivate_person(*, person: Person, actor) -> None:
 
 @transaction.atomic
 def deactivate_tablet(*, tablet: Tablet, actor) -> None:
+    lock_department_capacity(
+        Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
+    )
     tablet = Tablet.objects.select_for_update().get(pk=tablet.pk)
     now = timezone.now()
     TabletVehicleAssignment.objects.filter(
