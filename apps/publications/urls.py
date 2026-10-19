@@ -10,6 +10,11 @@ urlpatterns = [
         name="publications-list",
     ),
     path(
+        "departments/<uuid:department_id>/publications/stations/",
+        views.publication_station_search,
+        name="publications-station-search",
+    ),
+    path(
         "departments/<uuid:department_id>/publications/status/",
         views.publication_status,
         name="publications-status",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from uuid import UUID
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -8,7 +9,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Exists, F, OuterRef, Q, Subquery
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
@@ -20,7 +21,7 @@ from apps.authorization.services import (
     require_publication_scope,
     require_system_admin,
 )
-from apps.organizations.models import Department
+from apps.organizations.models import Department, Station
 from apps.publications.builders import build_source_payload
 from apps.publications.diffs import source_diff
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
@@ -150,7 +151,13 @@ def _decorate_scope_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _filtered_scope_queryset(department: Department, selected_filter: str):
+def _filtered_scope_queryset(
+    department: Department,
+    selected_filter: str,
+    *,
+    scope_mode: str = "department",
+    station: Station | None = None,
+):
     """Filter scope rows before pagination without materializing every row.
 
     The normal list path has no publication subqueries at all.  State filters
@@ -158,6 +165,10 @@ def _filtered_scope_queryset(department: Department, selected_filter: str):
     count, but intentionally never project a publication's heavy payload.
     """
     queryset = publication_scope_queryset(department)
+    if scope_mode == "department":
+        queryset = queryset.filter(station__isnull=True)
+    elif scope_mode == "station":
+        queryset = queryset.filter(station=station) if station else queryset.none()
     if not selected_filter:
         return queryset
 
@@ -234,11 +245,47 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
     selected_filter = request.GET.get("state", "")
     if selected_filter not in SCOPE_FILTERS:
         selected_filter = ""
-    paginator = Paginator(_filtered_scope_queryset(department, selected_filter), SCOPE_PAGE_SIZE)
+    scope_mode = request.GET.get("scope", "department")
+    if scope_mode not in {"department", "station", "all"}:
+        scope_mode = "department"
+    station = None
+    station_invalid = False
+    if scope_mode == "station" and request.GET.get("station_id"):
+        try:
+            station_id = UUID(request.GET["station_id"])
+        except ValueError:
+            station_invalid = True
+        else:
+            station = Station.objects.filter(
+                pk=station_id, department=department, active=True
+            ).first()
+            station_invalid = station is None
+    queryset = _filtered_scope_queryset(
+        department, selected_filter, scope_mode=scope_mode, station=station
+    )
+    paginator = Paginator(queryset, SCOPE_PAGE_SIZE)
     page = paginator.get_page(request.GET.get("page"))
     rows = _decorate_scope_rows(scope_operational_states_for_scopes(list(page.object_list)))
-    page_query = request.GET.copy()
-    page_query.pop("page", None)
+    page_query = QueryDict(mutable=True)
+    page_query["scope"] = scope_mode
+    if station:
+        page_query["station_id"] = str(station.id)
+    if selected_filter:
+        page_query["state"] = selected_filter
+    clear_query = page_query.copy()
+    clear_query.pop("state", None)
+    station_query = request.GET.get("station_q", "").strip()[:255]
+    station_options = (
+        list(_matching_stations(department, station_query)) if scope_mode == "station" else []
+    )
+    if station and station not in station_options:
+        station_options.insert(0, station)
+    has_scopes = bool(rows) or (
+        bool(selected_filter)
+        and _filtered_scope_queryset(
+            department, "", scope_mode=scope_mode, station=station
+        ).exists()
+    )
     system_scopes = DatasetScopeState.objects.filter(
         scope_type=DatasetScopeState.ScopeType.SYSTEM,
         current_published_publication__isnull=False,
@@ -252,6 +299,14 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
         "page": page,
         "total_count": paginator.count,
         "selected_filter": selected_filter,
+        "scope_mode": scope_mode,
+        "selected_station": station,
+        "station_invalid": station_invalid,
+        "station_query": station_query,
+        "station_options": station_options,
+        "has_scopes": has_scopes,
+        "clear_status_query": clear_query.urlencode(),
+        "publications_url": reverse("publications-list", args=(department.id,)),
         "scope_filters": SCOPE_FILTERS,
         "page_query": page_query.urlencode(),
         "system_scope_rows": system_rows,
@@ -335,13 +390,35 @@ def _modal_redirect(request: HttpRequest, url: str) -> HttpResponse:
     return redirect(url)
 
 
+def _matching_stations(department: Department, query: str):
+    stations = Station.objects.filter(department=department, active=True)
+    if query:
+        stations = stations.filter(Q(name__icontains=query) | Q(short_code__icontains=query))
+    return stations.order_by("name", "id")[:20]
+
+
+@login_required
+@require_http_methods(["GET"])
+def publication_station_search(request: HttpRequest, department_id) -> HttpResponse:
+    department = _department_or_403(request, department_id)
+    query = request.GET.get("q", "").strip()[:255]
+    return render(
+        request,
+        "file_library/_station_search_results.html",
+        {"results": _matching_stations(department, query)},
+    )
+
+
 @login_required
 @require_http_methods(["GET"])
 def publications(request: HttpRequest, department_id) -> HttpResponse:
     department = _department_or_403(request, department_id)
     context = _publication_list_context(request, department)
-    if request.headers.get("HX-Request") == "true":
-        return render(request, "publications/_scope_results.html", context)
+    if (
+        request.headers.get("HX-Request") == "true"
+        and request.headers.get("HX-History-Restore-Request") != "true"
+    ):
+        return render(request, "publications/_publication_browser.html", context)
     return render(request, "publications/list.html", context)
 
 
@@ -394,7 +471,9 @@ def publication_status(request: HttpRequest, department_id) -> HttpResponse:
     """Compatibility polling endpoint; scope-row polling is preferred in Phase 4B."""
     department = _department_or_403(request, department_id)
     return render(
-        request, "publications/_scope_results.html", _publication_list_context(request, department)
+        request,
+        "publications/_publication_browser.html",
+        _publication_list_context(request, department),
     )
 
 

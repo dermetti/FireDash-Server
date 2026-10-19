@@ -1,9 +1,10 @@
 /* Progressive enhancement only; the server always validates station authority. */
 (function () {
+  const initialized = new WeakSet();
   function initialize() {
-    document.querySelectorAll('[data-station-access]').forEach(function (root) {
-      if (root.dataset.initialized || !window.htmx) return;
-      root.dataset.initialized = 'true';
+    document.querySelectorAll('[data-station-access], [data-station-selector]').forEach(function (root) {
+      if (initialized.has(root) || !window.htmx) return;
+      initialized.add(root);
       const input = root.querySelector('#station-combobox');
       const chosen = root.querySelector('#chosen-station-id');
       const results = root.querySelector('#station-search-results');
@@ -14,8 +15,23 @@
       root.querySelectorAll('[data-station-fallback]').forEach(function (el) { el.hidden = true; });
       root.querySelector('#station-select-fallback').disabled = true;
       chosen.disabled = false;
-      activate.disabled = !chosen.value;
+      if (activate) activate.disabled = !chosen.value;
       let index = -1;
+      if (root.hasAttribute('data-publication-station')) {
+        root.querySelectorAll('[data-station-fallback] input').forEach(function (el) { el.disabled = true; });
+        input.addEventListener('htmx:configRequest', function (event) { event.detail.parameters.q = input.value; });
+        const form = chosen.form;
+        function updateScope() {
+          const stationMode = form.elements.scope.value === 'station';
+          root.hidden = !stationMode;
+          root.disabled = !stationMode;
+          if (!stationMode) close();
+        }
+        form.querySelectorAll('[name="scope"]').forEach(function (el) {
+          el.addEventListener('change', updateScope);
+        });
+        updateScope();
+      }
       function options() { return Array.from(results.querySelectorAll('[role="option"]')); }
       function highlight(next) {
         const rows = options();
@@ -33,17 +49,17 @@
         highlight(-1);
       }
       function select(row) {
-        if (chosen.value !== row.dataset.stationId) confirm.checked = false;
+        if (confirm && chosen.value !== row.dataset.stationId) confirm.checked = false;
         chosen.value = row.dataset.stationId;
         input.value = row.dataset.stationLabel;
         status.textContent = 'Selected: ' + row.dataset.stationLabel;
-        activate.disabled = false;
+        if (activate) activate.disabled = false;
         close();
       }
       input.addEventListener('input', function () {
         chosen.value = '';
-        confirm.checked = false;
-        activate.disabled = true;
+        if (confirm) confirm.checked = false;
+        if (activate) activate.disabled = true;
         status.textContent = 'No station selected.';
         close();
         results.querySelector('[role="listbox"]').replaceChildren();
@@ -85,10 +101,12 @@
         status.textContent = options().length ? 'Choose a matching station.' : 'No matching active stations.';
       });
       chosen.form.addEventListener('submit', function (event) {
-        if (!chosen.value) { event.preventDefault(); input.focus(); }
+        if (activate && !chosen.value) { event.preventDefault(); input.focus(); }
       });
     });
   }
   initialize();
   document.body.addEventListener('htmx:afterSwap', initialize);
+  document.body.addEventListener('htmx:historyRestore', initialize);
+  window.addEventListener('pageshow', initialize);
 })();

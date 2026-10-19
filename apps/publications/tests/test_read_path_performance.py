@@ -51,7 +51,7 @@ def test_publication_list_query_count_is_bounded_and_only_enriches_visible_page(
     """The list counts/pages scopes before its bounded publication batch reads."""
     assert connection.vendor == "postgresql"
     department = _department_with_station_scopes(total=total)
-    request = RequestFactory().get("/publications/", {"page": "1"})
+    request = RequestFactory().get("/publications/", {"scope": "all", "page": "1"})
     calls: list[int] = []
 
     from apps.publications import views

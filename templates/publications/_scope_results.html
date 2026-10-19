@@ -1,5 +1,21 @@
 <div id="publication-scope-results">
-  <p class="text-body-secondary small">Showing {{ scope_rows|length }} of {{ total_count }} publication scope{{ total_count|pluralize }}.</p>
-  <table class="table table-hover align-middle"><thead><tr><th>Dataset / Scope</th><th>Current publication</th><th>Update</th><th>Last changed</th><th class="text-end">Actions</th></tr></thead><tbody>{% for row in scope_rows %}{% include "publications/_scope_row.html" %}{% empty %}<tr><td colspan="5" class="text-center text-body-secondary py-4">No publication scopes match this filter.</td></tr>{% endfor %}</tbody></table>
-  {% include "components/_pagination.html" with hx_target="#publication-scope-results" hx_base=request.path hx_swap="outerHTML" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+      <h2 class="h5 mb-1">{% if scope_mode == 'station' %}{% if selected_station %}{{ selected_station.name }} publications{% else %}Station publications{% endif %}{% elif scope_mode == 'all' %}All department and station publications{% else %}Department publications{% endif %}</h2>
+      <p class="small text-body-secondary mb-0">{% if selected_station %}{{ selected_station.short_code }} &middot; {% endif %}{% for value,label in scope_filters.items %}{% if value == selected_filter %}{% if not value %}All statuses{% else %}{{ label }}{% endif %}{% endif %}{% endfor %}</p>
+    </div>
+    <span class="text-body-secondary small">Showing {{ scope_rows|length }} of {{ total_count }} publication scope{{ total_count|pluralize }}.</span>
+  </div>
+  {% if scope_rows %}
+  <table class="table table-hover align-middle"><thead><tr><th>Dataset / Scope</th><th>Current publication</th><th>Update</th><th class="d-none d-lg-table-cell">Last changed</th><th class="text-end">Actions</th></tr></thead><tbody>{% for row in scope_rows %}{% include "publications/_scope_row.html" %}{% endfor %}</tbody></table>
+  {% elif scope_mode == 'station' and not selected_station %}
+  <div class="text-center text-body-secondary py-4">Select a station to view its publications.</div>
+  {% elif selected_filter and has_scopes %}
+  <div class="text-center py-4"><p class="mb-2">No publications match these filters.</p><a href="{{ publications_url }}?{{ clear_status_query }}">Clear status filter</a></div>
+  {% elif scope_mode == 'station' %}
+  <div class="text-center text-body-secondary py-4">No publication scopes are available for this station.</div>
+  {% else %}
+  <div class="text-center text-body-secondary py-4">No publication scopes are available in this scope.</div>
+  {% endif %}
+  {% include "components/_pagination.html" with hx_target="#publication-browser" hx_base=publications_url hx_swap="outerHTML" %}
 </div>

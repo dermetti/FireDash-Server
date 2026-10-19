@@ -235,7 +235,7 @@ def test_publication_permissions_and_ui(scope, client, crypto):
         ).status_code
         == 200
     )
-    response = client.get(reverse("publications-list", args=[scope[3].id]))
+    response = client.get(reverse("publications-list", args=[scope[3].id]), {"scope": "all"})
     assert b"Station files" in response.content
     assert scope[5].short_code.encode() in response.content
 

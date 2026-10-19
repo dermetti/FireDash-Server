@@ -201,9 +201,11 @@ def test_department_station_publications_are_scoped_paginated_and_administrable(
     client.force_login(scope[0])
     monkeypatch.setattr("apps.publications.views.SCOPE_PAGE_SIZE", 1)
     url = reverse("publications-list", args=(scope[3].id,))
-    first = client.get(url, {"state": "scheduled"})
+    first = client.get(url, {"scope": "all", "state": "scheduled"})
     assert first.context["page"].paginator.count == 2
-    second = client.get(url, {"state": "scheduled", "page": 2}, HTTP_HX_REQUEST="true")
+    second = client.get(
+        url, {"scope": "all", "state": "scheduled", "page": 2}, HTTP_HX_REQUEST="true"
+    )
     assert second.status_code == 200
     assert scope[5].short_code.encode() in second.content
     assert reverse("publications-scope-detail", args=(state.id,)).encode() in second.content

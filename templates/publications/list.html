@@ -1,12 +1,23 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Publications — {{ department.name }}{% endblock %}
+{% block head %}
+<style>
+  .publication-scope-switch .scope-selected { visibility: hidden; }
+  .publication-scope-switch .btn-check:checked + label .scope-selected { visibility: visible; }
+</style>
+{% endblock %}
 {% block content %}
 <p class="text-body-secondary small mb-0">Distributed Data / Publications</p>
 <h1 class="mb-1">Publications</h1>
 <p class="text-body-secondary">Current publication status and the active update workflow for each dataset scope.</p>
-<section class="mb-4"><form method="post" action="{% url 'publications-bulk-rebuild' department.id %}">{% csrf_token %}<button type="submit" class="btn btn-primary">Build affected datasets</button></form></section>
-<section class="mb-4" aria-label="Publication filters"><form method="get" hx-get="{% url 'publications-list' department.id %}" hx-target="#publication-scope-results" hx-push-url="true" hx-trigger="change"><label class="form-label" for="publication-state-filter">Show</label><div class="d-flex align-items-center gap-2 flex-wrap"><select class="form-select" id="publication-state-filter" name="state" style="max-width: 18rem">{% for value, label in scope_filters.items %}<option value="{{ value }}"{% if value == selected_filter %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% if selected_filter %}<a class="btn btn-outline-secondary" href="{% url 'publications-list' department.id %}">Reset</a>{% endif %}</div></form></section>
-{% include "publications/_scope_results.html" %}
+<section class="mb-4" aria-labelledby="publication-bulk-heading">
+  <h2 id="publication-bulk-heading" class="h6">Department-wide bulk action</h2>
+  <p class="small text-body-secondary">Build affected datasets throughout the department, regardless of the filters below.</p>
+  <form method="post" action="{% url 'publications-bulk-rebuild' department.id %}">{% csrf_token %}<button type="submit" class="btn btn-primary">Build affected datasets</button></form>
+</section>
+{% include "publications/_publication_browser.html" %}
+<script src="{% static 'file_library/station_access.js' %}" defer></script>
 {% if system_scope_rows %}
 <section class="mt-5" aria-labelledby="system-provided-publications-heading">
   <h2 id="system-provided-publications-heading" class="h4">System-provided publications</h2>

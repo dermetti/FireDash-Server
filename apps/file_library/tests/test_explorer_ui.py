@@ -464,7 +464,10 @@ def test_station_dialog_bounded_search_fallback_reauth_and_stale_choice(client, 
     assert client.get(choose).status_code == 403 and client.get(endpoint).status_code == 403
 
 
-def test_station_combobox_keyboard_pointer_and_stale_responses_in_browser(tmp_path, client, scope):
+@pytest.mark.parametrize("selector", ["temporary_access", "publication_filter"])
+def test_station_combobox_keyboard_pointer_and_stale_responses_in_browser(
+    tmp_path, client, scope, selector
+):
     if sys.platform == "win32":
         pytest.skip(
             "Native Linux browser check: this Windows sandbox cannot launch Edge's GPU process."
@@ -481,9 +484,14 @@ def test_station_combobox_keyboard_pointer_and_stale_responses_in_browser(tmp_pa
     # Real browser DOM/events; HTTP authorization and bounded result sets are tested above.
     library = library_for(scope)
     client.force_login(scope[0])
-    html = client.get(
-        reverse("file-library-station-access-choose", args=(library.id,))
-    ).content.decode()
+    if selector == "publication_filter":
+        html = client.get(
+            reverse("publications-list", args=(scope[3].id,)), {"scope": "station"}
+        ).content.decode()
+    else:
+        html = client.get(
+            reverse("file-library-station-access-choose", args=(library.id,))
+        ).content.decode()
     html += '<pre id="result">WAIT</pre><script>window.htmx={};</script>'
 
     driver = (

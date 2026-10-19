@@ -418,7 +418,7 @@ def test_filters_are_server_side_and_count_scopes_not_attempts(client, publicati
 
     response = client.get(
         reverse("publications-list", args=(department.id,)),
-        {"state": "scheduled"},
+        {"scope": "all", "state": "scheduled"},
         HTTP_HX_REQUEST="true",
     )
     content = response.content.decode()
