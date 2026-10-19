@@ -1,11 +1,11 @@
 # FireDash Phase 3 — File Management & File Explorer UI implementation guide
 
-**Status:** Revised implementation aid (both Department and Station Administrators); not yet implemented.  
-**Repository baseline:** `dermetti/FireDash-Server`, Phase 2 commit `5d9f44436815cb6500a359eebbeeaf2a38318ef9`.  
+**Status:** Implemented shared File Explorer for Department and Station Administrators; retained as the implementation and acceptance guide.<br>
+**Original planning baseline:** `dermetti/FireDash-Server`, Phase 2 commit `5d9f44436815cb6500a359eebbeeaf2a38318ef9`.<br>
 **Audience:** Django/Bootstrap/HTMX coding agent. Follow `docs/FireDash_UI_Styleguide.md` as the overarching style system.  
 **Goal:** One familiar, operationally safe PDF explorer UI used by **both Department and Station Administrators**, with **File Management as a parent page** and **File Explorer as a dedicated child page**. Reuse views/templates where practical while preserving fundamentally different authorization and publication workflows.
 
-> **Example-status convention.** HTML below is a *precise implementation pattern*, not a claim that new routes, variables or partials already exist. Existing Django names are identified as such; **proposed** names must be implemented and verified in the same change. Do not paste a proposed URL tag into a template until its route is registered. The examples are intentionally detailed because the agent should not invent new UI patterns.
+> **Example-status convention.** The shared explorer and routes described here are implemented. HTML examples remain illustrative patterns; exact context names and fragment structure may differ from the current templates. The implementation in the working tree is authoritative.
 
 ## 1. User experience contract
 
@@ -24,7 +24,7 @@ Sidebar: File Management  ───► GET /files/  (existing dispatcher)
                                             └─ Primary "Open File Explorer" CTA
                                                         │
                                                         ▼
-                                 GET /files/<library-uuid>/explorer/  (PROPOSED `file-library-explorer`)
+                                 GET /files/<library-uuid>/explorer/  (`file-library-explorer`)
                                             FILE EXPLORER SUBPAGE
                                             ├─ Back to File Management
                                             ├─ Breadcrumb navigation
@@ -146,20 +146,20 @@ Read these files before editing:
 | `apps/file_library/explorer.py` | Phase 1 `read_explorer()`, typed read model, bounded page, search, folder ancestry and operation hints | Use for child page; do not rewrite the query model in the view |
 | `apps/file_library/services.py` | Auth, temp access, mutations and folder constraints | Services are final authorization boundary |
 | `apps/file_library/views.py` | Existing `index`, `library_view`, `select_station_access`, `document`, capacity review actions | Refactor carefully and preserve security |
-| `apps/file_library/urls.py` | Existing `file-library`, `file-library-index`, PDF and access URLs | Add child route before generic UUID path as appropriate |
-| `templates/file_library/library.html` | Current overloaded parent/explorer template | Split into clean parent and new child + partials |
+| `apps/file_library/urls.py` | Existing `file-library`, `file-library-index`, PDF and access URLs | Keep registered explorer and action routes |
+| `templates/file_library/library.html` | Shared File Management parent template | Keep file browsing in the shared child and partials |
 | `templates/file_library/index.html` | Multi-library selector | Retain semantics |
 | `apps/file_library/forms.py` | Validated station ModelChoice + confirm | Reuse its authorized queryset at POST time |
 | `apps/file_library/publication.py` | `publish_now`, `publication_state` | Preserve for station admin only on parent |
-| `apps/publications/views.py` | Department `department_files_publish` POST route prepared in Phase 1 | Wire into Publications UI, not file explorer |
-| `templates/publications/scope_detail.html` | Existing department scope actions/history | Add an explicit authorized department-file publish action here |
+| `apps/publications/views.py` | Department `department_files_publish` POST route prepared in Phase 1 | Used by Publications UI, not file explorer |
+| `templates/publications/scope_detail.html` | Existing department scope actions/history | Hosts the authorized department-file publish action |
 | `templates/components/_htmx_action_modal.html` | Existing action modal controller | Reuse or minimally improve, no parallel modal frameworks |
 | `templates/components/_page_header.html` | Shared page heading | Use for parent and child |
 | `templates/components/_alerts.html` | Shared flash feedback | Retain per-file outcomes and action errors |
 
 **Existing route names, already implemented:** `file-library`, `file-library-index`, `file-library-document`, `file-library-station-access-select`, `file-library-station-access-release`, `file-library-capacity-review`, `portal-department-settings`, `publications-list`, `publications-scope-detail`, `publications-department-files-publish`.
 
-**New route names proposed:** `file-library-explorer`, `file-library-explorer-action` and, if needed, `file-library-station-search`. Build those views and tests. The action route can accept a constrained action slug and optional target UUID, but must call existing service functions—not generic model edits.
+**Implemented Phase 3 route names:** `file-library-explorer`, `file-library-explorer-action`, `file-library-station-access-choose` and `file-library-station-search`. The action route accepts a constrained action slug and an optional target UUID in the request, and calls existing service functions—not generic model edits.
 
 ### 2.1 Access and operation matrix
 
@@ -490,7 +490,7 @@ Suggested partial `templates/file_library/_explorer_listing.html`:
 </section>
 ```
 
-**Implementation notes:** The proposed `file-library-explorer-action` route must be implemented, and `can_manage_files` must be server-derived from the access mode. `hx-select`/`hx-target` above are illustrative; ensure the returned HTMX fragment structure exactly matches the swap target and does not duplicate IDs. An alternative is to return only `_explorer_listing.html` for HX requests and use `hx-swap="outerHTML"` on `#file-explorer-content`. Choose one coherent strategy, test it, and retain non-JavaScript GET behavior.
+**Implementation notes:** `file-library-explorer-action` is implemented; management capabilities are server-derived from the access mode. `hx-select`/`hx-target` above are illustrative; ensure the returned HTMX fragment structure exactly matches the swap target and does not duplicate IDs. An alternative is to return only `_explorer_listing.html` for HX requests and use `hx-swap="outerHTML"` on `#file-explorer-content`. Choose one coherent strategy, test it, and retain non-JavaScript GET behavior.
 
 **Sorting:** Add simple query-linked Name / Size / Modified headers or a `Sort by` select. Supported values from `explorer.py` are `name`, `modified`, `size`, with `descending` boolean and fixed UUID tie breaker. Preserve `folder`, `q`, sort and direction in pagination/search links. Reset to page 1 on new search/sort. Do not build all entries in Python to sort them.
 
@@ -869,7 +869,7 @@ No fake trash/recycle feature. After a successful *temporary* delete, redirect t
 </div>
 ```
 
-`file-library-station-search` above is **proposed**. It must be read-only, authorized for the department and return bounded active-station results. The POST `file-library-station-access-select` exists and must keep validating the selected UUID with `TemporaryStationAccessForm`. The modal can be AJAX-enhanced, but the choice must be final and checked server-side.
+`file-library-station-search` is implemented as a read-only, department-authorized endpoint returning bounded active-station results. The POST `file-library-station-access-select` exists and must keep validating the selected UUID with `TemporaryStationAccessForm`. The modal can be AJAX-enhanced, but the choice must be final and checked server-side.
 
 ### 6.3 Returned search-result partial
 
@@ -985,7 +985,7 @@ The standard selection view should accept `station_q` through GET, return at mos
 - **Presentation:** use repository-local SVGs and Bootstrap classes. No CDN, new JS framework, file-manager dependency or new client-side storage.
 - **Language:** English interface strings only.
 
-## 9. Implementation checklist (agent work order)
+## 9. Implementation checklist (completed Phase 3 work)
 
 1. Add explorer GET route and view using the existing `read_explorer()` read model; map validated query parameters to context.
 2. Extract `templates/file_library/library.html` into a compact **shared parent** and create the **shared child** `explorer.html`; test both normal department and normal station entry paths before implementing modal actions.
@@ -1034,7 +1034,7 @@ The standard selection view should accept `station_q` through GET, return at mos
 
 ## 11. Canonical UI styleguide update (small, required)
 
-The companion guide is implementation-specific; `docs/FireDash_UI_Styleguide.md` remains authoritative for global styling. After implementing Phase 3, add a concise **File Management & File Explorer** subsection to that canonical styleguide reflecting these stable rules (do not paste all ~1,000 lines into it):
+The companion guide is implementation-specific; `docs/FireDash_UI_Styleguide.md` remains authoritative for global styling. The canonical styleguide now documents **File Management & File Explorer**, reflecting these stable rules (do not paste all ~1,000 lines into it):
 
 > One shared File Management parent template and one shared File Explorer child template serve authorized Department and Station Administrators. Department admins manage their own department library and its publication lifecycle through Publications; normal station admins manage their own station library and publish station files from the station parent because they have no Publications access. Department admins accessing a station by temporary grant use the same explorer in browse/download/single-delete-only mode, with an explicit access banner and release. The parent hosts role-specific overview, review and access workflows; the child owns file/folder browsing and mutations. All permissions come from server-side scope checks; no duplicate station explorer and no role enforcement solely by hiding UI controls.
 

@@ -10,7 +10,7 @@
     function showModal() {
       var modalEl = container.querySelector(".modal");
       if (!modalEl) return;
-      var instance = bootstrap.Modal.getInstance(modalEl);
+      var instance = activeModal || bootstrap.Modal.getInstance(modalEl);
       if (instance) instance.dispose();
       document.querySelectorAll(".modal-backdrop").forEach(function (backdrop) {
         backdrop.remove();
@@ -29,6 +29,8 @@
     });
     document.body.addEventListener("hidden.bs.modal", function (event) {
       if (container.contains(event.target)) {
+        var instance = bootstrap.Modal.getInstance(event.target);
+        if (instance) instance.dispose();
         activeModal = null;
         container.innerHTML = "";
         if (opener && opener.isConnected) opener.focus();
