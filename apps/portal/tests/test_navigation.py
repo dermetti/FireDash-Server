@@ -67,6 +67,7 @@ def test_department_admin_nav_is_department_wide_without_mode_selector(nav_roles
     labels = _all_labels(context)
     assert "Data Hub" in labels
     assert "Publications" in labels
+    assert "File Management" not in labels
     assert "Tablets" in labels
     assert "Stations" in labels
     assert "Administrator Accounts" in labels
@@ -94,6 +95,11 @@ def test_station_admin_nav_resolves_single_station(nav_roles):
     assert context["nav_role"] == "station"
     assert context["nav_station"] == s1
     assert context["nav_station_ambiguous"] is False
+    labels = _all_labels(context)
+    assert "File Management" in labels
+    assert "Data Hub" not in labels
+    assert "Publications" not in labels
+    assert "System Settings" not in labels
 
 
 @pytest.mark.django_db
@@ -163,3 +169,29 @@ def test_rendered_navigation_has_no_blank_links(client, nav_roles):
     # The single shared navigation source is rendered by both the desktop
     # sidebar and the Offcanvas.
     assert content.count("Distributed Data") >= 2
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("role", ["department", "station"])
+def test_role_specific_navigation_matches_on_desktop_and_mobile(client, nav_roles, role):
+    _, department_admin, station_admin, department, station, _ = nav_roles
+    client.force_login(department_admin if role == "department" else station_admin)
+    response = client.get(reverse("dashboard"))
+    assert response.status_code == 200
+    menus = response.content.decode().split(
+        '<nav class="nav flex-column" aria-label="Primary navigation">'
+    )[1:]
+    assert len(menus) == 2
+    for markup in menus:
+        menu = markup.split("</nav>", 1)[0]
+        assert (f'href="{reverse("file-library-index")}"' in menu) == (role == "station")
+        assert (f'href="{reverse("portal-data-hub", args=(department.id,))}"' in menu) == (
+            role == "department"
+        )
+        assert (f'href="{reverse("publications-list", args=(department.id,))}"' in menu) == (
+            role == "department"
+        )
+        assert reverse("station-data-hub", args=(station.id,)) not in menu
+        assert "Tablets" in menu
+        if role == "station":
+            assert "Personnel" in menu and "Administrator Accounts" not in menu

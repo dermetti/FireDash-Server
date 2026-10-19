@@ -502,3 +502,136 @@ def test_station_combobox_keyboard_pointer_and_stale_responses_in_browser(tmp_pa
     )
     assert result.returncode == 0, result.stderr
     assert '<pre id="result">PASS</pre>' in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("role", ["department", "station"])
+def test_library_rename_overview_form_and_authorization(client, scope, role):
+    actor, library = normal(scope, role)
+    parent_url = reverse("file-library", args=(library.id,))
+    client.force_login(actor)
+    library.refresh_from_db()
+    revision, usage, original_name = library.source_revision, library.usage_bytes, library.name
+    overview = client.get(parent_url)
+    assert 'aria-label="Rename library"' in overview.content.decode()
+    assert f'href="{parent_url}?rename=1#library-rename"' in overview.content.decode()
+    edit = client.get(parent_url, {"rename": "1"})
+    html = edit.content.decode()
+    assert 'id="library-rename" method="post"' in html
+    assert 'name="csrfmiddlewaretoken"' in html
+    assert f'value="{original_name}"' in html
+    assert '<label class="form-label" for="library-name">Library name</label>' in html
+    assert ">Save</button>" in html and f'href="{parent_url}">Cancel</a>' in html
+    assert 'name="action" value="library_name"' not in client.get(url(library)).content.decode()
+    for invalid in ("", "../invalid", "x" * 256):
+        response = client.post(parent_url, {"action": "library_name", "name": invalid})
+        assert response.status_code == 200
+        assert 'id="library-name-error"' in response.content.decode()
+        assert 'aria-invalid="true"' in response.content.decode()
+        assert f'value="{invalid}"' in response.content.decode()
+        library.refresh_from_db()
+        assert library.name == original_name and library.source_revision == revision
+    response = client.post(
+        parent_url, {"action": "library_name", "name": "New library"}, follow=True
+    )
+    assert response.status_code == 200 and b"Library renamed." in response.content
+    assert response.redirect_chain == [(parent_url, 302)]
+    library.refresh_from_db()
+    assert library.name == "New library" and library.source_revision == revision + 1
+    assert library.usage_bytes == usage
+    event = AuditEvent.objects.get(action="file_library.library_renamed", target_uuid=library.id)
+    assert event.actor_user_id == actor.id and event.station_id == library.station_id
+    assert not library.entries.exists()
+    # Saving the same name remains a no-op in the authoritative service.
+    client.post(parent_url, {"action": "library_name", "name": "New library"})
+    library.refresh_from_db()
+    assert library.source_revision == revision + 1
+    assert AuditEvent.objects.filter(action="file_library.library_renamed").count() == 1
+    assert (
+        Client(enforce_csrf_checks=True).post(parent_url, {"action": "library_name"}).status_code
+        == 403
+    )
+    client.force_login(scope[2])
+    assert client.get(parent_url, {"rename": "1"}).status_code == 403
+    assert client.post(parent_url, {"action": "library_name", "name": "Foreign"}).status_code == 403
+    client.force_login(scope[1] if role == "department" else scope[0])
+    assert (
+        client.post(parent_url, {"action": "library_name", "name": "Wrong scope"}).status_code
+        == 403
+    )
+    library.refresh_from_db()
+    assert library.name == "New library" and library.source_revision == revision + 1
+
+
+def test_temporary_access_cannot_rename_library(client, scope):
+    actor, library = normal(scope, "station")
+    grant = services.activate_temporary_access(actor=scope[0], station=scope[5])
+    client.force_login(scope[0])
+    library.refresh_from_db()
+    original_name, revision = library.name, library.source_revision
+    for query in ({}, {"rename": "1"}):
+        response = client.get(reverse("file-library", args=(library.id,)), query)
+        assert response.status_code == 200
+        html = response.content.decode()
+        assert 'aria-label="Rename library"' not in html and 'id="library-rename"' not in html
+    assert (
+        client.post(
+            reverse("file-library", args=(library.id,)),
+            {"action": "library_name", "name": "Denied"},
+        ).status_code
+        == 403
+    )
+    library.refresh_from_db()
+    grant.refresh_from_db()
+    assert library.name == original_name and library.source_revision == revision
+    assert grant.revoked_at is None
+    assert not AuditEvent.objects.filter(action="file_library.library_renamed").exists()
+
+
+@pytest.mark.parametrize("role", ["department", "station"])
+def test_move_destination_presentation_and_navigation(client, scope, role):
+    actor, library = normal(scope, role)
+    item = services.create_folder(actor=actor, library_id=library.id, name="Test")
+    plans = services.create_folder(actor=actor, library_id=library.id, name="KLGV Plans")
+    child = services.create_folder(
+        actor=actor, library_id=library.id, name="Subfolder", parent_id=plans.id
+    )
+    client.force_login(actor)
+    for headers in ({}, {"HTTP_HX_REQUEST": "true"}):
+        root = client.get(url(library, "move"), {"entry": item.id}, **headers)
+        assert root.status_code == 200
+        assert (
+            '<strong>Destination:</strong> <em class="text-body-secondary">Files</em>'
+            in root.content.decode()
+        )
+        assert 'aria-label="Destination pages"' not in root.content.decode()
+        response = client.get(
+            url(library, "move"), {"entry": item.id, "destination": child.id}, **headers
+        )
+        html = response.content.decode()
+        assert "<strong>Test</strong>" in html
+        assert (
+            '<strong>Destination:</strong> <em class="text-body-secondary">'
+            "Files / KLGV Plans / Subfolder</em>" in html
+        )
+        assert "The selected item will be moved here when you confirm." in html
+        assert ">Up one level</a>" in html and ">Files</a>" in html
+        assert f"destination={plans.id}" in html
+        assert 'name="destination"' in html and f'value="{child.id}"' in html
+        assert "Page 1 of 1" not in html and 'aria-label="Destination pages"' not in html
+        assert ">Move here</button>" in html
+        assert ("hx-get=" in html) == bool(headers)
+        assert ("hx-post=" in html) == bool(headers)
+    for index in range(26):
+        services.create_folder(
+            actor=actor, library_id=library.id, name=f"Folder {index}", parent_id=plans.id
+        )
+    page = client.get(
+        url(library, "move"), {"entry": item.id, "destination": plans.id}, HTTP_HX_REQUEST="true"
+    )
+    assert 'aria-label="Destination pages"' in page.content.decode()
+    assert "Page 1 of 2" in page.content.decode()
+    assert page.context["destinations"].has_next()
+    response = client.post(url(library, "move"), {"entry": item.id, "destination": child.id})
+    assert response.status_code == 302
+    item.refresh_from_db()
+    assert item.parent_id == child.id

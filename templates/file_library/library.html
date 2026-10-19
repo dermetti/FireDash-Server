@@ -7,7 +7,19 @@
 {% if access_mode == "temporary" %}{% include "file_library/_temporary_access_banner.html" %}{% endif %}
 {% if library.usage_bytes > library.quota_bytes %}<div class="alert alert-danger" role="alert">This library is over quota. Storage-increasing operations are blocked.</div>{% endif %}
 <section class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4" aria-label="Library overview">
-  <div><div class="fw-semibold">{{ library.name }}</div><div class="text-body-secondary small">{{ file_count }} PDF{{ file_count|pluralize }} &middot; {{ library.usage_bytes|filesizeformat }} of {{ library.quota_bytes|filesizeformat }} used</div></div>
+  <div>
+    <div class="d-flex align-items-center gap-2 mb-1"><span class="fw-semibold">{{ library.name }}</span>{% if access_mode == "normal" and not editing_library_name %}<a class="btn btn-outline-secondary btn-sm" href="{% url 'file-library' library.id %}?rename=1#library-rename" aria-label="Rename library">Rename</a>{% endif %}</div>
+    {% if access_mode == "normal" and editing_library_name %}
+    <form id="library-rename" method="post" action="{% url 'file-library' library.id %}" class="mb-3">
+      {% csrf_token %}<input type="hidden" name="action" value="library_name">
+      <label class="form-label" for="library-name">Library name</label>
+      <input id="library-name" name="name" type="text" class="form-control{% if library_name_error %} is-invalid{% endif %}" value="{{ library_name_value }}" maxlength="255" required{% if library_name_error %} aria-invalid="true" aria-describedby="library-name-error"{% endif %}>
+      {% if library_name_error %}<div id="library-name-error" class="invalid-feedback">{{ library_name_error }}</div>{% endif %}
+      <div class="d-flex gap-2 mt-2"><button type="submit" class="btn btn-primary btn-sm">Save</button><a class="btn btn-outline-secondary btn-sm" href="{% url 'file-library' library.id %}">Cancel</a></div>
+    </form>
+    {% endif %}
+    <div class="text-body-secondary small">{{ file_count }} PDF{{ file_count|pluralize }} &middot; {{ library.usage_bytes|filesizeformat }} of {{ library.quota_bytes|filesizeformat }} used</div>
+  </div>
   <a class="btn btn-primary" href="{% url 'file-library-explorer' library.id %}">Open File Explorer <span aria-hidden="true">&rarr;</span></a>
 </section>
 {% if is_department_library_admin %}

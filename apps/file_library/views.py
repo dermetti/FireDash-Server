@@ -73,6 +73,8 @@ def library_view(request, library_id):
         current = services.parent_entry(library, identifier(request.GET.get("folder")))
     except services.LibraryError as error:
         raise Http404 from error
+    library_name_error = None
+    library_name_value = library.name
     if request.method == "POST":
         deletion_access = None
         try:
@@ -147,16 +149,23 @@ def library_view(request, library_id):
             else:
                 raise services.LibraryError("Unknown file operation.")
             if action not in {"upload", "publish"}:
-                messages.success(request, "Library updated.")
+                messages.success(
+                    request, "Library renamed." if action == "library_name" else "Library updated."
+                )
         except services.CapacityWarning as error:
             return redirect("file-library-capacity-review", review_id=error.review.id)
         except (services.LibraryError, PdfValidationError, ValidationError) as error:
-            messages.error(request, str(error))
+            if action == "library_name":
+                library_name_error = str(error)
+                library_name_value = request.POST.get("name", "")
+            else:
+                messages.error(request, str(error))
         except (PdfSanitizerError, StorageError, OSError):
             messages.error(request, "PDF processing unavailable; retry later.")
         if action == "delete" and deletion_access == services.ACCESS_TEMPORARY:
             return redirect("file-library-index")
-        return redirect(request.get_full_path())
+        if library_name_error is None:
+            return redirect(request.path if action == "library_name" else request.get_full_path())
     from apps.file_library.capacity import pending_department_reviews
 
     department_admin = bool(library.department_id and access == services.ACCESS_NORMAL)
@@ -171,6 +180,10 @@ def library_view(request, library_id):
         "file_library/library.html",
         {
             "library": library,
+            "library_name_value": library_name_value,
+            "library_name_error": library_name_error,
+            "editing_library_name": request.GET.get("rename") == "1"
+            or library_name_error is not None,
             "pending_review_page": review_page,
             "file_count": library.entries.filter(is_folder=False).count(),
             "capacity_reviews": (

@@ -239,7 +239,6 @@ def _nav_context(request):
                 "label": "Distributed Data",
                 "children": [
                     {"label": "Data Hub", "url": reverse("portal-data-hub", args=(department.id,))},
-                    {"label": "File Management", "url": reverse("file-library-index")},
                     {
                         "label": "Publications",
                         "url": reverse("publications-list", args=(department.id,)),
@@ -299,10 +298,6 @@ def _nav_context(request):
                 {
                     "label": "Station",
                     "children": [
-                        {
-                            "label": "Data Hub",
-                            "url": reverse("station-data-hub", args=(station.id,)),
-                        },
                         {"label": "File Management", "url": reverse("file-library-index")},
                         {
                             "label": "Tablets",
