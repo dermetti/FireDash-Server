@@ -29,6 +29,8 @@ MAX_REQUEST_BYTES = 64
 
 # O_NOFOLLOW is not exposed on non-Linux hosts; it is only required in production.
 _O_NOFOLLOW: int = getattr(os, "O_NOFOLLOW", 0)
+_O_DIRECTORY: int = getattr(os, "O_DIRECTORY", 0)
+_O_NONBLOCK: int = getattr(os, "O_NONBLOCK", 0)
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -60,7 +62,6 @@ def run_job(job_id: str) -> str:
     broker only reports success or infrastructure failure.
     """
     unit = f"fire-pdf-sanitizer@{job_id}.service"
-    output = os.path.join(SANITIZER_OUTPUT_ROOT, job_id, OUTPUT_NAME)
     try:
         # Fixed argv derived from a validated UUID; never a shell.
         result = subprocess.run(  # nosec B603
@@ -77,15 +78,21 @@ def run_job(job_id: str) -> str:
         return "ERR output"
     if result.returncode != 0:
         return "ERR output"
+    root_fd = job_fd = fd = None
     try:
-        # Open with O_NOFOLLOW and finalize on the fd to avoid a path-based
-        # TOCTOU window between lstat and chown/chmod.
-        fd = os.open(output, os.O_RDONLY | _O_NOFOLLOW)
-    except OSError:
-        return "ERR output"
-    try:
+        # O_NOFOLLOW protects only the last path component. Pin both mutable
+        # directory components, then open relative to those descriptors so a
+        # renamed/replaced job directory cannot redirect privileged finalization.
+        root_fd = os.open(SANITIZER_OUTPUT_ROOT, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW)
+        job_fd = os.open(job_id, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW, dir_fd=root_fd)
+        # A FIFO must not block before fstat can reject it.
+        fd = os.open(OUTPUT_NAME, os.O_RDONLY | _O_NONBLOCK | _O_NOFOLLOW, dir_fd=job_fd)
         entry = os.fstat(fd)
-        if not stat.S_ISREG(entry.st_mode) or entry.st_size > MAX_OUTPUT_BYTES:
+        if (
+            not stat.S_ISREG(entry.st_mode)
+            or entry.st_nlink != 1
+            or not 0 < entry.st_size <= MAX_OUTPUT_BYTES
+        ):
             return "ERR output"
         uid, gid = _owner_ids()
         os.fchown(fd, uid, gid)
@@ -93,7 +100,9 @@ def run_job(job_id: str) -> str:
     except (OSError, KeyError):
         return "ERR output"
     finally:
-        os.close(fd)
+        for opened_fd in (fd, job_fd, root_fd):
+            if opened_fd is not None:
+                os.close(opened_fd)
     return "OK"
 
 

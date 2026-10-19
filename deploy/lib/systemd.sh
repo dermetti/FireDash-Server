@@ -16,22 +16,20 @@ install_systemd_units() {
 # Stop every service that could touch the DB, including the activation socket.
 quiesce() {
     log "entering maintenance/quiesce mode"
-    if systemctl list-unit-files fire-backup.timer >/dev/null 2>&1 \
-        && systemctl is-enabled --quiet fire-backup.timer 2>/dev/null; then
-        systemctl stop fire-backup.timer 2>/dev/null || true
-        systemctl stop fire-backup.service 2>/dev/null || true
-    fi
     local timer svc
-    for timer in fire-publication-worker.timer fire-publication-build.timer fire-publication-maintenance.timer fire-import-staging-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
-        systemctl stop "$timer" 2>/dev/null || true
+    for timer in fire-backup.timer fire-publication-worker.timer fire-publication-build.timer fire-publication-maintenance.timer fire-import-staging-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
+        systemctl stop "$timer" || die "could not stop $timer; cannot proceed with migration"
     done
-    for svc in fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-publication-maintenance.service fire-import-staging-maintenance.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
-        systemctl stop "$svc" 2>/dev/null || true
+    # Close activation sources before stopping workers: a queued wake must not
+    # restart the build service while migrations are running.
+    systemctl stop fire-publication-build.socket || die "could not stop publication build socket"
+    systemctl stop fire-backend.socket || die "could not stop backend socket"
+    for svc in fire-backup.service fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-publication-maintenance.service fire-import-staging-maintenance.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
+        systemctl stop "$svc" || die "could not stop $svc; cannot proceed with migration"
     done
-    systemctl stop fire-backend.socket 2>/dev/null || true
-    systemctl stop fire-backend.service 2>/dev/null || true
+    systemctl stop fire-backend.service || die "could not stop backend service"
 
-    for svc in fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-publication-maintenance.service fire-import-staging-maintenance.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
+    for svc in fire-backup.timer fire-backup.service fire-publication-worker.timer fire-publication-build.timer fire-publication-maintenance.timer fire-import-staging-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer fire-publication-build.socket fire-backend.socket fire-backend.service fire-publication-worker.service fire-publication-delivery.service fire-publication-build.service fire-publication-maintenance.service fire-import-staging-maintenance.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
         if systemctl is-active --quiet "$svc"; then
             die "unit $svc is still active; cannot proceed with migration"
         fi
@@ -48,8 +46,8 @@ activate_socket() {
 
 activate_timers() {
     local timer
-    systemctl disable --now fire-publication-worker.timer 2>/dev/null || true
-    systemctl stop fire-publication-worker.service 2>/dev/null || true
+    systemctl disable --now fire-publication-worker.timer || return
+    systemctl stop fire-publication-worker.service || return
     for timer in fire-publication-build.timer fire-publication-maintenance.timer fire-import-staging-maintenance.timer fire-temporary-assignment-expiry.timer fire-stale-installation.timer; do
         systemctl enable --now "$timer"
     done

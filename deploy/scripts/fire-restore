@@ -6,6 +6,9 @@ set -eu
 : "${FIRE_RESTORE_SNAPSHOT:?FIRE_RESTORE_SNAPSHOT is required}"
 : "${FIRE_RESTORE_TARGET:?FIRE_RESTORE_TARGET is required}"
 
+# Compare the resolved path: a lexical prefix also accepts ../ traversal and
+# existing symlinks that escape the isolated restore tree.
+FIRE_RESTORE_TARGET=$(realpath -m -- "$FIRE_RESTORE_TARGET")
 case "$FIRE_RESTORE_TARGET" in
     /var/lib/fire-backend/restore-tests/*) ;;
     *) echo "FIRE_RESTORE_TARGET must be below /var/lib/fire-backend/restore-tests" >&2; exit 2 ;;

@@ -212,8 +212,9 @@ else
 fi
 
 (
+    FAIL=0
     export DJANGO_SETTINGS_MODULE=config.settings.production
-    load_env_file "$ENV_FILE"
+    load_env_file "$ENV_FILE" || exit 1
     if "$RELEASE/venv/bin/python" "$RELEASE/manage.py" check --deploy >/dev/null 2>&1; then
         ok "check --deploy"
     else
@@ -224,7 +225,9 @@ fi
     else
         fail "migrate --check failed"
     fi
-)
+    # fail() updates a subshell-local counter; propagate it to the parent.
+    [[ $FAIL -eq 0 ]]
+) || fail "Django deployment checks failed"
 
 # -------- systemd --------
 log "=== systemd ==="
@@ -383,6 +386,15 @@ fi
 
 # -------- filesystem / credentials --------
 log "=== filesystem / credentials ==="
+[[ $(stat -c '%U:%G:%a' /var/lib/fire-backend) == "root:root:711" ]] \
+    && ok "mutable parent remains root:root 0711" || fail "mutable parent ownership/mode unexpected"
+for service_user in fire_backend fire_publication fire_pdf_sanitizer; do
+    if runuser -u "$service_user" -- test -w /var/lib/fire-backend; then
+        fail "$service_user can modify the mutable parent"
+    else
+        ok "$service_user cannot modify the mutable parent"
+    fi
+done
 [[ $(stat -c '%a' "$SECRET_DIR") == 700 ]] && ok "credentials dir 0700" || fail "credentials dir mode $(stat -c '%a' "$SECRET_DIR")"
 for f in database-owner-password backup-role-password publication-kek publication-signing-key publication-signing-public-key publication-signing-public-key-ring.json application-secret-kek-ring.json; do
     [[ $(stat -c '%U:%G:%a' "$SECRET_DIR/$f") == "root:root:600" ]] && ok "$f root:root 0600" || fail "$f has unexpected ownership/mode"

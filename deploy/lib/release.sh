@@ -94,6 +94,12 @@ activate_release() {
     local release=${FIREDASH_RELEASE:?} root=${FIREDASH_REPO_ROOT:?}
     local sql="$root/deploy/postgresql/roles.sql"
 
+    # Direct activation must not bypass build completion, including after an
+    # interrupted build. Check before migrations or any other mutable work.
+    [[ -f "$release/.firedash-release-complete" && ! -e "$release/.firedash-release-building" ]] \
+        || die "release $release is incomplete; refusing activation"
+    verify_release_venv "$release"
+
     log "converging service identities and accepted document-source permissions"
     "$root/deploy/scripts/create-service-users.sh"
 

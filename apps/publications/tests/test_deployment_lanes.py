@@ -123,6 +123,22 @@ def test_accepted_document_source_uses_its_own_reader_group():
     assert '"$root/deploy/scripts/create-service-users.sh"' in release
 
 
+def test_mutable_parent_remains_root_owned_across_activation_and_tmpfiles():
+    users = (ROOT / "deploy/scripts/create-service-users.sh").read_text(encoding="utf-8")
+    tmpfiles = (ROOT / "deploy/systemd/fire-backend.tmpfiles.conf").read_text(encoding="utf-8")
+    parent_installs = [
+        line
+        for line in users.splitlines()
+        if line.startswith("install -d ") and line.endswith(" /var/lib/fire-backend")
+    ]
+    assert parent_installs == ["install -d -o root -g root -m 0711 /var/lib/fire-backend"]
+    assert "d /var/lib/fire-backend 0711 root root -" in tmpfiles.splitlines()
+    assert "install -d -o root -g root -m 0700 /etc/fire-backend/credentials" in users
+    verifier = (ROOT / "deploy/verify-deployment.sh").read_text(encoding="utf-8")
+    assert "mutable parent remains root:root 0711" in verifier
+    assert 'runuser -u "$service_user" -- test -w /var/lib/fire-backend' in verifier
+
+
 def test_root_rotation_helper_uses_two_phase_atomic_public_ring_workflow():
     helper = (ROOT / "deploy" / "rotate-publication-signing-key").read_text(encoding="utf-8")
     secrets = (ROOT / "deploy" / "lib" / "secrets.sh").read_text(encoding="utf-8")

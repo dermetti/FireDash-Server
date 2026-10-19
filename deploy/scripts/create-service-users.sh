@@ -36,7 +36,9 @@ if ! id fire_publication >/dev/null 2>&1; then
         --shell /usr/sbin/nologin --no-create-home fire_publication
 fi
 
-install -d -o fire_backend -g fire_nginx -m 0710 /var/lib/fire-backend
+# Match tmpfiles: services own their specific mutable children, never the parent
+# of root-only backup/restore trees or other service identities' directories.
+install -d -o root -g root -m 0711 /var/lib/fire-backend
 install -d -o root -g root -m 0755 /var/lib/fire-backend/static
 install -d -o root -g fire_backend -m 0750 /etc/fire-backend
 install -d -o fire_backend -g fire_pdf_sanitizer -m 2710 /var/lib/fire-backend/quarantine
