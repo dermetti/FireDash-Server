@@ -17,8 +17,9 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
-from apps.accounts.models import User
+from apps.accounts.models import AccountSetupToken, User
 from apps.accounts.reauth import require_recent_reauthentication
+from apps.accounts.services import DuplicateEmailError
 from apps.application_secrets.crypto import ApplicationSecretError
 from apps.assignments.services import AssignmentError
 from apps.audit.models import AuditEvent
@@ -97,7 +98,7 @@ from apps.portal.overview import attention_for_request, attention_total, operati
 
 @dataclass(frozen=True)
 class AdministratorListRow:
-    """One current operational authority presentation for one User.
+    """One current authority presentation for an active or pending User.
 
     The management list intentionally projects current authority only.  Full
     Department and Station lifecycle history remains on the administrator detail
@@ -118,6 +119,7 @@ class AdministratorListRow:
             DepartmentMembership.Status.ACTIVE: "success",
             DepartmentMembership.Status.SUSPENDED: "warning",
             DepartmentMembership.Status.REVOKED: "secondary",
+            "PENDING_SETUP": "warning",
         }
         return badges[self.lifecycle]
 
@@ -127,9 +129,10 @@ def _current_administrator_rows(
 ) -> list[AdministratorListRow]:
     """Build one sparse list row per User from current authority only.
 
-    Effective Department administration takes precedence over any Station
-    assignments.  Station-only rows contain only active assignments at active
-    Stations; suspended and revoked Station history is detail-only.
+    Current Department administration takes precedence over any Station
+    assignments, including accounts awaiting setup. Station-only rows contain
+    only active assignments at active Stations; suspended and revoked Station
+    history is detail-only.
     """
     rows: list[AdministratorListRow] = []
     for administrator in users:
@@ -140,11 +143,17 @@ def _current_administrator_rows(
                 AdministratorListRow(
                     administrator=administrator,
                     scope="Department",
-                    lifecycle=membership.status,
-                    lifecycle_display=membership.get_status_display(),
+                    lifecycle=membership.status if administrator.is_active else "PENDING_SETUP",
+                    lifecycle_display=(
+                        membership.get_status_display()
+                        if administrator.is_active
+                        else "Pending setup"
+                    ),
                     membership=membership,
                     station_assignment=None,
-                    can_lifecycle_actions=department_admin_actions_allowed,
+                    can_lifecycle_actions=(
+                        department_admin_actions_allowed or not administrator.is_active
+                    ),
                 )
             )
             continue
@@ -158,8 +167,10 @@ def _current_administrator_rows(
             AdministratorListRow(
                 administrator=administrator,
                 scope=scope,
-                lifecycle=assignment.status,
-                lifecycle_display=assignment.get_status_display(),
+                lifecycle=assignment.status if administrator.is_active else "PENDING_SETUP",
+                lifecycle_display=(
+                    assignment.get_status_display() if administrator.is_active else "Pending setup"
+                ),
                 membership=None,
                 station_assignment=assignment,
                 can_lifecycle_actions=True,
@@ -870,9 +881,12 @@ def system_department_detail(request: HttpRequest, department_id) -> HttpRespons
         )
         admin_form = AdministratorForm(request.POST)
         if admin_form.is_valid():
-            token = provision_department_admin(
-                actor=request.user, department=department, **admin_form.cleaned_data
-            )
+            try:
+                token = provision_department_admin(
+                    actor=request.user, department=department, **admin_form.cleaned_data
+                )
+            except DuplicateEmailError as error:
+                admin_form.add_error("email", str(error))
     if request.method == "POST" and request.POST.get("action") == "tablet-lease":
         lease_form = DepartmentTabletLeaseForm(request.POST)
         if lease_form.is_valid():
@@ -979,15 +993,25 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
         station__active=True,
         status=StationAdminAssignment.Status.ACTIVE,
     )
-    effective_membership_for_user = effective_memberships.filter(user_id=OuterRef("pk"))
+    # This presentation query includes pending users without treating them as
+    # effective administrators for authorization or last-administrator protection.
+    current_memberships = DepartmentMembership.objects.filter(
+        department=department,
+        department__status=Department.Status.ACTIVE,
+        status=DepartmentMembership.Status.ACTIVE,
+    )
+    current_membership_for_user = current_memberships.filter(user_id=OuterRef("pk"))
     current_station_assignment_for_user = current_station_assignments.filter(user_id=OuterRef("pk"))
     administrators = (
-        User.objects.filter(is_active=True)
-        .annotate(
-            has_effective_department_admin=Exists(effective_membership_for_user),
+        User.objects.annotate(
+            has_pending_setup=Exists(
+                AccountSetupToken.objects.filter(user_id=OuterRef("pk"), used_at__isnull=True)
+            ),
+            has_current_department_admin=Exists(current_membership_for_user),
             has_current_station_admin=Exists(current_station_assignment_for_user),
         )
-        .filter(Q(has_effective_department_admin=True) | Q(has_current_station_admin=True))
+        .filter(Q(is_active=True) | Q(has_pending_setup=True))
+        .filter(Q(has_current_department_admin=True) | Q(has_current_station_admin=True))
     )
     query = request.GET.get("q", "").strip()
     scope_filter = request.GET.get("scope", request.GET.get("station", ""))
@@ -996,10 +1020,10 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
             Q(display_name__icontains=query) | Q(email__icontains=query)
         )
     if scope_filter == "department":
-        administrators = administrators.filter(has_effective_department_admin=True)
+        administrators = administrators.filter(has_current_department_admin=True)
     elif scope_filter:
         administrators = administrators.filter(
-            has_effective_department_admin=False,
+            has_current_department_admin=False,
             station_admin_assignments__station_id=scope_filter,
             station_admin_assignments__station__department=department,
             station_admin_assignments__station__active=True,
@@ -1008,7 +1032,7 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
     administrators = administrators.prefetch_related(
         Prefetch(
             "department_memberships",
-            queryset=effective_memberships.order_by("pk"),
+            queryset=current_memberships.order_by("pk"),
             to_attr="current_department_memberships",
         ),
         Prefetch(
@@ -1058,29 +1082,33 @@ def administrator_provision_modal(
             request,
             return_url=reverse("portal-department-manage", args=(department.id,)),
         )
-        token = (
-            provision_station_admin(
-                actor=request.user, station=station, **cast(BaseForm, form).cleaned_data
+        try:
+            token = (
+                provision_station_admin(
+                    actor=request.user, station=station, **cast(BaseForm, form).cleaned_data
+                )
+                if station is not None
+                else provision_department_admin(
+                    actor=request.user, department=department, **cast(BaseForm, form).cleaned_data
+                )
             )
-            if station is not None
-            else provision_department_admin(
-                actor=request.user, department=department, **cast(BaseForm, form).cleaned_data
+        except DuplicateEmailError as error:
+            form.add_error("email", str(error))
+        else:
+            context = {
+                "setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,))),
+                "department": department,
+                "station": station,
+            }
+            return render(
+                request,
+                (
+                    "portal/_administrator_setup_link_modal.html"
+                    if request.headers.get("HX-Request") == "true"
+                    else "portal/setup_link.html"
+                ),
+                context,
             )
-        )
-        context = {
-            "setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,))),
-            "department": department,
-            "station": station,
-        }
-        return render(
-            request,
-            (
-                "portal/_administrator_setup_link_modal.html"
-                if request.headers.get("HX-Request") == "true"
-                else "portal/setup_link.html"
-            ),
-            context,
-        )
     return render(
         request,
         (
@@ -1928,14 +1956,22 @@ def station_manage(request: HttpRequest, station_id) -> HttpResponse:
         )
         admin_form = AdministratorForm(request.POST)
         if admin_form.is_valid():
-            token = provision_station_admin(
-                actor=request.user, station=station, **admin_form.cleaned_data
-            )
-            return render(
-                request,
-                "portal/setup_link.html",
-                {"setup_url": request.build_absolute_uri(reverse("accounts-setup", args=(token,)))},
-            )
+            try:
+                token = provision_station_admin(
+                    actor=request.user, station=station, **admin_form.cleaned_data
+                )
+            except DuplicateEmailError as error:
+                admin_form.add_error("email", str(error))
+            else:
+                return render(
+                    request,
+                    "portal/setup_link.html",
+                    {
+                        "setup_url": request.build_absolute_uri(
+                            reverse("accounts-setup", args=(token,))
+                        )
+                    },
+                )
     vehicle_status = request.GET.get("vehicle_status", "active")
     vehicles = station.vehicles.all()
     if vehicle_status == "active":

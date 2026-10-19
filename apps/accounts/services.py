@@ -3,11 +3,24 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
 
 from apps.accounts.models import AccountSetupToken, AuthenticationThrottle
+
+
+class DuplicateEmailError(ValueError):
+    def __init__(self) -> None:
+        super().__init__("An account with this email address already exists.")
+
+
+def validate_new_account_email(email: str) -> str:
+    user_model = get_user_model()
+    email = user_model.objects.normalize_email(email).casefold()
+    if user_model.objects.filter(email=email).exists():
+        raise DuplicateEmailError
+    return email
 
 
 def permanently_deactivate_and_anonymize_user(*, user) -> None:
@@ -39,12 +52,22 @@ def create_setup_token_for_user(*, user, actor) -> tuple[AccountSetupToken, str]
 
 def create_setup_token(*, actor, email: str, display_name: str) -> tuple[AccountSetupToken, str]:
     user_model = get_user_model()
-    with transaction.atomic():
-        user = user_model.objects.create_user(email, display_name)
-        user.set_unusable_password()
-        user.is_active = False
-        user.save(update_fields=("password", "is_active"))
-        token, raw_token = create_setup_token_for_user(user=user, actor=actor)
+    email = validate_new_account_email(email)
+    try:
+        with transaction.atomic():
+            user = user_model.objects.create_user(email, display_name)
+            user.set_unusable_password()
+            user.is_active = False
+            user.save(update_fields=("password", "is_active"))
+            token, raw_token = create_setup_token_for_user(user=user, actor=actor)
+    except IntegrityError as error:
+        # A competing insert can win after validation. Roll back the savepoint
+        # before translating only the email uniqueness violation.
+        if getattr(getattr(error.__cause__, "diag", None), "constraint_name", None) == (
+            "accounts_user_email_key"
+        ):
+            raise DuplicateEmailError from error
+        raise
     return token, raw_token
 
 

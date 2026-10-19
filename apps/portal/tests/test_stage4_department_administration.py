@@ -373,3 +373,72 @@ def test_department_search_lists_use_personnel_live_contract_and_results_fragmen
     )
     assert response.status_code == 200
     assert 'id="department-administrator-results"' in response.content.decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("station_scope", [False, True])
+@pytest.mark.parametrize("active", [False, True])
+def test_provision_duplicate_email_is_a_field_error_without_authority_changes(
+    client, stage4_scope, station_scope, active
+):
+    from apps.accounts.models import AccountSetupToken
+
+    existing = stage4_scope["other_admin"]
+    existing.is_active = active
+    existing.save(update_fields=("is_active",))
+    department = stage4_scope["department"]
+    url = (
+        reverse(
+            "portal-station-administrator-provision",
+            args=(department.id, stage4_scope["station"].id),
+        )
+        if station_scope
+        else reverse("portal-administrator-provision", args=(department.id,))
+    )
+    _recent_reauth(client)
+    counts = (User.objects.count(), AccountSetupToken.objects.count(), AuditEvent.objects.count())
+    response = client.post(
+        url,
+        {"email": f"  {existing.email.upper()}  ", "display_name": "Duplicate"},
+        HTTP_HX_REQUEST="true",
+    )
+    assert response.status_code == 200
+    assert list(response.context["form"].errors) == ["email"]
+    assert b"An account with this email address already exists." in response.content
+    assert b"invalid-feedback d-block" in response.content
+    assert b'id="department-admin-modal"' in response.content
+    assert b"single-use setup link" not in response.content
+    assert counts == (
+        User.objects.count(),
+        AccountSetupToken.objects.count(),
+        AuditEvent.objects.count(),
+    )
+    assert not DepartmentMembership.objects.filter(user=existing, department=department).exists()
+    assert not StationAdminAssignment.objects.filter(
+        user=existing, station__department=department
+    ).exists()
+    existing.refresh_from_db()
+    assert existing.is_active == active
+    assert existing.display_name == "Other Admin"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("station_scope", [False, True])
+def test_provision_rejects_cross_department_scope(client, stage4_scope, station_scope):
+    department = stage4_scope["other_department"]
+    url = (
+        reverse(
+            "portal-station-administrator-provision",
+            args=(department.id, stage4_scope["other_station"].id),
+        )
+        if station_scope
+        else reverse("portal-administrator-provision", args=(department.id,))
+    )
+    _recent_reauth(client)
+    response = client.post(
+        url,
+        {"email": "unauthorized-new@example.test", "display_name": "Unauthorized"},
+        HTTP_HX_REQUEST="true",
+    )
+    assert response.status_code == 403
+    assert not User.objects.filter(email="unauthorized-new@example.test").exists()

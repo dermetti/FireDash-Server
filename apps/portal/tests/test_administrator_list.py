@@ -1,11 +1,17 @@
 """Current-authority Administrator Accounts list regressions."""
 
+from datetime import timedelta
+
 import pytest
+from django.contrib.auth import authenticate
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.accounts.models import User
+from apps.accounts.models import AccountSetupToken, User
+from apps.accounts.services import consume_setup_token, create_setup_token_for_user
 from apps.authorization.models import DepartmentMembership, StationAdminAssignment
+from apps.authorization.scopes import active_department_ids, active_station_ids
+from apps.authorization.services import provision_department_admin, provision_station_admin
 from apps.organizations.models import Department, Station
 
 
@@ -153,3 +159,111 @@ def test_administrator_detail_retains_historical_station_authority(
     content = response.content.decode()
     assert "F4000" in content and "Suspended" in content
     assert "F5000" in content and "Revoked" in content
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("station_scope", [False, True])
+def test_pending_administrator_is_visible_scoped_and_cannot_authenticate(
+    client, administrator_list_scope, station_scope
+):
+    admin, _, _, department, stations = administrator_list_scope
+    email = "pending@example.test"
+    raw_token = (
+        provision_station_admin(
+            actor=admin, station=stations["F2921"], email=email, display_name="Pending"
+        )
+        if station_scope
+        else provision_department_admin(
+            actor=admin, department=department, email=email, display_name="Pending"
+        )
+    )
+    user = User.objects.get(email=email)
+    assert not user.is_active and not user.has_usable_password()
+    assert authenticate(email=email, password="password") is None
+    assert not list(active_department_ids(user))
+    assert not list(active_station_ids(user))
+
+    scope = str(stations["F2921"].id) if station_scope else "department"
+    response = _list_response(client, admin, department, q="pending", scope=scope)
+    assert response.context["total_count"] == 1
+    row = response.context["administrators"][0]
+    assert row.administrator == user
+    assert row.scope == ("F2921" if station_scope else "Department")
+    assert row.lifecycle == "PENDING_SETUP"
+    assert row.lifecycle_display == "Pending setup"
+    assert b'badge text-bg-warning">Pending setup</span>' in response.content
+    wrong_scope = "department" if station_scope else str(stations["F2921"].id)
+    assert (
+        _list_response(client, admin, department, q="pending", scope=wrong_scope).context[
+            "total_count"
+        ]
+        == 0
+    )
+
+    other = Department.objects.create(name="Other", short_code="OTHER", created_by=admin)
+    other_admin = User.objects.create_user("other@example.test", "Other", "password")
+    DepartmentMembership.objects.create(user=other_admin, department=other, created_by=admin)
+    assert _list_response(client, other_admin, other, q="pending").context["total_count"] == 0
+    client.force_login(user)
+    denied = client.get(reverse("portal-department-manage", args=(department.id,)))
+    assert denied.status_code == 302
+    assert denied.wsgi_request.user.is_anonymous
+
+    # Only completing the existing setup flow activates the account and changes
+    # the list's lifecycle label. Listing the account never grants authority.
+    assert consume_setup_token(raw_token=raw_token, password="new-password") == user
+    assert authenticate(email=email, password="new-password") == user
+    response = _list_response(client, admin, department, q="pending", scope=scope)
+    assert response.context["administrators"][0].lifecycle == "ACTIVE"
+    assert b"Pending setup" not in response.content
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("station_scope", [False, True])
+def test_pending_list_requires_unconsumed_setup_but_keeps_expired_pending_accounts(
+    client, administrator_list_scope, station_scope
+):
+    admin, _, _, department, stations = administrator_list_scope
+    if station_scope:
+        provision_station_admin(
+            actor=admin,
+            station=stations["F2921"],
+            email="pending@example.test",
+            display_name="Pending",
+        )
+    else:
+        provision_department_admin(
+            actor=admin, department=department, email="pending@example.test", display_name="Pending"
+        )
+    user = User.objects.get(email="pending@example.test")
+    token = AccountSetupToken.objects.get(user=user)
+    token.expires_at = timezone.now() - timedelta(hours=1)
+    token.save(update_fields=("expires_at",))
+    assert _list_response(client, admin, department, q="pending").context["total_count"] == 1
+    token.used_at = timezone.now()
+    token.save(update_fields=("used_at",))
+    assert _list_response(client, admin, department, q="pending").context["total_count"] == 0
+    token.delete()
+    assert _list_response(client, admin, department, q="pending").context["total_count"] == 0
+
+
+@pytest.mark.django_db
+def test_pending_administrators_participate_in_pagination_without_duplicate_rows(
+    client, administrator_list_scope
+):
+    admin, _, _, department, _ = administrator_list_scope
+    for index in range(98):
+        user = User.objects.create_user(f"page{index:03}@example.test", "Page", "password")
+        DepartmentMembership.objects.create(user=user, department=department, created_by=admin)
+    provision_department_admin(
+        actor=admin, department=department, email="zzpending@example.test", display_name="Pending"
+    )
+    pending = User.objects.get(email="zzpending@example.test")
+    create_setup_token_for_user(user=pending, actor=admin)
+    first = _list_response(client, admin, department)
+    assert first.context["total_count"] == 101
+    assert len(first.context["administrators"]) == 100
+    second = _list_response(client, admin, department, page=2)
+    assert second.context["page"].paginator.num_pages == 2
+    assert [row.administrator for row in second.context["administrators"]] == [pending]
+    assert b"Pending setup" in second.content

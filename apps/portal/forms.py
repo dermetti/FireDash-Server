@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from django import forms
 from django.conf import settings
 
+from apps.accounts.services import DuplicateEmailError, validate_new_account_email
 from apps.authorization.models import validate_vehicle_rescue_guides_web_url
 from apps.organizations.presentation import DEPARTMENT_LOCALE_CHOICES, DEPARTMENT_TIMEZONE_CHOICES
 from apps.outbound_mail.http_transport import (
@@ -95,6 +96,12 @@ class AdministratorForm(forms.Form):
     display_name = forms.CharField(
         max_length=255, widget=forms.TextInput(attrs={"class": "form-control"})
     )
+
+    def clean_email(self) -> str:
+        try:
+            return validate_new_account_email(self.cleaned_data["email"])
+        except DuplicateEmailError as error:
+            raise forms.ValidationError(str(error)) from error
 
 
 class AdministratorRemovalForm(forms.Form):
