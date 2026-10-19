@@ -222,8 +222,14 @@ jobs:
           pip-audit -r requirements/base.txt
           pip-audit -r requirements/dev.txt
 
+      - name: Prepare publication artifact test group
+        run: |
+          sudo groupadd --system --force fire_nginx
+          sudo usermod --append --groups fire_nginx "$(id -un)"
+
       - name: Run PostgreSQL/PostGIS test suite
-        run: python -m pytest --ds=config.settings.test -p no:cacheprovider -ra --durations=25
+        # Activate the new group in this process; pytest still runs as the runner.
+        run: sg fire_nginx -c 'python -m pytest --ds=config.settings.test -p no:cacheprovider -ra --durations=25'
 
       - name: Validate OpenAPI schema
         run: python manage.py spectacular --validate

@@ -64,9 +64,12 @@ if validate_outbound_mail_https_proxy "$TMPROOT/release" 'http:///missing-host';
     fail "hostless proxy was accepted"
 fi
 
-if rg -qi '100\.64\.0\.8|mjblab|squid|tailscale|headscale' \
-    "$ROOT/deploy/lib" "$ROOT/deploy/install-local.sh" "$ROOT/docs/configuration.md" "$ROOT/docs/deployment.md"; then
+if grep -Eri '100\.64\.0\.8|mjblab|squid|tailscale|headscale' \
+    "$ROOT/deploy/lib" "$ROOT/deploy/install-local.sh" "$ROOT/docs/configuration.md" "$ROOT/docs/deployment.md" >/dev/null; then
     fail "deployment contains environment-specific proxy infrastructure"
+else
+    search_status=$?
+    [[ $search_status -eq 1 ]] || fail "proxy infrastructure search failed (status $search_status)"
 fi
 
 if [[ $failures -eq 0 ]]; then

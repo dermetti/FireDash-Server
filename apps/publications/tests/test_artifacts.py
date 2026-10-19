@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import stat
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -125,6 +126,33 @@ def test_final_directory_permissions_apply_group_and_mode(tmp_path, monkeypatch)
 
     assert chown_calls == [(directory, -1, 4321)]
     assert chmod_calls == [(directory, 0o750)]
+
+
+@pytest.mark.skipif(artifacts.grp is None, reason="Requires native Unix group ownership support")
+def test_final_permissions_on_real_filesystem(tmp_path):
+    group_id = artifacts._fire_nginx_gid()
+    assert os.geteuid() != 0, "Publication permission tests must run without root privileges"
+    directory = tmp_path / "publication"
+    directory.mkdir(mode=0o700)
+    artifact = directory / "artifact.bin"
+    artifact.write_bytes(b"ciphertext")
+
+    artifacts._set_final_directory_permissions(directory)
+    artifacts._set_final_artifact_permissions(artifact)
+
+    assert directory.stat().st_gid == group_id
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o750
+    assert artifact.stat().st_gid == group_id
+    assert stat.S_IMODE(artifact.stat().st_mode) == 0o640
+
+
+def test_missing_nginx_group_fails_closed(monkeypatch):
+    def missing_group(name):
+        raise KeyError(name)
+
+    monkeypatch.setattr(artifacts, "grp", SimpleNamespace(getgrnam=missing_group))
+    with pytest.raises(ArtifactError, match="fire_nginx group is unavailable"):
+        artifacts._fire_nginx_gid()
 
 
 def test_artifact_signature_contract_fixture_is_canonical_and_verifiable():
