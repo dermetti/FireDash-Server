@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}File Explorer &middot; {{ library.name }}{% endblock %}
+{% block content %}
+<div class="mb-3"><a class="link-secondary text-decoration-none" href="{% url 'file-library' library.id %}"><span aria-hidden="true">&larr;</span> File Management</a></div>
+{% include "components/_page_header.html" with title="File Explorer" description="Browse and manage PDF files and folders." %}
+<p class="small text-body-secondary mb-3">{% if library.department_id %}Department files &middot; {{ library.department.name }}{% else %}Station files &middot; {{ library.station.name }}{% endif %}</p>
+{% if access_mode == "temporary" %}{% include "file_library/_temporary_access_banner.html" %}{% endif %}
+<nav aria-label="Folder path" class="mb-3"><ol class="breadcrumb mb-0">
+  <li class="breadcrumb-item{% if not breadcrumbs %} active{% endif %}"{% if not breadcrumbs %} aria-current="page"{% endif %}>{% if breadcrumbs %}<a href="{% url 'file-library-explorer' library.id %}">Files</a>{% else %}Files{% endif %}</li>
+  {% for folder in breadcrumbs %}<li class="breadcrumb-item{% if forloop.last %} active{% endif %}"{% if forloop.last %} aria-current="page"{% endif %}>{% if forloop.last %}{{ folder.name }}{% else %}<a href="{% url 'file-library-explorer' library.id %}?folder={{ folder.id }}">{{ folder.name }}</a>{% endif %}</li>{% endfor %}
+</ol></nav>
+<div id="file-explorer-content">{% include "file_library/_explorer_listing.html" %}</div>
+{% include "components/_htmx_action_modal.html" with modal_container_id="file-explorer-action-modal" %}
+{% endblock %}

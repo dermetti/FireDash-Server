@@ -1,0 +1,4 @@
+  <section class="mb-4" aria-labelledby="station-reviews-heading">
+    <h2 id="station-reviews-heading" class="h5">Your capacity reviews</h2>
+    {% for review in capacity_reviews %}<div class="d-flex flex-wrap justify-content-between gap-2 border-bottom py-2"><div><strong>{{ review.operation.name }}</strong> <span class="text-body-secondary small">&middot; {% if review.decision == "pending" %}Pending{% elif review.decision == "approved" %}Approved{% else %}Rejected{% endif %}</span><small class="d-block text-body-secondary">Expires {{ review.expires_at }}</small></div><a href="{% url 'file-library-capacity-review' review.id %}">View review</a></div>{% empty %}<p class="text-body-secondary small">No outstanding capacity reviews.</p>{% endfor %}
+  </section>

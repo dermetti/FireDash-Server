@@ -5,6 +5,7 @@
     if (!container || container.dataset.modalController) return;
     container.dataset.modalController = "true";
     var activeModal = null;
+    var opener = null;
 
     function showModal() {
       var modalEl = container.querySelector(".modal");
@@ -18,6 +19,11 @@
       activeModal.show();
     }
 
+    document.body.addEventListener("htmx:beforeRequest", function (event) {
+      if (event.detail.target === container && !container.contains(event.detail.elt)) {
+        opener = event.detail.elt;
+      }
+    });
     document.body.addEventListener("htmx:afterSwap", function (event) {
       if (event.target === container) showModal();
     });
@@ -25,6 +31,7 @@
       if (container.contains(event.target)) {
         activeModal = null;
         container.innerHTML = "";
+        if (opener && opener.isConnected) opener.focus();
       }
     });
     document.body.addEventListener("phonebook-modal-close", function () {

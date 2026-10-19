@@ -130,7 +130,7 @@ def test_elevated_permission_boundary_and_read_only_ui(client, scope, pdf_pipeli
         publish_now(actor=admin, library_id=station_library.id)
 
     client.force_login(admin)
-    page = client.get(reverse("file-library", args=(station_library.id,)))
+    page = client.get(reverse("file-library-explorer", args=(station_library.id,)))
     content = page.content.decode()
     assert page.status_code == 200
     assert "Temporary station access" in content

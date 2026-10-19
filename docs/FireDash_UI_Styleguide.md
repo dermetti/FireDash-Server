@@ -1108,3 +1108,31 @@ Publication ownership is explicit and must be shown independently from delivery 
 `SYSTEM` publications are authored and published once by system administration and appear to eligible departments as read-only **System managed** content. `DEPARTMENT` publications are **Department managed**. `STATION` publications are department-managed and labelled **Station scoped**. “Web” and future “Offline” describe delivery, not ownership; eligibility/entitlement is a separate authorization decision.
 
 System-managed configuration is global configuration inherited by departments, but is not publication data. Vehicle Rescue Guides is implemented as one system-managed Euro RESCUE **Web** URL: system administrators edit it from System Data Hub and departments see it read-only as **System managed**. It has no publication lifecycle or department-specific copy. CBRN/ADR is intended to be the first SYSTEM publication, but is not part of this stage. No premium licensing model exists in this stage.
+
+
+## File Management and File Explorer
+
+One shared File Management parent and one shared File Explorer child serve
+Department and Station Administrators. The parent owns scope, usage and the
+Open File Explorer entry point; the child owns breadcrumbs, library-wide search,
+folder-first sorting, bounded pagination, PDF links and contextual action dialogs.
+Both normal roles use the same toolbar, rows, local SVG icons and focused forms.
+Action links have ordinary GET/POST fallbacks; no per-row form collections or
+unbounded destination selectors. Tables remain in normal document flow so row
+menus are not clipped by overflow containers. Narrow layouts hide secondary
+columns while retaining names and accessible action menus.
+
+Department administrators manage their own department library; publication
+controls and history live in Publications, while the Data Hub card keeps a
+read-only publication summary. Normal station administrators publish only from
+the station parent, since they have no department Publications access. The
+parent's department-wide approval queue and station requester-review links are
+separate authorized workflows; approved requests retain the existing retry page.
+
+Temporary station grants use the same explorer in browse/download/single-delete
+mode, with an explicit station/expiry/release banner and no normal mutation or
+publication controls. One searchable station-access dialog on the department
+parent uses a bounded, accessible combobox with arrow/Enter/Escape/Tab and
+pointer support; changing the query invalidates the prior selection. An ordinary
+search/select form remains available without JavaScript. All permissions and
+posted IDs are checked server-side; hiding controls never grants authority.

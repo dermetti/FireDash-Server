@@ -1,0 +1,3 @@
+<ul id="station-listbox" role="listbox" class="list-group shadow-sm" aria-label="Matching stations">
+{% for station in results %}<li id="station-option-{{ forloop.counter0 }}" role="option" aria-selected="false" tabindex="-1" data-station-id="{{ station.id }}" data-station-label="{{ station.name }} ({{ station.short_code }})" class="list-group-item list-group-item-action d-flex justify-content-between"><span>{{ station.name }}</span><span class="small text-body-secondary">{{ station.short_code }}</span></li>{% empty %}<li class="list-group-item text-body-secondary" role="presentation">No matching active stations.</li>{% endfor %}
+</ul>

@@ -384,16 +384,55 @@ publication jobs or audit rows, and does not backfill customized values. Its dat
 conversion is not reversed automatically: doing so could undo later administrator
 intent. Schema rollback restores the old callable defaults only.
 
-The future Explorer read model lives in `apps.file_library.explorer`: each read
+The Explorer read model lives in `apps.file_library.explorer`: each read
 checks persisted library access, validates its folder using existing services,
 and provides a bounded database-sorted page with complete containing-folder paths.
 Search covers the authorized library recursively; sort keys are `name`, `modified`
 and `size`, always folders first with UUID tie-breaking. Page sizes are 1 to 100;
 invalid page numbers raise Django paginator errors. These operation hints never
-replace service authorization. No Explorer route or UI exists yet.
+replace service authorization. The shared Explorer UI consumes this read model; no independent folder-query implementation exists in its views.
 
 `publications-department-files-publish` is a POST-only department-admin endpoint
-using the same `publish_now` service as the existing File Management form. It
+using the authoritative `publish_now` service. It
 requires recent reauthentication and CSRF, coalesces existing jobs through the
 normal publication queue, and redirects to department Publications (HTMX receives
-`HX-Redirect`). Existing department/station File Management forms remain supported.
+`HX-Redirect`). The obsolete department File Management publish POST is denied; station publication remains on the station parent page.
+
+## Shared File Management and File Explorer
+
+`file-library` is one shared, compact parent page for department and station
+administrators. It displays scope, storage usage and an Open File Explorer link.
+The department parent includes paginated department-wide pending capacity
+approvals and temporary station-access selection. Normal station administrators
+see their own unexpired capacity requests and a compact station publication panel.
+Department-file publication controls and history live exclusively in Publications;
+its department-files scope invokes `publications-department-files-publish`.
+
+`file-library-explorer` (`/files/<library UUID>/explorer/`) uses the same template,
+read model, toolbar, rows and dialogs for both normal roles. Search covers the
+whole authorized library and displays complete containing-folder paths. Sorting
+and pagination execute in the database; pages default to 25 with a hard limit of
+100. File operations remain authoritative service calls, preserving source
+revisions, quota locks, sanitization, document identity, audit and publication
+scheduling. Focused action GETs have standalone forms as well as HTMX dialogs;
+POSTs recheck persisted scope and explicit deletion confirmation. GETs never
+perform file mutations. Existing legacy file-mutation POSTs remain authorized
+for compatibility; the old department publish action is explicitly denied.
+
+Temporary station grants use these same pages in restricted mode, with scope,
+expiry and release shown prominently. They allow browsing, search, preview,
+download and one confirmed deletion. Successful deletion consumes the grant and
+redirects to `/files/`; failed deletion preserves it. Upload, folder creation,
+rename, move, replace, publication and capacity override remain denied by services.
+No department membership implies normal station management authority.
+
+Station selection opens one reusable dialog with a server-filtered, keyboard-
+and pointer-operated combobox. Results contain at most 20 active stations from
+the authorized department; typing clears any prior UUID and confirmation.
+Out-of-order suggestions are ignored. A standalone GET search and bounded native
+select provide the no-JavaScript fallback (25 results plus a validated current
+selection). Both modes POST through `TemporaryStationAccessForm`, preserving
+recent reauthentication, six-hour expiry, grant replacement and audit. The chosen
+station survives the reauthentication return; activation still requires a fresh,
+explicit POST confirmation. Existing station sidebar and Station Data Hub routes
+continue to enter the shared parent.

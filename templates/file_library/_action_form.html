@@ -1,0 +1,15 @@
+<form method="post" action="{{ action_url }}"{% if multipart %} enctype="multipart/form-data"{% endif %}{% if is_modal %} hx-post="{{ action_url }}" hx-target="#file-explorer-action-modal" hx-swap="innerHTML"{% if multipart %} hx-encoding="multipart/form-data"{% endif %}{% endif %}>
+{% csrf_token %}<input type="hidden" name="folder" value="{{ current_folder.id|default:'' }}">{% if entry %}<input type="hidden" name="entry" value="{{ entry.id }}">{% endif %}
+<div class="modal-body">
+{% if is_modal %}{% include "components/_alerts.html" %}{% endif %}
+{% for error in form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endfor %}
+{% for review in review_links %}<p><a href="{% url 'file-library-capacity-review' review.id %}">Review tablet capacity: {{ review.operation.name }}</a></p>{% endfor %}
+{% if entry %}<p><strong>{{ entry.name }}</strong></p>{% endif %}
+{% if action == 'upload' or action == 'new-folder' %}<p class="small text-body-secondary">Destination: {{ folder_display_path }}</p>{% endif %}
+{% if action == 'upload' %}<p class="form-text">PDFs are validated and sanitized before being accepted. Maximum size per PDF: {{ max_file_bytes|filesizeformat }}.</p>{% endif %}
+{% if action == 'replace' %}<p class="small text-body-secondary">The logical document identity and displayed filename stay the same.</p>{% endif %}
+{% if action == 'delete' %}<p>Delete this item?{% if entry.is_folder %} This will also delete all files and subfolders inside it.{% endif %}</p>{% if access_mode == 'temporary' %}<p class="text-warning-emphasis small">One successful deletion immediately ends temporary station access.</p>{% endif %}{% endif %}
+{% for field in form %}<div class="{% if field.name == 'confirm' %}form-check {% endif %}mb-3">{% if field.name == 'confirm' %}{{ field }}<label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{% else %}<label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% endif %}{% if field.errors %}<div id="{{ field.id_for_label }}_error" class="invalid-feedback d-block">{% for error in field.errors %}{{ error }}{% endfor %}</div>{% endif %}</div>{% endfor %}
+{% if action == 'move' %}{% include "file_library/_move_destination.html" %}{% endif %}
+{% if multipart %}<div role="status" aria-live="polite" class="small text-body-secondary">Each PDF is processed separately.</div>{% endif %}
+</div><div class="modal-footer">{% if is_modal %}<button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>{% else %}<a class="btn btn-outline-secondary" href="{{ back_url }}">Cancel</a>{% endif %}<button type="submit" class="btn {% if action == 'delete' %}btn-danger{% else %}btn-primary{% endif %}">{{ submit_label }}</button></div></form>

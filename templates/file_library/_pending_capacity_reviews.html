@@ -1,0 +1,15 @@
+{% if pending_review_page.paginator.count %}
+<section class="mb-4" aria-labelledby="capacity-reviews-heading">
+  <h2 id="capacity-reviews-heading" class="h5">Capacity reviews requiring approval</h2>
+  <p class="text-body-secondary">{{ pending_review_page.paginator.count }} pending request{{ pending_review_page.paginator.count|pluralize }}.</p>
+  <table class="table table-hover align-middle"><thead><tr><th scope="col">Library</th><th scope="col">Requested operation</th><th scope="col">Requesting administrator</th><th scope="col">Expiration</th><th scope="col">Review</th></tr></thead><tbody>
+  {% for review in pending_review_page %}<tr>
+    <td>{% if review.library.station_id %}{{ review.library.station.name }}{% else %}Department library{% endif %}</td>
+    <td>{% if review.operation.kind == "replace" %}Replace{% else %}Upload{% endif %} {{ review.operation.name }}</td>
+    <td>{{ review.requested_by.display_name }}</td><td>{{ review.expires_at }}</td>
+    <td><a href="{% url 'file-library-capacity-review' review.id %}">Review request<span class="visually-hidden">: {{ review.operation.name }}</span></a></td>
+  </tr>{% endfor %}
+  </tbody></table>
+  <nav aria-label="Capacity review pages">{% if pending_review_page.has_previous %}<a href="?review_page={{ pending_review_page.previous_page_number }}#capacity-reviews-heading">Previous</a>{% endif %} <span>Page {{ pending_review_page.number }} of {{ pending_review_page.paginator.num_pages }}</span> {% if pending_review_page.has_next %}<a href="?review_page={{ pending_review_page.next_page_number }}#capacity-reviews-heading">Next</a>{% endif %}</nav>
+</section>
+{% endif %}

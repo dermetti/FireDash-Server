@@ -1,81 +1,35 @@
 {% extends "base.html" %}
-{% block title %}{{ library.name }} · File Management{% endblock %}
+{% load static %}
+{% block title %}File Management{% endblock %}
 {% block content %}
-{% include "components/_page_header.html" with title=library.name description="File Management · Manage source files and scheduled publications." %}
-{% if pending_review_page.paginator.count %}
-<section class="mb-4" aria-labelledby="capacity-reviews-heading">
-  <h2 id="capacity-reviews-heading" class="h5">Capacity reviews requiring approval</h2>
-  <p class="text-body-secondary">{{ pending_review_page.paginator.count }} pending request{{ pending_review_page.paginator.count|pluralize }}.</p>
-  <table class="table table-hover align-middle"><thead><tr><th scope="col">Library</th><th scope="col">Requested operation</th><th scope="col">Requesting administrator</th><th scope="col">Expiration</th><th scope="col">Review</th></tr></thead><tbody>
-  {% for review in pending_review_page %}<tr>
-    <td>{% if review.library.station_id %}{{ review.library.station.name }}{% else %}Department library{% endif %}</td>
-    <td>{% if review.operation.kind == "replace" %}Replace{% else %}Upload{% endif %} {{ review.operation.name }}</td>
-    <td>{{ review.requested_by.display_name }}</td><td>{{ review.expires_at }}</td>
-    <td><a href="{% url 'file-library-capacity-review' review.id %}">Review request<span class="visually-hidden">: {{ review.operation.name }}</span></a></td>
-  </tr>{% endfor %}
-  </tbody></table>
-  <nav aria-label="Capacity review pages">{% if pending_review_page.has_previous %}<a href="?review_page={{ pending_review_page.previous_page_number }}#capacity-reviews-heading">Previous</a>{% endif %} <span>Page {{ pending_review_page.number }} of {{ pending_review_page.paginator.num_pages }}</span> {% if pending_review_page.has_next %}<a href="?review_page={{ pending_review_page.next_page_number }}#capacity-reviews-heading">Next</a>{% endif %}</nav>
+{% include "components/_page_header.html" with title="File Management" description="Manage the files in this library." %}
+<p class="text-body-secondary mb-2">{% if library.department_id %}Department files &middot; {{ library.department.name }}{% else %}Station files &middot; {{ library.station.name }}{% endif %}</p>
+{% if access_mode == "temporary" %}{% include "file_library/_temporary_access_banner.html" %}{% endif %}
+{% if library.usage_bytes > library.quota_bytes %}<div class="alert alert-danger" role="alert">This library is over quota. Storage-increasing operations are blocked.</div>{% endif %}
+<section class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4" aria-label="Library overview">
+  <div><div class="fw-semibold">{{ library.name }}</div><div class="text-body-secondary small">{{ file_count }} PDF{{ file_count|pluralize }} &middot; {{ library.usage_bytes|filesizeformat }} of {{ library.quota_bytes|filesizeformat }} used</div></div>
+  <a class="btn btn-primary" href="{% url 'file-library-explorer' library.id %}">Open File Explorer <span aria-hidden="true">&rarr;</span></a>
 </section>
+{% if is_department_library_admin %}
+  {% include "file_library/_pending_capacity_reviews.html" %}
+  <section class="mb-4" aria-labelledby="station-access-heading">
+    <h2 id="station-access-heading" class="h5">Temporary station access</h2>
+    <p class="text-body-secondary mb-2">Temporarily view, download or delete files in an authorized station library.</p>
+    {% if temporary_access %}<div class="alert alert-warning" role="status"><p>Active for <strong>{{ temporary_access.station.name }}</strong> until {{ temporary_access.expires_at }}. <a href="{% url 'file-library' temporary_access.station.library.id %}">Open library</a></p><form method="post" action="{% url 'file-library-station-access-release' %}">{% csrf_token %}<button type="submit" class="btn btn-outline-dark btn-sm">Release access</button></form></div>{% endif %}
+    <a class="btn btn-outline-secondary" href="{% url 'file-library-station-access-choose' library.id %}" hx-get="{% url 'file-library-station-access-choose' library.id %}" hx-target="#station-access-dialog">Choose station&hellip;</a>
+  </section>
+  <p><a href="{% url 'publications-list' library.department_id %}">Department Publications</a> &middot; <a href="{% url 'portal-department-settings' library.department_id %}">System Settings</a></p>
+  {% include "components/_htmx_action_modal.html" with modal_container_id="station-access-dialog" %}
 {% endif %}
-<p><strong>{% if library.department_id %}Department library: {{ library.department.name }}{% else %}Station library: {{ library.station.name }}{% endif %}</strong> · Source revision {{ library.source_revision }}</p>
-<p>Storage: {{ library.usage_bytes|filesizeformat }} of {{ library.quota_bytes|filesizeformat }} · PDF limit: {{ max_file_bytes|filesizeformat }}</p>
-{% if access_mode != "temporary" %}{% for review in capacity_reviews %}<div class="alert alert-warning"><a href="{% url 'file-library-capacity-review' review.id %}">Capacity review: {{ review.operation.name }} · {{ review.decision }}</a> · Expires {{ review.expires_at }}</div>{% endfor %}{% endif %}
-{% if library.usage_bytes > library.quota_bytes %}<div class="alert alert-danger">This library is over quota. Uploads and replacements that increase storage are blocked until usage is reduced or the quota is raised.</div>{% endif %}
-{% if library.department_id and access_mode != "temporary" %}<p><a class="btn btn-outline-secondary btn-sm" href="{% url 'portal-department-settings' library.department_id %}">System Settings</a></p>{% endif %}
-{% if access_mode == "temporary" %}
-<div class="alert alert-warning">
-  <h2 class="h5">Temporary station access: {{ library.station.name }}</h2>
-  <p class="mb-2">View, download, and delete only. Valid until {{ temporary_access.expires_at }} ({{ temporary_access.expires_at|timeuntil }} remaining). A successful deletion releases access.</p>
-  <form method="post" action="{% url 'file-library-station-access-release' %}">{% csrf_token %}<button class="btn btn-outline-danger">Release Access</button></form>
-</div>
-{% elif library.department_id %}
-<div class="card card-body mb-3">
-  <h2 class="h5">Temporary station access</h2>
-  <p class="text-body-secondary">Select a station for temporary view, download and delete access.</p>
-  {% if temporary_access %}<div class="alert alert-warning">
-    <p>Active for <strong>{{ temporary_access.station.name }}</strong> until {{ temporary_access.expires_at }}. <a href="{% url 'file-library' temporary_access.station.library.id %}">Open library</a></p>
-    <form method="post" action="{% url 'file-library-station-access-release' %}">{% csrf_token %}<button type="submit" class="btn btn-outline-danger">Release access</button></form>
-  </div>{% endif %}
-  <form method="get" action="{% url 'file-library' library.id %}" id="station-search"></form>
-  <form method="post" action="{% url 'file-library-station-access-select' %}">
-    {% csrf_token %}<input type="hidden" name="department_id" value="{{ library.department_id }}">
-    {% url 'portal-scoped-selector' library.department_id 'stations' as station_endpoint %}
-    {% include "components/searchable_selector.html" with selector_id="temporary-station" label="Station" field_name="station_id" options=station_access_form.options endpoint=station_endpoint search_name="station_q" search_value=station_query search_placeholder="Search stations" search_form_id="station-search" selected=station_access_form.station_id.value %}
-    <noscript><button type="submit" form="station-search" class="btn btn-outline-secondary btn-sm mb-3">Search stations</button></noscript>
-    {% for error in station_access_form.station_id.errors %}<div class="invalid-feedback d-block mb-3">{{ error }}</div>{% endfor %}
-    <div class="form-check mb-3">
-      <input id="temporary-confirm" type="checkbox" class="form-check-input" name="confirm" value="yes" required{% if station_access_form.confirm.value %} checked{% endif %}>
-      <label class="form-check-label" for="temporary-confirm">I understand that temporary access permits viewing, downloading and one successful deletion, and expires after six hours.</label>
-      {% for error in station_access_form.confirm.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
-    </div>
-    <button type="submit" class="btn btn-primary">Activate temporary access</button>
-  </form>
-</div>
+{% if is_station_library_admin or capacity_reviews %}{% include "file_library/_requester_capacity_reviews.html" %}{% endif %}
+{% if is_station_library_admin %}
+  <section class="border-top pt-3 mt-3" aria-labelledby="station-publish-heading">
+    <h2 id="station-publish-heading" class="h5">Station file publication</h2>
+    <p class="text-body-secondary small">{{ publication.label }}{% if publication.current %} &middot; Active version {{ publication.current.version_number }}{% else %} &middot; Not published{% endif %}</p>
+    {% if publication.job.build_publication %}<p class="small">Latest attempt: generation {{ publication.job.build_publication.version_number }} &middot; {{ publication.job.get_status_display }}</p>{% endif %}
+    <form method="post" action="{% url 'file-library' library.id %}">{% csrf_token %}<input type="hidden" name="action" value="publish"><button type="submit" class="btn btn-outline-primary btn-sm">Publish Now</button></form>
+    <p class="form-text">Publication does not confirm delivery to any tablet.</p>
+  </section>
 {% endif %}
-{% if access_mode != "temporary" %}
-<div class="card card-body mb-3">
-  <p><strong>{{ publication.label }}</strong>{% if publication.unpublished %} · Unpublished changes{% endif %}</p>
-  {% if publication.current %}<p>Published generation {{ publication.current.version_number }} · Source revision {{ publication.current.source_revision }}</p>{% else %}<p>No successful publication yet.</p>{% endif %}
-  {% if publication.job.build_publication %}<p>Latest attempt: generation {{ publication.job.build_publication.version_number }} · {{ publication.job.get_status_display }}</p>{% endif %}
-  <p class="text-body-secondary">Publication prepares a signed library for compatible tablets. This does not confirm tablet delivery.</p>
-  <form method="post" action="{% url 'file-library' library.id %}{% if current %}?folder={{ current.id }}{% endif %}">{% csrf_token %}<input type="hidden" name="action" value="publish"><button class="btn btn-primary">Publish Now</button></form>
-</div>
-<details class="mb-3"><summary>Edit library display name</summary><form method="post" action="{% url 'file-library' library.id %}{% if current %}?folder={{ current.id }}{% endif %}" class="d-flex gap-2 mt-2">{% csrf_token %}<input type="hidden" name="action" value="library_name"><input class="form-control" aria-label="Library name" name="name" value="{{ library.name }}" maxlength="255" required><button class="btn btn-outline-primary">Save name</button></form></details>
-{% endif %}
-<nav aria-label="Folder breadcrumb" class="mb-3"><a href="{% url 'file-library' library.id %}">Library root</a>{% for folder in breadcrumbs %} / <a href="?folder={{ folder.id }}">{{ folder.name }}</a>{% endfor %}</nav>
-{% if access_mode != "temporary" %}<div class="card card-body mb-3"><div class="row g-3">
-<form method="post" action="{% url 'file-library' library.id %}{% if current %}?folder={{ current.id }}{% endif %}" enctype="multipart/form-data" class="col-md-6">{% csrf_token %}<input type="hidden" name="action" value="upload"><label class="form-label" for="pdfs">Upload PDFs to {% if current %}{{ current.name }}{% else %}library root{% endif %}</label><input id="pdfs" class="form-control mb-2" name="pdfs" type="file" accept="application/pdf,.pdf" multiple required><button class="btn btn-primary">Upload PDFs</button></form>
-<form method="post" action="{% url 'file-library' library.id %}{% if current %}?folder={{ current.id }}{% endif %}" class="col-md-6">{% csrf_token %}<input type="hidden" name="action" value="folder"><label class="form-label" for="folder-name">New folder</label><input id="folder-name" class="form-control mb-2" name="name" maxlength="255" required><button class="btn btn-outline-primary">Create folder</button></form>
-</div></div>{% endif %}
-<form method="get" action="{% url 'file-library' library.id %}" class="d-flex gap-2 mb-3"><label class="visually-hidden" for="search">Search library filenames and folders</label><input id="search" type="search" class="form-control" name="q" value="{{ query }}" placeholder="Search filenames and folders throughout this library"><button class="btn btn-outline-secondary">Search</button></form>
-<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead><tbody>
-{% for entry in entries %}<tr><td>{% if entry.is_folder %}<a href="?folder={{ entry.id }}">📁 {{ entry.name }}</a>{% else %}<a href="{% url 'file-library-document' library.id entry.id %}" target="_blank" rel="noopener">{{ entry.name }}</a>{% endif %}{% if query %}<small class="d-block text-body-secondary">{% if entry.parent %}In {{ entry.parent.name }}{% else %}Library root{% endif %}</small>{% endif %}</td><td>{% if entry.content %}{{ entry.content.size_bytes|filesizeformat }}{% else %}Folder{% endif %}</td><td>{{ entry.modified_at }}<small class="d-block">{{ entry.modified_by.display_name }}</small></td><td>
-{% if not entry.is_folder %}<a class="btn btn-sm btn-outline-primary" href="{% url 'file-library-document' library.id entry.id %}" target="_blank" rel="noopener">Preview</a> <a class="btn btn-sm btn-outline-secondary" href="{% url 'file-library-document' library.id entry.id %}?download=1">Download</a>{% endif %}
-<details class="mt-2"><summary>Manage {{ entry.name }}</summary>
-{% if access_mode != "temporary" %}<form method="post" action="{% url 'file-library' library.id %}{% if current %}?folder={{ current.id }}{% endif %}" class="d-flex gap-2 my-2">{% csrf_token %}<input type="hidden" name="action" value="rename"><input type="hidden" name="entry" value="{{ entry.id }}"><input class="form-control" aria-label="New name for {{ entry.name }}" name="name" value="{{ entry.name }}" maxlength="255" required><button class="btn btn-outline-secondary">Rename</button></form>
-<form method="post" action="{% url 'file-library' library.id %}{% if current %}?folder={{ current.id }}{% endif %}" class="d-flex gap-2 my-2">{% csrf_token %}<input type="hidden" name="action" value="move"><input type="hidden" name="entry" value="{{ entry.id }}"><select class="form-select" aria-label="Destination for {{ entry.name }}" name="destination"><option value="">Library root</option>{% for folder in folders %}{% if folder.id != entry.id %}<option value="{{ folder.id }}" {% if folder.id == entry.parent_id %}selected{% endif %}>{{ folder.display_path }}</option>{% endif %}{% endfor %}</select><button class="btn btn-outline-secondary">Move</button></form>
-{% if not entry.is_folder %}<form method="post" action="{% url 'file-library' library.id %}{% if current %}?folder={{ current.id }}{% endif %}" enctype="multipart/form-data" class="my-2">{% csrf_token %}<input type="hidden" name="action" value="replace"><input type="hidden" name="entry" value="{{ entry.id }}"><label class="form-label" for="replace-{{ entry.id }}">Replace PDF (keeps document identity and name)</label><input id="replace-{{ entry.id }}" class="form-control mb-2" type="file" name="pdf" accept="application/pdf,.pdf" required><button class="btn btn-outline-secondary">Replace PDF</button></form>{% endif %}{% endif %}
-<form method="post" action="{% url 'file-library' library.id %}{% if current %}?folder={{ current.id }}{% endif %}" class="border border-danger rounded p-2 mt-3">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="entry" value="{{ entry.id }}"><label class="d-block mb-2"><input type="checkbox" name="confirm" value="yes" required> Confirm deleting “{{ entry.name }}”{% if entry.is_folder %} and all files and folders inside it{% endif %} from this library.</label><button class="btn btn-danger">Delete{% if entry.is_folder %} recursively{% endif %}</button></form>
-</details></td></tr>{% empty %}<tr><td colspan="4" class="text-body-secondary">{% if query %}No matching files or folders.{% else %}This folder is empty.{% endif %}</td></tr>{% endfor %}
-</tbody></table></div>
 {% endblock %}
+{% block scripts %}{% if is_department_library_admin %}<script src="{% static 'file_library/station_access.js' %}" defer></script>{% endif %}{% endblock %}

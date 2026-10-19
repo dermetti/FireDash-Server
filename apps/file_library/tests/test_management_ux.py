@@ -188,7 +188,10 @@ def test_quota_settings_two_groups_preserve_arbitrary_bytes(client, scope):
     assert content.count('name="department_amount"') == 1
     assert content.count('name="station_amount"') == 1
     assert 'name="library_id"' not in content
-    assert "Save quotas" in content and "This limit applies to each station library." in content
+    assert (
+        "Save quotas" in content
+        and "This limit applies separately to every station library." in content
+    )
     reauth(client)
     response = client.post(url, {"action": "file-library-quota", **form.initial})
     assert response.status_code == 302
@@ -210,14 +213,15 @@ def test_temporary_selector_bounded_search_and_normal_form_errors(client, scope)
         department=department, name="Inactive", short_code="OFF", active=False
     )
     client.force_login(admin)
-    url = reverse("file-library", args=(library.id,))
+    url = reverse("file-library-station-access-choose", args=(library.id,))
     response = client.get(url)
     content = response.content.decode()
     assert content.count('action="' + reverse("file-library-station-access-select") + '"') == 1
-    assert content.count('name="station_id"') == 1
+    assert content.count('name="station_id"') == 2
+    assert 'id="chosen-station-id"' in content and " disabled" in content
     assert len(response.context["station_access_form"].options) == 25
     assert "Forbidden" not in content and "Inactive" not in content
-    assert 'placeholder="Search stations"' in content and 'form="station-search"' in content
+    assert 'placeholder="Search stations"' in content and 'role="combobox"' in content
     found = client.get(url, {"station_q": "S109"})
     assert len(found.context["station_access_form"].options) == 1
     endpoint = reverse("portal-scoped-selector", args=(department.id, "stations"))
@@ -318,7 +322,8 @@ def test_department_pending_reviews_counts_pagination_and_station_isolation(clie
     assert response.context["pending_review_page"].paginator.count == 28
     assert len(response.context["pending_review_page"]) == 25
     content = response.content.decode()
-    assert content.index("Capacity reviews requiring approval") < content.index("Publish Now")
+    assert "Capacity reviews requiring approval" in content
+    assert "Publish Now" not in content
     assert reverse("file-library-capacity-review", args=(station_review.id,)) in content
     page2 = client.get(reverse("file-library", args=(library.id,)), {"review_page": 2})
     assert len(page2.context["pending_review_page"]) == 3

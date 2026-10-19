@@ -7,6 +7,14 @@
 <p class="text-body-secondary">Publication history and current distributed state for this dataset scope.</p>
 
 <section class="mb-4">{% include "publications/_scope_detail_status.html" %}</section>
+{% if scope.dataset_type_code == "department_files" and scope.station_id is None %}
+<section class="mb-4" aria-label="Department file publication">
+  <form method="post" action="{% url 'publications-department-files-publish' scope.department_id %}">
+    {% csrf_token %}<button type="submit" class="btn btn-primary">Publish Now</button>
+  </form>
+  <p class="form-text">This prepares the next signed publication; it does not confirm tablet delivery.</p>
+</section>
+{% endif %}
 
 {% if scope.dataset_type_code == "department_fire_plans" and scope.station_id is None and scope.delivery_format == "V1_ARTIFACT" %}
 <section class="mb-4"><form method="post" action="{% url 'publications-scope-fire-plan-document-manifest-cutover' scope.id %}">{% csrf_token %}<button class="btn btn-warning" type="submit">Migrate this Fire Plan scope to document-manifest v2</button></form></section>

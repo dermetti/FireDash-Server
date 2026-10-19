@@ -1,0 +1,4 @@
+<div class="alert alert-warning d-flex flex-wrap align-items-center justify-content-between gap-2" role="status">
+  <div><strong>Temporary station access &middot; {{ library.station.name }}</strong><span class="d-block small">View, download or delete only. One successful deletion ends access. Expires {{ temporary_access.expires_at }}.</span></div>
+  <form method="post" action="{% url 'file-library-station-access-release' %}">{% csrf_token %}<button type="submit" class="btn btn-outline-dark btn-sm">Release access</button></form>
+</div>

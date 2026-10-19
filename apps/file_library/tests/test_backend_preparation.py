@@ -301,7 +301,7 @@ def _reauthenticate(client):
     session.save()
 
 
-def test_department_publication_endpoint_coalesces_with_existing_form(
+def test_department_publication_endpoint_coalesces_and_rejects_obsolete_form(
     scope, client, monkeypatch, django_capture_on_commit_callbacks
 ):
     admin, _, _, department, _, station, _ = scope
@@ -334,16 +334,16 @@ def test_department_publication_endpoint_coalesces_with_existing_form(
     assert response.status_code == 204 and response["HX-Redirect"] == reverse(
         "publications-list", args=(department.id,)
     )
-    assert legacy.status_code == 302
+    assert legacy.status_code == 403
     assert (
         PublicationJob.objects.filter(department=department, station=None).get().id == first_job_id
     )
-    assert wake.call_count == 3
+    assert wake.call_count == 2
     assert (
         AuditEvent.objects.filter(
             action="file_library.publish_requested", target_uuid=library.id, department=department
         ).count()
-        == 3
+        == 2
     )
     library.refresh_from_db()
     assert library.source_revision == 0 and library.usage_bytes == 0

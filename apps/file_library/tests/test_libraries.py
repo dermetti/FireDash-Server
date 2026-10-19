@@ -273,7 +273,10 @@ def test_portal_bulk_errors_preview_search_and_confirmation(scope, pdf_pipeline,
         response = client.get(doc_url + suffix)
         assert response.status_code == 200 and response["Content-Type"] == "application/pdf"
         assert b"%PDF" in b"".join(response.streaming_content)
-    assert b"guide.pdf" in client.get(url + "?q=guide").content
+    assert (
+        b"guide.pdf"
+        in client.get(reverse("file-library-explorer", args=[library.id]) + "?q=guide").content
+    )
     client.post(url, {"action": "library_name", "name": "Operations"})
     library.refresh_from_db()
     assert library.name == "Operations"
@@ -422,7 +425,10 @@ def test_station_operations_audit_scope_and_cross_station_rejection(scope, pdf_p
         client.post(url, data)
     document.refresh_from_db()
     assert document.name == "Operations.pdf" and document.parent_id is None
-    assert b"Manuals" in client.get(url + "?q=manual").content
+    assert (
+        b"Manuals"
+        in client.get(reverse("file-library-explorer", args=[library.id]) + "?q=manual").content
+    )
     doc_url = reverse("file-library-document", args=[library.id, document.id])
     response = client.get(doc_url)
     assert response.status_code == 200

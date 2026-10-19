@@ -1,6 +1,6 @@
 from django.urls import path
 
-from apps.file_library import views
+from apps.file_library import explorer_views, views
 
 urlpatterns = [
     path("stations/<uuid:station_id>/data/", views.station_hub, name="station-data-hub"),
@@ -24,6 +24,24 @@ urlpatterns = [
         "files/station-access/release/",
         views.release_station_access,
         name="file-library-station-access-release",
+    ),
+    path(
+        "files/<uuid:library_id>/explorer/", explorer_views.explorer, name="file-library-explorer"
+    ),
+    path(
+        "files/<uuid:library_id>/explorer/actions/<slug:action>/",
+        explorer_views.action,
+        name="file-library-explorer-action",
+    ),
+    path(
+        "files/<uuid:library_id>/station-access/",
+        explorer_views.choose_station_access,
+        name="file-library-station-access-choose",
+    ),
+    path(
+        "files/station-search/<uuid:department_id>/",
+        explorer_views.station_search,
+        name="file-library-station-search",
     ),
     path("files/<uuid:library_id>/", views.library_view, name="file-library"),
     path(

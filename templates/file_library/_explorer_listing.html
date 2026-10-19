@@ -1,0 +1,23 @@
+<section aria-label="File explorer">
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div class="d-flex flex-wrap gap-2">{% if can_manage_files %}
+    <a class="btn btn-primary" href="{% url 'file-library-explorer-action' library.id 'upload' %}?folder={{ current_folder.id|default:'' }}" hx-get="{% url 'file-library-explorer-action' library.id 'upload' %}?folder={{ current_folder.id|default:'' }}" hx-target="#file-explorer-action-modal">Upload PDFs</a>
+    <a class="btn btn-outline-secondary" href="{% url 'file-library-explorer-action' library.id 'new-folder' %}?folder={{ current_folder.id|default:'' }}" hx-get="{% url 'file-library-explorer-action' library.id 'new-folder' %}?folder={{ current_folder.id|default:'' }}" hx-target="#file-explorer-action-modal">New folder</a>
+  {% endif %}</div>
+  <form id="explorer-search-form" method="get" action="{% url 'file-library-explorer' library.id %}" class="d-flex flex-wrap gap-2 flex-grow-1 justify-content-end" role="search">
+    {% if current_folder %}<input type="hidden" name="folder" value="{{ current_folder.id }}">{% endif %}
+    <label class="visually-hidden" for="explorer-search">Search files and folders</label>
+    <input type="search" id="explorer-search" name="q" class="form-control w-auto flex-grow-1" placeholder="Search files and folders" value="{{ query }}" maxlength="255" hx-get="{% url 'file-library-explorer' library.id %}" hx-trigger="input changed delay:1s, search" hx-include="#explorer-search-form" hx-target="#file-explorer-content" hx-swap="innerHTML" hx-push-url="true">
+    <label class="visually-hidden" for="explorer-sort">Sort by</label>
+    <select id="explorer-sort" name="sort" class="form-select w-auto" hx-get="{% url 'file-library-explorer' library.id %}" hx-trigger="change" hx-include="#explorer-search-form" hx-target="#file-explorer-content" hx-swap="innerHTML" hx-push-url="true"><option value="name"{% if sort == 'name' %} selected{% endif %}>Name</option><option value="size"{% if sort == 'size' %} selected{% endif %}>Size</option><option value="modified"{% if sort == 'modified' %} selected{% endif %}>Modified</option></select>
+    <label class="visually-hidden" for="explorer-direction">Sort direction</label>
+    <select id="explorer-direction" name="direction" class="form-select w-auto" hx-get="{% url 'file-library-explorer' library.id %}" hx-trigger="change" hx-include="#explorer-search-form" hx-target="#file-explorer-content" hx-swap="innerHTML" hx-push-url="true"><option value="asc"{% if direction == 'asc' %} selected{% endif %}>Ascending</option><option value="desc"{% if direction == 'desc' %} selected{% endif %}>Descending</option></select>
+    <button class="btn btn-outline-secondary" type="submit">Search</button>
+  </form>
+</div>
+<p class="small text-body-secondary">Search includes all folders in this library.{% if query %} Results for <strong>{{ query }}</strong>. <a href="{% url 'file-library-explorer' library.id %}?folder={{ current_folder.id|default:'' }}">Clear search</a>{% endif %}</p>
+<table class="table table-hover align-middle"><thead><tr><th scope="col">Name</th><th scope="col" class="d-none d-md-table-cell">Size</th><th scope="col" class="d-none d-md-table-cell">Modified</th><th scope="col" class="text-end">Actions</th></tr></thead><tbody>
+{% for item in items %}{% include "file_library/_explorer_row.html" %}{% empty %}<tr><td colspan="4" class="text-center text-body-secondary py-5">{% if query %}No matching files or folders. Try another search.{% else %}This folder is empty.{% if can_manage_files %} Upload PDFs or create a folder to get started.{% endif %}{% endif %}</td></tr>{% endfor %}
+</tbody></table>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2"><span class="small text-body-secondary">{{ page.paginator.count }} item{{ page.paginator.count|pluralize }}</span>{% include "file_library/_explorer_pagination.html" %}</div>
+</section>
