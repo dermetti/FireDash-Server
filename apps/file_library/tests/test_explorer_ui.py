@@ -635,3 +635,27 @@ def test_move_destination_presentation_and_navigation(client, scope, role):
     assert response.status_code == 302
     item.refresh_from_db()
     assert item.parent_id == child.id
+
+
+@pytest.mark.parametrize("role", ["department", "station"])
+@pytest.mark.parametrize("action", ["rename", "move", "delete"])
+def test_actions_reject_missing_or_invalid_entries(client, scope, role, action):
+    actor, library = normal(scope, role)
+    deleted = services.create_folder(actor=actor, library_id=library.id, name="Deleted")
+    services.delete_entry(actor=actor, library_id=library.id, entry_id=deleted.id)
+    library.refresh_from_db()
+    revision = library.source_revision
+    events = AuditEvent.objects.count()
+    client.force_login(actor)
+    for entry_id in (None, "invalid", "00000000-0000-0000-0000-000000000001", str(deleted.id)):
+        data = {"name": "New name", "confirm": "yes", "destination": ""}
+        if entry_id is not None:
+            data["entry"] = entry_id
+        for method in (client.get, client.post):
+            for headers in ({}, {"HTTP_HX_REQUEST": "true"}):
+                response = method(url(library, action), data, **headers)
+                assert response.status_code == 404
+    library.refresh_from_db()
+    assert library.source_revision == revision
+    assert AuditEvent.objects.count() == events
+    assert not library.entries.exists()

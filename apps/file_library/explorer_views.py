@@ -158,10 +158,12 @@ def action(request, library_id, action):
                     parent_id=current.id if current else None,
                 )
             elif action == "rename":
-                assert entry is not None
+                if entry is None:
+                    raise Http404("The selected item is unavailable in this library.")
                 services.edit_entry(**common, entry_id=entry.id, name=form.cleaned_data["name"])
             elif action == "move":
-                assert entry is not None
+                if entry is None:
+                    raise Http404("The selected item is unavailable in this library.")
                 services.edit_entry(
                     **common,
                     entry_id=entry.id,
@@ -169,7 +171,8 @@ def action(request, library_id, action):
                     parent_id=destination.id if destination else None,
                 )
             elif action == "delete":
-                assert entry is not None
+                if entry is None:
+                    raise Http404("The selected item is unavailable in this library.")
                 deletion_access = services.delete_entry(**common, entry_id=entry.id)
             if not form.errors:
                 if action not in {"upload", "replace"}:
@@ -184,7 +187,8 @@ def action(request, library_id, action):
             form.add_error("name" if action in {"rename", "new-folder"} else None, str(error))
     destinations = None
     if action == "move":
-        assert entry is not None
+        if entry is None:
+            raise Http404("The selected item is unavailable in this library.")
         try:
             destinations = Paginator(
                 library.entries.filter(is_folder=True, parent=destination)
