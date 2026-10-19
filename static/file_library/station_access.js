@@ -11,26 +11,17 @@
       const status = root.querySelector('#station-selection-status');
       const confirm = root.querySelector('#station-access-confirm');
       const activate = root.querySelector('#activate-station-access');
+      const publication = root.hasAttribute('data-publication-station');
+      let searching = !chosen.value;
+      input.disabled = false;
       root.querySelector('[data-station-enhanced]').hidden = false;
       root.querySelectorAll('[data-station-fallback]').forEach(function (el) { el.hidden = true; });
       root.querySelector('#station-select-fallback').disabled = true;
       chosen.disabled = false;
       if (activate) activate.disabled = !chosen.value;
       let index = -1;
-      if (root.hasAttribute('data-publication-station')) {
+      if (publication) {
         root.querySelectorAll('[data-station-fallback] input').forEach(function (el) { el.disabled = true; });
-        input.addEventListener('htmx:configRequest', function (event) { event.detail.parameters.q = input.value; });
-        const form = chosen.form;
-        function updateScope() {
-          const stationMode = form.elements.scope.value === 'station';
-          root.hidden = !stationMode;
-          root.disabled = !stationMode;
-          if (!stationMode) close();
-        }
-        form.querySelectorAll('[name="scope"]').forEach(function (el) {
-          el.addEventListener('change', updateScope);
-        });
-        updateScope();
       }
       function options() { return Array.from(results.querySelectorAll('[role="option"]')); }
       function highlight(next) {
@@ -54,13 +45,19 @@
         input.value = row.dataset.stationLabel;
         status.textContent = 'Selected: ' + row.dataset.stationLabel;
         if (activate) activate.disabled = false;
+        searching = false;
         close();
+        if (publication) chosen.form.requestSubmit();
       }
       input.addEventListener('input', function () {
-        chosen.value = '';
-        if (confirm) confirm.checked = false;
-        if (activate) activate.disabled = true;
-        status.textContent = 'No station selected.';
+        searching = true;
+        // Filter searches must not change the active station until a row is chosen.
+        if (!publication) {
+          chosen.value = '';
+          if (confirm) confirm.checked = false;
+          if (activate) activate.disabled = true;
+          status.textContent = 'No station selected.';
+        }
         close();
         results.querySelector('[role="listbox"]').replaceChildren();
       });
@@ -91,14 +88,14 @@
       root.addEventListener('htmx:beforeSwap', function (event) {
         if (event.detail.target !== results) return;
         const query = event.detail.requestConfig.parameters.q;
-        if (query !== input.value || chosen.value) event.detail.shouldSwap = false;
+        if (query !== input.value || (publication ? !searching : chosen.value)) event.detail.shouldSwap = false;
       });
       root.addEventListener('htmx:afterSwap', function (event) {
         if (event.target !== results) return;
         highlight(-1);
         results.hidden = false;
         input.setAttribute('aria-expanded', String(options().length > 0));
-        status.textContent = options().length ? 'Choose a matching station.' : 'No matching active stations.';
+        if (!publication) status.textContent = options().length ? 'Choose a matching station.' : 'No matching active stations.';
       });
       chosen.form.addEventListener('submit', function (event) {
         if (activate && !chosen.value) { event.preventDefault(); input.focus(); }

@@ -14,7 +14,12 @@ from django.http import HttpResponse
 from django.utils import timezone
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_field
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_field,
+)
 from rest_framework import (
     authentication,
     exceptions,
@@ -502,6 +507,12 @@ class ReportDeliveryView(InstallationAPIView):
 
 
 @extend_schema(
+    description=(
+        "Both free_storage_bytes and total_storage_bytes are required JSON integers, "
+        "not strings, booleans or floats. Free must not exceed total. The current "
+        "installation owns the measurement; the server supplies its observation timestamp. "
+        "Incomplete or invalid measurements return 400 without renewing the lease."
+    ),
     request=CheckInRequestSerializer,
     responses={
         200: CheckInResponseSerializer,
@@ -547,6 +558,11 @@ class CheckInView(InstallationAPIView):
 
 
 @extend_schema(
+    description=(
+        "Explicit user-requested lease top-up. No request body; this is distinct from "
+        "check-in and does not record storage telemetry. Requires an ACTIVE, unexpired, "
+        "operational installation."
+    ),
     request=None,
     responses={
         200: CheckInResponseSerializer,
@@ -638,12 +654,17 @@ class ConfigurationView(InstallationAPIView):
 
 
 @extend_schema(
+    description=(
+        "Fetch the exact requested Ed25519 signing-key version, not a latest-key alias. "
+        "Returns algorithm, version and the Base64 raw public_key (32 bytes). "
+        "Requires current installation/assignment authorization, including for old public keys."
+    ),
     responses={
         200: SigningKeyResponseSerializer,
         (403, "application/problem+json"): ProblemResponseSerializer,
         (404, "application/problem+json"): ProblemResponseSerializer,
         (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
-    }
+    },
 )
 class SigningKeyView(InstallationAPIView):
     def get(self, request, version: str):
@@ -670,7 +691,20 @@ class SigningKeyView(InstallationAPIView):
 
 @extend_schema(
     responses={
-        200: OpenApiTypes.OBJECT,
+        200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description=(
+                "Complete Ed25519-signed tablet manifest (docs/tablet-api.md, Complete manifest). "
+                "Includes configuration, authorization_valid_until, manifest_generation, generated_at, "
+                "capabilities and datasets, plus signature, signature_algorithm and "
+                "signing_key_version. Dataset descriptors include publication_id, type, scope, "
+                "version, schema_version, required and minimum_app_version. File datasets use "
+                "artifact_format=document-manifest-v2 and manifest_url, not a monolithic "
+                "download_url. JSON datasets carry their encryption metadata and key_grant. "
+                "The quoted response ETag excludes only generated_at; matching If-None-Match "
+                "returns 304 without a body. A pending complete manifest returns a 202 problem."
+            ),
+        ),
         (202, "application/problem+json"): ManifestPendingResponseSerializer,
         304: None,
         (403, "application/problem+json"): ProblemResponseSerializer,
@@ -875,13 +909,44 @@ class FirePlanDocumentArtifactDownloadView(InstallationAPIView):
 
 
 @extend_schema(
+    description=(
+        "Complete signed schema-v2 document snapshot for an authorized current generation "
+        "(or retained successful file-library generation within the current scope). "
+        "Rechecks current installation, assignment, lease, dataset visibility and app compatibility. "
+        "No conditional GET: this endpoint emits no ETag and never returns 304."
+    ),
     responses={
-        200: OpenApiTypes.OBJECT,
-        202: None,
-        403: ProblemResponseSerializer,
-        404: ProblemResponseSerializer,
+        200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description=(
+                "format=document-generation-v2; dataset_type, publication_id, version, "
+                "schema_version=2 and complete documents array. File datasets additionally "
+                "include source_revision, library={id,name,scope} and the complete folders "
+                "array ({id,name,parent_id}). Each file document includes "
+                "file={id,name,folder_id,size_bytes,sha256} and the shared artifact envelope: "
+                "artifact_id, sanitized_pdf_sha256, ciphertext_sha256, ciphertext_size, nonce, "
+                "encryption_algorithm, wrapping_algorithm, kek_version, signature, "
+                "signature_algorithm, signing_key_version, generation_wrapped_cek, "
+                "generation_key_wrapping_algorithm and download_path. KLGV documents instead "
+                "carry klgv_plan metadata. Top-level signature, signature_algorithm and "
+                "signing_key_version authenticate canonical JSON before those response-only "
+                "fields and generation_key_grant are attached. generation_key_grant contains "
+                "scheme, ciphersuite, encapsulated_key, wrapped_generation_key and info. "
+                "Validate info's protocol=firedash-document-generation-hpke-v2, publication_id, "
+                "installation_id, tablet_id, scope, version_number and schema_version. "
+                "HPKE opens the generation key; AES-KW unwraps each document CEK. "
+                "Empty document/folder arrays are valid authoritative snapshots. "
+                "See docs/tablet-api.md for canonical signing and complete activation rules."
+            ),
+        ),
+        202: OpenApiResponse(
+            description="Generation-key grant pending; empty body. Retry after 5 seconds."
+        ),
+        (403, "application/problem+json"): ProblemResponseSerializer,
+        (404, "application/problem+json"): ProblemResponseSerializer,
+        (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     },
-    parameters=_MANIFEST_CONDITIONAL_GET_PARAMETERS,
+    parameters=[OpenApiParameter("Retry-After", int, OpenApiParameter.HEADER, response=[202])],
 )
 class DocumentGenerationManifestView(InstallationAPIView):
     """Generic schema-v2 manifest endpoint for adapter-backed datasets."""
@@ -926,12 +991,22 @@ class DocumentGenerationManifestView(InstallationAPIView):
 
 
 @extend_schema(
+    description=(
+        "Immutable document ciphertext referenced by this generation. Requires current "
+        "generation authorization and a READY generation-key grant for this installation. "
+        "The quoted ETag is ciphertext_sha256. Only an exact If-None-Match match returns "
+        "304 (no body); otherwise download and verify the entire ciphertext. "
+        "AES-256-GCM uses the signed nonce, no AAD and an appended authentication tag. "
+        "Verify ciphertext length/hash, then plaintext SHA-256 and file.size_bytes. "
+        "Artifact signature metadata is server-only; clients verify the generation manifest."
+    ),
     parameters=[OpenApiParameter("format", exclude=True), *_CONDITIONAL_GET_PARAMETERS],
     responses={
         (200, "application/octet-stream"): OpenApiTypes.BINARY,
         304: None,
-        403: ProblemResponseSerializer,
-        404: ProblemResponseSerializer,
+        (403, "application/problem+json"): ProblemResponseSerializer,
+        (404, "application/problem+json"): ProblemResponseSerializer,
+        (426, "application/problem+json"): ClientUpdateRequiredResponseSerializer,
     },
 )
 class DocumentArtifactDownloadView(InstallationAPIView):

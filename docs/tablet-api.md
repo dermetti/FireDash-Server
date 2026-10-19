@@ -154,12 +154,31 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 | `POST /api/v1/tablet/refresh` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
 | `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
 | `POST /api/v1/tablet/report-delivery` | Bearer | `multipart/form-data`: UUID `delivery_request_id`, UUID `recipient_personnel_id`, binary `pdf` | 200 `{state,code}` | 400, 403, 426 | Current authenticated installation; recipient authorization and delivery readiness are evaluated server-side |
-| `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403 | ACTIVE or INACTIVE current installation with a valid assignment |
+| `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403, 426 | ACTIVE or INACTIVE current installation with a valid assignment |
 | `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | ACTIVE or INACTIVE current installation; exact configured public key version |
-| `GET /api/v1/tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403 | ACTIVE returns assigned publications; INACTIVE returns a signed empty dataset list |
-| `GET /api/v1/tablet/datasets/{publication_id}/download` | Bearer | No body; `If-None-Match` optional | 200 encrypted bytes | 304, 403, 404 | ACTIVE, unexpired, authorised and manifest-listed |
+| `GET /api/v1/tablet/manifest` | Bearer | No body; `If-None-Match` optional | 200 manifest | 202, 304, 403, 426 | ACTIVE returns assigned publications; INACTIVE returns a signed empty dataset list |
+| `GET /api/v1/tablet/datasets/{publication_id}/download` | Bearer | No body; `If-None-Match` optional | 200 encrypted bytes | 304, 403, 404, 426 | ACTIVE, unexpired, authorised and manifest-listed |
+| `GET /api/v1/tablet/document-generations/{publication_id}/manifest` | Bearer | No body; no conditional headers | 200 signed generation JSON | 202 empty, 403, 404, 426 | ACTIVE, unexpired, current assignment and dataset entitlement; per-installation generation-key grant must be READY for 200 |
+| `GET /api/v1/tablet/document-generations/{publication_id}/artifacts/{artifact_id}/download` | Bearer | No body; optional exact quoted `If-None-Match` | 200 immutable ciphertext (`application/octet-stream`) | 304 empty, 403, 404, 426 | Same generation authorization, referenced artifact and READY generation-key grant |
 
-304 has no body. A 202 manifest is a problem object with `Retry-After: 5`.
+304 has no body. A 202 **complete tablet manifest** is a problem object with
+`Retry-After: 5`. A 202 **document-generation manifest** instead has an empty
+body and `Retry-After: 5`: the worker has not yet prepared this installation's
+HPKE generation-key grant. Retry the generation manifest; do not activate it or
+attempt artifact downloads until it returns 200. This endpoint does not emit an
+ETag, evaluate `If-None-Match`, or return 304. A 200 returns the complete signed
+snapshot plus the installation-bound grant, not PDF bytes.
+
+Artifact downloads require membership in the authorized generation and a READY
+grant; otherwise they return 403, or 404 for an unknown generation manifest or
+artifact reference. Retained successful file generations are accessible only
+while their scope remains currently authorized. A previous grant never bypasses
+reassignment, expiry, revocation, feature visibility or compatibility checks.
+The artifact's quoted ETag is its ciphertext SHA-256. An **exact** matching
+`If-None-Match` returns 304 after authorization; 200 returns the whole immutable
+ciphertext. Reuse only a previously verified cached body for that artifact.
+The complete tablet manifest has its own signed JSON and ETag contract below;
+its 304 support must not be assumed for generation manifests.
 Request the complete encrypted artifact: do not send `Range` as part of the
 FireDash application protocol, and never accept a partial/206 response as a
 fully verified artifact. Protected Nginx may serve ranges, but FireDash
@@ -342,8 +361,7 @@ Department lease policy is server-owned: default seven days, minimum three.
 Use `Content-Type: application/json`. Both fields must be JSON integers;
 booleans, floating-point values, numeric strings, and null are invalid.
 `free_storage_bytes` is nonnegative,
-`total_storage_bytes` is greater than zero, both are at most signed 64-bit
-integer range, and free must not exceed total. A valid authenticated check-in
+`total_storage_bytes` is greater than zero, both are at most `9223372036854775807` (`2^63 - 1`), and free must not exceed total. A valid authenticated check-in
 stores the complete measurement and a server-generated observation timestamp on
 the current installation. Re-provisioned installations begin without telemetry;
 measurements are never inherited from a replaced installation. Invalid or
@@ -1080,25 +1098,50 @@ identity is `library.id`; no synthetic folder UUID is inserted into `folders`.
 
 ### File-library capacity warnings (server administration only)
 
-File uploads/replacements may be held for explicit department-admin review when
-estimated post-operation free capacity is strictly below 20%, or capacity is
-unknown. Exactly 20% is allowed. Server estimates use authenticated device-reported
-measurements, the expected published baseline, reusable document ciphertexts, and
-outstanding source reservations across the eligible department/station scopes.
-They reserve full new ciphertext bytes without assuming deletion/replacement has
-freed old files. See [file-libraries.md](file-libraries.md#projected-capacity-and-administrative-overrides)
-for the precise model, freshness limit and one-operation review lifecycle.
+Valid PDFs enter the server library immediately after normal PDF validation,
+sanitization, authorization, integrity and server-quota checks. Tablet capacity
+gates the **frozen publication candidate**, not upload or replacement. Upload
+success is not publication or delivery, and approval never bypasses server quotas.
+No original-PDF reupload is necessary after approval.
 
-A fresh measurement requires a current ACTIVE installation with an unexpired lease;
-missing, invalid, future, or older-than-86400-second readings (configurable server
-limit) are capacity unknown. A station assignment beginning after the reading
-also requires a fresh check-in before projecting its new scope. Replaced
-installation values never carry forward.
-A server override is audited administrative acceptance of an estimate/risk. It
-changes neither the measurement, the required datasets, grants, lease, signatures,
-nor tablet authorization. No override flag or capacity prediction is added to the
-tablet check-in response, complete manifest or generation schema. There is no
-per-distribution receipt, acknowledgment or server proof of cached contents.
+Both unknown capacity and projected remaining free storage **strictly below 20%**
+of total require Department Administrator approval. Exactly 20% is not a breach.
+Unknown capacity has warning severity; known insufficient capacity has a stronger
+danger warning because publication may fail on affected devices. Mixed populations
+retain the stronger warning while also reporting unknown tablets. An eligible
+population with no tablets is clear, not unknown.
+
+The assessment binds department/station scope, dataset, source revision, frozen
+content and relevant tablet/assignment/installation/telemetry context. Approval
+accepts that candidate's recorded risk; it is never a reusable exemption.
+Source or material device-context changes require reassessment, and fresh safe
+telemetry can clear a pending review without approval. Existing successful
+generations remain available while approval is pending, within current tablet
+authorization. Pending reviews have no upload-specific retry deadline.
+
+Department Administrator **File Management** administers the department's reviews,
+including station-file publications; System Settings does not. Station
+administrators can inspect their own review status but cannot approve. See
+[file-libraries.md](file-libraries.md#projected-capacity-and-administrative-overrides)
+for the conservative publication estimate and review lifecycle.
+
+Affected tablets must be ACTIVE physical assets with current operational vehicle
+and station assignments: department-wide for `department_files`, current station
+only for `station_files`. A usable measurement belongs to the current ACTIVE
+installation with an unexpired lease. Missing, invalid, future, expired, or
+older-than-86400-second measurements are unknown (the default 24-hour freshness
+limit is configurable through `TABLET_STORAGE_TELEMETRY_MAX_AGE_SECONDS`). An
+assignment beginning after the observation requires a fresh check-in. Replaced
+installation values never carry forward. Estimates use the expected published
+baseline and outstanding source reservations, without assuming that replacement
+or deletion has reclaimed device storage. They are not delivery receipts.
+
+Capacity approval is server administration only. There is **no** tablet approval
+flag, override token or capacity-review endpoint. Approval changes neither the
+reported measurement, required datasets, key grants, lease, signatures nor tablet
+authorization. No capacity predictions are added to check-in responses, complete
+manifests or generation schemas. There is no per-distribution acknowledgment or
+server proof of cached contents.
 
 The iPad must handle actual disk exhaustion during download/decryption/staging,
 retain a verified active generation on failure, and avoid partial activation.

@@ -1,12 +1,6 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Publications — {{ department.name }}{% endblock %}
-{% block head %}
-<style>
-  .publication-scope-switch .scope-selected { visibility: hidden; }
-  .publication-scope-switch .btn-check:checked + label .scope-selected { visibility: visible; }
-</style>
-{% endblock %}
 {% block content %}
 <p class="text-body-secondary small mb-0">Distributed Data / Publications</p>
 <h1 class="mb-1">Publications</h1>

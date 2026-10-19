@@ -393,9 +393,13 @@ def test_both_file_scopes_deliver_signed_individual_pdfs_and_authoritative_empty
     assert descriptor["schema_version"] == 2 and descriptor["required"] is True
     assert descriptor["scope"]["type"] == ("DEPARTMENT" if department_scope else "STATION")
     url = descriptor["manifest_url"]
-    assert client.get(url, **auth).status_code == 202
+    pending = client.get(url, **auth)
+    assert pending.status_code == 202 and pending.content == b""
+    assert pending["Retry-After"] == "5"
     assert process_next_generation_key_grant().status == "READY"
-    delivered = client.get(url, **auth).json()
+    response = client.get(url, HTTP_IF_NONE_MATCH='"ignored"', **auth)
+    assert response.status_code == 200 and "ETag" not in response
+    delivered = response.json()
     grant = delivered["generation_key_grant"]
     generation_key = hpke_open(
         encapsulated_key=base64.b64decode(grant["encapsulated_key"]),
@@ -416,7 +420,13 @@ def test_both_file_scopes_deliver_signed_individual_pdfs_and_authoritative_empty
     plaintext = AESGCM(cek).decrypt(base64.b64decode(envelope["nonce"]), ciphertext, None)
     assert len(plaintext) == envelope["file"]["size_bytes"]
     assert hashlib.sha256(plaintext).hexdigest() == envelope["file"]["sha256"]
-    assert client.get(envelope["download_path"], **auth).status_code == 200
+    download = client.get(envelope["download_path"], **auth)
+    assert download.status_code == 200
+    assert download["Content-Type"] == "application/octet-stream"
+    assert download["ETag"] == f'"{envelope["ciphertext_sha256"]}"'
+    cached = client.get(envelope["download_path"], HTTP_IF_NONE_MATCH=download["ETag"], **auth)
+    assert cached.status_code == 304 and cached.content == b""
+    assert cached["ETag"] == download["ETag"]
     services.delete_entry(actor=actor, library_id=library.id, entry_id=folder.id)
     empty = publish(actor, library)
     payload = DocumentGenerationManifest.objects.get(publication=empty).payload

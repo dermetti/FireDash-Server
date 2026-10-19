@@ -963,6 +963,63 @@ def test_check_in_openapi_requires_storage_telemetry():
     assert request_schema["required"] == ["free_storage_bytes", "total_storage_bytes"]
     assert request_schema["properties"]["free_storage_bytes"]["minimum"] == 0
     assert request_schema["properties"]["total_storage_bytes"]["minimum"] == 1
+    assert operation["requestBody"]["required"] is True
+    for name in ("free_storage_bytes", "total_storage_bytes"):
+        assert request_schema["properties"][name]["type"] == "integer"
+        assert request_schema["properties"][name]["maximum"] == 2**63 - 1
+
+
+def test_document_generation_openapi_matches_json_binary_and_pending_contracts():
+    schema = yaml.safe_load(Client().get("/api/v1/schema/").content)
+    paths = schema["paths"]
+    manifest_path = "/api/v1/tablet/document-generations/{publication_id}/manifest"
+    download_path = (
+        "/api/v1/tablet/document-generations/{publication_id}/artifacts/{artifact_id}/download"
+    )
+    manifest = paths[manifest_path]["get"]
+    download = paths[download_path]["get"]
+    for path, operation in ((manifest_path, manifest), (download_path, download)):
+        assert set(paths[path]) == {"get"}
+        assert operation["security"] == [{"InstallationBearer": []}]
+        assert "requestBody" not in operation
+        for code in ("403", "404", "426"):
+            assert set(operation["responses"][code]["content"]) == {"application/problem+json"}
+    assert set(manifest["responses"]) == {"200", "202", "403", "404", "426"}
+    assert set(manifest["responses"]["200"]["content"]) == {"application/json"}
+    assert "content" not in manifest["responses"]["202"]
+    assert set(manifest["responses"]["202"]["headers"]) == {"Retry-After"}
+    assert "headers" not in manifest["responses"]["200"]
+    assert {item["name"] for item in manifest["parameters"]} == {"publication_id"}
+    description = manifest["responses"]["200"]["description"]
+    for member in (
+        "document-generation-v2",
+        "source_revision",
+        "folders",
+        "file={id,name,folder_id",
+        "generation_wrapped_cek",
+        "generation_key_grant",
+        "wrapped_generation_key",
+        "firedash-document-generation-hpke-v2",
+    ):
+        assert member in description
+    assert set(download["responses"]) == {"200", "304", "403", "404", "426"}
+    assert download["responses"]["200"]["content"] == {
+        "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+    }
+    assert "content" not in download["responses"]["304"]
+    for code in ("200", "304"):
+        assert set(download["responses"][code]["headers"]) == {"ETag"}
+    assert {item["name"] for item in download["parameters"]} == {
+        "publication_id",
+        "artifact_id",
+        "If-None-Match",
+    }
+    refresh = paths["/api/v1/tablet/refresh"]["post"]
+    assert "requestBody" not in refresh
+    assert refresh["security"] == [{"InstallationBearer": []}]
+    signing_key = paths["/api/v1/tablet/signing-keys/{version}"]["get"]
+    assert signing_key["security"] == [{"InstallationBearer": []}]
+    assert "exact requested Ed25519" in signing_key["description"]
 
 
 def test_report_delivery_openapi_and_tablet_contract_are_multipart_and_idempotent():

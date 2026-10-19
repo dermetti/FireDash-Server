@@ -8,12 +8,12 @@
   </div>
   {% if scope_rows %}
   <table class="table table-hover align-middle"><thead><tr><th>Dataset / Scope</th><th>Current publication</th><th>Update</th><th class="d-none d-lg-table-cell">Last changed</th><th class="text-end">Actions</th></tr></thead><tbody>{% for row in scope_rows %}{% include "publications/_scope_row.html" %}{% endfor %}</tbody></table>
-  {% elif scope_mode == 'station' and not selected_station %}
-  <div class="text-center text-body-secondary py-4">Select a station to view its publications.</div>
+  {% elif station_invalid %}
+  <div class="text-center text-body-secondary py-4">Select an available station or clear the station selection.</div>
   {% elif selected_filter and has_scopes %}
   <div class="text-center py-4"><p class="mb-2">No publications match these filters.</p><a href="{{ publications_url }}?{{ clear_status_query }}">Clear status filter</a></div>
   {% elif scope_mode == 'station' %}
-  <div class="text-center text-body-secondary py-4">No publication scopes are available for this station.</div>
+  <div class="text-center text-body-secondary py-4">No publication scopes are available for {% if selected_station %}this station{% else %}stations in this department{% endif %}.</div>
   {% else %}
   <div class="text-center text-body-secondary py-4">No publication scopes are available in this scope.</div>
   {% endif %}

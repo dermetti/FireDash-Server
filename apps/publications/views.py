@@ -157,6 +157,7 @@ def _filtered_scope_queryset(
     *,
     scope_mode: str = "department",
     station: Station | None = None,
+    station_invalid: bool = False,
 ):
     """Filter scope rows before pagination without materializing every row.
 
@@ -168,7 +169,11 @@ def _filtered_scope_queryset(
     if scope_mode == "department":
         queryset = queryset.filter(station__isnull=True)
     elif scope_mode == "station":
-        queryset = queryset.filter(station=station) if station else queryset.none()
+        if station_invalid:
+            return queryset.none()
+        queryset = (
+            queryset.filter(station=station) if station else queryset.filter(station__isnull=False)
+        )
     if not selected_filter:
         return queryset
 
@@ -261,7 +266,11 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
             ).first()
             station_invalid = station is None
     queryset = _filtered_scope_queryset(
-        department, selected_filter, scope_mode=scope_mode, station=station
+        department,
+        selected_filter,
+        scope_mode=scope_mode,
+        station=station,
+        station_invalid=station_invalid,
     )
     paginator = Paginator(queryset, SCOPE_PAGE_SIZE)
     page = paginator.get_page(request.GET.get("page"))
@@ -270,6 +279,8 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
     page_query["scope"] = scope_mode
     if station:
         page_query["station_id"] = str(station.id)
+    elif station_invalid:
+        page_query["station_id"] = request.GET["station_id"][:255]
     if selected_filter:
         page_query["state"] = selected_filter
     clear_query = page_query.copy()
@@ -283,9 +294,16 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
     has_scopes = bool(rows) or (
         bool(selected_filter)
         and _filtered_scope_queryset(
-            department, "", scope_mode=scope_mode, station=station
+            department, "", scope_mode=scope_mode, station=station, station_invalid=station_invalid
         ).exists()
     )
+    scope_queries = {}
+    for mode in ("department", "station", "all"):
+        query = QueryDict(mutable=True)
+        query["scope"] = mode
+        if selected_filter:
+            query["state"] = selected_filter
+        scope_queries[mode] = query.urlencode()
     system_scopes = DatasetScopeState.objects.filter(
         scope_type=DatasetScopeState.ScopeType.SYSTEM,
         current_published_publication__isnull=False,
@@ -300,6 +318,8 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
         "total_count": paginator.count,
         "selected_filter": selected_filter,
         "scope_mode": scope_mode,
+        "scope_queries": scope_queries,
+        "station_value": page_query.get("station_id", ""),
         "selected_station": station,
         "station_invalid": station_invalid,
         "station_query": station_query,
