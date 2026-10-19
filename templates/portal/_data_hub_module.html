@@ -10,7 +10,7 @@
 {% elif module.id == "department_fire_plans" %}
   {% include "portal/_data_hub_card.html" with name="Fire Plans" description="Current operational fire-plan PDFs and their canonical metadata." icon="building" count_label="Active plans" %}
 {% elif module.id == "department_klgv_plans" %}
-  {% include "portal/_data_hub_card.html" with name="KLGV Plans" description="Optional Kleingartenverein / allotment-garden operational plans." icon="garden" count_label="Active plans" %}
+  {% include "portal/_data_hub_card.html" with name="KLGV Plans" description="Kleingartenverein plans." icon="garden" count_label="Active plans" %}
 {% elif module.id == "system_vehicle_rescue_guides" %}
   {% include "portal/_data_hub_card.html" with name="Vehicle Rescue Guides" description="System-managed Euro RESCUE web application configuration." icon="vehicle" count_label="" status="Enabled" status_css="success" %}
 {% elif module.id == "system_outbound_email" %}
