@@ -92,7 +92,9 @@ def test_publication_attention_is_bounded_without_detailed_rows_or_source_rebuil
         [
             DatasetScopeState(
                 scope_type="STATION",
-                department=department, station=station, dataset_type_code="station_personnel"
+                department=department,
+                station=station,
+                dataset_type_code="station_personnel",
             )
             for station in stations
         ]

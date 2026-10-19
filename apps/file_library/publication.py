@@ -1,6 +1,7 @@
 """File-library adapter for the standard publication lifecycle."""
 
 import uuid
+from typing import Any, cast
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -60,8 +61,8 @@ def source_payload(*, department, station):
                 "id": str(e.id),
                 "name": e.name,
                 "folder_id": str(e.parent_id) if e.parent_id else None,
-                "size_bytes": e.content.size_bytes,
-                "sha256": e.content.sha256,
+                "size_bytes": cast(Content, e.content).size_bytes,
+                "sha256": cast(Content, e.content).sha256,
                 "content_id": str(e.content_id),
             }
             for e in entries
@@ -222,11 +223,11 @@ def initialize_missing_libraries():
         existing = DatasetScopeState.objects.filter(dataset_type_code=code).values_list(
             field + "_id", flat=True
         )
-        active = (
+        active: dict[str, Any] = (
             {"status": "ACTIVE"}
             if model == Department
             else {"active": True, "department__status": "ACTIVE"}
         )
         for owner in model.objects.filter(**active).exclude(pk__in=existing):
-            library, _ = Library.objects.get_or_create(**{field: owner})
+            library, _ = Library.objects.get_or_create(**cast(dict[str, Any], {field: owner}))
             initialize_library(library)

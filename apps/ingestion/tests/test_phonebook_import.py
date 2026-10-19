@@ -253,12 +253,20 @@ def test_phonebook_review_scope_reasons_and_progress_are_resolved_and_stable(cli
         department,
         [
             {
-                "first_name": "Sven", "last_name": "Kasch", "organization_unit": "Bereichsführung",
-                "function": "Duty", "phone_number": "0175 265 7194", "scope": "F2921",
+                "first_name": "Sven",
+                "last_name": "Kasch",
+                "organization_unit": "Bereichsführung",
+                "function": "Duty",
+                "phone_number": "0175 265 7194",
+                "scope": "F2921",
             },
             {
-                "first_name": "Sven", "last_name": "Kasch", "organization_unit": "Bereichsführung",
-                "function": "Duty", "phone_number": "0175 265 7194", "scope": "department",
+                "first_name": "Sven",
+                "last_name": "Kasch",
+                "organization_unit": "Bereichsführung",
+                "function": "Duty",
+                "phone_number": "0175 265 7194",
+                "scope": "department",
             },
         ],
     )

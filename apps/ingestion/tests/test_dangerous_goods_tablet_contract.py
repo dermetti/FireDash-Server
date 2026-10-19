@@ -287,12 +287,21 @@ def test_tablet_receives_required_dangerous_goods_through_generic_encrypted_life
             department=department, actor=actor, private_key=private_key
         )
         assert request_manifest(installation=installation).unavailable
-        assert process_next_signed_manifest().status == SignedManifest.Status.PENDING
-        assert process_next_dataset_key_grant().status.name == "READY"
-        assert process_next_signed_manifest().status == SignedManifest.Status.READY
+        pending_manifest = process_next_signed_manifest()
+        assert pending_manifest is not None
+        assert pending_manifest.status == SignedManifest.Status.PENDING
+        ready_grant = process_next_dataset_key_grant()
+        assert ready_grant is not None
+        assert ready_grant.status == "READY"
+        ready_manifest = process_next_signed_manifest()
+        assert ready_manifest is not None
+        assert ready_manifest.status == SignedManifest.Status.READY
 
         client = Client()
-        manifest_response = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+        manifest_response = client.get(
+            "/api/v1/tablet/manifest",
+            HTTP_AUTHORIZATION=_authorization(credential)["HTTP_AUTHORIZATION"],
+        )
         assert manifest_response.status_code == 200
         manifest = manifest_response.json()
         unsigned = {key: value for key, value in manifest.items() if key != "signature"}
@@ -316,7 +325,7 @@ def test_tablet_receives_required_dangerous_goods_through_generic_encrypted_life
         response = client.get(
             entry["download_url"],
             HTTP_ACCEPT="application/octet-stream",
-            **_authorization(credential),
+            HTTP_AUTHORIZATION=_authorization(credential)["HTTP_AUTHORIZATION"],
         )
         assert response.status_code == 200
         assert (
@@ -325,6 +334,9 @@ def test_tablet_receives_required_dangerous_goods_through_generic_encrypted_life
         )
         ciphertext = (tmp_path / "artifacts" / publication.artifact_path).read_bytes()
         assert hashlib.sha256(ciphertext).hexdigest() == entry["ciphertext_sha256"]
+        assert publication.artifact_signature is not None
+        assert publication.artifact_wrapped_cek is not None
+        assert publication.artifact_nonce is not None
         Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key().verify(
             bytes(publication.artifact_signature),
             _signature_payload(
@@ -368,6 +380,11 @@ def test_tablet_receives_required_dangerous_goods_through_generic_encrypted_life
             private_key=ec.generate_private_key(ec.SECP256R1()),
         )
         assert request_manifest(installation=other_installation).unavailable
-        assert process_next_signed_manifest().status == SignedManifest.Status.READY
-        denied = client.get(entry["download_url"], **_authorization(other_credential))
+        other_manifest = process_next_signed_manifest()
+        assert other_manifest is not None
+        assert other_manifest.status == SignedManifest.Status.READY
+        denied = client.get(
+            entry["download_url"],
+            HTTP_AUTHORIZATION=_authorization(other_credential)["HTTP_AUTHORIZATION"],
+        )
         assert denied.status_code == 404

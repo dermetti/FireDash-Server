@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -277,19 +277,23 @@ def set_department_tablet_asset_number_policy(
     # field.  Allocation separately verifies that future numeric growth still fits.
     from apps.tablets.models import Tablet
 
-    asset_number_max_length = Tablet._meta.get_field("asset_number").max_length
+    asset_number_max_length = cast(int, Tablet._meta.get_field("asset_number").max_length)
     if len(prefix) + width > asset_number_max_length:
         raise ValueError(
             "The prefix and number width must fit within the Tablet asset-number length."
         )
 
     department = Department.objects.select_for_update().get(pk=department.pk)
-    old_values = {
+    old_values: dict[str, str | int | bool | None] = {
         "auto_enabled": department.tablet_asset_number_auto_enabled,
         "prefix": department.tablet_asset_number_prefix,
         "width": department.tablet_asset_number_width,
     }
-    new_values = {"auto_enabled": auto_enabled, "prefix": prefix, "width": width}
+    new_values: dict[str, str | int | bool | None] = {
+        "auto_enabled": auto_enabled,
+        "prefix": prefix,
+        "width": width,
+    }
     if old_values == new_values:
         return department
     department.tablet_asset_number_auto_enabled = auto_enabled

@@ -14,19 +14,51 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="TabletReportDeliveryRequest",
             fields=[
-                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4, editable=False, primary_key=True, serialize=False
+                    ),
+                ),
                 ("delivery_request_id", models.UUIDField()),
                 ("recipient_personnel_id", models.UUIDField()),
-                ("state", models.CharField(choices=[("PROCESSING", "Processing"), ("SUCCESS", "Success"), ("FAILED", "Failed"), ("UNKNOWN", "Unknown")], default="PROCESSING", max_length=16)),
+                (
+                    "state",
+                    models.CharField(
+                        choices=[
+                            ("PROCESSING", "Processing"),
+                            ("SUCCESS", "Success"),
+                            ("FAILED", "Failed"),
+                            ("UNKNOWN", "Unknown"),
+                        ],
+                        default="PROCESSING",
+                        max_length=16,
+                    ),
+                ),
                 ("result_code", models.CharField(blank=True, default="", max_length=64)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("completed_at", models.DateTimeField(blank=True, null=True)),
-                ("department", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to="organizations.department")),
-                ("installation", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="report_delivery_requests", to="tablets.appinstallation")),
+                (
+                    "department",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT, to="organizations.department"
+                    ),
+                ),
+                (
+                    "installation",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="report_delivery_requests",
+                        to="tablets.appinstallation",
+                    ),
+                ),
             ],
         ),
         migrations.AddConstraint(
             model_name="tabletreportdeliveryrequest",
-            constraint=models.UniqueConstraint(fields=("installation", "delivery_request_id"), name="unique_tablet_report_delivery_request"),
+            constraint=models.UniqueConstraint(
+                fields=("installation", "delivery_request_id"),
+                name="unique_tablet_report_delivery_request",
+            ),
         ),
     ]

@@ -11,8 +11,12 @@ def test_system_scope_has_no_tenant_owner_and_is_explicitly_canonical():
     scope.full_clean()
     scope.save()
     publication = DatasetPublication(
-        scope_type="SYSTEM", dataset_type_code="test_system_dataset", scope_state=scope,
-        version_number=1, schema_version=1, source_revision=1,
+        scope_type="SYSTEM",
+        dataset_type_code="test_system_dataset",
+        scope_state=scope,
+        version_number=1,
+        schema_version=1,
+        source_revision=1,
     )
     publication.full_clean(
         exclude={"created_by", "published_by", "build_summary", "change_summary"}

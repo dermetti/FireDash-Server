@@ -130,6 +130,8 @@ class _PinnedSMTP(smtplib.SMTP):
 
 
 class _PinnedSMTPSSL(smtplib.SMTP_SSL):
+    _host: str  # Set by smtplib.SMTP.__init__; omitted from typeshed.
+
     def __init__(self, host, port, *, pinned_addresses: tuple[str, ...], **kwargs) -> None:
         self._pinned_addresses = pinned_addresses
         super().__init__(host, port, **kwargs)

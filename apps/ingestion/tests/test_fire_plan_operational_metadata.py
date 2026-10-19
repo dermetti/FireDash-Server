@@ -3,8 +3,8 @@ import zipfile
 
 import pytest
 
-from apps.ingestion.pdf_packages import FIRE_PLAN_MANIFEST_NAME, parse_pdf_package
 from apps.ingestion.parsers import ImportValidationError
+from apps.ingestion.pdf_packages import FIRE_PLAN_MANIFEST_NAME, parse_pdf_package
 
 
 def _package(manifest: str) -> bytes:

@@ -1,4 +1,5 @@
 import uuid
+from typing import cast
 
 from django.conf import settings
 from django.contrib.gis.db import models
@@ -74,7 +75,7 @@ class PhonebookEntry(models.Model):
             raise ValidationError(
                 {"organization_unit": "Provide a complete name or an organization unit."}
             )
-        if self.station_id and self.station.department_id != self.department_id:
+        if self.station_id and cast(Station, self.station).department_id != self.department_id:
             raise ValidationError({"station": "Station must belong to the selected department."})
 
     @property
@@ -83,7 +84,7 @@ class PhonebookEntry(models.Model):
 
     @property
     def scope_label(self) -> str:
-        return self.station.name if self.station_id else "Department"
+        return cast(Station, self.station).name if self.station_id else "Department"
 
 
 class PhonebookDuplicateDecision(models.Model):

@@ -122,6 +122,7 @@ def outbound_mail_secret_rotation_status() -> OutboundMailSecretRotationStatus:
 
 
 def _secret_value(reference: _SecretReference) -> str:
+    configuration: SystemMailConfiguration | DepartmentMailConfiguration | None
     if reference.kind.startswith("system_"):
         configuration = SystemMailConfiguration.objects.filter(pk=reference.object_id).first()
     else:
@@ -130,6 +131,7 @@ def _secret_value(reference: _SecretReference) -> str:
 
 
 def _locked_secret_value(reference: _SecretReference):
+    configuration: SystemMailConfiguration | DepartmentMailConfiguration | None
     if reference.kind.startswith("system_"):
         configuration = (
             SystemMailConfiguration.objects.select_for_update()

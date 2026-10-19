@@ -6,6 +6,7 @@ import ipaddress
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from typing import cast
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -39,7 +40,8 @@ from apps.outbound_mail.runtime import (
 )
 
 BREVO_API_KEY_CONTEXT = "outbound-mail:api:brevo"
-SMTP_PASSWORD_CONTEXT = "outbound-mail:smtp:password"
+# Encryption context, not a secret.
+SMTP_PASSWORD_CONTEXT = "outbound-mail:smtp:password"  # nosec B105
 _DOMAIN_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
@@ -108,7 +110,7 @@ def get_system_mail_configuration() -> SystemMailConfigurationState:
         brevo_sender_email=configuration.brevo_sender_email,
         brevo_api_key_configured=configuration.brevo_api_key_configured,
         smtp_host=configuration.smtp_host,
-        smtp_port=configuration.smtp_port,
+        smtp_port=cast(int, configuration.smtp_port),
         smtp_tls_mode=configuration.smtp_tls_mode,
         smtp_sender_name=configuration.smtp_sender_name,
         smtp_sender_email=configuration.smtp_sender_email,
@@ -130,7 +132,11 @@ def _locked_configuration() -> SystemMailConfiguration:
 
 
 def _audit(
-    *, actor, action: str, configuration: SystemMailConfiguration, metadata: dict[str, str | bool]
+    *,
+    actor,
+    action: str,
+    configuration: SystemMailConfiguration,
+    metadata: dict[str, str | int | bool | None],
 ) -> None:
     record_event(
         action=action,
@@ -410,7 +416,8 @@ def clear_smtp_credentials(*, actor) -> SystemMailConfiguration:
     require_system_admin(actor)
     configuration = _locked_configuration()
     configuration.smtp_username = ""
-    configuration.smtp_password_encrypted = ""
+    # Absence/clearing of credentials.
+    configuration.smtp_password_encrypted = ""  # nosec B105
     configuration.updated_by = actor
     _invalidate_verification(configuration)
     configuration.save(
@@ -516,7 +523,7 @@ def get_department_mail_configuration(
     return DepartmentMailConfigurationState(
         delivery_mode=configuration.delivery_mode,
         smtp_host=configuration.smtp_host,
-        smtp_port=configuration.smtp_port,
+        smtp_port=cast(int, configuration.smtp_port),
         smtp_tls_mode=configuration.smtp_tls_mode,
         smtp_sender_name=configuration.smtp_sender_name,
         smtp_sender_email=configuration.smtp_sender_email,
@@ -535,7 +542,12 @@ def _locked_department_configuration(*, department: Department) -> DepartmentMai
 
 
 def _audit_department_configuration(
-    *, actor, action: str, configuration, metadata: dict, revoke_access=True
+    *,
+    actor,
+    action: str,
+    configuration,
+    metadata: dict[str, str | int | bool | None],
+    revoke_access=True,
 ) -> None:
     record_event(
         action=action,
@@ -647,7 +659,8 @@ def clear_department_smtp_credentials(
     if not configuration.smtp_username and not configuration.smtp_password_encrypted:
         return configuration
     configuration.smtp_username = ""
-    configuration.smtp_password_encrypted = ""
+    # Absence/clearing of credentials.
+    configuration.smtp_password_encrypted = ""  # nosec B105
     configuration.updated_by = actor
     _invalidate_department_smtp_verification(configuration)
     configuration.save(
@@ -694,7 +707,8 @@ def verify_department_smtp_configuration(
         configuration.validate_smtp_configuration()
         if bool(configuration.smtp_username) != bool(configuration.smtp_password_encrypted):
             raise ValueError
-        password = ""
+        # Absence/clearing of credentials.
+        password = ""  # nosec B105
         if configuration.smtp_username:
             password = decrypt_application_secret(
                 configuration.smtp_password_encrypted,
@@ -707,7 +721,7 @@ def verify_department_smtp_configuration(
         provider = SmtpProvider(
             configuration=SmtpEffectiveConfiguration(
                 host=configuration.smtp_host,
-                port=configuration.smtp_port,
+                port=cast(int, configuration.smtp_port),
                 tls_mode=configuration.smtp_tls_mode,
                 sender_name=configuration.smtp_sender_name,
                 sender_email=configuration.smtp_sender_email,

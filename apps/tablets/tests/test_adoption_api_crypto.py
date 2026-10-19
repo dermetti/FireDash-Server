@@ -211,9 +211,7 @@ def test_completion_replay_rotates_only_the_original_installation_and_rejects_ne
     # server-completed adoption.  It must not be mistaken for recovery.
     _, replacement_token = create_adoption_invitation(actor=ctx.user, tablet=ctx.tablet)
     replacement_preview = preview(replacement_token)
-    replacement_request = AdoptionRequest.objects.get(
-        pk=replacement_preview["adoption_request_id"]
-    )
+    replacement_request = AdoptionRequest.objects.get(pk=replacement_preview["adoption_request_id"])
     invalid_retry = client.post(
         ADOPTION_COMPLETE,
         data=json.dumps(

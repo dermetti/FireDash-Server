@@ -1,6 +1,7 @@
 import uuid
 from datetime import timedelta
 from functools import wraps
+from typing import cast
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -412,7 +413,9 @@ def delete_entry(*, actor, library_id, entry_id):
         frontier = list(Entry.objects.filter(parent_id__in=frontier).values_list("id", flat=True))
         ids.extend(frontier)
     items = list(Entry.objects.filter(pk__in=ids).select_related("content"))
-    library.usage_bytes -= sum(item.content.size_bytes for item in items if item.content_id)
+    library.usage_bytes -= sum(
+        cast(Content, item.content).size_bytes for item in items if item.content_id
+    )
     # Snapshot the complete post-deletion source, preserving the audit identity.
     target_id = entry.id
     entry.delete()
@@ -564,7 +567,7 @@ def set_library_quota(*, actor, library_id, quota_bytes):
         # Lock only the library row. PostgreSQL rejects FOR UPDATE across the
         # nullable side of the department/station scope joins.
         library = Library.objects.select_for_update().get(pk=library_id)
-        department = library.department or library.station.department
+        department = library.department or cast(Station, library.station).department
         from apps.authorization.services import require_department_admin
 
         require_department_admin(actor, department)

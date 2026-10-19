@@ -1,3 +1,4 @@
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 # ruff: noqa: E501
@@ -139,9 +140,7 @@ class FileLibraryQuotaForm(forms.Form):
         min_value=0,
         max_value=settings.FILE_LIBRARY_MAX_QUOTA_BYTES,
         label="Quota (bytes)",
-        widget=forms.NumberInput(
-            attrs={"class": "form-control", "min": 0, "step": 1}
-        ),
+        widget=forms.NumberInput(attrs={"class": "form-control", "min": 0, "step": 1}),
     )
 
 
@@ -186,7 +185,7 @@ class DepartmentTabletAssetNumberPolicyForm(forms.Form):
         label="Automatically generate asset numbers",
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
     )
-    prefix = forms.CharField(
+    prefix = forms.CharField(  # type: ignore[assignment]  # Declarative form field, collected by Django.
         max_length=128,
         required=False,
         label="Prefix",
@@ -203,7 +202,7 @@ class DepartmentTabletAssetNumberPolicyForm(forms.Form):
         return self.cleaned_data["prefix"].strip()
 
     def clean(self):
-        cleaned_data = super().clean()
+        cleaned_data = cast(dict[str, Any], super().clean())
         prefix = cleaned_data.get("prefix", "")
         width = cleaned_data.get("width")
         if width is not None:
@@ -271,12 +270,12 @@ class SystemMailDeliveryModeForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["api_provider"].choices = [
+        cast(forms.ChoiceField, self.fields["api_provider"]).choices = [
             (provider, provider.replace("_", " ").title()) for provider in API_PROVIDER_REGISTRY
         ]
 
     def clean(self):
-        cleaned_data = super().clean()
+        cleaned_data = cast(dict[str, Any], super().clean())
         if cleaned_data.get(
             "delivery_mode"
         ) == SystemMailConfiguration.DeliveryMode.API and not cleaned_data.get("api_provider"):
@@ -404,24 +403,72 @@ class DepartmentRecipientPolicyForm(forms.Form):
 
 class DepartmentOutboundEmailSettingsForm(forms.Form):
     delivery_mode = DepartmentMailDeliveryModeForm.base_fields["delivery_mode"]
-    host = forms.CharField(required=False, max_length=255, label="Host", widget=forms.TextInput(attrs={"class": "form-control"}))
-    port = forms.IntegerField(required=False, min_value=1, max_value=65535, label="Port", widget=forms.NumberInput(attrs={"class": "form-control"}))
-    tls_mode = forms.ChoiceField(required=False, choices=(("", "Select TLS mode"), *SystemMailConfiguration.SmtpTlsMode.choices), label="TLS mode", widget=forms.Select(attrs={"class": "form-select"}))
-    sender_name = forms.CharField(required=False, max_length=255, label="Sender name", widget=forms.TextInput(attrs={"class": "form-control"}))
-    sender_email = forms.EmailField(required=False, max_length=254, label="Sender email", widget=forms.EmailInput(attrs={"class": "form-control"}))
-    username = forms.CharField(required=False, max_length=255, label="Username", widget=forms.TextInput(attrs={"class": "form-control"}))
-    password = forms.CharField(required=False, label="Password", widget=forms.PasswordInput(attrs={"class": "form-control", "autocomplete": "new-password"}, render_value=False))
-    approved_domains = forms.CharField(required=False, label="Approved recipient domains", help_text="One exact domain per line, for example feuerwehr.hamburg.de. Do not include @; subdomains are not included.", widget=forms.Textarea(attrs={"class": "form-control", "rows": 4, "spellcheck": "false"}))
+    host = forms.CharField(
+        required=False,
+        max_length=255,
+        label="Host",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    port = forms.IntegerField(
+        required=False,
+        min_value=1,
+        max_value=65535,
+        label="Port",
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+    tls_mode = forms.ChoiceField(
+        required=False,
+        choices=(("", "Select TLS mode"), *SystemMailConfiguration.SmtpTlsMode.choices),
+        label="TLS mode",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    sender_name = forms.CharField(
+        required=False,
+        max_length=255,
+        label="Sender name",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    sender_email = forms.EmailField(
+        required=False,
+        max_length=254,
+        label="Sender email",
+        widget=forms.EmailInput(attrs={"class": "form-control"}),
+    )
+    username = forms.CharField(
+        required=False,
+        max_length=255,
+        label="Username",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    password = forms.CharField(
+        required=False,
+        label="Password",
+        widget=forms.PasswordInput(
+            attrs={"class": "form-control", "autocomplete": "new-password"}, render_value=False
+        ),
+    )
+    approved_domains = forms.CharField(
+        required=False,
+        label="Approved recipient domains",
+        help_text="One exact domain per line, for example feuerwehr.hamburg.de. Do not include @; subdomains are not included.",
+        widget=forms.Textarea(attrs={"class": "form-control", "rows": 4, "spellcheck": "false"}),
+    )
 
     def clean_approved_domains(self):
         return [value for value in self.cleaned_data["approved_domains"].splitlines() if value]
 
     def clean(self):
-        cleaned = super().clean()
+        cleaned = cast(dict[str, Any], super().clean())
         if cleaned.get("delivery_mode") == "CUSTOM_SMTP":
             for name in ("host", "port", "tls_mode", "sender_name", "sender_email"):
                 if not cleaned.get(name):
                     self.add_error(name, "This field is required for Own SMTP server.")
-            if cleaned.get("username") and not cleaned.get("password") and not self.initial.get("smtp_password_configured"):
-                self.add_error("password", "A password is required when configuring SMTP authentication.")
+            if (
+                cleaned.get("username")
+                and not cleaned.get("password")
+                and not self.initial.get("smtp_password_configured")
+            ):
+                self.add_error(
+                    "password", "A password is required when configuring SMTP authentication."
+                )
         return cleaned

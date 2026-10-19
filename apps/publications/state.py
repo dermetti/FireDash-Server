@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
+from uuid import UUID
 
 from django.db.models import BooleanField, Case, Value, When
 from django.utils import timezone
@@ -220,9 +221,9 @@ def _state_publications_and_jobs(
 def _scope_state_inputs(
     *,
     scope: DatasetScopeState,
-    latest_by_scope: dict,
-    active_jobs: dict,
-    linked_publications: dict,
+    latest_by_scope: dict[UUID, DatasetPublication],
+    active_jobs: dict[UUID, PublicationJob],
+    linked_publications: dict[UUID | None, DatasetPublication],
 ):
     """Return the compact values shared by detailed and aggregate state paths."""
     latest = latest_by_scope.get(scope.id)

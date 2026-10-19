@@ -4,6 +4,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from types import SimpleNamespace
+from typing import cast
 
 import pikepdf
 import pytest
@@ -358,7 +359,7 @@ def test_replacement_quota_and_audit_failure_preserve_old_content(scope, pdf_pip
 def test_additional_ingestion_failures(scope, pdf_pipeline, monkeypatch, settings, kind):
     library = library_for(scope)
     upload = pdf()
-    expected = (PdfValidationError,)
+    expected: tuple[type[Exception], ...] = (PdfValidationError,)
     if kind == "mime":
         monkeypatch.setitem(
             sys.modules, "magic", SimpleNamespace(from_file=lambda *a, **kw: "text/plain")
@@ -463,7 +464,7 @@ def test_shared_content_retained_until_last_reference_and_commit(
 def test_database_depth_content_namespace_and_revision_guards(scope, pdf_pipeline):
     library = library_for(scope)
     common = {"actor": scope[0], "library_id": library.id}
-    folders = []
+    folders: list[Entry] = []
     for index in range(5):
         folders.append(
             services.create_folder(
@@ -532,7 +533,9 @@ def test_concurrent_capacity_changes(scope, pdf_pipeline, monkeypatch, race):
         results = sorted(pool.map(mutate, range(2)))
     assert results == (["ok", "quota"] if race == "replacements" else ["ok", "ok"])
     library.refresh_from_db()
-    actual = sum(entry.content.size_bytes for entry in Entry.objects.select_related("content"))
+    actual = sum(
+        cast(Content, entry.content).size_bytes for entry in Entry.objects.select_related("content")
+    )
     assert library.usage_bytes == actual <= library.quota_bytes
     assert library.source_revision == (3 if race == "replacements" else 4)
 

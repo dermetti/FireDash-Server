@@ -72,7 +72,7 @@ def _b64decode(value: str) -> bytes:
         raise ApplicationSecretError("malformed_envelope")
     try:
         return base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
-    except (ValueError, binascii.Error):  # type: ignore[name-defined]
+    except (ValueError, binascii.Error):
         raise ApplicationSecretError("malformed_envelope") from None
 
 

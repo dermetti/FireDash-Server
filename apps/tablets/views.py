@@ -324,9 +324,7 @@ def tablet_detail(request: HttpRequest, department_id, tablet_id) -> HttpRespons
             and current_installation.status == AppInstallation.Status.STALE
         ),
         "storage_percentage": (
-            current_installation.free_storage_bytes
-            * 100
-            / current_installation.total_storage_bytes
+            current_installation.free_storage_bytes * 100 / current_installation.total_storage_bytes
             if current_installation is not None
             and current_installation.free_storage_bytes is not None
             and current_installation.total_storage_bytes
@@ -643,7 +641,8 @@ def _asset_action(
             require_recent_reauthentication(request, return_url=_with_next(request.path, next_url))
         try:
             if needs_reason:
-                assert form is not None
+                # Form construction invariant; validated above.
+                assert form is not None  # nosec B101
                 service(actor=request.user, tablet=tablet, reason=form.cleaned_data["reason"])
             else:
                 service(actor=request.user, tablet=tablet)

@@ -19,9 +19,9 @@ from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEnt
 logger = logging.getLogger(__name__)
 
 MAX_HYDRANT_STATUS_BUCKETS = 50
-BUILDERS: dict[str, Callable[..., dict[str, object]]] = {}
+BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {}
 ARTIFACT_BUILDERS: dict[str, Callable[..., bytes]] = {}
-SOURCE_BUILDERS: dict[str, Callable[..., dict[str, object]]] = {}
+SOURCE_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {}
 VALIDATORS: dict[str, Callable[..., None]] = {}
 
 
@@ -42,7 +42,7 @@ def source_fingerprint(*, definition: DatasetTypeDefinition, department, station
     )
 
 
-def source_fingerprint_for_payload(payload: dict[str, object]) -> str:
+def source_fingerprint_for_payload(payload: dict[str, Any]) -> str:
     if set(payload) == {"_exact_source_sha256"} and isinstance(
         payload["_exact_source_sha256"], str
     ):
@@ -52,7 +52,7 @@ def source_fingerprint_for_payload(payload: dict[str, object]) -> str:
 
 def build_source_payload(
     *, definition: DatasetTypeDefinition, department, station
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Build deterministic publishable source content without volatile fields."""
     try:
         builder = SOURCE_BUILDERS[definition.builder_service]
@@ -63,7 +63,7 @@ def build_source_payload(
 
 def build_summary(
     *, definition: DatasetTypeDefinition, department, station, source_revision: int
-) -> dict[str, object]:
+) -> dict[str, Any]:
     try:
         summary = BUILDERS[definition.builder_service](
             department=department,
@@ -106,7 +106,7 @@ def validate_summary(*, definition: DatasetTypeDefinition, summary: Any) -> None
                 raise PublicationBuildError("Builder summary exceeds the configured item limit.")
 
 
-def _build_hydrants(*, department, station, source_revision: int) -> dict[str, object]:
+def _build_hydrants(*, department, station, source_revision: int) -> dict[str, Any]:
     if station is not None:
         raise PublicationBuildError("Hydrant builder requires a department scope.")
     status_rows = list(
@@ -124,7 +124,7 @@ def _build_hydrants(*, department, station, source_revision: int) -> dict[str, o
     }
 
 
-def _build_fire_plans(*, department, station, source_revision: int) -> dict[str, object]:
+def _build_fire_plans(*, department, station, source_revision: int) -> dict[str, Any]:
     if station is not None:
         raise PublicationBuildError("Fire-plan builder requires a department scope.")
     aggregates = FirePlan.objects.filter(department=department, active=True).aggregate(
@@ -140,7 +140,7 @@ def _build_fire_plans(*, department, station, source_revision: int) -> dict[str,
     }
 
 
-def _build_personnel(*, department, station, source_revision: int) -> dict[str, object]:
+def _build_personnel(*, department, station, source_revision: int) -> dict[str, Any]:
     if station is None or station.department_id != department.id:
         raise PublicationBuildError("Personnel builder requires a station in the department.")
     # This mirrors the current personnel visibility predicate for active assignments.
@@ -172,7 +172,7 @@ def _build_personnel(*, department, station, source_revision: int) -> dict[str, 
     }
 
 
-def _build_klgv_plans(*, department, station, source_revision: int) -> dict[str, object]:
+def _build_klgv_plans(*, department, station, source_revision: int) -> dict[str, Any]:
     if station is not None:
         raise PublicationBuildError("KLGV plan builder requires a department scope.")
     aggregates = KlgvPlan.objects.filter(department=department, active=True).aggregate(
@@ -188,7 +188,7 @@ def _build_klgv_plans(*, department, station, source_revision: int) -> dict[str,
     }
 
 
-def _build_phonebook(*, department, station, source_revision: int) -> dict[str, object]:
+def _build_phonebook(*, department, station, source_revision: int) -> dict[str, Any]:
     entries = _phonebook_source_payload(department=department, station=station)["entries"]
     return {"entry_count": len(entries), "source_revision": source_revision}
 
@@ -347,7 +347,7 @@ for _code in ("department_files", "station_files"):
     BUILDERS[_code] = _file_library_summary
 
 
-def _hydrant_source_payload(*, department, station) -> dict[str, object]:
+def _hydrant_source_payload(*, department, station) -> dict[str, Any]:
     if station is not None:
         raise PublicationBuildError("Hydrant source requires a department scope.")
     features = []
@@ -374,7 +374,7 @@ def _hydrant_source_payload(*, department, station) -> dict[str, object]:
     return {"type": "FeatureCollection", "features": features, "schema_version": 1}
 
 
-def _personnel_source_payload(*, department, station) -> dict[str, object]:
+def _personnel_source_payload(*, department, station) -> dict[str, Any]:
     if station is None or station.department_id != department.id:
         raise PublicationBuildError("Personnel source requires a station in the department.")
     now = timezone.now()
@@ -408,7 +408,7 @@ def _personnel_source_payload(*, department, station) -> dict[str, object]:
     }
 
 
-def _fire_plan_source_manifest(*, department, station) -> list[dict[str, object]]:
+def _fire_plan_source_manifest(*, department, station) -> list[dict[str, Any]]:
     if station is not None:
         raise PublicationBuildError("Fire-plan source requires a department scope.")
     return [
@@ -432,11 +432,11 @@ def _fire_plan_source_manifest(*, department, station) -> list[dict[str, object]
     ]
 
 
-def _fire_plan_source_payload(*, department, station) -> dict[str, object]:
+def _fire_plan_source_payload(*, department, station) -> dict[str, Any]:
     return {"fire_plans": _fire_plan_source_manifest(department=department, station=station)}
 
 
-def _klgv_source_manifest(*, department, station) -> list[dict[str, object]]:
+def _klgv_source_manifest(*, department, station) -> list[dict[str, Any]]:
     if station is not None:
         raise PublicationBuildError("KLGV plan source requires a department scope.")
     return [
@@ -456,11 +456,11 @@ def _klgv_source_manifest(*, department, station) -> list[dict[str, object]]:
     ]
 
 
-def _klgv_source_payload(*, department, station) -> dict[str, object]:
+def _klgv_source_payload(*, department, station) -> dict[str, Any]:
     return {"klgv_plans": _klgv_source_manifest(department=department, station=station)}
 
 
-def _phonebook_source_payload(*, department, station) -> dict[str, object]:
+def _phonebook_source_payload(*, department, station) -> dict[str, Any]:
     if station is not None and station.department_id != department.id:
         raise PublicationBuildError("Phonebook source requires a station in the department.")
     entries = PhonebookEntry.objects.filter(department=department)
@@ -491,7 +491,7 @@ def _artifact_phonebook(
     return _json_bytes(payload | {"source_revision": source_revision})
 
 
-def _dangerous_goods_source_payload(*, department, station) -> dict[str, object]:
+def _dangerous_goods_source_payload(*, department, station) -> dict[str, Any]:
     if station is not None:
         raise PublicationBuildError("Dangerous-goods source requires a department scope.")
     source = (
@@ -525,7 +525,7 @@ def _dangerous_goods_source(
     return source
 
 
-def _build_dangerous_goods(*, department, station, source_revision: int) -> dict[str, object]:
+def _build_dangerous_goods(*, department, station, source_revision: int) -> dict[str, Any]:
     if station is not None:
         raise PublicationBuildError("Dangerous-goods builder requires a department scope.")
     source = DatasetSourceRevision.objects.filter(
@@ -594,7 +594,7 @@ def validate_built_summary(*, definition: DatasetTypeDefinition, summary: Any) -
 
 
 def build_change_summary(
-    *, definition: DatasetTypeDefinition, previous: object, current: dict[str, object]
+    *, definition: DatasetTypeDefinition, previous: object, current: dict[str, Any]
 ) -> dict[str, int]:
     previous_summary = previous if isinstance(previous, dict) else {}
     fields_by_type = {

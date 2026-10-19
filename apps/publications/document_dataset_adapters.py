@@ -1,14 +1,19 @@
 """Dataset-specific inputs for generic document-manifest-v2 generation."""
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+from uuid import UUID
 
 from apps.publications.builders import PublicationBuildError
 from apps.reference_data.models import KlgvPlan
 
+if TYPE_CHECKING:
+    from apps.file_library.publication import FileLibraryAdapter
+
 
 @dataclass(frozen=True)
 class FrozenDocument:
-    canonical_document_id: object
+    canonical_document_id: UUID | str
     sanitized_pdf_sha256: str
     metadata: dict[str, object]
     accepted_document_key: str
@@ -40,15 +45,16 @@ class DocumentDatasetAdapter:
             or len({document_id for document_id, _ in identities}) != len(identities)
         ):
             raise PublicationBuildError("Frozen document source is invalid.")
+        validated_identities = cast(list[tuple[str, str]], identities)
         plans = {
             str(plan.id): plan
             for plan in KlgvPlan.objects.filter(
                 department_id=publication.department_id,
-                id__in=[document_id for document_id, _ in identities],
+                id__in=[document_id for document_id, _ in validated_identities],
             )
         }
         if len(plans) != len(identities) or any(
-            plans[document_id].sha256 != digest for document_id, digest in identities
+            plans[document_id].sha256 != digest for document_id, digest in validated_identities
         ):
             raise PublicationBuildError(
                 "Accepted KLGV document hash does not match frozen metadata."
@@ -65,7 +71,7 @@ class DocumentDatasetAdapter:
                 },
                 accepted_document_key=plans[document_id].path,
             )
-            for document_id, digest in identities
+            for document_id, digest in validated_identities
         )
 
 
@@ -88,7 +94,9 @@ _KLGV_ADAPTER = DocumentDatasetAdapter(
 )
 
 
-def document_dataset_adapter(*, dataset_type_code: str) -> DocumentDatasetAdapter:
+def document_dataset_adapter(
+    *, dataset_type_code: str
+) -> "DocumentDatasetAdapter | FileLibraryAdapter":
     if dataset_type_code in {"department_files", "station_files"}:
         from apps.file_library.publication import FileLibraryAdapter
 

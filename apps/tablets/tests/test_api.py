@@ -196,8 +196,10 @@ def test_inactive_tablet_syncs_signed_empty_manifest_and_reactivates_same_instal
 
     # Inactive check-in is a contact/control operation, not an operational renewal.
     check_in = client.post(
-        "/api/v1/tablet/check-in", _storage(), content_type="application/json",
-        **_authorization(credential)
+        "/api/v1/tablet/check-in",
+        _storage(),
+        content_type="application/json",
+        **_authorization(credential),
     )
     assert check_in.status_code == 200
     installation.refresh_from_db()
@@ -361,7 +363,7 @@ def test_current_document_generation_is_discovered_without_a_v1_grant(api_contex
     assert document_entry == {
         "publication_id": str(current.id),
         "type": "department_fire_plans",
-            "scope": {"type": "DEPARTMENT", "department_id": str(department.id)},
+        "scope": {"type": "DEPARTMENT", "department_id": str(department.id)},
         "version": 7,
         "schema_version": 2,
         "required": True,
@@ -487,8 +489,10 @@ def test_check_in_does_not_renew_an_active_installation_with_more_than_48_hours_
     client, installation, credential, _ = api_context
     previous_expiry = installation.authorization_valid_until
     response = client.post(
-        "/api/v1/tablet/check-in", _storage(), content_type="application/json",
-        **_authorization(credential)
+        "/api/v1/tablet/check-in",
+        _storage(),
+        content_type="application/json",
+        **_authorization(credential),
     )
 
     installation.refresh_from_db()
@@ -546,8 +550,10 @@ def test_invalid_check_in_storage_does_not_persist_or_renew(api_context, payload
     )
 
     response = client.post(
-        "/api/v1/tablet/check-in", payload, content_type="application/json",
-        **_authorization(credential)
+        "/api/v1/tablet/check-in",
+        payload,
+        content_type="application/json",
+        **_authorization(credential),
     )
 
     installation.refresh_from_db()
@@ -623,8 +629,10 @@ def test_check_in_reports_upgrade_before_lease_renewal_but_accepts_new_version_t
     previous_expiry = installation.authorization_valid_until
 
     blocked = client.post(
-        "/api/v1/tablet/check-in", _storage(), content_type="application/json",
-        **_authorization(credential)
+        "/api/v1/tablet/check-in",
+        _storage(),
+        content_type="application/json",
+        **_authorization(credential),
     )
     installation.refresh_from_db()
     assert blocked.status_code == 426
@@ -799,8 +807,10 @@ def test_deactivated_tablet_keeps_identity_but_loses_operational_endpoint_access
 
     assert (
         client.post(
-            "/api/v1/tablet/check-in", _storage(), content_type="application/json",
-        **_authorization(credential)
+            "/api/v1/tablet/check-in",
+            _storage(),
+            content_type="application/json",
+            **_authorization(credential),
         ).status_code
         == 200
     )
@@ -912,8 +922,10 @@ def test_terminal_installations_only_retain_narrow_status_access(api_context, in
 
     assert (
         client.post(
-            "/api/v1/tablet/check-in", _storage(), content_type="application/json",
-        **_authorization(credential)
+            "/api/v1/tablet/check-in",
+            _storage(),
+            content_type="application/json",
+            **_authorization(credential),
         ).status_code
         == 403
     )

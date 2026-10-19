@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import TypedDict
+from uuid import UUID
 
 from django.conf import settings
 from django.db import transaction
@@ -56,7 +57,7 @@ def _retained_predecessor_ids() -> Iterable[object]:
     )
 
 
-def _candidate_ids(*, limit: int, now: datetime) -> list[object]:
+def _candidate_ids(*, limit: int, now: datetime) -> list[UUID]:
     """Fetch at most ``limit`` lightweight, potentially retainable rows."""
     protected_ids = _retained_predecessor_ids()
     superseded_ids = list(
@@ -125,7 +126,7 @@ def _live_job(*, scope: DatasetScopeState) -> PublicationJob | None:
 
 
 @transaction.atomic
-def _process_candidate(*, publication_id: object, now: datetime, dry_run: bool) -> str:
+def _process_candidate(*, publication_id: UUID, now: datetime, dry_run: bool) -> str:
     """Recheck and mutate one candidate under the established lock order."""
     preview = DatasetPublication.objects.filter(pk=publication_id).values("scope_state_id").first()
     if preview is None:

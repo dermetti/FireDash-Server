@@ -14,7 +14,11 @@ urlpatterns = [
         views.dangerous_goods_modal,
         name="ingestion-dangerous-goods-modal",
     ),
-    path("departments/<uuid:department_id>/dangerous-goods/inspect/", views.dangerous_goods_inspect, name="ingestion-dangerous-goods-inspect"),
+    path(
+        "departments/<uuid:department_id>/dangerous-goods/inspect/",
+        views.dangerous_goods_inspect,
+        name="ingestion-dangerous-goods-inspect",
+    ),
     path(
         "departments/<uuid:department_id>/dangerous-goods/imports/<uuid:batch_id>/apply/",
         views.dangerous_goods_apply,

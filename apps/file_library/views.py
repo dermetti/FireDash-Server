@@ -2,6 +2,7 @@ import hashlib
 import io
 import uuid
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from django.conf import settings
 from django.contrib import messages
@@ -17,7 +18,7 @@ from django.views.decorators.http import require_http_methods
 from apps.accounts.reauth import require_recent_reauthentication
 from apps.authorization.scopes import active_department_ids
 from apps.file_library import services
-from apps.file_library.models import CapacityReview, Entry, Library
+from apps.file_library.models import CapacityReview, Content, Entry, Library
 from apps.file_library.publication import publication_state, publish_now
 from apps.organizations.models import Station
 from apps.reference_data.pdf_sandbox import PdfSanitizerError
@@ -59,10 +60,10 @@ def library_view(request, library_id):
         if (
             request.method == "GET"
             and library.station_id
-            and library.station.department_id in active_department_ids(request.user)
+            and cast(Station, library.station).department_id in active_department_ids(request.user)
         ):
             department_library = services.get_library(
-                request.user, department_id=library.station.department_id
+                request.user, department_id=cast(Station, library.station).department_id
             )
             return redirect("file-library", library_id=department_library.id)
         raise
@@ -156,7 +157,7 @@ def library_view(request, library_id):
     query = request.GET.get("q", "").strip()[:255]
     entries = library.entries.select_related("content", "modified_by", "parent")
     entries = entries.filter(name__icontains=query) if query else entries.filter(parent=current)
-    breadcrumbs = []
+    breadcrumbs: list[Entry] = []
     cursor = current
     while cursor:
         breadcrumbs.insert(0, cursor)
@@ -168,7 +169,7 @@ def library_view(request, library_id):
         while cursor.parent_id:
             cursor = by_id[cursor.parent_id]
             names.insert(0, cursor.name)
-        folder.display_path = " / ".join(names)
+        cast(Any, folder).display_path = " / ".join(names)
     return render(
         request,
         "file_library/library.html",
@@ -219,8 +220,8 @@ def document(request, library_id, entry_id):
     except (OSError, services.LibraryError) as error:
         raise Http404("PDF unavailable") from error
     if (
-        len(data) != entry.content.size_bytes
-        or hashlib.sha256(data).hexdigest() != entry.content.sha256
+        len(data) != cast(Content, entry.content).size_bytes
+        or hashlib.sha256(data).hexdigest() != cast(Content, entry.content).sha256
     ):
         raise Http404("PDF integrity verification failed")
     response = FileResponse(

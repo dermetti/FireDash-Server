@@ -258,7 +258,11 @@ def test_v2_manifest_grant_and_document_delivery(v2_delivery_context):
         .startswith(b"PDF")
     )
     with pytest.raises(InvalidTag):
-        AESGCM(cek).decrypt(bytes(reference.document_artifact.nonce), ciphertext[:-1] + b"x", None)
+        AESGCM(cek).decrypt(
+            bytes(reference.document_artifact.nonce),
+            ciphertext[:-1] + bytes([ciphertext[-1] ^ 1]),
+            None,
+        )
     client = Client()
     path = (
         f"/api/v1/tablet/fire-plan-generations/{publication.id}/artifacts/"
@@ -300,6 +304,7 @@ def test_explicit_cutover_queues_and_builds_the_first_document_generation(v2_del
     assert selected.delivery_format == selected.DeliveryFormat.DOCUMENT_MANIFEST_V2
     job = process_next_job()
     assert job is not None and job.status == job.Status.SUCCEEDED
+    assert job.build_publication_id is not None
     publication = DatasetPublication.objects.get(pk=job.build_publication_id)
     assert publication.status == DatasetPublication.Status.PUBLISHED
     assert publication.schema_version == 2

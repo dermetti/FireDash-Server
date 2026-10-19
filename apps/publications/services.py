@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, time, timedelta
+from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -68,7 +69,7 @@ def _registered_scope_type(dataset_type_code: str) -> str:
 
 def _scope_filter(
     *, department, station, dataset_type_code: str, scope_type=None
-) -> dict[str, object]:
+) -> dict[str, Any]:
     scope_type = scope_type or _registered_scope_type(dataset_type_code)
     return {
         "scope_type": scope_type,
@@ -119,7 +120,7 @@ def _allocate_staged_publication(
     scope: DatasetScopeState,
     job: PublicationJob,
     source_fingerprint_value: str,
-    source_snapshot: dict[str, object],
+    source_snapshot: dict[str, Any],
 ) -> DatasetPublication:
     """Allocate an immutable attempt while the canonical scope row is locked."""
     definition = get_dataset_definition(job.dataset_type_code)
@@ -218,7 +219,7 @@ def cut_over_fire_plan_scope_to_document_manifest(
     return locked
 
 
-def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, object]:
+def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, Any]:
     return build_source_payload(
         definition=get_dataset_definition(scope.dataset_type_code),
         department=scope.department,
@@ -226,7 +227,7 @@ def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, object]:
     )
 
 
-def _current_source_state(*, scope: DatasetScopeState) -> tuple[dict[str, object], str]:
+def _current_source_state(*, scope: DatasetScopeState) -> tuple[dict[str, Any], str]:
     snapshot = _current_source_snapshot(scope=scope)
     if (
         scope.dataset_type_code in {"department_files", "station_files"}
@@ -398,7 +399,7 @@ def enqueue_publication_job(
     trigger_type: str = PublicationJob.TriggerType.DATA_CHANGE,
     debounce_started_at: datetime | None = None,
     allow_clean_rebuild: bool = False,
-    source_snapshot: dict[str, object] | None = None,
+    source_snapshot: dict[str, Any] | None = None,
     source_fingerprint_value: str | None = None,
 ) -> PublicationJob | None:
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
@@ -643,7 +644,7 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             error_category="worker",
             error_message="Claim did not allocate a publication.",
         )
-    artifact: dict[str, object] | None = None
+    artifact: dict[str, Any] | None = None
     try:
         definition = get_dataset_definition(job.dataset_type_code)
         _validate_scope(
@@ -773,7 +774,7 @@ def _is_publication_guard_error(error: IntegrityError) -> bool:
     return getattr(cause, "sqlstate", None) == "P0001"
 
 
-def _compensate_artifact(artifact: dict[str, object] | None) -> None:
+def _compensate_artifact(artifact: dict[str, Any] | None) -> None:
     """Remove a promoted artifact that could not be finalized (best effort)."""
     if artifact is None:
         return
@@ -825,8 +826,8 @@ def _queue_follow_up_if_stale(*, job: PublicationJob) -> None:
 def finalize_publication_job(
     *,
     job_id,
-    summary: dict[str, object],
-    artifact: dict[str, object],
+    summary: dict[str, Any],
+    artifact: dict[str, Any],
     source_fingerprint_value: str | None = None,
 ) -> PublicationJob:
     job_preview = PublicationJob.objects.select_related("department", "station").get(pk=job_id)

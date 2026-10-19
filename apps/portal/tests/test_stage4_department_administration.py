@@ -305,9 +305,7 @@ def test_administrator_provision_modal_fragments_and_role_assignment(client, sta
     assert b"Enter a valid email address" in invalid.content
     assert b'<div class="modal fade show"' in invalid.content
 
-    invalid_full_page = client.post(
-        department_url, {"email": "invalid", "display_name": ""}
-    )
+    invalid_full_page = client.post(department_url, {"email": "invalid", "display_name": ""})
     assert invalid_full_page.status_code == 200
     assert b"<html" in invalid_full_page.content.lower()
     assert b"Enter a valid email address" in invalid_full_page.content

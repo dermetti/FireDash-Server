@@ -47,7 +47,8 @@ def _package(manifest: str, files: dict[str, bytes]) -> bytes:
 
 
 _FIRE_HEADER = (
-    "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,fsd_location,bmz_location,rwa_info,action"
+    "external_identifier,filename,object_name,address,postal_code,city,longitude,latitude,"
+    "fsd_location,bmz_location,rwa_info,action"
 )
 
 

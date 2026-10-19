@@ -17,10 +17,10 @@ import os
 import sys
 import uuid
 import zipfile
+from argparse import Namespace
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -43,7 +43,12 @@ from tools.fake_ipad.crypto import (  # noqa: E402
 from tools.fake_ipad.errors import ClientError  # noqa: E402
 from tools.fake_ipad.output import Output  # noqa: E402
 from tools.fake_ipad.state import DeviceState, secure_write  # noqa: E402
-from tools.fake_ipad.transport import HttpResponse, parse_problem, problem_text  # noqa: E402
+from tools.fake_ipad.transport import (  # noqa: E402
+    ApiClient,
+    HttpResponse,
+    parse_problem,
+    problem_text,
+)
 
 # --- stubbed transport -------------------------------------------------------
 
@@ -55,7 +60,9 @@ class StubApi:
         self.server_url = server_url
         self.out = Output()
         self.calls: list[dict[str, Any]] = []
-        self.handlers: dict[str, Callable[..., tuple[int, dict[str, Any], dict[str, str]]]] = {}
+        self.handlers: dict[
+            str, Callable[..., tuple[int, dict[str, Any] | bytes, dict[str, str]]]
+        ] = {}
 
     def call(
         self,
@@ -127,7 +134,9 @@ def test_fake_app_version_identity_uses_frozen_three_component_grammar(
     tmp_path: Path, version: str
 ):
     with pytest.raises(ClientError, match="MAJOR.MINOR.PATCH"):
-        FakeIPadClient(DeviceState(tmp_path / "state"), StubApi(), app_version=version)
+        FakeIPadClient(
+            DeviceState(tmp_path / "state"), cast(ApiClient, StubApi()), app_version=version
+        )
 
 
 # --- local state -------------------------------------------------------------
@@ -689,11 +698,12 @@ def test_verified_manifest_ignores_unknown_optional_dataset_and_syncs_known_requ
     api.handlers["/api/v1/tablet/manifest"] = lambda b, r: (304, b"", {})
     client = _client(state, api)
     verified: list[str] = []
-    monkeypatch.setattr(
-        client,
-        "verify_dataset",
-        lambda dataset, config, crypto, cache: verified.append(dataset["type"]) or {},
-    )
+
+    def record_verification(dataset, config, crypto, cache):
+        verified.append(dataset["type"])
+        return {}
+
+    monkeypatch.setattr(client, "verify_dataset", record_verification)
 
     etag_payload = copy.deepcopy(manifest)
     etag_payload.pop("generated_at")
@@ -860,17 +870,17 @@ def test_cli_adopt_without_server_fails(tmp_path: Path):
 def test_get_token_reads_token_file(tmp_path: Path):
     token_file = tmp_path / "token.txt"
     token_file.write_text("file-token-value\n")
-    args = SimpleNamespace(token=None, token_file=str(token_file))
+    args = Namespace(token=None, token_file=str(token_file))
     assert get_token(args, prompt="unused") == "file-token-value"
 
 
 def test_get_token_prefers_explicit_argument(tmp_path: Path):
-    args = SimpleNamespace(token="arg-token", token_file=None)
+    args = Namespace(token="arg-token", token_file=None)
     assert get_token(args, prompt="unused") == "arg-token"
 
 
 def test_get_token_stdin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    args = SimpleNamespace(token=None, token_file="-")
+    args = Namespace(token=None, token_file="-")
     monkeypatch.setattr("sys.stdin", io.StringIO("stdin-token\n"))
     assert get_token(args, prompt="unused") == "stdin-token"
 

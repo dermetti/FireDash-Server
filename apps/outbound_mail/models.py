@@ -83,8 +83,10 @@ class SystemMailConfiguration(models.Model):
                 condition=Q(singleton=True), name="system_mail_configuration_singleton"
             ),
             models.CheckConstraint(
-                condition=Q(smtp_username="", smtp_password_encrypted="")
-                | (Q(smtp_username__gt="") & Q(smtp_password_encrypted__gt="")),
+                # Empty-value database constraint.
+                condition=Q(smtp_username="", smtp_password_encrypted="")  # nosec B106
+                # Empty-value database constraint.
+                | (Q(smtp_username__gt="") & Q(smtp_password_encrypted__gt="")),  # nosec B106
                 name="system_mail_smtp_auth_pair",
             ),
         ]
@@ -180,8 +182,10 @@ class DepartmentMailConfiguration(models.Model):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                condition=Q(smtp_username="", smtp_password_encrypted="")
-                | (Q(smtp_username__gt="") & Q(smtp_password_encrypted__gt="")),
+                # Empty-value database constraint.
+                condition=Q(smtp_username="", smtp_password_encrypted="")  # nosec B106
+                # Empty-value database constraint.
+                | (Q(smtp_username__gt="") & Q(smtp_password_encrypted__gt="")),  # nosec B106
                 name="department_mail_smtp_auth_pair",
             ),
         ]

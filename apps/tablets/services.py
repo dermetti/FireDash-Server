@@ -294,7 +294,7 @@ def _recover_stale_installation(*, installation: AppInstallation, now: datetime)
 def _formatted_asset_number(*, department: Department, sequence: int) -> str:
     numeric_part = str(sequence).zfill(department.tablet_asset_number_width)
     asset_number = f"{department.tablet_asset_number_prefix}{numeric_part}"
-    max_length = Tablet._meta.get_field("asset_number").max_length
+    max_length = cast(int, Tablet._meta.get_field("asset_number").max_length)
     if len(asset_number) > max_length:
         raise TabletError(
             "The next generated asset number does not fit the Tablet asset-number length.",

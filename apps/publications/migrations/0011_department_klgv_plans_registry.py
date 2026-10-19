@@ -18,4 +18,6 @@ def add_department_klgv_plans_registry(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [("publications", "0010_publicationjob_bulk_trigger")]
 
-    operations = [migrations.RunPython(add_department_klgv_plans_registry, migrations.RunPython.noop)]
+    operations = [
+        migrations.RunPython(add_department_klgv_plans_registry, migrations.RunPython.noop)
+    ]

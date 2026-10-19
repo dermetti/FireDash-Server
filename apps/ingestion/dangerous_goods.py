@@ -6,7 +6,7 @@ caller retains and publishes the original UTF-8 bytes verbatim.
 
 import json
 import re
-from typing import Any
+from typing import Any, NoReturn
 
 
 class DangerousGoodsValidationError(ValueError):
@@ -22,7 +22,7 @@ _ADR_STRING_FIELDS = {
 }
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     raise DangerousGoodsValidationError(message)
 
 

@@ -875,7 +875,12 @@ class FirePlanDocumentArtifactDownloadView(InstallationAPIView):
 
 
 @extend_schema(
-    responses={200: OpenApiTypes.OBJECT, 202: None, 403: ProblemResponseSerializer, 404: ProblemResponseSerializer},
+    responses={
+        200: OpenApiTypes.OBJECT,
+        202: None,
+        403: ProblemResponseSerializer,
+        404: ProblemResponseSerializer,
+    },
     parameters=_MANIFEST_CONDITIONAL_GET_PARAMETERS,
 )
 class DocumentGenerationManifestView(InstallationAPIView):
@@ -922,7 +927,12 @@ class DocumentGenerationManifestView(InstallationAPIView):
 
 @extend_schema(
     parameters=[OpenApiParameter("format", exclude=True), *_CONDITIONAL_GET_PARAMETERS],
-    responses={(200, "application/octet-stream"): OpenApiTypes.BINARY, 304: None, 403: ProblemResponseSerializer, 404: ProblemResponseSerializer},
+    responses={
+        (200, "application/octet-stream"): OpenApiTypes.BINARY,
+        304: None,
+        403: ProblemResponseSerializer,
+        404: ProblemResponseSerializer,
+    },
 )
 class DocumentArtifactDownloadView(InstallationAPIView):
     renderer_classes = [renderers.JSONRenderer, OctetStreamRenderer]

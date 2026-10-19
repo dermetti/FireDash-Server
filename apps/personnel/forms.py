@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 from django import forms
 
 from apps.organizations.models import Station
@@ -36,12 +38,14 @@ class PersonCreateForm(PersonForm):
 
     def __init__(self, *args, department, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["home_station"].queryset = Station.objects.filter(
-            department=department, active=True
-        ).order_by("name", "short_code", "id")
+        cast(
+            "forms.ModelChoiceField[Station]", self.fields["home_station"]
+        ).queryset = Station.objects.filter(department=department, active=True).order_by(
+            "name", "short_code", "id"
+        )
 
     def clean(self):
-        cleaned = super().clean()
+        cleaned = cast(dict[str, Any], super().clean())
         if cleaned.get("incident_commander_email") and not cleaned.get(
             "incident_commander_eligible"
         ):

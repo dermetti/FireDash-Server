@@ -8,6 +8,7 @@ from django.test import override_settings
 from django.utils import timezone
 from pypdf import PdfReader
 from pypdf._encryption import PasswordType
+from pypdf.generic import DictionaryObject
 
 from apps.accounts.models import User
 from apps.audit.models import AuditEvent
@@ -29,8 +30,11 @@ def report_scope(db):
     other_department = Department.objects.create(name="Other", short_code="other", created_by=admin)
     DepartmentMembership.objects.create(user=admin, department=department, created_by=admin)
     person = Person.objects.create(
-        department=department, display_name="Commander", incident_commander_eligible=True,
-        incident_commander_email="commander@example.test", email_verified_at=timezone.now(),
+        department=department,
+        display_name="Commander",
+        incident_commander_eligible=True,
+        incident_commander_email="commander@example.test",
+        email_verified_at=timezone.now(),
     )
     return admin, department, other_department, person
 
@@ -39,9 +43,12 @@ def _encrypted_pdf(*, revision=6, aes=True, user="report-password") -> bytes:
     document = pikepdf.Pdf.new()
     document.add_blank_page()
     output = io.BytesIO()
-    document.save(output, encryption=pikepdf.Encryption(
-        user=user, owner="owner-password", R=revision, aes=aes, metadata=revision >= 4
-    ))
+    document.save(
+        output,
+        encryption=pikepdf.Encryption(
+            user=user, owner="owner-password", R=revision, aes=aes, metadata=revision >= 4
+        ),
+    )
     return output.getvalue()
 
 
@@ -70,7 +77,8 @@ def test_admission_resolves_only_current_eligible_scoped_personnel(report_scope)
         department=other_department,
         display_name="Other commander",
         incident_commander_eligible=True,
-        incident_commander_email="other@example.test", email_verified_at=timezone.now(),
+        incident_commander_email="other@example.test",
+        email_verified_at=timezone.now(),
     )
     for personnel_id in (foreign.id, person.id):
         if personnel_id == person.id:
@@ -131,7 +139,7 @@ def test_only_password_required_aes256_r6_pdfs_are_accepted(report_scope):
 
 def test_parsed_pypdf_contract_rejects_spoofed_and_incomplete_encryption(report_scope, monkeypatch):
     _admin, department, _other_department, person = report_scope
-    assert pypdf.__version__ == "6.18.0"
+    assert pypdf.__version__ == "6.19.0"
     weak_with_markers = _encrypted_pdf(revision=4) + b"\n/R 6 /Length 256 /AESV3\n"
     with pytest.raises(ReportAdmissionError) as error:
         _admit(department, person, weak_with_markers)
@@ -142,7 +150,9 @@ def test_parsed_pypdf_contract_rejects_spoofed_and_incomplete_encryption(report_
     monkeypatch.setattr(reader._encryption, "EFF", "/Identity")
     assert _is_password_required_aes256_revision6(reader) is False
     reader = PdfReader(io.BytesIO(_encrypted_pdf()))
-    reader.trailer["/Encrypt"].pop("/CF")
+    encryption = reader.trailer["/Encrypt"]
+    assert isinstance(encryption, DictionaryObject)
+    encryption.pop("/CF")
     assert _is_password_required_aes256_revision6(reader) is False
 
 

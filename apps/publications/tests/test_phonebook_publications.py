@@ -265,6 +265,8 @@ def test_phonebook_json_artifact_and_hpke_grant_obey_existing_authorization_cont
             if publication.dataset_type_code == "department_phonebook"
         )
         grant = department_publication.key_grants.get(app_installation=installation)
+        assert grant.hpke_encapsulated_key is not None
+        assert grant.hpke_wrapped_content_key is not None
         cek = hpke_open(
             encapsulated_key=bytes(grant.hpke_encapsulated_key),
             ciphertext=bytes(grant.hpke_wrapped_content_key),
@@ -282,6 +284,7 @@ def test_phonebook_json_artifact_and_hpke_grant_obey_existing_authorization_cont
             ),
         )
         ciphertext = (test_root / "artifacts" / department_publication.artifact_path).read_bytes()
+        assert department_publication.artifact_nonce is not None
         assert (
             json.loads(
                 AESGCM(cek).decrypt(bytes(department_publication.artifact_nonce), ciphertext, None)

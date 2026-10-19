@@ -40,9 +40,7 @@ def test_one_station_switch_release_expiry_and_authority_loss(scope):
     first.refresh_from_db()
     assert first.revocation_reason == "switched"
     assert switched.station == second
-    assert TemporaryStationAccess.objects.filter(
-        user=admin, revoked_at__isnull=True
-    ).count() == 1
+    assert TemporaryStationAccess.objects.filter(user=admin, revoked_at__isnull=True).count() == 1
     assert AuditEvent.objects.filter(
         action="file_library.temporary_access_switched", station=second
     ).exists()
@@ -99,18 +97,19 @@ def test_activation_rejects_cross_department_and_requires_confirmation_and_reaut
     assert expired.status_code == 302
     assert expired.url != reverse("file-library", args=(station_library.id,))
 
-    assert client.post(
-        reverse("file-library-station-access-activate", args=(outside_station.id,)),
-        {"confirm": "yes"},
-    ).status_code == 403
+    assert (
+        client.post(
+            reverse("file-library-station-access-activate", args=(outside_station.id,)),
+            {"confirm": "yes"},
+        ).status_code
+        == 403
+    )
 
 
 def test_elevated_permission_boundary_and_read_only_ui(client, scope, pdf_pipeline):
     admin, station_admin, _other, _department, _outside, station, _second = scope
     station_library = services.get_library(station_admin, station_id=station.id)
-    document = services.upload_pdf(
-        actor=station_admin, library_id=station_library.id, upload=pdf()
-    )
+    document = services.upload_pdf(actor=station_admin, library_id=station_library.id, upload=pdf())
     _activate(admin, station)
 
     assert (
@@ -144,18 +143,19 @@ def test_elevated_permission_boundary_and_read_only_ui(client, scope, pdf_pipeli
         ).status_code
         == 200
     )
-    assert client.post(
-        reverse("file-library", args=(station_library.id,)),
-        {"action": "folder", "name": "Denied"},
-    ).status_code == 403
+    assert (
+        client.post(
+            reverse("file-library", args=(station_library.id,)),
+            {"action": "folder", "name": "Denied"},
+        ).status_code
+        == 403
+    )
 
 
 def test_elevated_delete_uses_source_lifecycle_and_consumes_grant(scope, pdf_pipeline):
     admin, station_admin, _other, _department, _outside, station, _second = scope
     station_library = services.get_library(station_admin, station_id=station.id)
-    document = services.upload_pdf(
-        actor=station_admin, library_id=station_library.id, upload=pdf()
-    )
+    document = services.upload_pdf(actor=station_admin, library_id=station_library.id, upload=pdf())
     content_id = document.content_id
     station_library.refresh_from_db()
     before = station_library.source_revision
@@ -303,9 +303,12 @@ def test_expiry_between_preflight_and_locked_delete_persists_after_denial(scope,
     access.refresh_from_db()
     assert access.revocation_reason == "expired"
     assert library.entries.filter(pk=folder.id).exists()
-    assert AuditEvent.objects.filter(
-        action="file_library.temporary_access_expired", target_uuid=access.id
-    ).count() == 1
+    assert (
+        AuditEvent.objects.filter(
+            action="file_library.temporary_access_expired", target_uuid=access.id
+        ).count()
+        == 1
+    )
 
 
 def test_successful_administrator_provisioning_revokes_access(scope):

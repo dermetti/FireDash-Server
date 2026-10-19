@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
-from typing import BinaryIO
+from typing import BinaryIO, cast
 from uuid import UUID
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from pypdf import PdfReader
-from pypdf._encryption import PasswordType
+from pypdf._encryption import Encryption, PasswordType
 from pypdf.errors import PdfReadError, PyPdfError
 from pypdf.generic import DictionaryObject
 
@@ -173,7 +173,7 @@ def _validated_filename(filename: str) -> str:
 def _inspect_aes256_password_pdf(pdf_bytes: bytes) -> None:
     """Accept only parsed, password-required AES-256 revision-6 PDFs.
 
-    ``pypdf==6.18.0`` parses the encryption dictionary without authenticating a
+    ``pypdf==6.19.0`` parses the encryption dictionary without authenticating a
     password.  The small private-API use below is isolated deliberately:
     pypdf's effective ``Encryption`` fields account for crypt-filter defaults
     (notably an omitted ``/EFF``), which the raw parsed dictionary alone cannot
@@ -215,7 +215,7 @@ def _is_password_required_aes256_revision6(reader: PdfReader) -> bool:
             return False
         # pypdf's effective encryption fields are deliberately checked as well:
         # EFF correctly applies the standard default when /EFF is omitted.
-        encryption = reader._encryption
+        encryption = cast(Encryption, reader._encryption)
         return (
             encrypt.get("/V") == 5
             and encrypt.get("/R") == 6

@@ -86,7 +86,8 @@ def system_attention() -> list[AttentionItem]:
     if not count:
         return []
     first = orphaned.first()
-    assert first is not None
+    # Internal query invariant, not authorization.
+    assert first is not None  # nosec B101
     return [
         AttentionItem(
             "warning",

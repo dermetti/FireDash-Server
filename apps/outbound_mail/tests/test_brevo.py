@@ -1,5 +1,6 @@
 import base64
 import json
+from typing import Any, cast
 
 import pytest
 import requests
@@ -34,10 +35,12 @@ class FakeBrevoTransport:
         self.status_code = status_code
         self.body = body
         self.api_key_was_used = False
-        self.payload = None
-        self.get_url = None
+        self.payload: dict[str, Any] | None = None
+        self.get_url: str | None = None
 
-    def post_json(self, *, url: str, headers: dict[str, str], payload: dict) -> HttpResponse:
+    def post_json(
+        self, *, url: str, headers: dict[str, str], payload: dict[str, Any]
+    ) -> HttpResponse:
         self.api_key_was_used = headers.get("api-key") == "test-brevo-key"
         self.payload = payload
         return HttpResponse(status_code=self.status_code, body=self.body)
@@ -49,7 +52,9 @@ class FakeBrevoTransport:
 
 
 class FailingBrevoTransport:
-    def post_json(self, *, url: str, headers: dict[str, str], payload: dict) -> HttpResponse:
+    def post_json(
+        self, *, url: str, headers: dict[str, str], payload: dict[str, Any]
+    ) -> HttpResponse:
         raise OutboundMailTransportError()
 
 
@@ -90,7 +95,9 @@ def _message() -> OutboundMessage:
 
 def test_brevo_maps_canonical_message_and_uses_configured_encrypted_key(configured_brevo) -> None:
     transport = FakeBrevoTransport()
-    provider = BrevoProvider.from_system_configuration(transport=transport)
+    provider = BrevoProvider.from_system_configuration(
+        transport=cast(OutboundMailHttpTransport, transport)
+    )
     result = provider.send(_message())
 
     assert result.provider == "BREVO"
@@ -116,7 +123,9 @@ def test_brevo_is_resolved_through_the_generic_provider_registry(configured_brev
 
 def test_brevo_verification_uses_non_delivery_account_endpoint(configured_brevo) -> None:
     transport = FakeBrevoTransport(status_code=200, body=b'{"sensitive":"response"}')
-    provider = BrevoProvider.from_system_configuration(transport=transport)
+    provider = BrevoProvider.from_system_configuration(
+        transport=cast(OutboundMailHttpTransport, transport)
+    )
     provider.verify()
     assert transport.get_url == "https://api.brevo.com/v3/account"
     assert transport.api_key_was_used
@@ -139,7 +148,10 @@ def test_brevo_statuses_map_to_sanitized_provider_failures(
     configured_brevo, status_code, error_type
 ) -> None:
     provider = BrevoProvider.from_system_configuration(
-        transport=FakeBrevoTransport(status_code=status_code, body=b"sensitive provider response")
+        transport=cast(
+            OutboundMailHttpTransport,
+            FakeBrevoTransport(status_code=status_code, body=b"sensitive provider response"),
+        )
     )
     with pytest.raises(error_type) as error:
         provider.send(_message())
@@ -148,7 +160,9 @@ def test_brevo_statuses_map_to_sanitized_provider_failures(
 
 
 def test_brevo_transport_failure_is_temporary_without_retry(configured_brevo) -> None:
-    provider = BrevoProvider.from_system_configuration(transport=FailingBrevoTransport())
+    provider = BrevoProvider.from_system_configuration(
+        transport=cast(OutboundMailHttpTransport, FailingBrevoTransport())
+    )
     with pytest.raises(ProviderUnavailableError):
         provider.send(_message())
 
@@ -161,7 +175,7 @@ class FakeResponse:
 
 class FakeSession:
     def __init__(self, *, error: Exception | None = None, status_code: int = 201) -> None:
-        self.calls = []
+        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
         self.error = error
         self.status_code = status_code
         self.trust_env = True
@@ -175,7 +189,7 @@ class FakeSession:
 
 def test_http_transport_direct_and_proxy_routes_are_explicit() -> None:
     direct_session = FakeSession()
-    direct = OutboundMailHttpTransport(proxy_url="", session=direct_session)
+    direct = OutboundMailHttpTransport(proxy_url="", session=cast(requests.Session, direct_session))
     direct.post_json(url="https://provider.example.test/send", headers={}, payload={})
     assert direct_session.trust_env is False
     assert direct_session.calls[0][1]["proxies"] is None
@@ -184,7 +198,7 @@ def test_http_transport_direct_and_proxy_routes_are_explicit() -> None:
 
     proxy_session = FakeSession()
     proxy = OutboundMailHttpTransport(
-        proxy_url="http://proxy.example.test:3128", session=proxy_session
+        proxy_url="http://proxy.example.test:3128", session=cast(requests.Session, proxy_session)
     )
     proxy.post_json(url="https://provider.example.test/send", headers={}, payload={})
     assert proxy_session.calls[0][1]["proxies"] == {"https": "http://proxy.example.test:3128"}
@@ -200,7 +214,7 @@ def test_proxy_validation_uses_the_transport_routing_contract(value: str) -> Non
 def test_http_transport_proxy_failure_does_not_fall_back_to_direct(error) -> None:
     session = FakeSession(error=error)
     transport = OutboundMailHttpTransport(
-        proxy_url="http://proxy.example.test:3128", session=session
+        proxy_url="http://proxy.example.test:3128", session=cast(requests.Session, session)
     )
     with pytest.raises(OutboundMailTransportError):
         transport.post_json(url="https://provider.example.test/send", headers={}, payload={})
@@ -215,7 +229,7 @@ def test_brevo_verification_uses_the_shared_proxy_aware_transport() -> None:
         sender_email="sender@example.test",
         api_key="test-brevo-key",
         transport=OutboundMailHttpTransport(
-            proxy_url="http://proxy.example.test:3128", session=session
+            proxy_url="http://proxy.example.test:3128", session=cast(requests.Session, session)
         ),
     )
     provider.verify()

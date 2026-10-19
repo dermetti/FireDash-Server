@@ -74,7 +74,7 @@ def _label(row: dict[str, Any] | None, fallback: str) -> str:
 def _changed_fields(old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, Any]]:
     old = _flatten(old)
     new = _flatten(new)
-    changes = []
+    changes: list[dict[str, Any]] = []
     for key in sorted(set(old) | set(new)):
         if key in {"id", "type", "path"}:
             continue

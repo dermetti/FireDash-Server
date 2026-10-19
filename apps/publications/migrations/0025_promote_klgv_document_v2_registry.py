@@ -15,4 +15,6 @@ def promote_klgv_document_v2_registry(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [("publications", "0024_dangerous_goods_source_revisions")]
 
-    operations = [migrations.RunPython(promote_klgv_document_v2_registry, migrations.RunPython.noop)]
+    operations = [
+        migrations.RunPython(promote_klgv_document_v2_registry, migrations.RunPython.noop)
+    ]

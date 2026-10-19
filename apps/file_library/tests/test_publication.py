@@ -80,7 +80,9 @@ def crypto(settings, tmp_path):
 def publish(actor, library):
     publish_now(actor=actor, library_id=library.id)
     job = process_next_job()
+    assert job is not None
     assert job.status == "SUCCEEDED", (job.error_message, job.status)
+    assert job.build_publication is not None
     return job.build_publication
 
 
@@ -101,7 +103,9 @@ def test_empty_scheduled_and_manual_libraries(scope, crypto):
     assert generation.artifact_path == "" and not DocumentArtifact.objects.exists()
     crypto.verify(bytes(manifest.signature), canonical_manifest_payload(manifest.payload))
     PublicationJob.objects.filter(status="PENDING").update(not_before=timezone.now())
-    assert process_next_job().status == "SUCCEEDED"
+    scheduled_job = process_next_job()
+    assert scheduled_job is not None
+    assert scheduled_job.status == "SUCCEEDED"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -173,6 +177,7 @@ def test_revision_race_and_failure_preserve_previous(scope, pdf_pipeline, crypto
     services.rename_library(**common, name="Second")
     publish_now(**common)
     job = claim_next_job()
+    assert job is not None
     old = doc.content
     services.upload_pdf(**common, upload=pdf(pages=2), replace_id=doc.id)
     assert not services.collect_content(old.id)
@@ -189,7 +194,9 @@ def test_revision_race_and_failure_preserve_previous(scope, pdf_pipeline, crypto
         raise PublicationBuildError("test failure")
 
     monkeypatch.setattr(document_v2, "build_document_v2_generation", fail)
-    assert process_next_job().status == "FAILED"
+    failed_job = process_next_job()
+    assert failed_job is not None
+    assert failed_job.status == "FAILED"
     assert (
         DatasetScopeState.objects.get(**scope_kwargs(library)).current_published_publication_id
         == first.id
@@ -218,7 +225,9 @@ def test_publication_permissions_and_ui(scope, client, crypto):
     url = f"/files/{station_library.id}/"
     assert client.post(url, {"action": "publish"}).status_code == 302
     assert b"Publish Now" in client.get(url).content
-    generation = process_next_job().build_publication
+    generation_job = process_next_job()
+    assert generation_job is not None and generation_job.build_publication is not None
+    generation = generation_job.build_publication
     assert generation.station_id == scope[5].id
     client.force_login(scope[0])
     assert (
@@ -451,6 +460,7 @@ def test_active_build_alone_protects_removed_content(scope, pdf_pipeline, crypto
     original = doc.content
     publish_now(**common)
     job = claim_next_job()
+    assert job is not None
     if operation == "replace":
         services.upload_pdf(**common, upload=pdf(pages=2), replace_id=doc.id)
     else:
@@ -458,7 +468,9 @@ def test_active_build_alone_protects_removed_content(scope, pdf_pipeline, crypto
     assert not services.collect_content(original.id)
     assert build_claimed_job(job_id=job.id).status == "OBSOLETE"
     assert services.collect_content(original.id)
-    assert process_next_job().status == "SUCCEEDED"
+    rebuilt_job = process_next_job()
+    assert rebuilt_job is not None
+    assert rebuilt_job.status == "SUCCEEDED"
 
 
 @pytest.mark.django_db(transaction=True)

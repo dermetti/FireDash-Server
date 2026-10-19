@@ -1,5 +1,7 @@
 # ruff: noqa: E501
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, cast
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -7,6 +9,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Prefetch, Q
+from django.forms import BaseForm
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -111,11 +114,12 @@ class AdministratorListRow:
 
     @property
     def lifecycle_css(self) -> str:
-        return {
+        badges: dict[str, str] = {
             DepartmentMembership.Status.ACTIVE: "success",
             DepartmentMembership.Status.SUSPENDED: "warning",
             DepartmentMembership.Status.REVOKED: "secondary",
-        }[self.lifecycle]
+        }
+        return badges[self.lifecycle]
 
 
 def _current_administrator_rows(
@@ -694,28 +698,32 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
                     request, return_url=reverse("portal-system-outbound-email")
                 )
                 if action == "mode":
-                    set_delivery_mode(actor=request.user, **form.cleaned_data)
+                    set_delivery_mode(actor=request.user, **cast(BaseForm, form).cleaned_data)
                     messages.success(request, "Outbound email delivery mode was updated.")
                 elif action == "brevo_configuration":
-                    configure_brevo(actor=request.user, **form.cleaned_data)
+                    configure_brevo(actor=request.user, **cast(BaseForm, form).cleaned_data)
                     messages.success(request, "Email API sender configuration was updated.")
                 elif action == "brevo_key":
-                    replace_brevo_api_key(actor=request.user, **form.cleaned_data)
+                    replace_brevo_api_key(actor=request.user, **cast(BaseForm, form).cleaned_data)
                     messages.success(request, "Email API credential was replaced.")
                 elif action == "brevo_clear":
                     clear_brevo_api_key(actor=request.user)
                     messages.success(request, "Email API credential was cleared.")
                 elif action == "smtp_configuration":
-                    configure_smtp(actor=request.user, **form.cleaned_data)
+                    configure_smtp(actor=request.user, **cast(BaseForm, form).cleaned_data)
                     messages.success(request, "SMTP configuration was updated.")
                 elif action == "smtp_credentials":
-                    replace_smtp_credentials(actor=request.user, **form.cleaned_data)
+                    replace_smtp_credentials(
+                        actor=request.user, **cast(BaseForm, form).cleaned_data
+                    )
                     messages.success(request, "SMTP credentials were replaced.")
                 elif action == "smtp_clear":
                     clear_smtp_credentials(actor=request.user)
                     messages.success(request, "SMTP credentials were cleared.")
                 elif action == "https_proxy":
-                    configure_outbound_mail_https_proxy(actor=request.user, **form.cleaned_data)
+                    configure_outbound_mail_https_proxy(
+                        actor=request.user, **cast(BaseForm, form).cleaned_data
+                    )
                     messages.success(request, "Outbound email HTTPS egress routing was updated.")
                 else:
                     result = verify_system_mail_configuration(actor=request.user)
@@ -747,15 +755,15 @@ def system_outbound_email(request: HttpRequest) -> HttpResponse:
     if not settings_method and action in {"brevo_configuration", "brevo_key"}:
         settings_method = "API"
     if settings_method not in {"API", "SMTP"}:
-        settings_method = (
-            state.delivery_mode if state.delivery_mode in {"API", "SMTP"} else "API"
-        )
+        settings_method = state.delivery_mode if state.delivery_mode in {"API", "SMTP"} else "API"
     provider_choices = [
         (provider, provider.replace("_", " ").title()) for provider in API_PROVIDER_REGISTRY
     ]
     settings_provider = request.GET.get("settings_provider", "")
     if settings_provider not in API_PROVIDER_REGISTRY:
-        settings_provider = state.api_provider if state.api_provider in API_PROVIDER_REGISTRY else ""
+        settings_provider = (
+            state.api_provider if state.api_provider in API_PROVIDER_REGISTRY else ""
+        )
     if not settings_provider and provider_choices:
         settings_provider = provider_choices[0][0]
     context = {
@@ -1051,10 +1059,12 @@ def administrator_provision_modal(
             return_url=reverse("portal-department-manage", args=(department.id,)),
         )
         token = (
-            provision_station_admin(actor=request.user, station=station, **form.cleaned_data)
+            provision_station_admin(
+                actor=request.user, station=station, **cast(BaseForm, form).cleaned_data
+            )
             if station is not None
             else provision_department_admin(
-                actor=request.user, department=department, **form.cleaned_data
+                actor=request.user, department=department, **cast(BaseForm, form).cleaned_data
             )
         )
         context = {
@@ -1123,7 +1133,7 @@ def administrator_detail(request: HttpRequest, department_id, user_id) -> HttpRe
                     user=administrator,
                 )
             )
-            operations = {
+            operations: dict[str, Callable[..., Any]] = {
                 "suspend": suspend_department_admin
                 if isinstance(target, DepartmentMembership)
                 else suspend_station_admin,
@@ -1193,10 +1203,15 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     )
     from apps.file_library.models import CapacityReview
 
-    capacity_reviews = CapacityReview.objects.filter(
-        library_id__in=[department_library.id, *(item.id for item in station_libraries)],
-        decision="pending", expires_at__gt=timezone.now(),
-    ).select_related("library__station", "requested_by").order_by("created_at")[:50]
+    capacity_reviews = (
+        CapacityReview.objects.filter(
+            library_id__in=[department_library.id, *(item.id for item in station_libraries)],
+            decision="pending",
+            expires_at__gt=timezone.now(),
+        )
+        .select_related("library__station", "requested_by")
+        .order_by("created_at")[:50]
+    )
     policy = getattr(department, "personnel_retention_policy", None)
     lease_initial = {"tablet_lease_days": department.tablet_lease_days}
     retention_initial = {"retention_days": policy.retention_period.days if policy else 30}
@@ -1221,9 +1236,7 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         request.POST if action == "locale-time" else None,
         initial={"locale": department.locale, "timezone": department.timezone},
     )
-    quota_form = FileLibraryQuotaForm(
-        request.POST if action == "file-library-quota" else None
-    )
+    quota_form = FileLibraryQuotaForm(request.POST if action == "file-library-quota" else None)
     from apps.outbound_mail.services import (
         configure_department_smtp,
         get_department_mail_configuration,
@@ -1233,22 +1246,33 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         set_department_recipient_policy,
         verify_department_smtp_configuration,
     )
+
     mail = get_department_mail_configuration(department=department)
     recipient_policy = get_department_recipient_policy(department=department)
     mail_initial = {
-        "delivery_mode": mail.delivery_mode, "host": mail.smtp_host, "port": mail.smtp_port,
-        "tls_mode": mail.smtp_tls_mode, "sender_name": mail.smtp_sender_name,
-        "sender_email": mail.smtp_sender_email, "username": mail.smtp_username,
+        "delivery_mode": mail.delivery_mode,
+        "host": mail.smtp_host,
+        "port": mail.smtp_port,
+        "tls_mode": mail.smtp_tls_mode,
+        "sender_name": mail.smtp_sender_name,
+        "sender_email": mail.smtp_sender_email,
+        "username": mail.smtp_username,
         "approved_domains": "\n".join(recipient_policy.approved_domains),
         "smtp_password_configured": mail.smtp_password_configured,
     }
     mail_mode = request.GET.get("delivery_mode", mail.delivery_mode)
     if request.headers.get("HX-Request") and request.method == "GET":
         mail_initial["delivery_mode"] = mail_mode
-        return render(request, "portal/_department_outbound_email_card.html", {
-            "department": department, "mail": mail, "system_managed_allowed": is_system_managed_mail_allowed(department=department),
-            "email_form": DepartmentOutboundEmailSettingsForm(initial=mail_initial),
-        })
+        return render(
+            request,
+            "portal/_department_outbound_email_card.html",
+            {
+                "department": department,
+                "mail": mail,
+                "system_managed_allowed": is_system_managed_mail_allowed(department=department),
+                "email_form": DepartmentOutboundEmailSettingsForm(initial=mail_initial),
+            },
+        )
     email_form = DepartmentOutboundEmailSettingsForm(
         request.POST if action == "email-settings" else None, initial=mail_initial
     )
@@ -1270,22 +1294,53 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         return redirect("portal-department-settings", department_id=department.id)
     if action == "email-settings" and email_form.is_valid():
         try:
-            require_recent_reauthentication(request, return_url=reverse("portal-department-settings", args=(department.id,)))
+            require_recent_reauthentication(
+                request, return_url=reverse("portal-department-settings", args=(department.id,))
+            )
             values = email_form.cleaned_data
-            set_department_recipient_policy(actor=request.user, department=department, restriction_enabled=bool(values["approved_domains"]), approved_domains=values["approved_domains"])
+            set_department_recipient_policy(
+                actor=request.user,
+                department=department,
+                restriction_enabled=bool(values["approved_domains"]),
+                approved_domains=values["approved_domains"],
+            )
             if values["delivery_mode"] == "CUSTOM_SMTP":
-                configure_department_smtp(actor=request.user, department=department, host=values["host"], port=values["port"], tls_mode=values["tls_mode"], sender_name=values["sender_name"], sender_email=values["sender_email"])
+                configure_department_smtp(
+                    actor=request.user,
+                    department=department,
+                    host=values["host"],
+                    port=values["port"],
+                    tls_mode=values["tls_mode"],
+                    sender_name=values["sender_name"],
+                    sender_email=values["sender_email"],
+                )
                 if values["password"]:
-                    replace_department_smtp_credentials(actor=request.user, department=department, username=values["username"], password=values["password"])
-                set_department_delivery_mode(actor=request.user, department=department, delivery_mode=values["delivery_mode"])
-                result = verify_department_smtp_configuration(actor=request.user, department=department)
-                messages.info(request, "SMTP verification succeeded." if result.outcome == "SUCCESS" else "SMTP verification did not succeed.")
+                    replace_department_smtp_credentials(
+                        actor=request.user,
+                        department=department,
+                        username=values["username"],
+                        password=values["password"],
+                    )
+                set_department_delivery_mode(
+                    actor=request.user, department=department, delivery_mode=values["delivery_mode"]
+                )
+                result = verify_department_smtp_configuration(
+                    actor=request.user, department=department
+                )
+                messages.info(
+                    request,
+                    "SMTP verification succeeded."
+                    if result.outcome == "SUCCESS"
+                    else "SMTP verification did not succeed.",
+                )
             else:
-                set_department_delivery_mode(actor=request.user, department=department, delivery_mode=values["delivery_mode"])
+                set_department_delivery_mode(
+                    actor=request.user, department=department, delivery_mode=values["delivery_mode"]
+                )
                 messages.success(request, "Outbound email settings were updated.")
             return redirect("portal-department-settings", department_id=department.id)
         except (ValidationError, ApplicationSecretError) as error:
-            email_form.add_error(None, error)
+            email_form.add_error(None, error if isinstance(error, ValidationError) else str(error))
     if action == "asset-numbering" and asset_number_form.is_valid():
         require_recent_reauthentication(
             request,

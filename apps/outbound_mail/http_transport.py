@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit
 
 import requests
@@ -47,9 +48,11 @@ def _effective_proxy_url() -> str:
     try:
         from apps.outbound_mail.models import SystemMailConfiguration
 
-        configuration = SystemMailConfiguration.objects.filter(singleton=True).only(
-            "outbound_mail_https_proxy"
-        ).first()
+        configuration = (
+            SystemMailConfiguration.objects.filter(singleton=True)
+            .only("outbound_mail_https_proxy")
+            .first()
+        )
     except DatabaseError:
         # A provider cannot safely choose a direct route when its configured
         # system routing state cannot be read.
@@ -87,14 +90,21 @@ class OutboundMailHttpTransport:
         # deliberate deployment choice and must not have a fallback route.
         self._session.trust_env = False
 
-    def post_json(self, *, url: str, headers: dict[str, str], payload: dict) -> HttpResponse:
+    def post_json(
+        self, *, url: str, headers: dict[str, str], payload: dict[str, Any]
+    ) -> HttpResponse:
         return self.request_json(method="POST", url=url, headers=headers, payload=payload)
 
     def get_json(self, *, url: str, headers: dict[str, str]) -> HttpResponse:
         return self.request_json(method="GET", url=url, headers=headers)
 
     def request_json(
-        self, *, method: str, url: str, headers: dict[str, str], payload: dict | None = None
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any] | None = None,
     ) -> HttpResponse:
         try:
             response = self._session.request(

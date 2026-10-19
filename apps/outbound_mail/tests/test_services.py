@@ -1,5 +1,6 @@
 import base64
 import json
+from typing import cast
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -11,7 +12,7 @@ from apps.audit.models import AuditEvent
 from apps.authorization.models import SystemRole
 from apps.outbound_mail.models import SystemMailConfiguration
 from apps.outbound_mail.providers import BREVO, RUNTIME_PROVIDER_REGISTRY
-from apps.outbound_mail.runtime import ProviderUnavailableError, VerificationOutcome
+from apps.outbound_mail.runtime import MailProvider, ProviderUnavailableError, VerificationOutcome
 from apps.outbound_mail.services import (
     BREVO_API_KEY_CONTEXT,
     SMTP_PASSWORD_CONTEXT,
@@ -204,7 +205,7 @@ def test_verification_is_observational_and_configuration_changes_invalidate_it(
         def verify(self) -> None:
             return None
 
-    RUNTIME_PROVIDER_REGISTRY[BREVO] = FakeProvider()
+    RUNTIME_PROVIDER_REGISTRY[BREVO] = cast(MailProvider, FakeProvider())
     try:
         result = verify_system_mail_configuration(actor=actor)
     finally:
@@ -241,7 +242,7 @@ def test_failed_verification_persists_only_sanitized_metadata(
         def verify(self) -> None:
             raise ProviderUnavailableError()
 
-    RUNTIME_PROVIDER_REGISTRY[BREVO] = FailingProvider()
+    RUNTIME_PROVIDER_REGISTRY[BREVO] = cast(MailProvider, FailingProvider())
     try:
         result = verify_system_mail_configuration(actor=actor)
     finally:

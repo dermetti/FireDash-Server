@@ -1,5 +1,6 @@
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
 
 from django.conf import settings
 from django.contrib.gis.geos import Point
@@ -10,6 +11,7 @@ from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
+from apps.organizations.models import Station
 from apps.publications.services import mark_dirty
 from apps.reference_data.hydrants import NormalizedHydrant, parse_feature_collection
 from apps.reference_data.models import (
@@ -72,7 +74,7 @@ def update_phonebook_entry(*, actor, entry: PhonebookEntry, **values) -> Phonebo
     ):
         if field in values:
             setattr(entry, field, values[field])
-    if entry.station_id and entry.station.department_id != entry.department_id:
+    if entry.station_id and cast(Station, entry.station).department_id != entry.department_id:
         raise PermissionDenied("Station is outside this department.")
     entry.phone_number = normalize_phone_number(entry.phone_number)
     entry.full_clean()
@@ -313,7 +315,8 @@ def update_hydrant(*, actor, hydrant: Hydrant, **values) -> Hydrant:
         if field in values:
             # Preserve the nullable location rather than publishing the text "None".
             value = (
-                None if field == "location" and values[field] is None
+                None
+                if field == "location" and values[field] is None
                 else str(values[field]).strip()
             )
             setattr(hydrant, field, value)
@@ -619,8 +622,8 @@ def _probable_duplicate_count(*, department, features: list[NormalizedHydrant]) 
     for feature in features:
         key = (feature.longitude, feature.latitude, feature.hydrant_type, feature.status)
         if key in seen or any(
-            location.x == feature.longitude
-            and location.y == feature.latitude
+            cast(Point, location).x == feature.longitude
+            and cast(Point, location).y == feature.latitude
             and hydrant_type == feature.hydrant_type
             and status == feature.status
             for location, hydrant_type, status in known

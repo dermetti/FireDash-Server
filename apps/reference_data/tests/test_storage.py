@@ -67,9 +67,7 @@ def test_accepted_promotion_assigns_configured_reader_group(private_roots: Path)
             SimpleNamespace(getgrnam=lambda _name: SimpleNamespace(gr_gid=4242)),
         ):
             with patch("apps.reference_data.storage.os.chown", create=True) as chown:
-                accepted = promote_to_accepted(
-                    source, "123e4567-e89b-12d3-a456-426614174000.pdf"
-                )
+                accepted = promote_to_accepted(source, "123e4567-e89b-12d3-a456-426614174000.pdf")
 
     assert accepted.read_bytes() == b"safe"
     chown.assert_called_once_with(accepted, -1, 4242)

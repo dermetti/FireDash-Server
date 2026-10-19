@@ -5,6 +5,7 @@ from __future__ import annotations
 import smtplib
 import ssl
 from dataclasses import dataclass
+from typing import cast
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, get_connection
@@ -93,14 +94,15 @@ class SmtpProvider:
             configuration.validate_smtp_configuration()
             if bool(configuration.smtp_username) != bool(configuration.smtp_password_encrypted):
                 raise ValueError
-            password = ""
+            # Absence/clearing of credentials.
+            password = ""  # nosec B105
             if configuration.smtp_username:
                 password = decrypt_application_secret(
                     configuration.smtp_password_encrypted, context=SMTP_PASSWORD_CONTEXT
                 ).decode("utf-8")
             effective = SmtpEffectiveConfiguration(
                 host=configuration.smtp_host,
-                port=configuration.smtp_port,
+                port=cast(int, configuration.smtp_port),
                 tls_mode=configuration.smtp_tls_mode,
                 sender_name=configuration.smtp_sender_name,
                 sender_email=configuration.smtp_sender_email,
@@ -180,7 +182,8 @@ class SmtpProvider:
             if connection is not None:
                 try:
                     connection.close()
-                except Exception:
+                # Best-effort close after probe failure.
+                except Exception:  # nosec B110
                     pass
 
 

@@ -7,7 +7,8 @@ size, with no credit for source deletions or replacement reclamation.
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import cast
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
@@ -17,7 +18,7 @@ from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
-from apps.file_library.models import CapacityReview, Entry, Library, StorageImpact
+from apps.file_library.models import CapacityReview, Content, Entry, Library, StorageImpact
 from apps.publications.models import DatasetPublication, DocumentArtifact
 from apps.tablets.models import AppInstallation, Tablet
 
@@ -121,11 +122,11 @@ def project(library, operation):
     for entry in Entry.objects.filter(library__in=libraries, is_folder=False).select_related(
         "content"
     ):
-        desired[_identity(entry.library_id, entry.id, entry.content.sha256)] = (
+        desired[_identity(entry.library_id, entry.id, cast(Content, entry.content).sha256)] = (
             str(entry.library_id),
             str(entry.id),
-            entry.content.sha256,
-            entry.content.size_bytes,
+            cast(Content, entry.content).sha256,
+            cast(Content, entry.content).size_bytes,
         )
     # A replacement never takes credit for reclaiming the previous ciphertext.
     for key in list(desired):
@@ -226,12 +227,14 @@ def project(library, operation):
                     for p in publications
                     if p.source_snapshot
                     and p.source_snapshot["library"]["id"] == owner_id
-                    and p.published_at <= observed
+                    and cast(datetime, p.published_at) <= cast(datetime, observed)
                 ]
                 if eligible:
                     baseline.update(snapshots[eligible[-1].id])
             for impact in impacts:
-                if str(impact.library_id) in relevant and impact.created_at > observed:
+                if str(impact.library_id) in relevant and impact.created_at > cast(
+                    datetime, observed
+                ):
                     value = (
                         str(impact.library_id),
                         str(impact.document_id),
@@ -244,7 +247,9 @@ def project(library, operation):
                     publication.station_id is None
                     or publication.station_id == tablet["vehicle_assignments__vehicle__station_id"]
                 )
-                if scope_matches and publication.published_at > observed:
+                if scope_matches and cast(datetime, publication.published_at) > cast(
+                    datetime, observed
+                ):
                     if publication.id not in snapshots:
                         reason = "publication_history_unavailable"
                     else:
@@ -256,8 +261,8 @@ def project(library, operation):
             encrypted_identity(value) for value in needed.values() if encrypted_identity(value)
         )
         incremental = sum(size for identity, size in ciphertexts.items() if identity not in cached)
-        projected = None if reason else free - incremental
-        if not reason and projected * 5 < total:
+        projected = None if reason else cast(int, free) - incremental
+        if not reason and cast(int, projected) * 5 < cast(int, total):
             reason = "projected_low_storage"
         results.append(
             {

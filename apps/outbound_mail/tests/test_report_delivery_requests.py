@@ -128,10 +128,13 @@ def test_unknown_processing_and_conflicting_replays_never_send(request_context, 
 def test_provider_unavailable_is_terminal_unknown_without_resend(request_context, monkeypatch):
     installation, person, _credential = request_context
     calls = []
+
+    def unavailable_delivery(**kwargs):
+        calls.append(kwargs)
+        return ReportDeliveryOutcome(code=ReportDeliveryCode.PROVIDER_UNAVAILABLE)
+
     monkeypatch.setattr(
-        "apps.outbound_mail.report_delivery_requests.deliver_outbound_report",
-        lambda **kwargs: calls.append(kwargs)
-        or ReportDeliveryOutcome(code=ReportDeliveryCode.PROVIDER_UNAVAILABLE),
+        "apps.outbound_mail.report_delivery_requests.deliver_outbound_report", unavailable_delivery
     )
     request_id = uuid4()
     first = submit_tablet_report_delivery(
@@ -191,9 +194,12 @@ def test_postgresql_concurrent_claims_send_at_most_once(request_context, monkeyp
         (TabletReportDeliveryRequest.State.SUCCESS, ReportDeliveryCode.DELIVERED),
         ("UNKNOWN", "delivery_indeterminate"),
     }
-    assert TabletReportDeliveryRequest.objects.filter(
-        installation=installation, delivery_request_id=request_id
-    ).count() == 1
+    assert (
+        TabletReportDeliveryRequest.objects.filter(
+            installation=installation, delivery_request_id=request_id
+        ).count()
+        == 1
+    )
     replay = submit_tablet_report_delivery(
         installation=installation,
         delivery_request_id=request_id,
@@ -210,11 +216,12 @@ def test_postgresql_concurrent_claims_send_at_most_once(request_context, monkeyp
 def test_authenticated_multipart_endpoint_uses_idempotency_service(request_context, monkeypatch):
     installation, person, credential = request_context
     calls = []
-    monkeypatch.setattr(
-        "apps.tablets.api.submit_tablet_report_delivery",
-        lambda **kwargs: calls.append(kwargs)
-        or type("Result", (), {"state": "SUCCESS", "code": "delivered"})(),
-    )
+
+    def successful_delivery(**kwargs):
+        calls.append(kwargs)
+        return type("Result", (), {"state": "SUCCESS", "code": "delivered"})()
+
+    monkeypatch.setattr("apps.tablets.api.submit_tablet_report_delivery", successful_delivery)
     request_id = uuid4()
     client = Client()
     response = client.post(
@@ -270,8 +277,11 @@ def _usable(provider):
 def _endpoint_post(client, credential, request_id, recipient_id, content, filename="client.pdf"):
     return client.post(
         "/api/v1/tablet/report-delivery",
-        {"delivery_request_id": str(request_id), "recipient_personnel_id": str(recipient_id),
-         "pdf": SimpleUploadedFile(filename, content, "application/pdf")},
+        {
+            "delivery_request_id": str(request_id),
+            "recipient_personnel_id": str(recipient_id),
+            "pdf": SimpleUploadedFile(filename, content, "application/pdf"),
+        },
         HTTP_AUTHORIZATION=f"Bearer {credential}",
     )
 

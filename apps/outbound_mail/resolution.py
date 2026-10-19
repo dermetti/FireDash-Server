@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -130,7 +131,8 @@ def _resolve_department_smtp_provider(
     try:
         from apps.outbound_mail.smtp import SmtpEffectiveConfiguration, SmtpProvider
 
-        password = ""
+        # Absence/clearing of credentials.
+        password = ""  # nosec B105
         if configuration.smtp_username:
             password = decrypt_application_secret(
                 configuration.smtp_password_encrypted,
@@ -139,7 +141,7 @@ def _resolve_department_smtp_provider(
         provider = SmtpProvider(
             configuration=SmtpEffectiveConfiguration(
                 host=configuration.smtp_host,
-                port=configuration.smtp_port,
+                port=cast(int, configuration.smtp_port),
                 tls_mode=configuration.smtp_tls_mode,
                 sender_name=configuration.smtp_sender_name,
                 sender_email=configuration.smtp_sender_email,

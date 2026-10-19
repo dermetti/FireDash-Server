@@ -142,7 +142,7 @@ def test_source_diff_uses_the_canonical_payload_and_hides_pdf_hash_values():
 
 
 def test_source_diff_is_deterministic_and_bounds_its_preview():
-    before = {"people": []}
+    before: dict[str, list[dict[str, str]]] = {"people": []}
     after = {
         "people": [
             {"id": f"person-{number:02d}", "display_name": f"Person {number:02d}"}

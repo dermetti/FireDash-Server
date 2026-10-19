@@ -250,6 +250,8 @@ def native_output(broker, tmp_path, monkeypatch):
 def test_native_output_rejects_path_redirection_and_special_files(
     broker, native_output, tmp_path, attack
 ):
+    if sys.platform != "linux":
+        pytest.skip("requires Linux dir_fd, O_NOFOLLOW, ownership and FIFO semantics")
     root, job, output = native_output
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -298,6 +300,8 @@ def test_native_output_rejects_path_redirection_and_special_files(
 def test_native_directory_replacement_cannot_redirect_finalization(
     broker, native_output, tmp_path, monkeypatch
 ):
+    if sys.platform != "linux":
+        pytest.skip("requires Linux dir_fd, O_NOFOLLOW, ownership and FIFO semantics")
     root, job, output = native_output
     outside = tmp_path / "outside"
     outside.mkdir()

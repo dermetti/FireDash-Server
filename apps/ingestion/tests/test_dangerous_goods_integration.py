@@ -175,12 +175,15 @@ def test_build_encrypts_and_publishes_exact_retained_source(
         PUBLICATION_SIGNING_KEY_VERSION="test",
     ):
         completed_job = process_next_job()
+        assert completed_job is not None
         assert completed_job.status == PublicationJob.Status.SUCCEEDED, completed_job.error_message
         publication = DatasetPublication.objects.get(
             department=department, dataset_type_code="dangerous_goods"
         )
         ciphertext = (tmp_path / "artifacts" / publication.artifact_path).read_bytes()
+        assert publication.artifact_wrapped_cek is not None
         cek = aes_key_unwrap(kek, bytes(publication.artifact_wrapped_cek))
+        assert publication.artifact_nonce is not None
         assert AESGCM(cek).decrypt(bytes(publication.artifact_nonce), ciphertext, None) == payload
     assert publication.status == DatasetPublication.Status.PUBLISHED
     assert publication.artifact_status == DatasetPublication.ArtifactStatus.READY

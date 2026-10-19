@@ -1,4 +1,6 @@
 # ruff: noqa: E501
+from typing import Any, cast
+
 from django import forms
 
 from apps.ingestion.models import ImportBatch
@@ -118,8 +120,8 @@ class FirePlanCoordinateReviewForm(forms.Form):
         ),
     )
 
-    def __init__(self, *args, longitude: object, latitude: object, **kwargs) -> None:
-        super().__init__(
+    def __init__(self, *args: Any, longitude: object, latitude: object, **kwargs: Any) -> None:
+        super().__init__(  # type: ignore[misc]  # args forwards only form data/files.
             *args,
             initial={"longitude": longitude, "latitude": latitude},
             **kwargs,
@@ -127,7 +129,7 @@ class FirePlanCoordinateReviewForm(forms.Form):
         self._existing_coordinates = {"longitude": longitude, "latitude": latitude}
 
     def clean(self):
-        cleaned = super().clean()
+        cleaned = cast(dict[str, Any], super().clean())
         for field in ("longitude", "latitude"):
             if field in self.errors:
                 continue
@@ -188,17 +190,19 @@ class StationVehicleResolutionForm(forms.Form):
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )
 
-    def __init__(self, *args, department, resolution_kind: str, initial=None, **kwargs):
-        super().__init__(*args, initial=initial, **kwargs)
+    def __init__(self, *args: Any, department, resolution_kind: str, initial=None, **kwargs: Any):
+        super().__init__(*args, initial=initial, **kwargs)  # type: ignore[misc]  # data/files forwarding
         self.resolution_kind = resolution_kind
-        self.fields["station_id"].queryset = Station.objects.filter(
-            department=department, active=True
-        ).order_by("name", "short_code", "id")
+        cast(
+            "forms.ModelChoiceField[Station]", self.fields["station_id"]
+        ).queryset = Station.objects.filter(department=department, active=True).order_by(
+            "name", "short_code", "id"
+        )
         if resolution_kind == "ambiguous":
             self.fields["station_id"].required = True
 
     def clean(self):
-        cleaned = super().clean()
+        cleaned = cast(dict[str, Any], super().clean())
         if self.resolution_kind == "missing":
             for field in ("short_code", "name"):
                 if not cleaned.get(field, "").strip():

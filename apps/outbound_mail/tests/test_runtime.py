@@ -47,7 +47,7 @@ def test_canonical_message_supports_one_recipient_and_typed_attachments() -> Non
         lambda: MailAddress(display_name="Recipient", email="not-an-email"),
         lambda: MailAttachment(filename="../report.pdf", mime_type="application/pdf", content=b"x"),
         lambda: MailAttachment(filename="report.pdf", mime_type="not a mime type", content=b"x"),
-        lambda: MailAttachment(filename="report.pdf", mime_type="application/pdf", content="x"),
+        lambda: MailAttachment(filename="report.pdf", mime_type="application/pdf", content="x"),  # type: ignore[arg-type]  # Deliberately invalid input.
         lambda: OutboundMessage(
             sender=MailAddress(display_name="Sender", email="sender@example.test"),
             recipient=MailAddress(display_name="Recipient", email="recipient@example.test"),
@@ -65,7 +65,7 @@ def test_canonical_message_supports_one_recipient_and_typed_attachments() -> Non
             recipient=MailAddress(display_name="Recipient", email="recipient@example.test"),
             subject="subject",
             body="body",
-            attachments=[],
+            attachments=[],  # type: ignore[arg-type]  # Deliberately mutable input.
         ),
     ],
 )

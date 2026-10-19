@@ -67,6 +67,22 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/dev.txt
 
+      - name: Supply and verify the FireDash PostgreSQL locale
+        run: |
+          # This Bullseye image ships C.UTF-8 on disk, without the C.utf8 alias
+          # required by the production bootstrap. Change only this disposable
+          # container; never fall back to its en_US.utf8 cluster default.
+          postgres_container="${{ job.services.postgres.id }}"
+          docker exec "$postgres_container" sh -eu -c '
+            locale -a
+            if ! locale -a | grep -Fxq C.utf8; then
+              test -d /usr/lib/locale/C.UTF-8
+              ln -s C.UTF-8 /usr/lib/locale/C.utf8
+            fi
+            test "$(LC_ALL=C.utf8 locale charmap)" = UTF-8
+            locale -a | grep -Fx C.utf8
+          '
+
       - name: Provision PostgreSQL production and test databases
         env:
           PGPASSWORD: postgres_ci
@@ -169,6 +185,10 @@ jobs:
           bash deploy/tests/test_postgres_bootstrap.sh
           bash deploy/tests/test_converge.sh
           bash deploy/tests/test_release_venv.sh
+          bash deploy/tests/test_release_activation.sh
+          bash deploy/tests/test_systemd_quiesce.sh
+          bash deploy/tests/test_verify_django_checks.sh
+          bash deploy/tests/test_restore_target.sh
           bash deploy/tests/test_admin_state.sh
           bash deploy/tests/test_admin_url.sh
           bash deploy/tests/test_hba_verify.sh
@@ -202,7 +222,7 @@ jobs:
           pip-audit -r requirements/dev.txt
 
       - name: Run PostgreSQL/PostGIS test suite
-        run: pytest --ds=config.settings.test
+        run: python -m pytest --ds=config.settings.test -p no:cacheprovider -ra --durations=25
 
       - name: Validate OpenAPI schema
         run: python manage.py spectacular --validate

@@ -209,7 +209,7 @@ def delete_person(*, actor, person: Person) -> None:
     affected_station_ids = _visible_station_ids(person)
     person_id = person.id
     department = person.department
-    metadata = {
+    metadata: dict[str, str | int | bool | None] = {
         "personnel_number": person.personnel_number,
         "display_name": person.display_name,
     }
@@ -337,9 +337,9 @@ def set_retention_policy(
         raise PermissionDenied("A positive retention period and department scope are required.")
     # Serialize initialization as well as updates when no policy row exists yet.
     Department.objects.select_for_update().get(pk=department.pk)
-    policy = PersonnelRetentionPolicy.objects.select_for_update().filter(
-        department=department
-    ).first()
+    policy = (
+        PersonnelRetentionPolicy.objects.select_for_update().filter(department=department).first()
+    )
     if policy is not None and policy.retention_period == retention_period:
         return policy
     if policy is None:

@@ -97,9 +97,12 @@ def test_scope_migration_preserves_ready_artifacts_and_lazily_resigns_them(tmp_p
         }
         assert publications["department"].scope_type == "DEPARTMENT"
         assert publications["station"].scope_type == "STATION"
-        assert LegacyArtifactScopeSignatureUpgrade.objects.filter(
-            publication_id__in=old_publication_ids.values()
-        ).count() == 2
+        assert (
+            LegacyArtifactScopeSignatureUpgrade.objects.filter(
+                publication_id__in=old_publication_ids.values()
+            ).count()
+            == 2
+        )
         for label, publication in publications.items():
             assert publication.artifact_path == publication_artifact_relative_path(
                 department_id=department.id, publication_id=publication.id

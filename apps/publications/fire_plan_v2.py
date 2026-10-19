@@ -7,6 +7,7 @@ manifest/key delivery format.
 
 import hashlib
 from collections.abc import Sequence
+from typing import TYPE_CHECKING, cast
 
 from django.conf import settings
 from django.db import transaction
@@ -16,6 +17,9 @@ from apps.publications.document_artifacts import get_or_create_fire_plan_documen
 from apps.publications.models import DatasetPublication, PublicationFirePlanArtifactReference
 from apps.publications.pdf_bundles import PdfBundleError, read_accepted_pdf
 from apps.reference_data.models import FirePlan
+
+if TYPE_CHECKING:
+    from uuid import UUID
 
 
 def _snapshot_fire_plans(publication: DatasetPublication) -> list[tuple[FirePlan, str]]:
@@ -45,7 +49,7 @@ def _snapshot_fire_plans(publication: DatasetPublication) -> list[tuple[FirePlan
     plans = {
         str(plan.id): plan
         for plan in FirePlan.objects.filter(
-            department_id=publication.department_id,
+            department_id=cast("UUID", publication.department_id),
             id__in=[plan_id for plan_id, _ in identities],
         )
     }

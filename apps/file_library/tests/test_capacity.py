@@ -526,7 +526,7 @@ def serialized_operations(first, second, *, while_blocked=None):
     """
     assert connection.vendor == "postgresql"
     held, release = Event(), Event()
-    second_pid = Queue()
+    second_pid: Queue[int] = Queue()
 
     def run(action, *, hold=False):
         close_old_connections()

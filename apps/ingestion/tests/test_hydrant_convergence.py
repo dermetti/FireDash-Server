@@ -92,7 +92,13 @@ def test_exact_hydrant_reimport_is_unchanged_and_confirmation_is_a_noop(context)
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     "changes",
-    [{"diameter_mm": 125}, {"longitude": 10.1}, {"location": "Fußweg"}, {"hydrant_type": "wall"}, {"status": "INACTIVE"}],
+    [
+        {"diameter_mm": 125},
+        {"longitude": 10.1},
+        {"location": "Fußweg"},
+        {"hydrant_type": "wall"},
+        {"status": "INACTIVE"},
+    ],
 )
 def test_each_hydrant_business_field_change_is_an_update(context, changes):
     actor, department = context

@@ -104,7 +104,11 @@ def _signature_payload(
             "scope": {
                 "type": publication.scope_type,
                 "dataset_type_code": publication.dataset_type_code,
-                **({"department_id": str(publication.department_id)} if publication.department_id else {}),
+                **(
+                    {"department_id": str(publication.department_id)}
+                    if publication.department_id
+                    else {}
+                ),
                 **({"station_id": str(publication.station_id)} if publication.station_id else {}),
             },
             "kek_version": settings.PUBLICATION_KEK_VERSION,
@@ -362,11 +366,17 @@ def upgrade_legacy_scope_signature(*, publication) -> bool:
             path.relative_to(root)
             ciphertext = path.read_bytes()
         except (OSError, ValueError) as error:
-            raise ArtifactError("Migrated publication artifact is unavailable for signature upgrade.") from error
+            raise ArtifactError(
+                "Migrated publication artifact is unavailable for signature upgrade."
+            ) from error
         if hashlib.sha256(ciphertext).hexdigest() != publication.artifact_sha256:
             raise ArtifactError("Migrated publication artifact integrity check failed.")
         signing_key = _credential(settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH, "signing")
-        if len(signing_key) != 32 or publication.artifact_wrapped_cek is None or publication.artifact_nonce is None:
+        if (
+            len(signing_key) != 32
+            or publication.artifact_wrapped_cek is None
+            or publication.artifact_nonce is None
+        ):
             raise ArtifactError("Migrated publication cryptographic metadata is unavailable.")
         publication.artifact_signature = Ed25519PrivateKey.from_private_bytes(signing_key).sign(
             _signature_payload(

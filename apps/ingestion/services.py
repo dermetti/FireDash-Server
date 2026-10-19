@@ -14,7 +14,7 @@ import os
 import shutil
 import uuid
 import zipfile
-from typing import cast
+from typing import Any, cast
 
 from django.conf import settings
 from django.contrib.gis.geos import Point
@@ -721,7 +721,7 @@ def _phonebook_intent(*, rows, department):
     return intent, review_items
 
 
-def phonebook_review_context(batch: ImportBatch) -> dict[str, object]:
+def phonebook_review_context(batch: ImportBatch) -> dict[str, Any]:
     rows = [dict(row) for row in batch.normalized_intent.get("rows", []) if isinstance(row, dict)]
     current = next((row for row in rows if row.get("resolution") == "pending"), None)
     review_rows = [row for row in rows if row.get("candidates")]
@@ -963,8 +963,8 @@ def create_preview(
         elif domain == ImportBatch.Domain.STATION_VEHICLES:
             if import_format != ImportBatch.Format.CSV or import_mode != ImportBatch.Mode.UPSERT:
                 raise ImportError("Station and Vehicle imports require CSV upsert mode.")
-            parsed_rows = parse_station_vehicles(payload=payload, import_format=import_format)
-            intent, review_items = _station_vehicle_intent(rows=parsed_rows, department=department)
+            vehicle_rows = parse_station_vehicles(payload=payload, import_format=import_format)
+            intent, review_items = _station_vehicle_intent(rows=vehicle_rows, department=department)
             baseline = _station_vehicle_baseline(department=department)
             counts, updates = _preview_station_vehicles(intent=intent)
             updates_truncated = False
@@ -1323,7 +1323,7 @@ def _apply_phonebook(*, batch, actor):
         elif resolution == "update":
             entry = (
                 PhonebookEntry.objects.select_for_update()
-                .filter(id=row.get("target_id"), department=batch.department)
+                .filter(id=cast(str, row.get("target_id")), department=batch.department)
                 .first()
             )
             if entry is None or entry_fingerprint(entry) != row.get("target_fingerprint"):
@@ -1588,7 +1588,7 @@ def _apply_station_vehicles(*, batch, actor):
             raise ImportError(
                 "A Station already uses this Short Code or name; re-preview is required."
             )
-        station = create_station(actor=actor, department=department, **values)
+        station = create_station(actor=actor, department=department, **cast(dict[str, Any], values))
         stations.append(station)
         station_by_key[key] = station
         existing_code_keys.add(code_key)
@@ -1629,7 +1629,7 @@ def _apply_station_vehicles(*, batch, actor):
             raise ImportError(
                 "A Station already uses this Short Code or name; re-preview is required."
             )
-        station = create_station(actor=actor, department=department, **values)
+        station = create_station(actor=actor, department=department, **cast(dict[str, Any], values))
         stations.append(station)
         station_by_key[resolution_key] = station
         existing_code_keys.add(code_key)
@@ -2101,7 +2101,7 @@ def approve_all_review_decisions(*, actor, batch_id) -> ImportBatch:
     return batch
 
 
-def review_context(batch: ImportBatch, index: int | None = None) -> dict[str, object]:
+def review_context(batch: ImportBatch, index: int | None = None) -> dict[str, Any]:
     """Build the wizard view context for one document-import preview."""
     items = [
         item for item in batch.validation_summary.get("review_items", []) if isinstance(item, dict)
@@ -2205,8 +2205,8 @@ def set_review_coordinates(
     if row_index < 0 or row_index >= len(rows) or not isinstance(rows[row_index], dict):
         raise ImportError("Coordinate review target is unavailable.")
     try:
-        parsed_longitude = float(longitude)
-        parsed_latitude = float(latitude)
+        parsed_longitude = float(cast(Any, longitude))
+        parsed_latitude = float(cast(Any, latitude))
     except (TypeError, ValueError) as error:
         raise ImportError("Longitude and latitude must be numeric.") from error
     if not -180 <= parsed_longitude <= 180:

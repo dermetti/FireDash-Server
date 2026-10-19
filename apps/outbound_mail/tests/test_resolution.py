@@ -1,5 +1,6 @@
 import base64
 import json
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +21,7 @@ from apps.outbound_mail.resolution import (
     OutboundMailUnavailableReason,
     resolve_department_mail_provider,
 )
-from apps.outbound_mail.runtime import VerificationOutcome
+from apps.outbound_mail.runtime import MailProvider, VerificationOutcome
 from apps.outbound_mail.services import (
     configure_brevo,
     configure_department_smtp,
@@ -137,7 +138,7 @@ def test_system_api_uses_generic_registry_only_after_verified_readiness(
     class FakeProvider:
         provider_id = BREVO
 
-    RUNTIME_PROVIDER_REGISTRY[BREVO] = FakeProvider()
+    RUNTIME_PROVIDER_REGISTRY[BREVO] = cast(MailProvider, FakeProvider())
     try:
         result = resolve_department_mail_provider(department=department)
     finally:

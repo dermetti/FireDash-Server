@@ -19,30 +19,77 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="TemporaryStationAccess",
             fields=[
-                ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4, editable=False, primary_key=True, serialize=False
+                    ),
+                ),
                 ("activated_at", models.DateTimeField()),
                 ("expires_at", models.DateTimeField()),
                 ("revoked_at", models.DateTimeField(blank=True, null=True)),
                 ("revocation_reason", models.CharField(blank=True, max_length=64)),
-                ("department", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to="organizations.department")),
-                ("station", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to="organizations.station")),
-                ("user", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="temporary_station_file_accesses", to=settings.AUTH_USER_MODEL)),
+                (
+                    "department",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT, to="organizations.department"
+                    ),
+                ),
+                (
+                    "station",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT, to="organizations.station"
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="temporary_station_file_accesses",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
         migrations.AddConstraint(
             model_name="temporarystationaccess",
-            constraint=models.UniqueConstraint(condition=models.Q(("revoked_at__isnull", True)), fields=("user",), name="one_active_temporary_station_access"),
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("revoked_at__isnull", True)),
+                fields=("user",),
+                name="one_active_temporary_station_access",
+            ),
         ),
         migrations.AddConstraint(
             model_name="temporarystationaccess",
-            constraint=models.CheckConstraint(condition=models.Q(("expires_at__gt", models.F("activated_at"))), name="temporary_station_access_positive_duration"),
+            constraint=models.CheckConstraint(
+                condition=models.Q(("expires_at__gt", models.F("activated_at"))),
+                name="temporary_station_access_positive_duration",
+            ),
         ),
         migrations.AddConstraint(
             model_name="temporarystationaccess",
-            constraint=models.CheckConstraint(condition=models.Q(("expires_at__lte", models.F("activated_at") + datetime.timedelta(seconds=21600))), name="temporary_station_access_six_hour_max"),
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    (
+                        "expires_at__lte",
+                        models.F("activated_at") + datetime.timedelta(seconds=21600),
+                    )
+                ),
+                name="temporary_station_access_six_hour_max",
+            ),
         ),
         migrations.AddConstraint(
             model_name="temporarystationaccess",
-            constraint=models.CheckConstraint(condition=models.Q(models.Q(("revocation_reason", ""), ("revoked_at__isnull", True)), models.Q(("revoked_at__isnull", False), models.Q(("revocation_reason", ""), _negated=True)), _connector="OR"), name="temporary_station_access_revocation_state"),
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    models.Q(("revocation_reason", ""), ("revoked_at__isnull", True)),
+                    models.Q(
+                        ("revoked_at__isnull", False),
+                        models.Q(("revocation_reason", ""), _negated=True),
+                    ),
+                    _connector="OR",
+                ),
+                name="temporary_station_access_revocation_state",
+            ),
         ),
     ]

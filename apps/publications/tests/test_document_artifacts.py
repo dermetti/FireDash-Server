@@ -227,11 +227,12 @@ def test_document_artifact_promotion_is_atomic_and_identity_addressed(tmp_path, 
     artifact_id = uuid.uuid4()
     replaced = []
     real_replace = os.replace
-    monkeypatch.setattr(
-        artifacts.os,
-        "replace",
-        lambda src, dst: (replaced.append((src, dst)), real_replace(src, dst))[1],
-    )
+
+    def record_replace(src, dst):
+        replaced.append((src, dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(artifacts.os, "replace", record_replace)
     with override_settings(
         PUBLICATION_ARTIFACT_ROOT=root,
         PUBLICATION_ARTIFACT_TEMP_ROOT=root / ".tmp",

@@ -1,3 +1,5 @@
+from typing import Any
+
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
@@ -69,7 +71,7 @@ def update_station(
     )
     station = Station.objects.select_for_update().select_related("department").get(pk=station.pk)
     require_department_admin(actor, station.department)
-    normalized = {
+    normalized: dict[str, Any] = {
         "name": name.strip(),
         "short_code": short_code.strip(),
         "street": street.strip(),

@@ -97,9 +97,12 @@ def test_hydrant_modal_lifecycle_delete_publication_and_scope(client, hydrant_sc
     detail_body = detail.content.decode()
     assert "Location" in detail_body
     assert "Fahrbahn" in detail_body
-    assert "Fahrbahn" not in client.get(
-        reverse("reference-data-hydrants", args=(department.id,))
-    ).content.decode()
+    assert (
+        "Fahrbahn"
+        not in client.get(
+            reverse("reference-data-hydrants", args=(department.id,))
+        ).content.decode()
+    )
     assert "hydrant-action-modal-container" in detail_body
     assert 'data-bs-toggle="modal"' not in detail_body
     assert "htmx:afterSwap" in detail_body
@@ -120,7 +123,12 @@ def test_hydrant_modal_lifecycle_delete_publication_and_scope(client, hydrant_sc
     updated = client.post(edit_url, _payload())
     assert updated.status_code == 302
     hydrant.refresh_from_db()
-    assert (hydrant.location, hydrant.hydrant_type, hydrant.flow_information, hydrant.diameter_mm) == (
+    assert (
+        hydrant.location,
+        hydrant.hydrant_type,
+        hydrant.flow_information,
+        hydrant.diameter_mm,
+    ) == (
         "Fahrbahn",
         "Above ground",
         "1200 l/min",

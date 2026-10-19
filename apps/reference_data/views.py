@@ -75,9 +75,7 @@ def _configure_live_list_filters(form, *, request: HttpRequest, target: str, for
         field.widget.attrs.update(
             {
                 "hx-get": request.path,
-                "hx-trigger": "input changed delay:1s"
-                if name == "q"
-                else "change",
+                "hx-trigger": "input changed delay:1s" if name == "q" else "change",
                 "hx-target": target,
                 "hx-swap": "outerHTML",
                 "hx-include": f"#{form_id}",
@@ -399,9 +397,7 @@ def _phonebook_manual_review_state(*, request: HttpRequest, department: Departme
         if station is None:
             raise ValueError("The selected Phonebook station is no longer available.")
     values = {
-        field: stored.get(field, "")
-        for field in PHONEBOOK_ENTRY_FIELDS
-        if field != "station"
+        field: stored.get(field, "") for field in PHONEBOOK_ENTRY_FIELDS if field != "station"
     }
     values["station"] = station
     proposed = _phonebook_proposed_entry(department=department, values=values)

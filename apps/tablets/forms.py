@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 from django import forms
 
 from apps.tablets.models import Tablet
@@ -36,7 +38,7 @@ class TabletForm(forms.Form):
             # A browser can still submit a different readonly value. Replace it
             # before binding so errors never echo an untrusted manual override.
             if self.is_bound:
-                data = self.data.copy()
+                data = cast(Any, self.data).copy()
                 data["asset_number"] = preview
                 self.data = data
 

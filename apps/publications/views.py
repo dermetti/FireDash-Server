@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
@@ -87,7 +89,7 @@ def _eligible_predecessor_exists(scope_id, *, before_version: int) -> bool:
     ).exists()
 
 
-def _row_actions(row: dict[str, object]) -> dict[str, bool]:
+def _row_actions(row: dict[str, Any]) -> dict[str, bool]:
     """UI affordances only; Phase 4A services remain authoritative."""
     state = row["state"]
     has_predecessor = bool(row["has_eligible_predecessor"])
@@ -108,7 +110,7 @@ def _row_actions(row: dict[str, object]) -> dict[str, bool]:
     }
 
 
-def _decorate_scope_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def _decorate_scope_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     scope_ids = [row["scope_id"] for row in rows]
     predecessor_versions: dict[object, list[int]] = {}
     if scope_ids:
@@ -223,7 +225,7 @@ def _filtered_scope_queryset(department: Department, selected_filter: str):
     return queryset
 
 
-def _publication_list_context(request: HttpRequest, department: Department) -> dict[str, object]:
+def _publication_list_context(request: HttpRequest, department: Department) -> dict[str, Any]:
     selected_filter = request.GET.get("state", "")
     if selected_filter not in SCOPE_FILTERS:
         selected_filter = ""
@@ -251,7 +253,7 @@ def _publication_list_context(request: HttpRequest, department: Department) -> d
     }
 
 
-def _scope_row_context(scope: DatasetScopeState) -> dict[str, object]:
+def _scope_row_context(scope: DatasetScopeState) -> dict[str, Any]:
     rows = _decorate_scope_rows(scope_operational_states_for_scopes([scope]))
     if not rows:
         raise PermissionDenied("Dataset scope is unavailable.")
@@ -267,7 +269,7 @@ def _scope_title(scope: DatasetScopeState) -> str:
     )
 
 
-def _scope_history_context(scope: DatasetScopeState, page_number) -> dict[str, object]:
+def _scope_history_context(scope: DatasetScopeState, page_number) -> dict[str, Any]:
     publications = (
         DatasetPublication.objects.filter(scope_state=scope)
         .select_related("created_by", "published_by")
@@ -402,7 +404,7 @@ def publication_inspect_changes(request: HttpRequest, scope_id) -> HttpResponse:
             "scope": scope,
             "scope_title": _scope_title(scope),
             "candidate": candidate,
-            "diff": source_diff(current.source_snapshot, target_snapshot),
+            "diff": source_diff(current.source_snapshot, cast(dict[str, Any], target_snapshot)),
         },
     )
 
@@ -513,7 +515,7 @@ def bulk_rebuild(request: HttpRequest, department_id) -> HttpResponse:
 @login_required
 @require_http_methods(["GET", "POST"])
 def publication_lifecycle_modal(request: HttpRequest, publication_id, action: str) -> HttpResponse:
-    action_config = {
+    action_config: dict[str, dict[str, Any]] = {
         "delete-staged": {
             "title": "Delete staged publication",
             "button": "Delete staged publication",

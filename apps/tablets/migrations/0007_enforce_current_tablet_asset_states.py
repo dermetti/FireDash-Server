@@ -24,9 +24,7 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="tablet",
             constraint=models.CheckConstraint(
-                condition=models.Q(
-                    ("status__in", ("INACTIVE", "ACTIVE", "LOST", "RETIRED"))
-                ),
+                condition=models.Q(("status__in", ("INACTIVE", "ACTIVE", "LOST", "RETIRED"))),
                 name="tablet_status_is_current_asset_state",
             ),
         ),

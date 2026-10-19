@@ -2,9 +2,13 @@ import os
 import shutil
 import uuid
 from pathlib import Path
+from types import ModuleType
+from typing import Any, cast
 
 try:  # pragma: no cover - Windows has no Unix group database.
-    import grp
+    import grp as _grp
+
+    grp: ModuleType | None = _grp
 except ModuleNotFoundError:  # pragma: no cover - exercised through configured-group tests.
     grp = None
 
@@ -116,7 +120,7 @@ def _accepted_group_id() -> int | None:
     if grp is None:
         raise StorageError("Accepted document reader group is unavailable.")
     try:
-        return grp.getgrnam(group_name).gr_gid
+        return cast(int, grp.getgrnam(group_name).gr_gid)
     except KeyError as error:
         raise StorageError("Accepted document reader group is unavailable.") from error
 
@@ -131,5 +135,5 @@ def _apply_accepted_group(path: Path, *, accepted_group_id: int | None) -> None:
     """
     if accepted_group_id is None:
         return
-    os.chown(path, -1, accepted_group_id)
+    cast(Any, os).chown(path, -1, accepted_group_id)
     os.chmod(path, 0o640)

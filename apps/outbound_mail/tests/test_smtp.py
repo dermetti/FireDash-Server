@@ -2,6 +2,7 @@ import smtplib
 import ssl
 
 import pytest
+from django.core.mail import EmailMessage
 
 from apps.outbound_mail.models import SystemMailConfiguration
 from apps.outbound_mail.network_policy import ResolvedSmtpDestination
@@ -20,7 +21,7 @@ class FakeConnection:
     def __init__(self, *, send_result: int = 1, open_error: Exception | None = None) -> None:
         self.send_result = send_result
         self.open_error = open_error
-        self.messages = []
+        self.messages: list[EmailMessage] = []
         self.opened = False
         self.closed = False
 
@@ -120,7 +121,7 @@ def test_smtp_maps_canonical_message_in_memory_for_both_approved_tls_modes(
         ),
     ],
 )
-def test_smtp_failures_are_sanitized_and_never_retried(error, error_type) -> None:
+def test_smtp_failures_are_sanitized_and_never_retried(error, error_type, monkeypatch) -> None:
     connection = FakeConnection()
 
     def factory(**kwargs):
@@ -131,7 +132,7 @@ def test_smtp_failures_are_sanitized_and_never_retried(error, error_type) -> Non
         connection_factory=factory,
         destination_resolver=_public_destination,
     )
-    connection.send_messages = lambda messages: (_ for _ in ()).throw(error)
+    monkeypatch.setattr(connection, "send_messages", lambda messages: (_ for _ in ()).throw(error))
     with pytest.raises(error_type) as raised:
         provider.send(_message())
     assert "response" not in str(raised.value)

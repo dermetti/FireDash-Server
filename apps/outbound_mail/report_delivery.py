@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import BinaryIO
+from typing import BinaryIO, cast
 from uuid import UUID
 
 from apps.audit.services import record_event
@@ -15,6 +15,7 @@ from apps.outbound_mail.report_admission import (
 from apps.outbound_mail.resolution import resolve_department_mail_provider
 from apps.outbound_mail.runtime import (
     MailAttachment,
+    MailProvider,
     MailProviderError,
     MailSendResult,
     MessageRejectedError,
@@ -97,7 +98,7 @@ def deliver_outbound_report(
 
     try:
         message = OutboundMessage(
-            sender=resolution.provider.sender_identity,
+            sender=cast(MailProvider, resolution.provider).sender_identity,
             recipient=recipient_to_mail_address(recipient.email),
             subject=REPORT_SUBJECT,
             body=REPORT_BODY,
@@ -109,7 +110,7 @@ def deliver_outbound_report(
                 ),
             ),
         )
-        result = resolution.provider.send(message)
+        result = cast(MailProvider, resolution.provider).send(message)
         if not isinstance(result, MailSendResult):
             raise ProviderUnavailableError()
     except MailProviderError as error:

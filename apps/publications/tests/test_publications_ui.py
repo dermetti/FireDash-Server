@@ -586,6 +586,7 @@ def test_inspect_changes_uses_the_latest_coalesced_staged_snapshot(client, publi
     )
     update_hydrant(actor=admin, hydrant=hydrant, street="Third street")
     staged.refresh_from_db()
+    assert staged.source_snapshot is not None
     assert staged.source_snapshot["features"][0]["properties"]["street"] == "Third street"
 
     client.force_login(admin)

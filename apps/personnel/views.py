@@ -66,9 +66,7 @@ def _configure_live_list_filters(form: PersonnelFilterForm, *, request: HttpRequ
         field.widget.attrs.update(
             {
                 "hx-get": request.path,
-                "hx-trigger": "input changed delay:1s"
-                if name == "q"
-                else "change",
+                "hx-trigger": "input changed delay:1s" if name == "q" else "change",
                 "hx-target": "#person-results",
                 "hx-swap": "outerHTML",
                 "hx-include": "#person-filter-form",

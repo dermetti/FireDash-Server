@@ -215,6 +215,16 @@ Python lint/format and diff checks were also performed. Git Bash could not run
 native symlink activation/restore checks or positive Unix-mode restore handling;
 WSL was inaccessible. No live upgrade, rollback, restart or key rotation was run.
 
+Package 4 adds the four portable helper scripts to ordinary CI and keeps the
+privileged rotation helper excluded. The full serial regression, locale-contract
+correction and per-environment skip accounting are documented in
+[development.md](development.md#ci-postgresql-locale-contract). Supplying the
+missing locale spelling is confined to the disposable CI PostgreSQL container;
+production SQL and compatibility checks remain unchanged. Linux CI should run
+the native filesystem/symlink branches, but does not replace the installed-host
+checks below. No Package 4 result authorizes a testserver installation or rollback
+drill.
+
 Perform these checks later on the controlled Debian 13 testserver:
 
 1. In an isolated checkout with the test PostgreSQL settings configured, run

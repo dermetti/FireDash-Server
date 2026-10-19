@@ -10,11 +10,15 @@ class Migration(migrations.Migration):
             name="domain",
             field=models.CharField(
                 choices=[
-                    ("hydrants", "Hydrants"), ("personnel", "Personnel"),
-                    ("fire_plans", "Fire plans"), ("klgv_plans", "KLGV plans"),
-                    ("station_vehicles", "Stations and vehicles"), ("phonebook", "Phonebook"),
+                    ("hydrants", "Hydrants"),
+                    ("personnel", "Personnel"),
+                    ("fire_plans", "Fire plans"),
+                    ("klgv_plans", "KLGV plans"),
+                    ("station_vehicles", "Stations and vehicles"),
+                    ("phonebook", "Phonebook"),
                     ("dangerous_goods", "Dangerous goods"),
-                ], max_length=32,
+                ],
+                max_length=32,
             ),
         )
     ]

@@ -6,7 +6,7 @@ from typing import Any, cast
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.forms import ModelChoiceField
+from django.forms import ChoiceField, ModelChoiceField
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -46,7 +46,7 @@ def _department(request: HttpRequest, department_id) -> Department:
     return department
 
 
-def _dangerous_goods_context(*, department: Department) -> dict[str, object]:
+def _dangerous_goods_context(*, department: Department) -> dict[str, Any]:
     scope = (
         DatasetScopeState.objects.filter(
             department=department, station__isnull=True, dataset_type_code="dangerous_goods"
@@ -101,7 +101,7 @@ def _dangerous_goods_context(*, department: Department) -> dict[str, object]:
     }
 
 
-def _dangerous_goods_preview_details(document: dict[str, Any]) -> dict[str, object]:
+def _dangerous_goods_preview_details(document: dict[str, Any]) -> dict[str, Any]:
     metadata = document.get("metadata", {}) if isinstance(document.get("metadata"), dict) else {}
     goods = document.get("goods", []) if isinstance(document.get("goods"), list) else []
     sources = document.get("sources", []) if isinstance(document.get("sources"), list) else []
@@ -203,7 +203,9 @@ def dangerous_goods_apply(request: HttpRequest, department_id, batch_id) -> Http
 
 
 def _dg_normalize(value: str) -> str:
-    value = "".join(ch for ch in unicodedata.normalize("NFKD", value) if not unicodedata.combining(ch))
+    value = "".join(
+        ch for ch in unicodedata.normalize("NFKD", value) if not unicodedata.combining(ch)
+    )
     return " ".join("".join(ch if ch.isalnum() else " " for ch in value.casefold()).split())
 
 
@@ -249,12 +251,12 @@ def _dg_matches(document: dict[str, Any], query: str) -> list[dict[str, Any]]:
         result["inspection_eri_cards"] = [
             (code, document.get("eri_cards", {}).get(code, [])) for code in eri_codes
         ]
-        result["inspection_placards"] = _dg_placards((good.get("adr", {}) or {}).get("placards", []))
-        result["inspection_aliases"] = [
-            alias for items in aliases.values() for alias in items
-        ]
-        result["inspection_title"] = official.get("de") or official.get("en") or next(
-            iter(official.values()), "—"
+        result["inspection_placards"] = _dg_placards(
+            (good.get("adr", {}) or {}).get("placards", [])
+        )
+        result["inspection_aliases"] = [alias for items in aliases.values() for alias in items]
+        result["inspection_title"] = (
+            official.get("de") or official.get("en") or next(iter(official.values()), "—")
         )
         results.append(result)
     return results[:50]
@@ -266,7 +268,10 @@ def dangerous_goods_inspect(request: HttpRequest, department_id) -> HttpResponse
     department = _department(request, department_id)
     context = {"department": department} | _dangerous_goods_context(department=department)
     query = request.GET.get("q", "").strip()
-    context |= {"query": query, "results": _dg_matches(context["dangerous_goods_document"], query) if query else []}
+    context |= {
+        "query": query,
+        "results": _dg_matches(context["dangerous_goods_document"], query) if query else [],
+    }
     return render(request, "ingestion/_dangerous_goods_inspect_modal.html", context)
 
 
@@ -277,7 +282,7 @@ def _imports_url(*, department: Department, domain: str) -> str:
     avoids both user-controlled continuation URLs and the historical hydrants
     fallback after a successful document import.
     """
-    names = {
+    names: dict[str, str] = {
         ImportBatch.Domain.HYDRANTS: "ingestion-import-hydrants",
         ImportBatch.Domain.PERSONNEL: "ingestion-import-personnel",
         ImportBatch.Domain.FIRE_PLANS: "ingestion-import-fire-plans",
@@ -290,11 +295,13 @@ def _imports_url(*, department: Department, domain: str) -> str:
 
 def _domain_import(request: HttpRequest, department_id, domain: str) -> HttpResponse:
     """Domain routes remain thin adapters over the single authoritative wizard."""
-    request.GET = request.GET.copy()
-    request.GET["domain"] = domain
+    get_data = request.GET.copy()
+    get_data["domain"] = domain
+    request.GET = get_data  # type: ignore[assignment]  # Django accepts mutable QueryDict.
     if request.method == "POST":
-        request.POST = request.POST.copy()
-        request.POST["domain"] = domain
+        post_data = request.POST.copy()
+        post_data["domain"] = domain
+        request.POST = post_data  # type: ignore[assignment]  # Django accepts mutable QueryDict.
     return imports(request, department_id)
 
 
@@ -339,7 +346,7 @@ def import_phonebook(request: HttpRequest, department_id) -> HttpResponse:
 def imports(request: HttpRequest, department_id) -> HttpResponse:
     department = _department(request, department_id)
     requested_domain = request.POST.get("domain") or request.GET.get("domain")
-    domain_configs = {
+    domain_configs: dict[str, dict[str, Any]] = {
         ImportBatch.Domain.HYDRANTS: {
             "formats": (
                 (ImportBatch.Format.GEOJSON, "GeoJSON"),
@@ -409,9 +416,11 @@ def imports(request: HttpRequest, department_id) -> HttpResponse:
     form = ImportUploadForm(request.POST or None, request.FILES or None, initial=initial)
     if target_domain:
         config = domain_configs[target_domain]
-        form.fields["domain"].choices = ((target_domain, ImportBatch.Domain(target_domain).label),)
-        form.fields["import_format"].choices = config["formats"]
-        form.fields["import_mode"].choices = (
+        cast(ChoiceField, form.fields["domain"]).choices = (
+            (target_domain, ImportBatch.Domain(target_domain).label),
+        )
+        cast(ChoiceField, form.fields["import_format"]).choices = config["formats"]
+        cast(ChoiceField, form.fields["import_mode"]).choices = (
             (config["mode"], ImportBatch.Mode(config["mode"]).label),
         )
         form.fields["import_format"].initial = config["formats"][0][0]
@@ -483,7 +492,7 @@ def preview(request: HttpRequest, department_id, batch_id) -> HttpResponse:
         if batch.domain == ImportBatch.Domain.PHONEBOOK
         else _review_context(request, batch)
     )
-    context = {"department": department, "batch": batch, "review": review}
+    context: dict[str, Any] = {"department": department, "batch": batch, "review": review}
     if review is not None:
         context.update(_review_region_context(batch, review=review))
     return render(
@@ -495,7 +504,7 @@ def preview(request: HttpRequest, department_id, batch_id) -> HttpResponse:
     )
 
 
-def _review_context(request: HttpRequest, batch: ImportBatch) -> dict[str, object] | None:
+def _review_context(request: HttpRequest, batch: ImportBatch) -> dict[str, Any] | None:
     if batch.domain not in {
         ImportBatch.Domain.FIRE_PLANS,
         ImportBatch.Domain.KLGV_PLANS,
@@ -515,10 +524,10 @@ def _review_context(request: HttpRequest, batch: ImportBatch) -> dict[str, objec
 def _review_region_context(
     batch: ImportBatch,
     *,
-    review: dict[str, object] | None = None,
+    review: dict[str, Any] | None = None,
     coordinate_data=None,
     coordinate_row_index: int | None = None,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Prepare the shared review fragment, including any staged coordinate form."""
     review = review or review_context(batch)
     # Coordinate review is a capability of spatial/document imports, not a
@@ -600,7 +609,7 @@ def _review_region_context(
 
 def _render_review_region(
     request: HttpRequest, department: Department, batch: ImportBatch, **kwargs
-):
+) -> HttpResponse:
     return render(
         request,
         "ingestion/partials/_review_region.html",
@@ -647,7 +656,7 @@ def _review_decide(request, department_id, batch_id, key, decision) -> HttpRespo
                 batch = set_review_coordinates(
                     actor=request.user,
                     batch_id=batch.id,
-                    row_index=coordinate_item["index"],
+                    row_index=cast(dict[str, Any], coordinate_item)["index"],
                     longitude=coordinate_form.cleaned_data["longitude"],
                     latitude=coordinate_form.cleaned_data["latitude"],
                 )
@@ -701,7 +710,7 @@ def review_station_resolution(request: HttpRequest, department_id, batch_id, key
     review = review_context(batch)
     current = review.get("current")
     kind = str(current.get("kind", "")) if isinstance(current, dict) else ""
-    if kind not in {"missing", "ambiguous"} or str(current.get("key")) != key:
+    if kind not in {"missing", "ambiguous"} or str(cast(dict[str, Any], current).get("key")) != key:
         messages.error(request, "Station review target is unavailable.")
         return redirect("ingestion-preview", department_id=department.id, batch_id=batch.id)
     context = _review_region_context(batch, review=review, coordinate_data=request.POST)

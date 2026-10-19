@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from django import forms
 
@@ -20,9 +20,11 @@ def _bootstrap_fields(form: forms.BaseForm) -> None:
 
 
 if TYPE_CHECKING:
+    _PhonebookEntryModelForm = forms.ModelForm[PhonebookEntry]
     _FirePlanModelForm = forms.ModelForm[FirePlan]
     _KlgvPlanModelForm = forms.ModelForm[KlgvPlan]
 else:
+    _PhonebookEntryModelForm = forms.ModelForm
     _FirePlanModelForm = forms.ModelForm
     _KlgvPlanModelForm = forms.ModelForm
 
@@ -241,7 +243,7 @@ class ActiveForm(forms.Form):
     active = forms.BooleanField(required=False)
 
 
-class PhonebookEntryForm(forms.ModelForm):
+class PhonebookEntryForm(_PhonebookEntryModelForm):
     class Meta:
         model = PhonebookEntry
         fields = (
@@ -259,7 +261,9 @@ class PhonebookEntryForm(forms.ModelForm):
         # with this department, never with an unsaved None department.
         kwargs.setdefault("instance", PhonebookEntry(department=department))
         super().__init__(*args, **kwargs)
-        self.fields["station"].queryset = department.stations.order_by("short_code", "name")
+        cast(
+            "forms.ModelChoiceField[Station]", self.fields["station"]
+        ).queryset = department.stations.order_by("short_code", "name")
         self.fields["station"].required = False
         _bootstrap_fields(self)
 
@@ -280,5 +284,7 @@ class PhonebookFilterForm(forms.Form):
 
     def __init__(self, *args, department, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["station"].queryset = department.stations.order_by("short_code", "name")
+        cast(
+            "forms.ModelChoiceField[Station]", self.fields["station"]
+        ).queryset = department.stations.order_by("short_code", "name")
         _bootstrap_fields(self)

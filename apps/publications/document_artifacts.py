@@ -200,16 +200,18 @@ def cleanup_unreferenced_document_artifacts(*, batch_size: int = 500) -> int:
     )
     for artifact_id in generic_ids:
         with transaction.atomic():
-            artifact = DocumentArtifact.objects.select_for_update().filter(pk=artifact_id).first()
+            generic_artifact = (
+                DocumentArtifact.objects.select_for_update().filter(pk=artifact_id).first()
+            )
             if (
-                artifact is None
+                generic_artifact is None
                 or PublicationDocumentArtifactReference.objects.filter(
-                    document_artifact=artifact
+                    document_artifact=generic_artifact
                 ).exists()
             ):
                 continue
-            path = artifact.artifact_path
-            artifact.delete()
+            path = generic_artifact.artifact_path
+            generic_artifact.delete()
             _schedule_document_artifact_removal(artifact_id=artifact_id, artifact_path=path)
             removed += 1
     return removed

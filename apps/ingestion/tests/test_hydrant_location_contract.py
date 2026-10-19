@@ -69,7 +69,9 @@ def test_published_geojson_always_emits_nullable_location_key(location):
     )
 
     payload = build_source_payload(
-        definition=get_dataset_definition("department_hydrants"), department=department, station=None
+        definition=get_dataset_definition("department_hydrants"),
+        department=department,
+        station=None,
     )
     properties = payload["features"][0]["properties"]
     assert "location" in properties

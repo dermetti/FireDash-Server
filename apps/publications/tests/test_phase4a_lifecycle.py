@@ -96,9 +96,8 @@ def test_staged_delete_preserves_attempt_identity_and_next_version(lifecycle_sco
         requested_by=admin,
         trigger_type=PublicationJob.TriggerType.USER_REQUEST,
     )
-    assert (
-        next_job is not None and next_job.build_publication.version_number > staged.version_number
-    )
+    assert next_job is not None and next_job.build_publication is not None
+    assert next_job.build_publication.version_number > staged.version_number
     assert AuditEvent.objects.filter(
         action="publication.staged_deleted", target_uuid=staged.id
     ).exists()
@@ -154,6 +153,7 @@ def test_rollback_and_active_delete_require_scope_stability(lifecycle_scope):
         rollback_publication(actor=admin, publication=old)
     with pytest.raises(PublicationError, match="newer attempt"):
         delete_publication(actor=admin, publication=current)
+    assert staged_job is not None and staged_job.build_publication is not None
     delete_staged_publication(actor=admin, publication=staged_job.build_publication)
     restored = rollback_publication(actor=admin, publication=old)
     assert restored.status == DatasetPublication.Status.PUBLISHED
@@ -198,7 +198,7 @@ def test_terminal_attempts_never_reuse_versions_after_cancel_or_failure(lifecycl
         requested_by=admin,
         trigger_type=PublicationJob.TriggerType.USER_REQUEST,
     )
-    assert next_job is not None
+    assert next_job is not None and next_job.build_publication is not None
     assert next_job.build_publication.version_number > job.build_publication.version_number
 
 
