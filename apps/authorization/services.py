@@ -788,6 +788,11 @@ def permanently_remove_administrator(*, actor, user, department: Department) -> 
         department=department,
         target_type="user",
         target_uuid=user.id,
+        metadata={
+            "department_authority_count": len(memberships),
+            "station_authority_count": len(assignments),
+            "station_id": str(assignments[0].station_id) if len(assignments) == 1 else None,
+        },
     )
     from apps.file_library.services import revoke_temporary_access
 

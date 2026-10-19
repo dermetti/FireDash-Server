@@ -1,0 +1,1 @@
+{% load audit_presentation %}{% with context_rows=event|audit_event_context %}{% for label, value in context_rows %}<div><strong>{{ label }}:</strong> {{ value }}</div>{% empty %}No additional displayable context.{% endfor %}{% endwith %}

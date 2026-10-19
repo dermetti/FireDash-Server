@@ -95,13 +95,15 @@ def test_quota_settings_require_department_scope_reauth_and_show_shortcut(client
 
     page = client.get(settings_url)
     assert page.status_code == 200
-    assert "File-library storage quotas" in page.content.decode()
+    assert "File storage quotas" in page.content.decode()
     blocked = client.post(
         settings_url,
         {
             "action": "file-library-quota",
-            "library_id": station_library.id,
-            "quota_bytes": 10,
+            "department_amount": "1",
+            "department_unit": "GB",
+            "station_amount": "0.00001",
+            "station_unit": "MB",
         },
     )
     assert blocked.status_code == 302
@@ -116,8 +118,10 @@ def test_quota_settings_require_department_scope_reauth_and_show_shortcut(client
         settings_url,
         {
             "action": "file-library-quota",
-            "library_id": station_library.id,
-            "quota_bytes": 10,
+            "department_amount": "1",
+            "department_unit": "GB",
+            "station_amount": "0.00001",
+            "station_unit": "MB",
         },
     )
     assert changed.status_code == 302

@@ -1,1 +1,1 @@
-{% for value, label in options %}<option value="{{ value }}">{{ label }}</option>{% empty %}<option value="">No matching results</option>{% endfor %}
+{% for value, label in options %}<option value="{{ value }}"{% if value == selected %} selected{% endif %}>{{ label }}</option>{% empty %}<option value="">No matching results</option>{% endfor %}

@@ -12,7 +12,13 @@ from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.scopes import active_department_ids, active_station_ids, is_system_admin
-from apps.file_library.models import Content, Entry, Library, TemporaryStationAccess
+from apps.file_library.models import (
+    Content,
+    DepartmentQuotaPolicy,
+    Entry,
+    Library,
+    TemporaryStationAccess,
+)
 from apps.organizations.models import Department, Station
 from apps.reference_data import pdf_sandbox, storage
 from apps.reference_data.pdf_validation import validate_pdf
@@ -142,6 +148,7 @@ def active_temporary_access(actor, *, lock=False):
 
 @transaction.atomic
 def activate_temporary_access(*, actor, station):
+    station = Station.objects.select_related("department").get(pk=station.pk)
     if station.department_id not in active_department_ids(actor) or not station.active:
         raise PermissionDenied
     # Serialize activation/switching for one user. The partial unique constraint is
@@ -551,9 +558,7 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
         storage.cleanup(accepted)
 
 
-def set_library_quota(*, actor, library_id, quota_bytes):
-    """Set tenant policy without changing source revision or publication state."""
-    active_temporary_access(actor)
+def _validate_quota(quota_bytes):
     if (
         isinstance(quota_bytes, bool)
         or not isinstance(quota_bytes, int)
@@ -563,47 +568,62 @@ def set_library_quota(*, actor, library_id, quota_bytes):
         raise LibraryError(
             f"Quota must be between 0 and {settings.FILE_LIBRARY_MAX_QUOTA_BYTES} bytes."
         )
-    with transaction.atomic():
-        # Lock only the library row. PostgreSQL rejects FOR UPDATE across the
-        # nullable side of the department/station scope joins.
-        library = Library.objects.select_for_update().get(pk=library_id)
-        department = library.department or cast(Station, library.station).department
-        from apps.authorization.services import require_department_admin
 
-        require_department_admin(actor, department)
-        old_value = library.quota_bytes
-        if old_value == quota_bytes:
-            return library
-        library.quota_bytes = quota_bytes
-        library.save(update_fields=("quota_bytes",))
+
+@transaction.atomic
+def set_department_quotas(
+    *, actor, department, department_files_bytes=None, station_files_bytes=None
+):
+    """Two shared policies; serialize with source mutations before any row locks."""
+    from apps.authorization.services import require_department_admin
+    from apps.file_library.capacity import lock_department_capacity
+
+    require_department_admin(actor, department)
+    for value in (department_files_bytes, station_files_bytes):
+        if value is not None:
+            _validate_quota(value)
+    lock_department_capacity(department.id)
+    policy, _ = DepartmentQuotaPolicy.objects.get_or_create(department=department)
+    policy = DepartmentQuotaPolicy.objects.select_for_update().get(pk=policy.pk)
+    changed = False
+    for field, value in (
+        ("department_files_bytes", department_files_bytes),
+        ("station_files_bytes", station_files_bytes),
+    ):
+        old_value = getattr(policy, field)
+        if value is None or value == old_value:
+            continue
+        setattr(policy, field, value)
         record_event(
             action="file_library.quota_changed",
             actor_user=actor,
             department=department,
-            station=library.station,
-            target_type="library",
-            target_uuid=library.id,
-            metadata={
-                "library_id": str(library.id),
-                "old_quota_bytes": old_value,
-                "new_quota_bytes": quota_bytes,
-                "usage_bytes": library.usage_bytes,
-            },
+            target_type="department_quota_policy",
+            target_uuid=department.id,
+            metadata={"policy": field, "old_quota_bytes": old_value, "new_quota_bytes": value},
         )
+        changed = True
+    if changed:
+        policy.save(update_fields=("department_files_bytes", "station_files_bytes"))
         revoke_temporary_access(actor=actor, reason="department_mutation")
-        return library
+    return policy
 
 
-def department_quota_libraries(*, actor, department):
-    from apps.authorization.services import require_department_admin
-
-    require_department_admin(actor, department)
-    department_library, _ = Library.objects.get_or_create(department=department)
-    station_libraries = []
-    for station in department.stations.order_by("name", "id"):
-        library, _ = Library.objects.get_or_create(station=station)
-        station_libraries.append(library)
-    return department_library, station_libraries
+def set_library_quota(*, actor, library_id, quota_bytes):
+    """Compatibility entry point: station changes always update the shared policy."""
+    _validate_quota(quota_bytes)
+    library = Library.objects.select_related("department", "station__department").get(pk=library_id)
+    department = library.department or cast(Station, library.station).department
+    set_department_quotas(
+        actor=actor,
+        department=department,
+        **{
+            "department_files_bytes"
+            if library.department_id
+            else "station_files_bytes": quota_bytes
+        },
+    )
+    return library
 
 
 def content_path(content):

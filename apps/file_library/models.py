@@ -2,15 +2,24 @@
 
 import uuid
 from datetime import timedelta
+from typing import cast
 
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
 from django.db.models.functions import Lower
 
+from apps.organizations.models import Station
+
 
 def default_quota():
     return settings.FILE_LIBRARY_QUOTA_BYTES
+
+
+class DepartmentQuotaPolicy(models.Model):
+    department = models.OneToOneField("organizations.Department", on_delete=models.PROTECT)
+    department_files_bytes = models.PositiveBigIntegerField(default=default_quota)
+    station_files_bytes = models.PositiveBigIntegerField(default=default_quota)
 
 
 class Library(models.Model):
@@ -22,7 +31,12 @@ class Library(models.Model):
     name = models.CharField(max_length=255, default="Documents")
     source_revision = models.PositiveBigIntegerField(default=0)
     usage_bytes = models.PositiveBigIntegerField(default=0)
-    quota_bytes = models.PositiveBigIntegerField(default=default_quota)
+
+    @property
+    def quota_bytes(self):
+        department_id = self.department_id or cast(Station, self.station).department_id
+        policy, _ = DepartmentQuotaPolicy.objects.get_or_create(department_id=department_id)
+        return policy.department_files_bytes if self.department_id else policy.station_files_bytes
 
     class Meta:
         constraints = [

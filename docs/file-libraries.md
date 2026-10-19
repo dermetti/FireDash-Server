@@ -38,9 +38,9 @@ document's sanitized content size; historical/unreferenced content is excluded.
 
 - `FILE_LIBRARY_MAX_FILE_BYTES`: default 25 MiB, enforced on both input and output.
   The existing `MAX_PDF_INPUT_BYTES` / `MAX_PDF_OUTPUT_BYTES` remain upper bounds.
-- `FILE_LIBRARY_QUOTA_BYTES`: default 1 GiB, copied into newly created libraries.
-  Department administrators configure their department and station-library
-  quotas independently in System Settings.
+- `FILE_LIBRARY_QUOTA_BYTES`: default 1 GiB for new department quota policies.
+  Department administrators configure the department-files limit and shared
+  per-station-library limit in System Settings.
 - `FILE_LIBRARY_MAX_QUOTA_BYTES`: default 1 TiB, the server-side upper bound for
   administrator-configured quotas.
 - Existing quarantine, broker, sanitizer-output and accepted-storage settings apply.
@@ -53,7 +53,7 @@ there is no unsandboxed production fallback. Downloads/previews require live sco
 authorization and verify size and SHA-256 before serving with private/no-store
 headers. Client filenames never become storage paths.
 
-Quota policy changes lock the same library row used by uploads but do not
+Quota policy changes acquire the same department capacity lock used by uploads but do not
 increment the source revision, queue publication work, or alter current usage.
 A quota may be reduced below current usage. In that state, uploads and
 replacements that increase usage are rejected; deletion, metadata changes, and
@@ -182,7 +182,8 @@ Source mutations in either scope serialize on a department advisory lock before
 the established publication-scope/library locks. Capacity evaluation locks current
 installation rows, so check-in/replacement cannot overwrite a reviewed measurement
 mid-commit. Queries are batched, and estimating never builds a publication. Quota
-updates keep their existing library-row lock; publication workers retain the
+updates use the department advisory lock followed by the quota-policy row lock;
+publication workers retain the
 existing frozen-snapshot, supersession and reference-protection lifecycle.
 
 A blocked PDF creates a `CapacityReview` and audit event, **not** a document,
@@ -329,3 +330,29 @@ department/station PDFs, verify signed frozen metadata and hashes, and enforce
 current entitlement for retained URLs. Performance fixtures now declare STATION
 ownership explicitly and retain a fixed six-query bound including the existing
 separate SYSTEM panel; no production constraint was relaxed to accommodate them.
+
+
+## Department quota policies
+
+Each department has exactly two source-storage limits, stored in bytes: one for
+its department library, and one shared per-library limit for all its station
+libraries, including future stations. These limits are independent across
+departments and independent of tablet capacity. Settings accept decimal MB
+(1,000,000 bytes) or GB (1,000,000,000 bytes), with exact whole-byte conversion
+and the existing maximum bound. Quota changes neither revise sources nor publish.
+
+Migration 0008 preserves the existing department-library quota. If existing
+station quotas differ, it selects their **minimum**, reports the department UUID
+and legacy limits in migration output, and applies that shared limit to every
+station library. Review this output before activation: some libraries may become
+over quota, but existing files remain intact and only growth is blocked. A scope
+with no existing library uses the configured default. Reversing the migration
+copies the current shared policies to legacy library columns; it cannot restore
+the discarded per-station differences. Retain a database backup before migration
+if restoration of the original individual limits is required.
+
+Migration 0008 removes the legacy per-library quota column. Apply it with old
+application processes quiesced; old code must not run against the new schema.
+Returning to code that expects that column requires reversing 0008 first, in
+addition to the normal deployment rollback prerequisites. This package does not
+perform that migration or any release switch outside the local test database.

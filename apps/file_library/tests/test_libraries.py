@@ -184,7 +184,7 @@ def test_rejected_uploads_leave_no_canonical_state(
             lambda **kwargs: kwargs["sanitized_output"].write_bytes(b"bad"),
         )
     elif failure == "quota":
-        Library.objects.filter(pk=library.pk).update(quota_bytes=1)
+        services.set_library_quota(actor=scope[0], library_id=library.id, quota_bytes=1)
     elif failure == "size":
         settings.FILE_LIBRARY_MAX_FILE_BYTES = 1
     elif failure == "audit":
@@ -289,11 +289,11 @@ def test_portal_bulk_errors_preview_search_and_confirmation(scope, pdf_pipeline,
 
 def test_data_hub_role_tiles(scope, client):
     client.force_login(scope[0])
-    assert b"Dateiverwaltung" in client.get(reverse("portal-data-hub", args=[scope[3].id])).content
+    assert b"File Management" in client.get(reverse("portal-data-hub", args=[scope[3].id])).content
     station_hub = reverse("station-data-hub", args=[scope[5].id])
     assert client.get(station_hub).status_code == 403
     client.force_login(scope[1])
-    assert b"Dateiverwaltung" in client.get(station_hub).content
+    assert b"File Management" in client.get(station_hub).content
     assert client.get(reverse("portal-data-hub", args=[scope[3].id])).status_code == 403
     assert client.get(reverse("file-library-index")).status_code == 302
 
@@ -302,7 +302,7 @@ def test_data_hub_role_tiles(scope, client):
 def test_concurrent_uploads_enforce_capacity(scope, pdf_pipeline, monkeypatch):
     assert connection.vendor == "postgresql"
     library = library_for(scope)
-    Library.objects.filter(pk=library.pk).update(quota_bytes=pdf().size)
+    services.set_library_quota(actor=scope[0], library_id=library.id, quota_bytes=pdf().size)
     barrier = Barrier(2)
     original = services.pdf_sandbox.sanitize
 
@@ -333,10 +333,12 @@ def test_replacement_quota_and_audit_failure_preserve_old_content(scope, pdf_pip
     common = {"actor": scope[0], "library_id": library.id}
     document = services.upload_pdf(**common, upload=pdf())
     original_id = document.content_id
-    Library.objects.filter(pk=library.pk).update(quota_bytes=document.content.size_bytes)
+    services.set_library_quota(
+        actor=scope[0], library_id=library.id, quota_bytes=document.content.size_bytes
+    )
     with pytest.raises(services.LibraryError, match="quota"):
         services.upload_pdf(**common, upload=pdf(pages=3), replace_id=document.id)
-    Library.objects.filter(pk=library.pk).update(quota_bytes=10_000)
+    services.set_library_quota(actor=scope[0], library_id=library.id, quota_bytes=10_000)
 
     def fail(**kwargs):
         raise RuntimeError("Audit failure")
@@ -501,8 +503,10 @@ def test_concurrent_capacity_changes(scope, pdf_pipeline, monkeypatch, race):
     second = services.upload_pdf(**common, upload=pdf("two.pdf"))
     original_usage = first.content.size_bytes + second.content.size_bytes
     new_size = pdf(pages=3).size
-    Library.objects.filter(pk=library.pk).update(
-        quota_bytes=original_usage + new_size - first.content.size_bytes
+    services.set_library_quota(
+        actor=scope[0],
+        library_id=library.id,
+        quota_bytes=original_usage + new_size - first.content.size_bytes,
     )
     barrier = Barrier(2)
     original = services.pdf_sandbox.sanitize

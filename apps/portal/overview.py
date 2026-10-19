@@ -104,6 +104,21 @@ def system_attention() -> list[AttentionItem]:
 def department_attention(department: Department) -> list[AttentionItem]:
     """Return only actionable, authoritative department signals."""
     items: list[AttentionItem] = []
+    from apps.file_library.capacity import pending_department_reviews
+
+    reviews = pending_department_reviews(department)
+    count = reviews.count()
+    if count:
+        first = reviews.first()
+        assert first is not None  # nosec B101
+        items.append(
+            AttentionItem(
+                "warning",
+                count,
+                f"{count} file capacity review{'s' if count != 1 else ''} awaiting approval",
+                reverse("file-library-capacity-review", args=(first.id,)),
+            )
+        )
     unassigned = operationally_unassigned_tablets(department).count()
     if unassigned:
         items.append(

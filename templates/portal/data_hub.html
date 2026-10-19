@@ -3,7 +3,6 @@
 {% block content %}
 {% include "components/_page_header.html" with breadcrumb=department.name title="Data Hub" description="Choose a canonical data domain. Imports are validated and confirmed before publication is scheduled." %}
 <section class="row row-cols-1 row-cols-md-2 g-3" aria-label="Distributed data modules">
-  <div class="col"><a class="card h-100 d-block text-decoration-none text-reset shadow-sm" href="{% url 'file-library-index' %}"><div class="card-body"><h2 class="h5">File Management / Dateiverwaltung</h2><p class="text-body-secondary">Manage the department PDF library. Prepare signed publications for compatible tablets.</p></div></a></div>
   {% for module in modules %}
     {% include "portal/_data_hub_module.html" %}
   {% endfor %}

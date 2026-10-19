@@ -13,7 +13,6 @@ from django.forms import BaseForm
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
@@ -239,6 +238,7 @@ def _nav_context(request):
                 "label": "Distributed Data",
                 "children": [
                     {"label": "Data Hub", "url": reverse("portal-data-hub", args=(department.id,))},
+                    {"label": "File Management", "url": reverse("file-library-index")},
                     {
                         "label": "Publications",
                         "url": reverse("publications-list", args=(department.id,)),
@@ -302,6 +302,7 @@ def _nav_context(request):
                             "label": "Data Hub",
                             "url": reverse("station-data-hub", args=(station.id,)),
                         },
+                        {"label": "File Management", "url": reverse("file-library-index")},
                         {
                             "label": "Tablets",
                             "url": reverse("tablet-list", args=(station.department_id,)),
@@ -360,7 +361,8 @@ def _station_or_403(request: HttpRequest, station_id) -> Station:
 def scoped_selector(request: HttpRequest, department_id, kind: str) -> HttpResponse:
     """Return scoped UUID options for progressively enhanced relationship selects."""
     department = _department_or_403(request, department_id)
-    query = request.GET.get("q", "").strip()
+    query = request.GET.get("station_q", request.GET.get("q", "")).strip()[:255]
+    selected = ""
     if kind == "stations":
         stations = department.stations.filter(active=True)
         if query:
@@ -370,8 +372,24 @@ def scoped_selector(request: HttpRequest, department_id, kind: str) -> HttpRespo
                 str(item.id),
                 f"{item.name} ({item.short_code})" + (f", {item.city}" if item.city else ""),
             )
-            for item in stations.order_by("name")[:25]
+            for item in stations.order_by("name", "id")[:25]
         ]
+        try:
+            selected_station = (
+                department.stations.filter(
+                    active=True, pk=request.GET.get("station_id", "")
+                ).first()
+                if request.GET.get("station_id")
+                else None
+            )
+        except (ValueError, ValidationError):
+            selected_station = None
+        if selected_station:
+            selected = str(selected_station.id)
+            if selected not in {value for value, _label in options}:
+                options.append(
+                    (selected, f"{selected_station.name} ({selected_station.short_code})")
+                )
     elif kind == "personnel":
         from apps.personnel.models import Person
 
@@ -404,7 +422,9 @@ def scoped_selector(request: HttpRequest, department_id, kind: str) -> HttpRespo
         ]
     else:
         raise PermissionDenied("A supported scoped selector is required.")
-    return render(request, "components/_selector_options.html", {"options": options})
+    return render(
+        request, "components/_selector_options.html", {"options": options, "selected": selected}
+    )
 
 
 @login_required
@@ -1224,22 +1244,15 @@ def department_admin_revoke_modal(
 def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     """Edit only existing, authoritative per-department settings."""
     department = _department_or_403(request, department_id)
-    from apps.file_library.services import department_quota_libraries, set_library_quota
+    from decimal import Decimal
 
-    department_library, station_libraries = department_quota_libraries(
-        actor=request.user, department=department
-    )
-    from apps.file_library.models import CapacityReview
+    from apps.file_library.models import DepartmentQuotaPolicy, Library
+    from apps.file_library.services import set_department_quotas
 
-    capacity_reviews = (
-        CapacityReview.objects.filter(
-            library_id__in=[department_library.id, *(item.id for item in station_libraries)],
-            decision="pending",
-            expires_at__gt=timezone.now(),
-        )
-        .select_related("library__station", "requested_by")
-        .order_by("created_at")[:50]
-    )
+    department_library, _ = Library.objects.get_or_create(department=department)
+    from apps.file_library.capacity import pending_department_reviews
+
+    capacity_reviews = pending_department_reviews(department)[:50]
     policy = getattr(department, "personnel_retention_policy", None)
     lease_initial = {"tablet_lease_days": department.tablet_lease_days}
     retention_initial = {"retention_days": policy.retention_period.days if policy else 30}
@@ -1264,7 +1277,16 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         request.POST if action == "locale-time" else None,
         initial={"locale": department.locale, "timezone": department.timezone},
     )
-    quota_form = FileLibraryQuotaForm(request.POST if action == "file-library-quota" else None)
+    quota_policy, _ = DepartmentQuotaPolicy.objects.get_or_create(department=department)
+    quota_form = FileLibraryQuotaForm(
+        request.POST if action == "file-library-quota" else None,
+        initial={
+            "department_amount": Decimal(quota_policy.department_files_bytes) / 1_000_000,
+            "department_unit": "MB",
+            "station_amount": Decimal(quota_policy.station_files_bytes) / 1_000_000,
+            "station_unit": "MB",
+        },
+    )
     from apps.outbound_mail.services import (
         configure_department_smtp,
         get_department_mail_configuration,
@@ -1305,20 +1327,17 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         request.POST if action == "email-settings" else None, initial=mail_initial
     )
     if action == "file-library-quota" and quota_form.is_valid():
-        if quota_form.cleaned_data["library_id"] not in {
-            library.id for library in [department_library, *station_libraries]
-        }:
-            raise PermissionDenied("Library is outside this department's settings.")
         require_recent_reauthentication(
             request,
             return_url=reverse("portal-department-settings", args=(department.id,)),
         )
-        set_library_quota(
+        set_department_quotas(
             actor=request.user,
-            library_id=quota_form.cleaned_data["library_id"],
-            quota_bytes=quota_form.cleaned_data["quota_bytes"],
+            department=department,
+            department_files_bytes=quota_form.cleaned_data["department_files_bytes"],
+            station_files_bytes=quota_form.cleaned_data["station_files_bytes"],
         )
-        messages.success(request, "File-library quota was updated.")
+        messages.success(request, "File storage quotas were updated.")
         return redirect("portal-department-settings", department_id=department.id)
     if action == "email-settings" and email_form.is_valid():
         try:
@@ -1458,7 +1477,6 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
             "locale_time_form": locale_time_form,
             "quota_form": quota_form,
             "department_library": department_library,
-            "station_libraries": station_libraries,
             "capacity_reviews": capacity_reviews,
             "retention_policy": policy,
             "mail": mail,
@@ -1615,6 +1633,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     # Keep this gateway read-only: the cheap authoritative counts help an
     # administrator choose a module without duplicating CRUD controls here.
     from apps.authorization.services import vehicle_rescue_guides_capability
+    from apps.file_library.models import Entry, Library
     from apps.personnel.models import Person
     from apps.publications.models import DatasetScopeState
     from apps.publications.state import dataset_publication_summaries
@@ -1623,6 +1642,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     publication_states = dataset_publication_summaries(
         department,
         dataset_type_codes={
+            "department_files",
             "department_hydrants",
             "station_personnel",
             "department_fire_plans",
@@ -1631,8 +1651,8 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
         },
     )
 
-    def module(*, dataset_type_code: str, **values):
-        values["id"] = dataset_type_code
+    def module(*, dataset_type_code: str, module_id: str | None = None, **values):
+        values["id"] = module_id or dataset_type_code
         state = publication_states.get(dataset_type_code)
         # Gateway cards show only the currently distributed version. Candidate
         # work is secondary context and never becomes the displayed version
@@ -1645,7 +1665,15 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
             values["publication_state"] = state["current_update_label"] or state["state_label"]
         return values
 
+    library = Library.objects.filter(department=department).first()
     modules = (
+        module(
+            dataset_type_code="department_files",
+            module_id="file_management",
+            count=Entry.objects.filter(library=library, is_folder=False).count() if library else 0,
+            usage_bytes=library.usage_bytes if library else 0,
+            url=reverse("file-library-index"),
+        ),
         module(
             dataset_type_code="dangerous_goods",
             count=DatasetScopeState.objects.filter(

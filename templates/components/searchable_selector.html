@@ -1,8 +1,8 @@
 <div class="mb-3" x-data>
   <label class="form-label" for="{{ selector_id }}">{{ label }}</label>
-  <input class="form-control form-control-sm mb-1" type="search" name="q" placeholder="Search {{ label|lower }}" aria-label="Search {{ label|lower }}" hx-get="{{ endpoint }}" hx-trigger="input changed delay:250ms" hx-target="#{{ selector_id }}" hx-include="this">
+  <input class="form-control form-control-sm mb-1" type="search" name="{{ search_name|default:'q' }}" value="{{ search_value }}" {% if search_form_id %}form="{{ search_form_id }}"{% endif %} placeholder="{% if search_placeholder %}{{ search_placeholder }}{% else %}Search {{ label|lower }}{% endif %}" aria-label="Search {{ label|lower }}" hx-get="{{ endpoint }}" hx-trigger="input changed delay:250ms" hx-target="#{{ selector_id }}" hx-include="this, #{{ selector_id }}">
   <select id="{{ selector_id }}" name="{{ field_name }}" class="form-select" required>
     <option value="">Select {{ label|lower }}...</option>
-    {% include "components/_selector_options.html" with options=options %}
+    {% include "components/_selector_options.html" with options=options selected=selected %}
   </select>
 </div>

@@ -306,10 +306,10 @@ metadata by an explicit stable `module.id`; `_data_hub_card.html` owns the
 shared card markup and uses the local `_data_hub_icon.html` SVG partial.
 Do not select cards or key tests by mutable display titles.
 
-Department module IDs, in card order, are `dangerous_goods`,
+Department module IDs, in card order, are `file_management`, `dangerous_goods`,
 `department_phonebook`, `department_hydrants`, `station_personnel`,
-`department_fire_plans` and `department_klgv_plans`. File Management remains
-the first, template-owned navigation card. System IDs are
+`department_fire_plans` and `department_klgv_plans`. File Management uses the shared `_data_hub_module.html` and `_data_hub_card.html`
+renderer, with Files, Total size and Publication metrics. System IDs are
 `system_vehicle_rescue_guides` and `system_outbound_email`; inherited rescue
 configuration uses the same `system_vehicle_rescue_guides` ID in a read-only
 article, with its department-specific description owned by the template.

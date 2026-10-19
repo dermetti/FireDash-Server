@@ -204,7 +204,7 @@ def test_department_audit_is_bounded_safe_and_department_scoped(client, stage4_s
     assert "table-responsive" not in content and "Page 1 of 2" in content
     assert "test.other_department_event" not in content
     assert "must not render" not in content
-    assert "Safe event context recorded" in content
+    assert "No additional displayable context." in content
     filtered = client.get(
         reverse("portal-department-audit", args=(department.id,)), {"q": "event_100"}
     )

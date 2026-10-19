@@ -6,6 +6,11 @@ urlpatterns = [
     path("stations/<uuid:station_id>/data/", views.station_hub, name="station-data-hub"),
     path("files/", views.index, name="file-library-index"),
     path(
+        "files/station-access/activate/",
+        views.select_station_access,
+        name="file-library-station-access-select",
+    ),
+    path(
         "files/capacity-reviews/<uuid:review_id>/",
         views.capacity_review,
         name="file-library-capacity-review",

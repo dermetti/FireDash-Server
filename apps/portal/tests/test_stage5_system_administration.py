@@ -197,7 +197,7 @@ def test_system_audit_is_bounded_newest_first_filtered_safe_and_system_only(clie
     events = list(response.context["events"])
     assert events[0].action == "system.test_100"
     content = response.content.decode()
-    assert "Safe event context recorded" in content
+    assert "No additional displayable context." in content
     assert "must-not-render" not in content
     filtered = client.get(reverse("portal-system-audit"), {"action": "system.test_100"})
     assert filtered.context["total_count"] == 1

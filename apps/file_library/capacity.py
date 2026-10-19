@@ -8,6 +8,7 @@ size, with no credit for source deletions or replacement reclamation.
 import hashlib
 import json
 from datetime import datetime, timedelta
+from fractions import Fraction
 from typing import cast
 
 from django.conf import settings
@@ -24,6 +25,20 @@ from apps.tablets.models import AppInstallation, Tablet
 
 REVIEW_LIFETIME = timedelta(minutes=15)
 GCM_TAG_BYTES = 16
+
+
+def pending_department_reviews(department):
+    """Read model for authorized department views, including all station libraries."""
+    return (
+        CapacityReview.objects.filter(
+            Q(library__department=department) | Q(library__station__department=department),
+            decision="pending",
+            expires_at__gt=timezone.now(),
+            consumed_at__isnull=True,
+        )
+        .select_related("library__station", "requested_by")
+        .order_by("created_at", "id")
+    )
 
 
 def department_for(library):
@@ -295,6 +310,47 @@ def project(library, operation):
         },
         "operation": operation,
         "tablets": results,
+    }
+
+
+def presentation_summary(projection):
+    """Summarize stored estimates without changing their fingerprint or risk rules."""
+    rows = []
+    measured = []
+    for original in projection.get("tablets", []):
+        row = dict(original)
+        free, total = row.get("projected_free_bytes"), row.get("total_storage_bytes")
+        if (
+            row.get("state") != "unknown"
+            and isinstance(free, int)
+            and isinstance(total, int)
+            and total > 0
+        ):
+            row["remaining_percentage"] = float(Fraction(free * 100, total))
+            row["threshold_breached"] = free * 5 < total
+            measured.append(row)
+        else:
+            row["remaining_percentage"] = None
+        rows.append(row)
+    lowest = min(
+        measured, key=lambda row: (row["projected_free_bytes"], row["tablet_id"]), default=None
+    )
+    worst = min(
+        measured,
+        key=lambda row: (
+            Fraction(row["projected_free_bytes"], row["total_storage_bytes"]),
+            row["tablet_id"],
+        ),
+        default=None,
+    )
+    return {
+        "tablets": rows,
+        "lowest_free": lowest,
+        "worst_percentage": worst,
+        "unknown_count": len(rows) - len(measured),
+        "different_worst_percentage": bool(
+            lowest and worst and lowest["tablet_id"] != worst["tablet_id"]
+        ),
     }
 
 

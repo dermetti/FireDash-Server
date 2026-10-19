@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}File Management / Dateiverwaltung{% endblock %}
+{% block title %}File Management{% endblock %}
 {% block content %}
-{% include "components/_page_header.html" with title="File Management / Dateiverwaltung" description="Choose an authorized PDF library. Files are stored on the server and are not available on tablets." %}
+{% include "components/_page_header.html" with title="File Management" description="Choose an authorized PDF library. Files are stored on the server and are not available on tablets." %}
 <div class="row g-3">
 {% for library in libraries %}<div class="col-md-6"><a class="card card-body text-decoration-none" href="{% url 'file-library' library.id %}"><h2 class="h5">{{ library.name }}</h2><p>{% if library.department_id %}Department: {{ library.department.name }}{% else %}Station: {{ library.station.name }}{% endif %}</p></a></div>
 {% empty %}<p>No authorized libraries are available.</p>{% endfor %}

@@ -91,7 +91,7 @@ def test_phase1_audit_details_are_safe_and_scope_authorized(client, phase1_scope
     body = department_detail.content.decode()
     assert "phase1.safe_event" in body
     assert "must-not-render" not in body
-    assert "Safe event context was recorded" in body
+    assert "No additional displayable context." in body
     assert (
         client.get(
             reverse("portal-department-audit-detail", args=(other_department.id, event.id))

@@ -347,12 +347,15 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
             "KLGV Plans",
             "garden",
             "Active plans",
-            "Optional Kleingartenverein / allotment-garden operational plans.",
+            "Allotment garden plans.",
             "reference-data-klgv-plans",
         ),
     ]
     modules = response.context["modules"]
-    assert [module["id"] for module in modules] == [row[0] for row in expected]
+    assert [module["id"] for module in modules] == [
+        "file_management",
+        *[row[0] for row in expected],
+    ]
     assert all(
         not {"name", "description", "icon", "count_label"} & module.keys() for module in modules
     )
@@ -360,8 +363,12 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
     cards = HubCards(content).cards
     assert len(cards) == 8  # File Management, six datasets, inherited configuration.
     assert cards[0]["attrs"]["href"] == reverse("file-library-index")
-    assert "File Management / Dateiverwaltung" in cards[0]["text"]
-    assert "Manage the department PDF library." in cards[0]["text"]
+    assert cards[0]["attrs"]["data-module-id"] == "file_management"
+    _assert_navigation_card(
+        cards[0], title="File Management", icon="files", url=reverse("file-library-index")
+    )
+    assert "Manage department files and tablet publications." in cards[0]["text"]
+    assert "Files" in cards[0]["text"] and "Total size" in cards[0]["text"]
     assert [tag for tag, _ in cards[0]["elements"] if tag in {"a", "button"}] == ["a"]
     for card, (module_id, title, icon, count_label, description, route) in zip(
         cards[1:7], expected, strict=True

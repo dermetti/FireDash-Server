@@ -142,13 +142,36 @@ class DepartmentTabletLeaseForm(forms.Form):
 
 
 class FileLibraryQuotaForm(forms.Form):
-    library_id = forms.UUIDField(widget=forms.HiddenInput())
-    quota_bytes = forms.IntegerField(
-        min_value=0,
-        max_value=settings.FILE_LIBRARY_MAX_QUOTA_BYTES,
-        label="Quota (bytes)",
-        widget=forms.NumberInput(attrs={"class": "form-control", "min": 0, "step": 1}),
+    department_amount = forms.DecimalField(
+        min_value=0, max_digits=24, decimal_places=9, label="Department files"
     )
+    department_unit = forms.ChoiceField(choices=(("MB", "MB"), ("GB", "GB")))
+    station_amount = forms.DecimalField(
+        min_value=0, max_digits=24, decimal_places=9, label="Station files"
+    )
+    station_unit = forms.ChoiceField(choices=(("MB", "MB"), ("GB", "GB")))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name, field in self.fields.items():
+            field.widget.attrs["class"] = "form-select" if name.endswith("unit") else "form-control"
+            if name.endswith("amount"):
+                field.widget.attrs["step"] = "any"
+
+    def clean(self):
+        cleaned = super().clean() or {}
+        for prefix in ("department", "station"):
+            amount, unit = cleaned.get(f"{prefix}_amount"), cleaned.get(f"{prefix}_unit")
+            if amount is None or unit is None:
+                continue
+            value = amount * (1_000_000 if unit == "MB" else 1_000_000_000)
+            if value != value.to_integral_value() or value > settings.FILE_LIBRARY_MAX_QUOTA_BYTES:
+                self.add_error(
+                    f"{prefix}_amount", "Enter a whole number of bytes within the maximum quota."
+                )
+            else:
+                cleaned[f"{prefix}_files_bytes"] = int(value)
+        return cleaned
 
 
 class DepartmentSystemSettingsForm(DepartmentTabletLeaseForm):

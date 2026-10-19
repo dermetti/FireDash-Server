@@ -8,6 +8,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.paginator import Paginator
 from django.http import FileResponse, Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -18,6 +19,7 @@ from django.views.decorators.http import require_http_methods
 from apps.accounts.reauth import require_recent_reauthentication
 from apps.authorization.scopes import active_department_ids
 from apps.file_library import services
+from apps.file_library.forms import TemporaryStationAccessForm
 from apps.file_library.models import CapacityReview, Content, Entry, Library
 from apps.file_library.publication import publication_state, publish_now
 from apps.organizations.models import Station
@@ -52,7 +54,7 @@ def station_hub(request, station_id):
 
 @login_required
 @require_http_methods(["GET", "POST"])
-def library_view(request, library_id):
+def library_view(request, library_id, station_access_form=None):
     library = get_object_or_404(Library, pk=library_id)
     try:
         access = services.require_library_access(request.user, library, permission="read")
@@ -72,7 +74,7 @@ def library_view(request, library_id):
         current = services.parent_entry(library, identifier(request.GET.get("folder")))
     except services.LibraryError as error:
         raise Http404 from error
-    if request.method == "POST":
+    if request.method == "POST" and station_access_form is None:
         deletion_access = None
         try:
             action = request.POST.get("action")
@@ -170,11 +172,19 @@ def library_view(request, library_id):
             cursor = by_id[cursor.parent_id]
             names.insert(0, cursor.name)
         cast(Any, folder).display_path = " / ".join(names)
+    from apps.file_library.capacity import pending_department_reviews
+
+    review_page = None
+    if library.department_id:
+        review_page = Paginator(pending_department_reviews(library.department), 25).get_page(
+            request.GET.get("review_page", 1)
+        )
     return render(
         request,
         "file_library/library.html",
         {
             "library": library,
+            "pending_review_page": review_page,
             "entries": entries,
             "current": current,
             "breadcrumbs": breadcrumbs,
@@ -186,7 +196,9 @@ def library_view(request, library_id):
                 consumed_at__isnull=True,
                 expires_at__gt=timezone.now(),
             )
-            .exclude(decision="rejected")
+            .exclude(
+                decision__in=("rejected", "pending") if library.department_id else ("rejected",)
+            )
             .order_by("-created_at")[:10],
             "max_file_bytes": settings.FILE_LIBRARY_MAX_FILE_BYTES,
             "publication": publication_state(library),
@@ -196,13 +208,17 @@ def library_view(request, library_id):
                 if access == services.ACCESS_TEMPORARY or library.department_id
                 else None
             ),
-            "available_stations": (
-                Station.objects.filter(department_id=library.department_id, active=True).order_by(
-                    "name", "id"
+            "station_access_form": station_access_form
+            or (
+                TemporaryStationAccessForm(
+                    department_id=library.department_id,
+                    query=request.GET.get("station_q", "").strip()[:255],
+                    initial={"station_id": request.GET.get("station_id", "")},
                 )
                 if library.department_id
-                else ()
+                else None
             ),
+            "station_query": request.GET.get("station_q", "").strip()[:255],
         },
     )
 
@@ -258,6 +274,30 @@ def activate_station_access(request, station_id):
 
 @login_required
 @require_http_methods(["POST"])
+def select_station_access(request):
+    try:
+        department_id = identifier(request.POST.get("department_id"))
+    except services.LibraryError:
+        return HttpResponseBadRequest("Invalid department identifier.")
+    services.require_scope(request.user, department_id=department_id)
+    library = services.get_library(request.user, department_id=department_id)
+    form = TemporaryStationAccessForm(request.POST, department_id=department_id)
+    if not form.is_valid():
+        return library_view(request, library.id, station_access_form=form)
+    require_recent_reauthentication(
+        request,
+        return_url=reverse("file-library", args=(library.id,))
+        + f"?station_id={form.cleaned_data['station_id'].id}",
+    )
+    station = form.cleaned_data["station_id"]
+    access = services.activate_temporary_access(actor=request.user, station=station)
+    station_library = Library.objects.get(station=access.station)
+    messages.success(request, "Temporary station access activated.")
+    return redirect("file-library", library_id=station_library.id)
+
+
+@login_required
+@require_http_methods(["POST"])
 def release_station_access(request):
     access = services.revoke_temporary_access(actor=request.user, reason="released")
     if access:
@@ -268,7 +308,7 @@ def release_station_access(request):
 @login_required
 @require_http_methods(["GET", "POST"])
 def capacity_review(request, review_id):
-    from apps.file_library.capacity import decide, department_for
+    from apps.file_library.capacity import decide, department_for, presentation_summary
 
     review = get_object_or_404(
         CapacityReview.objects.select_related(
@@ -337,6 +377,7 @@ def capacity_review(request, review_id):
         "file_library/capacity_review.html",
         {
             "review": review,
+            "capacity_summary": presentation_summary(review.projection),
             "library": library,
             "department": department,
             "department_admin": department_admin,

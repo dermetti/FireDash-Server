@@ -6,13 +6,28 @@
 <p>Operation: {{ review.operation.kind }} {{ review.operation.name }} · {{ review.operation.size_bytes }} sanitized bytes · Document {{ review.operation.document_id }}</p>
 <p>Decision: {{ review.decision }} · Expires {{ review.expires_at }}{% if review.consumed_at %} · Used {{ review.consumed_at }}{% endif %}</p>
 <div class="alert alert-warning">Estimates are not confirmed device capacity. New ciphertext and outstanding source changes are reserved without assuming old files are reclaimed. Missing or outdated measurements mean capacity unknown. An override accepts this risk for this operation only.</div>
-<div class="table-responsive"><table class="table"><thead><tr><th>Tablet</th><th>Reported capacity</th><th>Observed</th><th>Additional encrypted bytes</th><th>Projected free bytes</th><th>State / reason</th></tr></thead><tbody>
-{% for tablet in review.projection.tablets %}<tr>
+{% if capacity_summary.unknown_count %}<div class="alert alert-warning"><strong>Capacity unknown</strong> for {{ capacity_summary.unknown_count }} affected tablet{{ capacity_summary.unknown_count|pluralize }}. Other measurements do not resolve this risk.</div>{% endif %}
+{% with tablet=capacity_summary.lowest_free %}{% if tablet %}
+<section class="card card-body mb-3" aria-labelledby="lowest-free-heading">
+  <h2 id="lowest-free-heading" class="h5">Lowest projected remaining free storage</h2>
+  <p><strong>{{ tablet.tablet_name }}</strong></p>
+  <dl class="row mb-0">
+    <dt class="col-sm-6">Reported free / total storage</dt><dd class="col-sm-6">{{ tablet.free_storage_bytes }} / {{ tablet.total_storage_bytes }} bytes</dd>
+    <dt class="col-sm-6">Additional encrypted bytes</dt><dd class="col-sm-6">{{ tablet.incremental_ciphertext_bytes }}</dd>
+    <dt class="col-sm-6">Projected remaining free storage</dt><dd class="col-sm-6">{{ tablet.projected_free_bytes }} bytes ({{ tablet.remaining_percentage|floatformat:2 }}%)</dd>
+    <dt class="col-sm-6">20% safety threshold</dt><dd class="col-sm-6">{% if tablet.threshold_breached %}<strong class="text-danger">Breached</strong>{% else %}Not breached{% endif %}</dd>
+  </dl>
+</section>
+{% endif %}{% endwith %}
+{% if capacity_summary.different_worst_percentage %}<div class="alert alert-warning">Lowest remaining percentage: <strong>{{ capacity_summary.worst_percentage.tablet_name }}</strong>, {{ capacity_summary.worst_percentage.remaining_percentage|floatformat:2 }}% ({{ capacity_summary.worst_percentage.projected_free_bytes }} bytes). {% if capacity_summary.worst_percentage.threshold_breached %}The 20% safety threshold is breached.{% else %}The 20% safety threshold is not breached.{% endif %}</div>{% endif %}
+<div class="table-responsive"><table class="table"><thead><tr><th>Tablet</th><th>Reported capacity</th><th>Observed</th><th>Additional encrypted bytes</th><th>Projected free bytes</th><th>Remaining storage</th><th>State / reason</th></tr></thead><tbody>
+{% for tablet in capacity_summary.tablets %}<tr>
   <td>{{ tablet.tablet_name }}<div class="small">{{ tablet.tablet_id }}</div></td>
   <td>{% if tablet.total_storage_bytes != None %}{{ tablet.free_storage_bytes }} / {{ tablet.total_storage_bytes }} bytes{% else %}Not reported{% endif %}</td>
   <td>{{ tablet.observed_at|default:"Not reported" }}</td>
   <td>{{ tablet.incremental_ciphertext_bytes }}</td>
   <td>{% if tablet.projected_free_bytes != None %}{{ tablet.projected_free_bytes }}{% else %}Capacity unknown{% endif %}</td>
+  <td>{% if tablet.remaining_percentage != None %}{{ tablet.remaining_percentage|floatformat:2 }}%{% else %}Capacity unknown{% endif %}</td>
   <td>{% if tablet.state == "unknown" %}<strong>Capacity unknown</strong>{% elif tablet.state == "warning" %}<strong>Projected free capacity below 20%</strong>{% else %}At least 20% projected free{% endif %}
     <div class="small text-body-secondary">{% if tablet.reason == "missing_installation" %}No current installation{% elif tablet.reason == "stale_installation" %}Installation stale or lease expired{% elif tablet.reason == "missing_or_outdated_telemetry" %}Measurement missing or outdated{% elif tablet.reason == "invalid_telemetry" %}Invalid measurement{% elif tablet.reason == "publication_history_unavailable" %}Publication history is insufficient for this estimate{% elif tablet.reason == "assignment_changed_since_telemetry" %}Station assignment changed after the measurement{% endif %}</div>
   </td>
