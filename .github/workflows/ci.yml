@@ -37,6 +37,7 @@ jobs:
       POSTGRES_PORT: "5432"
       DJANGO_ALLOWED_HOSTS: ci.invalid
       DJANGO_CSRF_TRUSTED_ORIGINS: https://ci.invalid
+      FIREDASH_PUBLIC_ORIGIN: https://ci.invalid
 
       TEST_POSTGRES_DB: test_firedash
       TEST_POSTGRES_USER: firedash_test
