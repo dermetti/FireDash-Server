@@ -362,6 +362,8 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
     content = response.content.decode()
     cards = HubCards(content).cards
     assert len(cards) == 8  # File Management, six datasets, inherited configuration.
+    assert all(card["attrs"]["data-module-id"] != "system_outbound_email" for card in cards)
+    assert all("Outbound Email" not in card["text"] for card in cards)
     assert cards[0]["attrs"]["href"] == reverse("file-library-index")
     assert cards[0]["attrs"]["data-module-id"] == "file_management"
     _assert_navigation_card(
@@ -406,17 +408,8 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    "mode,provider,delivery,status,css",
-    [
-        ("DISABLED", "Not active", "Disabled", "Disabled", "secondary"),
-        ("API", "Brevo", "Email API", "Api", "success"),
-        ("SMTP", "System SMTP", "SMTP", "Smtp", "success"),
-    ],
-)
-def test_system_hub_preserves_cards_and_dynamic_configuration(
-    data_hub_scope, client, mode, provider, delivery, status, css
-):
+@pytest.mark.parametrize("mode", ["DISABLED", "API", "SMTP"])
+def test_system_hub_preserves_rescue_configuration_without_email_card(data_hub_scope, client, mode):
     admin, department = data_hub_scope
     SystemRole.objects.create(user=admin)
     SystemMailConfiguration.objects.update_or_create(
@@ -429,42 +422,27 @@ def test_system_hub_preserves_cards_and_dynamic_configuration(
     assert response.status_code == 200
     assert [module["id"] for module in response.context["modules"]] == [
         "system_vehicle_rescue_guides",
-        "system_outbound_email",
     ]
     assert all(
         not {"name", "description", "icon", "count_label"} & module.keys()
         for module in response.context["modules"]
     )
-    rescue, mail = HubCards(response.content.decode()).cards
-    for card, module_id, title, icon, route, description in [
-        (
-            rescue,
-            "system_vehicle_rescue_guides",
-            "Vehicle Rescue Guides",
-            "vehicle",
-            "portal-system-vehicle-rescue-guides",
-            "System-managed Euro RESCUE web application configuration.",
-        ),
-        (
-            mail,
-            "system_outbound_email",
-            "Outbound Email",
-            "mail",
-            "portal-system-outbound-email",
-            "System-level transactional email delivery configuration.",
-        ),
-    ]:
-        assert card["attrs"]["data-module-id"] == module_id
-        _assert_navigation_card(card, title=title, icon=icon, url=reverse(route), system=True)
-        assert description in card["text"]
-        assert "Publication" not in card["text"]
+    (rescue,) = HubCards(response.content.decode()).cards
+    assert rescue["attrs"]["data-module-id"] == "system_vehicle_rescue_guides"
+    _assert_navigation_card(
+        rescue,
+        title="Vehicle Rescue Guides",
+        icon="vehicle",
+        url=reverse("portal-system-vehicle-rescue-guides"),
+        system=True,
+    )
+    assert "System-managed Euro RESCUE web application configuration." in rescue["text"]
+    assert "Publication" not in rescue["text"]
+    assert "Outbound Email" not in rescue["text"]
+    assert 'data-module-id="system_outbound_email"' not in response.content.decode()
     assert "Enabled" in rescue["text"] and "Euro RESCUE" in rescue["text"]
     assert "Web" in rescue["text"]
     assert "https://example.test/rescue?locale=de" in rescue["text"]
-    assert f'<span class="badge text-bg-{css}">{status}</span>' in mail["html"]
-    assert provider in mail["text"] and delivery in mail["text"]
-    assert f'<dd class="col-5 text-end">{provider}</dd>' in mail["html"]
-    assert f'<dd class="col-5 text-end">{delivery}</dd>' in mail["html"]
     assert 'aria-label="System data modules"' in response.content.decode()
     # Departments inherit the same effective URL, preserving safe external navigation.
     department_page = client.get(reverse("portal-data-hub", args=(department.id,)))

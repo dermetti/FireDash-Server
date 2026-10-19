@@ -582,31 +582,11 @@ def system_data_hub(request: HttpRequest) -> HttpResponse:
     from apps.authorization.services import vehicle_rescue_guides_capability
 
     capability = vehicle_rescue_guides_capability()
-    from apps.outbound_mail.models import SystemMailConfiguration
-    from apps.outbound_mail.services import get_system_mail_configuration
-
-    mail = get_system_mail_configuration()
     modules = (
         {
             "id": "system_vehicle_rescue_guides",
             "url": reverse("portal-system-vehicle-rescue-guides"),
             **capability,
-        },
-        {
-            "id": "system_outbound_email",
-            "url": reverse("portal-system-outbound-email"),
-            "status": mail.delivery_mode.replace("_", " ").title(),
-            "status_css": "secondary" if mail.delivery_mode == "DISABLED" else "success",
-            "provider": mail.api_provider.replace("_", " ").title()
-            if mail.delivery_mode == SystemMailConfiguration.DeliveryMode.API
-            else "System SMTP"
-            if mail.delivery_mode == SystemMailConfiguration.DeliveryMode.SMTP
-            else "Not active",
-            "delivery": "Email API"
-            if mail.delivery_mode == SystemMailConfiguration.DeliveryMode.API
-            else "SMTP"
-            if mail.delivery_mode == SystemMailConfiguration.DeliveryMode.SMTP
-            else "Disabled",
         },
     )
     return render(request, "portal/system_data_hub.html", {"modules": modules})

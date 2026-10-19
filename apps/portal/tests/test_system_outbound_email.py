@@ -48,7 +48,7 @@ def _reauthenticate(client):
 
 
 @pytest.mark.django_db
-def test_outbound_email_is_system_admin_only_and_is_listed_in_system_data_hub(
+def test_outbound_email_is_system_admin_only_and_is_listed_in_system_settings(
     client, system_admin, non_system_admin
 ):
     url = reverse("portal-system-outbound-email")
@@ -56,8 +56,12 @@ def test_outbound_email_is_system_admin_only_and_is_listed_in_system_data_hub(
     response = client.get(url)
     assert response.status_code == 200
     assert "Outbound Email" in response.content.decode()
+    settings_page = client.get(reverse("portal-system-settings"))
+    assert settings_page.status_code == 200
+    assert f'href="{url}"' in settings_page.content.decode()
     hub = client.get(reverse("portal-system-data-hub"))
-    assert url in hub.content.decode()
+    assert url not in hub.content.decode()
+    assert 'data-module-id="system_outbound_email"' not in hub.content.decode()
 
     client.force_login(non_system_admin)
     assert client.get(url).status_code == 403

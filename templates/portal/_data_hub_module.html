@@ -15,6 +15,4 @@
   {% include "portal/_data_hub_card.html" with name="KLGV Plans" description="Allotment garden plans." icon="garden" count_label="Active plans" %}
 {% elif module.id == "system_vehicle_rescue_guides" %}
   {% include "portal/_data_hub_card.html" with name="Vehicle Rescue Guides" description="System-managed Euro RESCUE web application configuration." icon="vehicle" count_label="" status="Enabled" status_css="success" %}
-{% elif module.id == "system_outbound_email" %}
-  {% include "portal/_data_hub_card.html" with name="Outbound Email" description="System-level transactional email delivery configuration." icon="mail" count_label="" status=module.status status_css=module.status_css %}
 {% endif %}

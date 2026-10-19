@@ -248,7 +248,6 @@ def test_system_data_hub_vehicle_rescue_guides_is_system_only_and_uses_audited_s
     assert configuration_url in content
     assert [module["id"] for module in hub.context["modules"]] == [
         "system_vehicle_rescue_guides",
-        "system_outbound_email",
     ]
     assert 'data-module-id="system_vehicle_rescue_guides"' in content
     assert '<circle cx="7" cy="17" r="2"/>' in content
