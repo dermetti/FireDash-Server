@@ -1224,9 +1224,6 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     from apps.file_library.services import set_department_quotas
 
     department_library, _ = Library.objects.get_or_create(department=department)
-    from apps.file_library.capacity import pending_department_reviews
-
-    capacity_reviews = pending_department_reviews(department)[:50]
     policy = getattr(department, "personnel_retention_policy", None)
     lease_initial = {"tablet_lease_days": department.tablet_lease_days}
     retention_initial = {"retention_days": policy.retention_period.days if policy else 30}
@@ -1453,7 +1450,6 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
             "locale_time_form": locale_time_form,
             "quota_form": quota_form,
             "department_library": department_library,
-            "capacity_reviews": capacity_reviews,
             "retention_policy": policy,
             "mail": mail,
             "system_managed_allowed": is_system_managed_mail_allowed(department=department),

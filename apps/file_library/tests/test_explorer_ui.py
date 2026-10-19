@@ -373,8 +373,10 @@ def test_publication_relocation_and_requester_review_visibility(client, scope):
     assert detail.status_code == 200
     assert (
         reverse("publications-department-files-publish", args=(department.id,))
-        in detail.content.decode()
+        not in detail.content.decode()
     )
+    assert "Publish Now" not in detail.content.decode()
+    assert "Build now" in detail.content.decode()
     client.force_login(station_admin)
     page = client.get(reverse("file-library", args=(station_library.id,)))
     html = page.content.decode()
@@ -383,7 +385,12 @@ def test_publication_relocation_and_requester_review_visibility(client, scope):
     for review in (private, expired):
         assert reverse("file-library-capacity-review", args=(review.id,)) not in html
     assert "Your capacity reviews" in html and "Publish Now" in html
-    assert "Awaiting approval" in html and "Approved" in html
+    # The synthetic snapshots do not match the current candidate. A fresh
+    # assessment clears them; historical decisions cannot stay actionable.
+    pending.refresh_from_db()
+    approved.refresh_from_db()
+    assert pending.superseded_at and approved.superseded_at
+    assert "Superseded" in html
     assert (
         client.post(
             reverse("file-library-capacity-review", args=(pending.id,)),

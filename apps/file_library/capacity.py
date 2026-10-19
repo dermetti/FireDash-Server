@@ -26,6 +26,26 @@ from apps.tablets.models import AppInstallation, Tablet
 GCM_TAG_BYTES = 16
 
 
+REVIEW_PAGE_SIZE = 25
+
+
+@transaction.atomic
+def review_management_url(department, review=None):
+    """Link to the exact pending queue row, or the department review area."""
+    from django.urls import reverse
+
+    lock_department_capacity(department.id, reassess=False)
+    library, _ = Library.objects.get_or_create(department=department)
+    url = reverse("file-library", args=(library.id,))
+    pending = pending_department_reviews(department)
+    if review and pending.filter(pk=review.pk).exists():
+        preceding = pending.filter(
+            Q(created_at__lt=review.created_at) | Q(created_at=review.created_at, id__lt=review.id)
+        ).count()
+        return f"{url}?review_page={1 + preceding // REVIEW_PAGE_SIZE}#capacity-review-{review.id}"
+    return f"{url}#capacity-reviews-heading"
+
+
 def pending_department_reviews(department):
     """Read model for authorized department views, including all station libraries."""
     return (

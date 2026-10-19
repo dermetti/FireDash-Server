@@ -227,7 +227,8 @@ def test_override_is_specific_atomic_single_use_and_audited(scope, pdf_pipeline,
     from apps.file_library.publication import publish_now
     from apps.publications.services import process_next_job
 
-    publish_now(actor=scope[0], library_id=library.id)
+    with pytest.raises(services.LibraryError, match="Publication is unavailable"):
+        publish_now(actor=scope[0], library_id=library.id)
     assert process_next_job() is None
     approve(scope[0], review)
     generation = publish(scope[0], library)
@@ -275,11 +276,12 @@ def test_stale_confirmation_is_rejected(scope, pdf_pipeline, change):
 
         DepartmentMembership.objects.filter(user=scope[0]).update(status="SUSPENDED")
     if change != "reviewer_authority":
-        publish_now(actor=scope[0], library_id=library.id)
-    else:
-        from apps.publications.models import PublicationJob
+        with pytest.raises(services.LibraryError, match="Publication is unavailable"):
+            publish_now(actor=scope[0], library_id=library.id)
 
-        PublicationJob.objects.filter(status="PENDING").update(not_before=timezone.now())
+    from apps.publications.models import PublicationJob
+
+    PublicationJob.objects.filter(status="PENDING").update(not_before=timezone.now())
     assert claim_next_job() is None
     review.refresh_from_db()
     assert review.consumed_at is None and review.superseded_at is not None
@@ -712,7 +714,12 @@ def test_review_rechecks_population_after_concurrent_mutation(scope, pdf_pipelin
         from apps.file_library.publication import publish_now
         from apps.publications.services import claim_next_job
 
-        publish_now(actor=scope[0], library_id=library.id)
+        try:
+            publish_now(actor=scope[0], library_id=library.id)
+        except services.LibraryError as error:
+            assert "Publication is unavailable" in str(error)
+            assert claim_next_job() is None
+            return None
         return claim_next_job()
 
     outside = services.get_library(scope[2], department_id=scope[4].id)

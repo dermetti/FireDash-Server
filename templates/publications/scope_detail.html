@@ -7,36 +7,11 @@
 <p class="text-body-secondary">Publication history and current distributed state for this dataset scope.</p>
 
 <section class="mb-4">{% include "publications/_scope_detail_status.html" %}</section>
-{% if file_publication.capacity_review %}
-<section class="mb-4" aria-label="Publication capacity assessment">
-  {% if not file_publication.capacity_review.superseded_at %}{% include "file_library/_capacity_warning.html" with summary=file_publication.capacity_summary review=file_publication.capacity_review %}{% endif %}
-  <p>Capacity review: {% if file_publication.capacity_review.superseded_at %}Superseded{% elif file_publication.capacity_review.decision == "pending" %}Awaiting approval{% else %}{{ file_publication.capacity_review.decision|capfirst }}{% endif %}. <a href="{% url 'file-library-capacity-review' file_publication.capacity_review.id %}">Review publication capacity</a></p>
-</section>
-{% endif %}
-{% if scope.dataset_type_code == "department_files" and scope.station_id is None %}
-<section class="mb-4" aria-label="Department file publication">
-  <form method="post" action="{% url 'publications-department-files-publish' scope.department_id %}">
-    {% csrf_token %}<button type="submit" class="btn btn-primary">Publish Now</button>
-  </form>
-  <p class="form-text">This prepares the next signed publication; it does not confirm tablet delivery.</p>
-</section>
-{% endif %}
-
 {% if scope.dataset_type_code == "department_fire_plans" and scope.station_id is None and scope.delivery_format == "V1_ARTIFACT" %}
 <section class="mb-4"><form method="post" action="{% url 'publications-scope-fire-plan-document-manifest-cutover' scope.id %}">{% csrf_token %}<button class="btn btn-warning" type="submit">Migrate this Fire Plan scope to document-manifest v2</button></form></section>
 {% endif %}
 
-{% if row.actions.delete_staged or row.actions.cancel_build or row.actions.build_now or row.actions.stage_update or row.actions.inspect_changes %}
-<section class="mb-4">
-  <h2 class="h5 mb-3">Actions</h2>
-  <div class="d-flex gap-2 flex-wrap">
-    {% if row.actions.inspect_changes %}<button class="btn btn-outline-secondary" type="button" hx-get="{% url 'publications-inspect-changes' scope.id %}" hx-target="#publication-action-modal-container">Inspect changes</button>{% endif %}
-    {% if row.actions.delete_staged %}<form method="post" action="{% url 'publications-scope-build-now' scope.id %}">{% csrf_token %}<button class="btn btn-primary">Build now</button></form><button class="btn btn-outline-danger" type="button" hx-get="{% url 'publications-lifecycle-modal' row.update_publication_id 'delete-staged' %}" hx-target="#publication-action-modal-container">Delete staged</button>{% endif %}
-    {% if row.actions.cancel_build %}<button class="btn btn-outline-warning" type="button" hx-get="{% url 'publications-lifecycle-modal' row.update_publication_id 'cancel' %}" hx-target="#publication-action-modal-container">Cancel build</button>{% endif %}
-    {% if row.actions.stage_update %}<form method="post" action="{% url 'publications-scope-stage-update' scope.id %}">{% csrf_token %}<button class="btn btn-primary">Stage update</button></form>{% endif %}
-  </div>
-</section>
-{% endif %}
+{% if not row.is_file_publication %}{% include "publications/_scope_actions.html" %}{% endif %}
 
 <section class="mb-4">
   <h2 class="h5 mb-3">Version history</h2>

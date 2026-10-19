@@ -35,6 +35,7 @@ from apps.file_library.tests.test_publication import (  # noqa: F401
 from apps.publications.manifests import manifest_publications
 from apps.publications.models import DatasetScopeState, PublicationJob
 from apps.publications.services import (
+    PublicationError,
     build_claimed_job,
     build_staged_publication,
     cancel_publication_build,
@@ -164,12 +165,12 @@ def test_mixed_risks_show_stronger_warning_and_all_diagnostics(client, scope, pd
     response = client.get(reverse("file-library-capacity-review", args=(review.id,)))
     assert "Approve publication risk" in response.content.decode()
     assert "Source revision 1" in response.content.decode()
-    # Department Publications remains scoped to department files. Reviewing a
-    # station capacity request does not confer station publication authority.
+    # Department publication administration includes station scopes, without
+    # conferring station File Explorer authoring authority.
     station_state = DatasetScopeState.objects.get(**scope_kwargs(library))
     assert (
         client.get(reverse("publications-scope-detail", args=(station_state.id,))).status_code
-        == 403
+        == 200
     )
     department_library = library_for(scope)
     services.upload_pdf(actor=scope[0], library_id=department_library.id, upload=pdf())
@@ -179,9 +180,10 @@ def test_mixed_risks_show_stronger_warning_and_all_diagnostics(client, scope, pd
     detail = client.get(detail_url)
     assert detail.status_code == 200 and b"Review publication capacity" in detail.content
     assert (
-        reverse("file-library-capacity-review", args=(department_review.id,))
-        in detail.content.decode()
-    )
+        reverse("file-library", args=(department_library.id,))
+        + "?review_page=1#capacity-review-"
+        + str(department_review.id)
+    ) in detail.content.decode()
     client.force_login(scope[1])
     assert client.get(detail_url).status_code == 403
 
@@ -201,8 +203,10 @@ def test_all_queue_entry_points_share_gate_and_unchanged_reviews_are_idempotent(
         enqueue_publication_job(
             **{k: v for k, v in scope_kwargs(library).items() if k != "scope_type"}
         )
-        publish_now(actor=scope[0], library_id=library.id)
-        build_staged_publication(actor=scope[0], scope=state)
+        with pytest.raises(services.LibraryError):
+            publish_now(actor=scope[0], library_id=library.id)
+        with pytest.raises(PublicationError):
+            build_staged_publication(actor=scope[0], scope=state)
         assert claim_next_job() is None
     assert current_review(library).id == review.id
     assert CapacityReview.objects.filter(library=library).count() == 1
@@ -223,7 +227,8 @@ def test_rejection_stays_blocked_until_context_changes(scope, pdf_pipeline):
     services.upload_pdf(actor=scope[0], library_id=library.id, upload=pdf())
     review = current_review(library)
     approve(scope[0], review, approve=False)
-    publish_now(actor=scope[0], library_id=library.id)
+    with pytest.raises(services.LibraryError):
+        publish_now(actor=scope[0], library_id=library.id)
     assert claim_next_job() is None
     assert current_review(library).decision == "rejected"
     services.create_folder(actor=scope[0], library_id=library.id, name="New revision")
@@ -517,6 +522,9 @@ def test_terminal_attempt_retires_review_without_removing_source(scope, pdf_pipe
     assert review.consumed_at is None and Entry.objects.get(library=library).id == document.id
     with pytest.raises(services.LibraryError):
         approve(scope[0], review)
-    publish_now(actor=scope[0], library_id=library.id)
+    candidate(library)
+    with pytest.raises(services.LibraryError):
+        publish_now(actor=scope[0], library_id=library.id)
+    enqueue_publication_job(**{k: v for k, v in scope_kwargs(library).items() if k != "scope_type"})
     assert claim_next_job() is None
     assert current_review(library).id != review.id

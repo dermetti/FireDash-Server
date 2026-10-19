@@ -124,11 +124,7 @@ def publication_scope_queryset(department, *, include_station: bool = True):
     ]
     if include_station:
         fields.extend(("station__id", "station__name", "station__short_code"))
-    queryset = (
-        DatasetScopeState.objects.filter(department=department)
-        .exclude(dataset_type_code="station_files")
-        .only(*fields)
-    )
+    queryset = DatasetScopeState.objects.filter(department=department).only(*fields)
     if include_station:
         queryset = queryset.select_related("station")
         return queryset.order_by("dataset_type_code", "station__name", "id")

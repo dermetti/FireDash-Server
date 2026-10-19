@@ -124,6 +124,10 @@ def _decorate_scope_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ).values_list("scope_state_id", "version_number"):
             predecessor_versions.setdefault(scope_id, []).append(version_number)
     for row in rows:
+        row["is_file_publication"] = row["dataset_type_code"] in {
+            "department_files",
+            "station_files",
+        }
         current_version = row["distributed_version"]
         row["has_eligible_predecessor"] = bool(
             current_version is not None
@@ -153,7 +157,7 @@ def _filtered_scope_queryset(department: Department, selected_filter: str):
     need a small number of boolean/latest-status predicates for an accurate
     count, but intentionally never project a publication's heavy payload.
     """
-    queryset = publication_scope_queryset(department).exclude(dataset_type_code="station_files")
+    queryset = publication_scope_queryset(department)
     if not selected_filter:
         return queryset
 
@@ -258,7 +262,28 @@ def _scope_row_context(scope: DatasetScopeState) -> dict[str, Any]:
     rows = _decorate_scope_rows(scope_operational_states_for_scopes([scope]))
     if not rows:
         raise PermissionDenied("Dataset scope is unavailable.")
-    return {"row": rows[0], "department": scope.department}
+    context: dict[str, Any] = {"row": rows[0], "department": scope.department}
+    if rows[0]["is_file_publication"]:
+        from apps.file_library.models import Library
+        from apps.file_library.publication import publication_state
+
+        library = Library.objects.filter(
+            Q(station_id=scope.station_id)
+            if scope.station_id
+            else Q(department_id=scope.department_id)
+        ).first()
+        state = publication_state(library) if library else None
+        context["file_publication"] = state
+        rows[0]["actions"]["build_now"] = bool(
+            rows[0]["actions"]["build_now"] and state and state["can_build"]
+        )
+        if library:
+            from apps.file_library.capacity import review_management_url
+
+            context["capacity_management_url"] = review_management_url(
+                scope.department, state["capacity_review"] if state else None
+            )
+    return context
 
 
 def _scope_title(scope: DatasetScopeState) -> str:
@@ -325,7 +350,7 @@ def publications(request: HttpRequest, department_id) -> HttpResponse:
 def department_files_publish(request: HttpRequest, department_id) -> HttpResponse:
     """Publish Now through the existing file service, without a second workflow."""
     from apps.file_library.publication import publish_now
-    from apps.file_library.services import active_temporary_access, get_library
+    from apps.file_library.services import LibraryError, active_temporary_access, get_library
 
     department = _department_or_403(request, department_id)
     return_url = reverse("publications-list", args=(department.id,))
@@ -340,6 +365,11 @@ def department_files_publish(request: HttpRequest, department_id) -> HttpRespons
     except PermissionDenied:
         active_temporary_access(request.user)
         raise
+    except LibraryError as error:
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(str(error), status=409)
+        messages.warning(request, str(error))
+        return redirect(return_url)
     if request.headers.get("HX-Request") == "true":
         response = HttpResponse(status=204)
         response["HX-Redirect"] = return_url
@@ -391,17 +421,6 @@ def publication_scope_status(request: HttpRequest, scope_id) -> HttpResponse:
 def publication_scope_detail(request: HttpRequest, scope_id) -> HttpResponse:
     scope = _scope_or_403(request, scope_id)
     context = _scope_row_context(scope) | _scope_history_context(scope, request.GET.get("page"))
-    if scope.dataset_type_code in {"department_files", "station_files"}:
-        from apps.file_library.models import Library
-        from apps.file_library.publication import publication_state
-
-        libraries = (
-            Library.objects.filter(station=scope.station)
-            if scope.station_id
-            else Library.objects.filter(department=scope.department)
-        )
-        library = libraries.first()
-        context["file_publication"] = publication_state(library) if library else None
     context.update({"scope": scope, "scope_title": _scope_title(scope)})
     return render(request, "publications/scope_detail.html", context)
 

@@ -30,12 +30,14 @@ def candidate_operation(scope, snapshot):
     }
 
 
-def assess(*, scope, snapshot, actor=None, publication=None, consume=False):
+def assess(*, scope, snapshot, actor=None, publication=None, consume=False, bind=True):
     """Return (admitted, review). Re-evaluate immediately before promotion too.
 
     A review records the frozen source and complete risk/identity fingerprint.
     Repeated unchanged assessments reuse the row and emit no duplicate audit.
     Historical upload reviews are excluded by the explicit snapshot marker.
+    Readiness checks use bind=False: only admission binds approval to a build,
+    and only successful promotion consumes it.
     """
     if scope.dataset_type_code not in FILE_DATASETS:
         return True, None
@@ -119,8 +121,10 @@ def assess(*, scope, snapshot, actor=None, publication=None, consume=False):
             current.superseded_at = timezone.now()
             current.save(update_fields=("superseded_at",))
             capacity.event(current, actor, "superseded")
-            return assess(scope=scope, snapshot=snapshot, actor=actor, publication=publication)
-        if admitted and publication is not None:
+            return assess(
+                scope=scope, snapshot=snapshot, actor=actor, publication=publication, bind=bind
+            )
+        if admitted and publication is not None and bind:
             current.publication = publication
             if consume:
                 current.consumed_at = timezone.now()

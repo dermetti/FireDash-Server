@@ -210,10 +210,9 @@ def test_publication_permissions_and_ui(scope, client, crypto):
     for actor, target in ((scope[0], station_library), (scope[1], library), (scope[2], library)):
         with pytest.raises(PermissionDenied):
             publish_now(actor=actor, library_id=target.id)
-    with pytest.raises(PermissionDenied):
-        request_rebuild(
-            actor=scope[0], department=scope[3], station=scope[5], dataset_type_code="station_files"
-        )
+    request_rebuild(
+        actor=scope[0], department=scope[3], station=scope[5], dataset_type_code="station_files"
+    )
     with pytest.raises(PermissionDenied):
         request_rebuild(
             actor=scope[1],
@@ -234,10 +233,11 @@ def test_publication_permissions_and_ui(scope, client, crypto):
         client.get(
             reverse("publications-scope-detail", args=[generation.scope_state_id])
         ).status_code
-        == 403
+        == 200
     )
     response = client.get(reverse("publications-list", args=[scope[3].id]))
-    assert b"Station files" not in response.content
+    assert b"Station files" in response.content
+    assert scope[5].short_code.encode() in response.content
 
 
 @pytest.mark.django_db(transaction=True)

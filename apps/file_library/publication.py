@@ -176,6 +176,13 @@ def _publish_now(*, actor, library_id):
     from apps.publications.wake import wake_publication_build_worker
 
     library = locked_library(actor, library_id)
+    readiness = candidate_readiness(library)
+    if not readiness["can_publish"] and not readiness.get("publication_current"):
+        from apps.file_library.services import LibraryError
+
+        raise LibraryError(
+            "Publication is unavailable. Review the current capacity and build status."
+        )
     kwargs = scope_kwargs(library)
     kwargs.pop("scope_type")
     job = enqueue_publication_job(
@@ -197,9 +204,62 @@ def _publish_now(*, actor, library_id):
     return job
 
 
+@transaction.atomic
+def candidate_readiness(library):
+    """Assess the current source under the worker's capacity/scope boundary.
+
+    Reuse the durable assessment; never treat a stored approval as readiness
+    without checking its current source, population and telemetry fingerprint.
+    """
+    from apps.file_library.publication_capacity import assess
+    from apps.publications.models import PublicationJob
+
+    scope = lock_scope(library)
+    library.refresh_from_db()
+    snapshot = source_payload(department=scope.department, station=scope.station)
+    job = (
+        PublicationJob.objects.filter(scope_state=scope, status__in=("PENDING", "RUNNING"))
+        .select_related("build_publication")
+        .order_by("created_at", "id")
+        .first()
+    )
+    if (
+        job is None
+        and scope.current_published_publication
+        and scope.current_published_publication.source_revision == library.source_revision
+    ):
+        return {
+            "capacity_ready": True,
+            "can_publish": False,
+            "can_build": False,
+            "publication_current": True,
+        }
+    admitted, review = assess(
+        scope=scope,
+        snapshot=snapshot,
+        publication=job.build_publication if job else None,
+        bind=False,
+    )
+    building = PublicationJob.objects.filter(scope_state=scope, status="RUNNING").exists()
+    return {
+        "capacity_ready": admitted,
+        "assessed_review": review,
+        "can_publish": admitted and not building,
+        "can_build": bool(
+            admitted
+            and job
+            and job.status == "PENDING"
+            and job.build_publication
+            and job.build_publication.status == "STAGED"
+        ),
+    }
+
+
+@transaction.atomic
 def publication_state(library):
     from apps.publications.models import PublicationJob
 
+    readiness = candidate_readiness(library)
     scope = DatasetScopeState.objects.filter(**scope_kwargs(library)).first()
     if scope is None:
         return {"label": "Unpublished changes"}
@@ -226,6 +286,7 @@ def publication_state(library):
         .first()
     )
     return {
+        **readiness,
         "capacity_review": review,
         "capacity_summary": presentation_summary(review.projection) if review else None,
         "label": label,

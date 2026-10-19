@@ -1,15 +1,17 @@
-{% if pending_review_page.paginator.count %}
 <section class="mb-4" aria-labelledby="capacity-reviews-heading">
   <h2 id="capacity-reviews-heading" class="h5">Capacity reviews requiring approval</h2>
+  {% if pending_review_page.paginator.count %}
   <p class="text-body-secondary">{{ pending_review_page.paginator.count }} pending request{{ pending_review_page.paginator.count|pluralize }}.</p>
-  <table class="table table-hover align-middle"><thead><tr><th scope="col">Library</th><th scope="col">Publication candidate</th><th scope="col">Requesting administrator</th><th scope="col">Source revision</th><th scope="col">Review</th></tr></thead><tbody>
-  {% for review in pending_review_page %}<tr>
-    <td>{% if review.library.station_id %}{{ review.library.station.name }}{% else %}Department library{% endif %}</td>
+  <div class="table-responsive"><table class="table table-hover align-middle"><thead><tr><th scope="col">Library</th><th scope="col">Publication candidate</th><th scope="col">Requesting administrator</th><th scope="col">Source revision</th><th scope="col">Risk / affected tablets</th><th scope="col">Status</th><th scope="col">Review</th></tr></thead><tbody>
+  {% for item in pending_review_rows %}{% with review=item.review %}<tr id="capacity-review-{{ review.id }}">
+    <td>{% if review.library.station_id %}{{ review.library.station.name }}{% else %}Department files &middot; {{ library.department.name }}{% endif %}</td>
     <td>{% if review.operation.kind == "publication" %}Publish{% elif review.operation.kind == "replace" %}Replace{% else %}Upload{% endif %} {{ review.operation.name }}</td>
     <td>{{ review.requested_by.display_name|default:"Automatic scheduling" }}</td><td>{{ review.operation.source_revision|default:"Historical" }}</td>
+    <td>{% if item.summary.low_count %}<strong class="text-danger">Known insufficient capacity</strong>{% else %}<span class="text-warning-emphasis">Capacity unknown</span>{% endif %}<div class="small">{{ item.summary.tablets|length }} affected &middot; {{ item.summary.low_count }} below 20% &middot; {{ item.summary.unknown_count }} unknown</div></td>
+    <td>Awaiting approval</td>
     <td><a href="{% url 'file-library-capacity-review' review.id %}">Review request<span class="visually-hidden">: {{ review.operation.name }}</span></a></td>
-  </tr>{% endfor %}
-  </tbody></table>
+  </tr>{% endwith %}{% endfor %}
+  </tbody></table></div>
   <nav aria-label="Capacity review pages">{% if pending_review_page.has_previous %}<a href="?review_page={{ pending_review_page.previous_page_number }}#capacity-reviews-heading">Previous</a>{% endif %} <span>Page {{ pending_review_page.number }} of {{ pending_review_page.paginator.num_pages }}</span> {% if pending_review_page.has_next %}<a href="?review_page={{ pending_review_page.next_page_number }}#capacity-reviews-heading">Next</a>{% endif %}</nav>
+{% else %}<p class="text-body-secondary">No pending capacity reviews.</p>{% endif %}
 </section>
-{% endif %}

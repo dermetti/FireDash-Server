@@ -412,7 +412,7 @@ and `size`, always folders first with UUID tie-breaking. Page sizes are 1 to 100
 invalid page numbers raise Django paginator errors. These operation hints never
 replace service authorization. The shared Explorer UI consumes this read model; no independent folder-query implementation exists in its views.
 
-`publications-department-files-publish` is a POST-only department-admin endpoint
+`publications-department-files-publish` remains a POST-only department-admin compatibility endpoint
 using the authoritative `publish_now` service. It
 requires recent reauthentication and CSRF, coalesces existing jobs through the
 normal publication queue, and redirects to department Publications (HTMX receives
@@ -425,8 +425,9 @@ administrators. It displays scope, storage usage and an Open File Explorer link.
 The department parent includes paginated department-wide pending capacity
 approvals and temporary station-access selection. Normal station administrators
 see their library publication-capacity requests and a compact station publication panel.
-Department-file publication controls and history live exclusively in Publications;
-its department-files scope invokes `publications-department-files-publish`.
+Department and station file-publication administration and history live in
+Publications. File scope details use the capacity-gated Build now action; they
+do not render the compatibility Publish Now endpoint as an additional control.
 
 `file-library-explorer` (`/files/<library UUID>/explorer/`) uses the same template,
 read model, toolbar, rows and dialogs for both normal roles. Search covers the
@@ -456,3 +457,28 @@ recent reauthentication, six-hour expiry, grant replacement and audit. The chose
 station survives the reauthentication return; activation still requires a fresh,
 explicit POST confirmation. Existing station sidebar and Station Data Hub routes
 continue to enter the shared parent.
+
+### Capacity review placement and manual publication controls
+
+Department File Management is the single department-wide queue for pending file
+capacity approvals, including station libraries. Rows identify the owning library,
+source revision, strongest risk, affected/unknown/below-20% counts and review
+status. Detailed assessments and decisions return to the relevant paginated queue
+row. System Settings retains quotas and other configuration, without a parallel
+capacity approval table.
+
+Department Publications includes department and station file scopes. Department
+administrators may administer station publication lifecycles without gaining
+station File Explorer authoring privileges. Scope filters, counts and pagination
+remain department-scoped. File rows lead to the scope detail for a fresh capacity
+assessment rather than computing projections for every row in a list.
+
+File-publication details expose **Build now** in Actions for an eligible staged
+candidate, without a second Publish Now section. Capacity status links back to
+File Management; the complete tablet assessment stays in its review workflow.
+Station administrators retain Publish Now on their own File Management page,
+but cannot use it while capacity approval is outstanding or a build is running.
+Approved assessments are checked again against the actual candidate and device
+context. Both manual services reject blocked requests independently of disabled
+HTML controls; uploads and other source operations remain available. Existing
+successful generations remain distributable while newer candidates await approval.

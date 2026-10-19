@@ -155,15 +155,21 @@ def library_view(request, library_id):
             return redirect("file-library-index")
         if library_name_error is None:
             return redirect(request.path if action == "library_name" else request.get_full_path())
-    from apps.file_library.capacity import pending_department_reviews
+    from apps.file_library.capacity import REVIEW_PAGE_SIZE, pending_department_reviews
 
     department_admin = bool(library.department_id and access == services.ACCESS_NORMAL)
     station_admin = bool(library.station_id and access == services.ACCESS_NORMAL)
     review_page = None
     if department_admin:
-        review_page = Paginator(pending_department_reviews(library.department), 25).get_page(
-            request.GET.get("review_page", 1)
-        )
+        review_page = Paginator(
+            pending_department_reviews(library.department), REVIEW_PAGE_SIZE
+        ).get_page(request.GET.get("review_page", 1))
+    from apps.file_library.capacity import presentation_summary
+
+    review_rows = [
+        {"review": review, "summary": presentation_summary(review.projection)}
+        for review in review_page or ()
+    ]
     return render(
         request,
         "file_library/library.html",
@@ -174,6 +180,7 @@ def library_view(request, library_id):
             "editing_library_name": request.GET.get("rename") == "1"
             or library_name_error is not None,
             "pending_review_page": review_page,
+            "pending_review_rows": review_rows,
             "file_count": library.entries.filter(is_folder=False).count(),
             "capacity_reviews": (
                 CapacityReview.objects.filter(
@@ -183,7 +190,7 @@ def library_view(request, library_id):
                 .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
                 .filter(Q(requested_by=request.user) | Q(publication_snapshot__isnull=False))
                 .order_by("-created_at", "id")[:10]
-                if station_admin or department_admin
+                if station_admin
                 else ()
             ),
             "publication": publication_state(library) if station_admin else None,
@@ -290,7 +297,12 @@ def release_station_access(request):
 @login_required
 @require_http_methods(["GET", "POST"])
 def capacity_review(request, review_id):
-    from apps.file_library.capacity import decide, department_for, presentation_summary
+    from apps.file_library.capacity import (
+        decide,
+        department_for,
+        presentation_summary,
+        review_management_url,
+    )
 
     review = get_object_or_404(
         CapacityReview.objects.select_related(
@@ -311,6 +323,11 @@ def capacity_review(request, review_id):
     if not department_admin and not can_view:
         raise PermissionDenied
     temporary = services.active_temporary_access(request.user)
+    management_url = (
+        review_management_url(department, review)
+        if department_admin
+        else reverse("file-library", args=(library.id,))
+    )
     if request.method == "POST":
         action = request.POST.get("action")
         try:
@@ -348,6 +365,7 @@ def capacity_review(request, review_id):
         "file_library/capacity_review.html",
         {
             "review": review,
+            "review_management_url": management_url,
             "capacity_summary": presentation_summary(review.projection),
             "library": library,
             "department": department,

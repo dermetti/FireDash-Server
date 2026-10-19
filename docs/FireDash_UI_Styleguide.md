@@ -1139,3 +1139,20 @@ parent uses a bounded, accessible combobox with arrow/Enter/Escape/Tab and
 pointer support; changing the query invalidates the prior selection. An ordinary
 search/select form remains available without JavaScript. All permissions and
 posted IDs are checked server-side; hiding controls never grants authority.
+
+### File publication capacity controls
+
+Department File Management owns the single pending capacity-review queue for
+both department and station libraries; System Settings has no approval table.
+Publication pages link to the relevant File Management queue page and row, and
+the detailed risk/decision page returns there. Department Publications includes
+station file scopes, with station identity visible independently from publication
+state. This grants publication administration, not station source authoring.
+
+File scope details keep one Build now control in Actions, with concise capacity
+status and a File Management link. File list actions lead to that fresh assessment;
+list rendering remains page-first and batched. Station File Management retains
+Publish Now, disabled with an explanation and review-status link when capacity
+approval or lifecycle state prevents proceeding. Unknown capacity uses warning
+styling and measured below-20% capacity uses danger styling. Valid approval or
+safe reassessment enables the normal workflow without reuploading accepted PDFs.

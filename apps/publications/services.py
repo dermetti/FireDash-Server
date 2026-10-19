@@ -1417,6 +1417,25 @@ def build_staged_publication(*, actor, scope: DatasetScopeState) -> PublicationJ
     )
     if publication is None or publication.status != DatasetPublication.Status.STAGED:
         raise PublicationError("Only a staged publication can be built now.")
+    from apps.file_library.publication_capacity import FILE_DATASETS, assess
+
+    if locked_scope.dataset_type_code in FILE_DATASETS:
+        if PublicationJob.objects.filter(
+            scope_state=locked_scope, status=PublicationJob.Status.RUNNING
+        ).exists():
+            raise PublicationError("A publication is already building.")
+        snapshot = build_source_payload(
+            department=locked_scope.department,
+            station=locked_scope.station,
+            definition=get_dataset_definition(locked_scope.dataset_type_code),
+        )
+        admitted, _review = assess(
+            scope=locked_scope, snapshot=snapshot, actor=actor, publication=publication, bind=False
+        )
+        if not admitted:
+            raise PublicationError(
+                "Capacity approval is required before building this publication."
+            )
     job.trigger_type = PublicationJob.TriggerType.USER_REQUEST
     # `not_before` is the server-authoritative immediate-claim timestamp. The
     # list may poll this staged row only for a bounded grace interval from it.
@@ -1743,9 +1762,9 @@ def bulk_request_rebuilds(*, actor, department) -> dict[str, int]:
     """
     require_department_admin(actor, department)
     scopes = list(
-        DatasetScopeState.objects.filter(department=department)
-        .exclude(dataset_type_code="station_files")
-        .select_related("station", "latest_built_publication")
+        DatasetScopeState.objects.filter(department=department).select_related(
+            "station", "latest_built_publication"
+        )
     )
     running_scope_ids = set(
         PublicationJob.objects.filter(
