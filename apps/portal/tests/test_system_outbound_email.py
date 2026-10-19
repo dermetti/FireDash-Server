@@ -69,6 +69,22 @@ def test_outbound_email_is_system_admin_only_and_is_listed_in_system_settings(
 
 
 @pytest.mark.django_db
+def test_outbound_email_return_button_links_to_system_settings(client, system_admin):
+    client.force_login(system_admin)
+    response = client.get(reverse("portal-system-outbound-email"))
+    assert response.status_code == 200
+    content = response.content.decode()
+    assert (
+        f'<a class="btn btn-outline-secondary" href="{reverse("portal-system-settings")}">'
+        "Back to System Settings</a>"
+    ) in content
+    assert "Back to System Data Hub" not in content
+    assert (
+        f'class="btn btn-outline-secondary" href="{reverse("portal-system-data-hub")}"'
+    ) not in content
+
+
+@pytest.mark.django_db
 def test_api_and_smtp_configuration_use_services_and_retain_inactive_settings(
     client, system_admin, application_secret_settings
 ):

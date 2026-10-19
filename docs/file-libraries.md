@@ -38,7 +38,12 @@ document's sanitized content size; historical/unreferenced content is excluded.
 
 - `FILE_LIBRARY_MAX_FILE_BYTES`: default 25 MiB, enforced on both input and output.
   The existing `MAX_PDF_INPUT_BYTES` / `MAX_PDF_OUTPUT_BYTES` remain upper bounds.
-- `FILE_LIBRARY_QUOTA_BYTES`: default 1 GiB for new department quota policies.
+- `FILE_LIBRARY_DEPARTMENT_QUOTA_BYTES`: default 5,000,000,000 bytes (5 GB).
+- `FILE_LIBRARY_STATION_QUOTA_BYTES`: default 2,000,000,000 bytes (2 GB per station).
+  All stations in a department use its one shared station policy.
+- `FILE_LIBRARY_QUOTA_BYTES` remains the historical default (1 GiB) for old
+  migration callables. If explicitly configured, it is also the fallback for
+  either new setting unless that setting is explicitly configured.
   Department administrators configure the department-files limit and shared
   per-station-library limit in System Settings.
 - `FILE_LIBRARY_MAX_QUOTA_BYTES`: default 1 TiB, the server-side upper bound for
@@ -356,3 +361,39 @@ application processes quiesced; old code must not run against the new schema.
 Returning to code that expects that column requires reversing 0008 first, in
 addition to the normal deployment rollback prerequisites. This package does not
 perform that migration or any release switch outside the local test database.
+
+## Decimal default transition (migration 0009)
+
+Migration 0008 is unchanged. Migration 0009 establishes separate callable
+field defaults and evaluates each existing policy field independently. Only a
+1,073,741,824-byte field with no explicit quota-change evidence is converted.
+Recorded append-only audit installation must predate the initial file-library
+migration, and migration 0008 must be recorded. Missing or inconsistent history,
+unknown/unscoped quota audit records, explicit changes (including changing back
+to 1 GiB), or custom default configuration preserve the affected values. Legacy
+per-library audit targets protect the corresponding department or shared station
+policy, including station limits reconciled by 0008. A malformed event scoped to
+a department protects both fields; an unscoped event protects all policies.
+
+This inference relies on the supported audited configuration paths. Direct SQL
+writes are not identifiable from the available provenance. The migration locks
+existing policy rows before reading audit evidence, so in-flight supported quota
+changes commit before they are evaluated. It prints
+updated and preserved counts for each field, never changes source usage/revisions,
+publication jobs or audit rows, and does not backfill customized values. Its data
+conversion is not reversed automatically: doing so could undo later administrator
+intent. Schema rollback restores the old callable defaults only.
+
+The future Explorer read model lives in `apps.file_library.explorer`: each read
+checks persisted library access, validates its folder using existing services,
+and provides a bounded database-sorted page with complete containing-folder paths.
+Search covers the authorized library recursively; sort keys are `name`, `modified`
+and `size`, always folders first with UUID tie-breaking. Page sizes are 1 to 100;
+invalid page numbers raise Django paginator errors. These operation hints never
+replace service authorization. No Explorer route or UI exists yet.
+
+`publications-department-files-publish` is a POST-only department-admin endpoint
+using the same `publish_now` service as the existing File Management form. It
+requires recent reauthentication and CSRF, coalesces existing jobs through the
+normal publication queue, and redirects to department Publications (HTMX receives
+`HX-Redirect`). Existing department/station File Management forms remain supported.

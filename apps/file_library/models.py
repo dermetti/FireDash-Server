@@ -16,10 +16,18 @@ def default_quota():
     return settings.FILE_LIBRARY_QUOTA_BYTES
 
 
+def default_department_quota() -> int:
+    return settings.FILE_LIBRARY_DEPARTMENT_QUOTA_BYTES
+
+
+def default_station_quota() -> int:
+    return settings.FILE_LIBRARY_STATION_QUOTA_BYTES
+
+
 class DepartmentQuotaPolicy(models.Model):
     department = models.OneToOneField("organizations.Department", on_delete=models.PROTECT)
-    department_files_bytes = models.PositiveBigIntegerField(default=default_quota)
-    station_files_bytes = models.PositiveBigIntegerField(default=default_quota)
+    department_files_bytes = models.PositiveBigIntegerField(default=default_department_quota)
+    station_files_bytes = models.PositiveBigIntegerField(default=default_station_quota)
 
 
 class Library(models.Model):

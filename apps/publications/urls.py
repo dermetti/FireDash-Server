@@ -15,6 +15,11 @@ urlpatterns = [
         name="publications-status",
     ),
     path(
+        "departments/<uuid:department_id>/publications/department-files/publish/",
+        views.department_files_publish,
+        name="publications-department-files-publish",
+    ),
+    path(
         "publications/scopes/<uuid:scope_id>/",
         views.publication_scope_detail,
         name="publications-scope-detail",

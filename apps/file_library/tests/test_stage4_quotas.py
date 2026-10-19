@@ -41,8 +41,8 @@ def test_department_admin_sets_both_scope_quotas_without_source_publication(scop
     assert PublicationJob.objects.count() == jobs
     events = AuditEvent.objects.filter(action="file_library.quota_changed").order_by("timestamp")
     assert [event.metadata["old_quota_bytes"] for event in events] == [
-        1024 * 1024 * 1024,
-        1024 * 1024 * 1024,
+        5_000_000_000,
+        2_000_000_000,
     ]
     assert [event.metadata["new_quota_bytes"] for event in events] == [123456, 654321]
     with pytest.raises(PermissionDenied):

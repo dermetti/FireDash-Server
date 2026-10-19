@@ -6,6 +6,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Exists, F, OuterRef, Q, Subquery
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -317,6 +318,33 @@ def publications(request: HttpRequest, department_id) -> HttpResponse:
     if request.headers.get("HX-Request") == "true":
         return render(request, "publications/_scope_results.html", context)
     return render(request, "publications/list.html", context)
+
+
+@login_required
+@require_http_methods(["POST"])
+def department_files_publish(request: HttpRequest, department_id) -> HttpResponse:
+    """Publish Now through the existing file service, without a second workflow."""
+    from apps.file_library.publication import publish_now
+    from apps.file_library.services import active_temporary_access, get_library
+
+    department = _department_or_403(request, department_id)
+    return_url = reverse("publications-list", args=(department.id,))
+    require_recent_reauthentication(request, return_url=return_url)
+    # Keep expired-grant audit cleanup outside the publication rollback boundary,
+    # as publish_now does for the existing File Management entry point.
+    active_temporary_access(request.user)
+    try:
+        with transaction.atomic():
+            library = get_library(request.user, department_id=department.id)
+            publish_now(actor=request.user, library_id=library.id)
+    except PermissionDenied:
+        active_temporary_access(request.user)
+        raise
+    if request.headers.get("HX-Request") == "true":
+        response = HttpResponse(status=204)
+        response["HX-Redirect"] = return_url
+        return response
+    return redirect(return_url)
 
 
 @login_required

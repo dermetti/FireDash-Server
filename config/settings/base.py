@@ -171,6 +171,18 @@ FILE_LIBRARY_MAX_FILE_BYTES = get_typed_env(
 FILE_LIBRARY_QUOTA_BYTES = get_typed_env(
     "FILE_LIBRARY_QUOTA_BYTES", int, default=1024 * 1024 * 1024
 )
+# Keep the historical setting/callable unchanged for applied migrations. An
+# explicitly configured legacy default remains the fallback for both new keys.
+FILE_LIBRARY_DEPARTMENT_QUOTA_BYTES = get_typed_env(
+    "FILE_LIBRARY_DEPARTMENT_QUOTA_BYTES",
+    int,
+    default=get_typed_env("FILE_LIBRARY_QUOTA_BYTES", int, default=5_000_000_000),
+)
+FILE_LIBRARY_STATION_QUOTA_BYTES = get_typed_env(
+    "FILE_LIBRARY_STATION_QUOTA_BYTES",
+    int,
+    default=get_typed_env("FILE_LIBRARY_QUOTA_BYTES", int, default=2_000_000_000),
+)
 FILE_LIBRARY_MAX_QUOTA_BYTES = get_typed_env(
     "FILE_LIBRARY_MAX_QUOTA_BYTES", int, default=1024 * 1024 * 1024 * 1024
 )

@@ -40,6 +40,7 @@ class CapacityWarning(LibraryError):
 TEMPORARY_ACCESS_DURATION = timedelta(hours=6)
 ACCESS_NORMAL = "normal"
 ACCESS_TEMPORARY = "temporary"
+MAX_FOLDER_DEPTH = 5
 
 
 def _library_mutation(function):
@@ -312,6 +313,24 @@ def parent_entry(library, parent_id):
     return scoped_entry(library, parent_id, folder=True) if parent_id else None
 
 
+def folder_ancestry(library: Library, folder: Entry | None) -> tuple[Entry, ...]:
+    """Root-to-folder navigation using the same scope and depth rules as mutations."""
+    ancestors: list[Entry] = []
+    seen = set()
+    while folder is not None:
+        if folder.library_id != library.id or not folder.is_folder:
+            raise LibraryError("The selected folder is unavailable in this library.")
+        if folder.id in seen or len(ancestors) >= MAX_FOLDER_DEPTH:
+            raise LibraryError("Folder cycles or excessive folder depth are not allowed.")
+        seen.add(folder.id)
+        ancestors.append(folder)
+        try:
+            folder = folder.parent
+        except Entry.DoesNotExist as error:
+            raise LibraryError("The selected folder is unavailable in this library.") from error
+    return tuple(reversed(ancestors))
+
+
 def validate_location(library, name, parent, *, entry=None, folder=False):
     duplicates = Entry.objects.filter(library=library, parent=parent, name__iexact=name)
     if entry:
@@ -322,7 +341,7 @@ def validate_location(library, name, parent, *, entry=None, folder=False):
     cursor = parent
     while cursor:
         depth += 1
-        if depth > 5 or (entry and cursor.pk == entry.pk):
+        if depth > MAX_FOLDER_DEPTH or (entry and cursor.pk == entry.pk):
             raise LibraryError("Folder cycles are not allowed.")
         cursor = cursor.parent
     height = 1 if folder else 0
@@ -336,7 +355,7 @@ def validate_location(library, name, parent, *, entry=None, folder=False):
             )
             if frontier:
                 height += 1
-    if depth + height > 5:
+    if depth + height > MAX_FOLDER_DEPTH:
         raise LibraryError("Folders may be nested at most five levels deep.")
 
 
