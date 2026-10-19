@@ -602,6 +602,11 @@ def _record_failed_attempt(*, request_id: UUID) -> None:
 
 @transaction.atomic
 def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation, str]:
+    lock_department_capacity(
+        AdoptionRequest.objects.values_list("invitation__tablet__department_id", flat=True).get(
+            pk=request_id
+        )
+    )
     request = (
         AdoptionRequest.objects.select_for_update(of=("self",))
         .select_related("invitation__tablet__department")
@@ -790,6 +795,11 @@ def check_in(
     free_storage_bytes: int | None = None,
     total_storage_bytes: int | None = None,
 ) -> AppInstallation:
+    lock_department_capacity(
+        AppInstallation.objects.values_list("tablet__department_id", flat=True).get(
+            pk=installation.pk
+        )
+    )
     installation = (
         AppInstallation.objects.select_for_update()
         .select_related("tablet__department")
@@ -888,6 +898,11 @@ def refresh_installation_lease(
     minimum_app_version=None,
 ) -> AppInstallation:
     """Explicitly top up one eligible installation without creating delivery work."""
+    lock_department_capacity(
+        AppInstallation.objects.values_list("tablet__department_id", flat=True).get(
+            pk=installation.pk
+        )
+    )
     installation = (
         AppInstallation.objects.select_for_update()
         .select_related("tablet__department")
@@ -962,6 +977,13 @@ def _mark_stale(installation: AppInstallation, now) -> None:
 @transaction.atomic
 def mark_stale_installations(*, now=None) -> int:
     now = now or timezone.now()
+    for department_id in (
+        AppInstallation.objects.filter(status="ACTIVE", authorization_valid_until__lte=now)
+        .order_by("tablet__department_id")
+        .values_list("tablet__department_id", flat=True)
+        .distinct()
+    ):
+        lock_department_capacity(department_id)
     installations = list(
         AppInstallation.objects.select_for_update()
         .select_related("tablet__department")
@@ -1168,6 +1190,11 @@ def revoke_installation(
     *, actor, installation: AppInstallation, reason: str = ""
 ) -> AppInstallation:
     """Revoke one current installation's authorization without changing the Tablet asset."""
+    lock_department_capacity(
+        AppInstallation.objects.values_list("tablet__department_id", flat=True).get(
+            pk=installation.pk
+        )
+    )
     installation = (
         AppInstallation.objects.select_for_update()
         .select_related("tablet__department")

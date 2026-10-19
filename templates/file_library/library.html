@@ -37,6 +37,10 @@
 {% if is_station_library_admin %}
   <section class="border-top pt-3 mt-3" aria-labelledby="station-publish-heading">
     <h2 id="station-publish-heading" class="h5">Station file publication</h2>
+    {% if publication.capacity_review %}
+      {% if not publication.capacity_review.superseded_at %}{% include "file_library/_capacity_warning.html" with summary=publication.capacity_summary review=publication.capacity_review %}{% endif %}
+      <p>Capacity review: {% if publication.capacity_review.superseded_at %}Superseded{% elif publication.capacity_review.decision == "pending" %}Awaiting approval{% else %}{{ publication.capacity_review.decision|capfirst }}{% endif %}. <a href="{% url 'file-library-capacity-review' publication.capacity_review.id %}">View review status</a></p>
+    {% endif %}
     <p class="text-body-secondary small">{{ publication.label }}{% if publication.current %} &middot; Active version {{ publication.current.version_number }}{% else %} &middot; Not published{% endif %}</p>
     {% if publication.job.build_publication %}<p class="small">Latest attempt: generation {{ publication.job.build_publication.version_number }} &middot; {{ publication.job.get_status_display }}</p>{% endif %}
     <form method="post" action="{% url 'file-library' library.id %}">{% csrf_token %}<input type="hidden" name="action" value="publish"><button type="submit" class="btn btn-outline-primary btn-sm">Publish Now</button></form>

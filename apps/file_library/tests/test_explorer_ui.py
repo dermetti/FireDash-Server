@@ -216,11 +216,15 @@ def test_action_errors_preserve_values_move_browser_and_capacity_warnings(
     empty = client.post(url(library, "upload"))
     assert empty.status_code == 200 and empty.context["form"].errors
     tablet_for(scope, free=100, total=1000)
-    warning = client.post(url(library, "upload"), {"pdfs": [pdf("capacity.pdf")]})
-    assert warning.status_code == 200 and b"Review tablet capacity" in warning.content
-    review = CapacityReview.objects.get(requested_by=actor, library=library)
-    assert reverse("file-library-capacity-review", args=(review.id,)) in warning.content.decode()
-    assert not library.entries.filter(name="capacity.pdf").exists()
+    accepted = client.post(url(library, "upload"), {"pdfs": [pdf("capacity.pdf")]})
+    assert accepted.status_code == 302
+    review = CapacityReview.objects.get(
+        requested_by=actor,
+        library=library,
+        superseded_at=None,
+    )
+    assert review.publication_snapshot is not None and review.decision == "pending"
+    assert library.entries.filter(name="capacity.pdf").exists()
 
 
 def test_temporary_parent_and_shared_explorer_restrict_consume_and_expire(
@@ -351,7 +355,7 @@ def test_publication_relocation_and_requester_review_visibility(client, scope):
         decided_by=admin,
         decided_at=timezone.now(),
     )
-    private = review_for(admin, station_library)
+    private = review_for(admin, station_library, publication_snapshot=None)
     expired = review_for(
         station_admin, station_library, expires_at=timezone.now() - timedelta(seconds=1)
     )
@@ -379,7 +383,7 @@ def test_publication_relocation_and_requester_review_visibility(client, scope):
     for review in (private, expired):
         assert reverse("file-library-capacity-review", args=(review.id,)) not in html
     assert "Your capacity reviews" in html and "Publish Now" in html
-    assert "Pending" in html and "Approved" in html
+    assert "Awaiting approval" in html and "Approved" in html
     assert (
         client.post(
             reverse("file-library-capacity-review", args=(pending.id,)),

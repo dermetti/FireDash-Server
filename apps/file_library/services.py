@@ -28,15 +28,6 @@ class LibraryError(ValueError):
     pass
 
 
-class CapacityWarning(LibraryError):
-    def __init__(self, review):
-        self.review = review
-        super().__init__(
-            f"Tablet capacity requires department-admin review {review.id}. "
-            "No file was accepted. Review the warning, then retry the same PDF."
-        )
-
-
 TEMPORARY_ACCESS_DURATION = timedelta(hours=6)
 ACCESS_NORMAL = "normal"
 ACCESS_TEMPORARY = "temporary"
@@ -54,12 +45,12 @@ def _library_mutation(function):
                 from apps.file_library.capacity import lock_capacity
 
                 library = Library.objects.get(pk=kwargs["library_id"])
+                lock_capacity(library)
                 require_library_access(
                     kwargs["actor"],
                     library,
                     permission="delete" if function.__name__ == "delete_entry" else "manage",
                 )
-                lock_capacity(library)
                 return function(*args, **kwargs)
         except PermissionDenied:
             # The grant may expire between preflight and locked authorization.
@@ -152,6 +143,9 @@ def activate_temporary_access(*, actor, station):
     station = Station.objects.select_related("department").get(pk=station.pk)
     if station.department_id not in active_department_ids(actor) or not station.active:
         raise PermissionDenied
+    from apps.file_library.capacity import lock_department_capacity
+
+    lock_department_capacity(station.department_id)
     # Serialize activation/switching for one user. The partial unique constraint is
     # the final defense against concurrent requests.
     get_user_model().objects.select_for_update().get(pk=actor.pk)
@@ -254,6 +248,14 @@ def require_library_access(actor, library, *, permission):
 @transaction.atomic
 def get_library(actor, *, department_id=None, station_id=None):
     require_scope(actor, department_id=department_id, station_id=station_id)
+    from apps.file_library.capacity import lock_department_capacity
+
+    owner_id = department_id or Station.objects.values_list("department_id", flat=True).get(
+        pk=station_id
+    )
+    # Creation can also initialize the shared quota policy. Acquire capacity
+    # before those writes, as initialization subsequently assesses publication.
+    lock_department_capacity(owner_id, reassess=False)
     scope = {"department_id": department_id} if department_id else {"station_id": station_id}
     library, _ = Library.objects.get_or_create(**scope)
     from apps.file_library.publication import initialize_library
@@ -479,14 +481,9 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
     content_id = uuid.uuid4()
     document_id = replace_id or uuid.uuid4()
     if approval_id:
-        from apps.file_library.models import CapacityReview
-
-        review = CapacityReview.objects.filter(
-            pk=approval_id, library=library, requested_by=actor
-        ).first()
-        if review is None:
-            raise PermissionDenied("Capacity review is unavailable for this operation.")
-        document_id = uuid.UUID(review.operation["document_id"])
+        raise LibraryError(
+            "Upload approvals are obsolete. Upload the PDF without a capacity review."
+        )
     key = f"file-libraries/{library.id}/{content_id}.pdf"
     try:
         source = storage.write_quarantine(upload, limit=settings.FILE_LIBRARY_MAX_FILE_BYTES)
@@ -499,7 +496,7 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
         if size > settings.FILE_LIBRARY_MAX_FILE_BYTES:
             raise LibraryError("Sanitized PDF exceeds the file size limit.")
         with transaction.atomic():
-            from apps.file_library.capacity import lock_capacity, review_upload
+            from apps.file_library.capacity import lock_capacity
             from apps.file_library.reconciliation import lock_storage
 
             lock_capacity(library)
@@ -514,61 +511,42 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
             usage = library.usage_bytes - old_size + size
             if usage > library.quota_bytes and usage > library.usage_bytes:
                 raise LibraryError("Library storage quota exceeded.")
-            operation = {
-                "kind": "replace" if replace_id else "upload",
-                "document_id": str(document_id),
-                "replace_id": str(replace_id) if replace_id else None,
-                "parent_id": str(parent.id) if parent else None,
-                "name": entry.name if entry else name,
-                "sha256": digest,
-                "size_bytes": size,
-            }
             storage_increases = entry is None or entry.content.sha256 != digest
-            warning = (
-                review_upload(
-                    actor=actor, library=library, operation=operation, approval_id=approval_id
-                )
-                if storage_increases or approval_id
-                else None
+            # Set the intended path before promotion so partial promotion failures are cleaned.
+            destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / key
+            if destination.exists():
+                raise LibraryError("Content identity already exists; retry the upload.")
+            accepted = destination
+            storage.promote_to_accepted(output, key)
+            content = Content.objects.create(
+                id=content_id, library=library, storage_key=key, size_bytes=size, sha256=digest
             )
-            if warning is None:
-                # Set the intended path before promotion so partial promotion failures are cleaned.
-                destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / key
-                if destination.exists():
-                    raise LibraryError("Content identity already exists; retry the upload.")
-                accepted = destination
-                storage.promote_to_accepted(output, key)
-                content = Content.objects.create(
-                    id=content_id, library=library, storage_key=key, size_bytes=size, sha256=digest
+            if entry:
+                entry.content, entry.modified_by = content, actor
+                entry.save()
+            else:
+                entry = Entry.objects.create(
+                    id=document_id,
+                    library=library,
+                    parent=parent,
+                    name=name,
+                    content=content,
+                    modified_by=actor,
                 )
-                if entry:
-                    entry.content, entry.modified_by = content, actor
-                    entry.save()
-                else:
-                    entry = Entry.objects.create(
-                        id=document_id,
-                        library=library,
-                        parent=parent,
-                        name=name,
-                        content=content,
-                        modified_by=actor,
-                    )
-                if storage_increases:
-                    from apps.file_library.models import StorageImpact
+            if storage_increases:
+                from apps.file_library.models import StorageImpact
 
-                    StorageImpact.objects.create(
-                        library=library, document_id=document_id, sha256=digest, size_bytes=size
-                    )
-                library.usage_bytes = usage
-                changed(
-                    actor,
-                    library,
-                    entry,
-                    "replaced" if replace_id else "uploaded",
-                    content_id=str(content.id),
+                StorageImpact.objects.create(
+                    library=library, document_id=document_id, sha256=digest, size_bytes=size
                 )
-        if warning is not None:
-            raise CapacityWarning(warning)
+            library.usage_bytes = usage
+            changed(
+                actor,
+                library,
+                entry,
+                "replaced" if replace_id else "uploaded",
+                content_id=str(content.id),
+            )
         accepted = None
         return entry
     finally:

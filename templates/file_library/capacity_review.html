@@ -1,11 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Tablet capacity review{% endblock %}
 {% block content %}
-{% include "components/_page_header.html" with title="Tablet capacity review" description="Review a conservative estimate before accepting a specific source operation." %}
+{% include "components/_page_header.html" with title="Tablet capacity review" description="Review tablet storage risk for one exact file-library publication." %}
 <p><strong>{{ department.name }} · {% if library.station_id %}Station {{ library.station.name }}{% else %}Department library{% endif %} · {{ library.name }}</strong></p>
-<p>Operation: {{ review.operation.kind }} {{ review.operation.name }} · {{ review.operation.size_bytes }} sanitized bytes · Document {{ review.operation.document_id }}</p>
-<p>Decision: {{ review.decision }} · Expires {{ review.expires_at }}{% if review.consumed_at %} · Used {{ review.consumed_at }}{% endif %}</p>
-<div class="alert alert-warning">Estimates are not confirmed device capacity. New ciphertext and outstanding source changes are reserved without assuming old files are reclaimed. Missing or outdated measurements mean capacity unknown. An override accepts this risk for this operation only.</div>
+{% if review.publication_snapshot != None %}
+<p>Publication scope: {% if library.station_id %}Station files{% else %}Department files{% endif %} &middot; Source revision {{ review.operation.source_revision }}</p>
+<p>Decision: {% if review.superseded_at %}Superseded{% elif review.consumed_at %}Publication admitted{% elif review.decision == "pending" %}Awaiting approval{% else %}{{ review.decision|capfirst }}{% endif %}</p>
+<p>{{ capacity_summary.tablets|length }} affected tablets &middot; {{ capacity_summary.unknown_count }} unknown &middot; {{ capacity_summary.low_count }} projected below 20%.</p>
+{% include "file_library/_capacity_warning.html" with summary=capacity_summary %}
+<div class="alert alert-info">Approval authorizes this exact publication despite the recorded risk. It does not guarantee installation or synchronization. Source files are already accepted and available in File Explorer; no second upload is needed. Estimates reserve new ciphertext and outstanding source changes without assuming old files are reclaimed.</div>
+{% else %}<div class="alert alert-secondary">Historical upload review. This record cannot authorize publication or another upload.</div>{% endif %}
 {% if capacity_summary.unknown_count %}<div class="alert alert-warning"><strong>Capacity unknown</strong> for {{ capacity_summary.unknown_count }} affected tablet{{ capacity_summary.unknown_count|pluralize }}. Other measurements do not resolve this risk.</div>{% endif %}
 {% with tablet=capacity_summary.lowest_free %}{% if tablet %}
 <section class="card card-body mb-3" aria-labelledby="lowest-free-heading">
@@ -36,15 +40,12 @@
 {% if pending %}
   {% if can_decide %}<form method="post" class="card card-body mb-3">{% csrf_token %}
     <input type="hidden" name="fingerprint" value="{{ review.fingerprint }}">
-    <label class="mb-3"><input type="checkbox" name="confirm" value="yes" required> I reviewed the scope, tablets, estimates, and risk for this specific operation.</label>
-    <div><button class="btn btn-danger" name="action" value="approve">Override capacity warning</button> <button class="btn btn-outline-secondary" name="action" value="reject">Reject</button></div>
+    <label class="mb-3"><input type="checkbox" name="confirm" value="yes" required> I reviewed the scope, tablets, estimates, and risk for this specific publication.</label>
+    <div><button class="btn btn-danger" name="action" value="approve">Approve publication risk</button> <button class="btn btn-outline-secondary" name="action" value="reject">Reject</button></div>
   </form>{% else %}<p>Ask a department administrator to review request {{ review.id }} in System Settings. Station administrators cannot override this warning.</p>{% endif %}
 {% endif %}
 {% if temporary %}<div class="alert alert-warning">Temporary access to {{ temporary.station.name }} is valid until {{ temporary.expires_at }} ({{ temporary.expires_at|timeuntil }} remaining). Release it before making an override decision. Access remains read/download/delete only.
   <form method="post" action="{% url 'file-library-station-access-release' %}" class="mt-2">{% csrf_token %}<button class="btn btn-outline-danger">Release Access</button></form>
 </div>{% endif %}
-{% if approved and can_retry %}<form method="post" enctype="multipart/form-data" class="card card-body">{% csrf_token %}<input type="hidden" name="action" value="retry">
-  <label for="retry-pdf" class="form-label">Select the same PDF again. Source and telemetry will be revalidated.</label><input id="retry-pdf" type="file" name="pdf" accept="application/pdf,.pdf" required class="form-control mb-3"><button class="btn btn-primary">Retry approved operation</button>
-</form>{% endif %}
-{% if department_admin %}<p class="mt-3"><a href="{% url 'portal-department-settings' department.id %}">Department System Settings</a></p>{% elif can_retry %}<p class="mt-3"><a href="{% url 'file-library' library.id %}">Return to file library</a></p>{% endif %}
+{% if department_admin %}<p class="mt-3"><a href="{% url 'portal-department-settings' department.id %}">Department System Settings</a></p>{% elif can_view %}<p class="mt-3"><a href="{% url 'file-library' library.id %}">Return to file library</a></p>{% endif %}
 {% endblock %}

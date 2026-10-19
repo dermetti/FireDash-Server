@@ -76,7 +76,15 @@ def operation(*, size=100, document_id=None, sha256="a" * 64):
 def projection(library, proposed):
     with transaction.atomic():
         capacity.lock_capacity(library)
-        return capacity.project(library, proposed)
+        kwargs = {}
+        if proposed["kind"] == "publication":
+            from apps.file_library.publication import source_payload
+
+            kwargs["candidate_snapshot"] = source_payload(
+                department=capacity.department_for(library),
+                station=library.station,
+            )
+        return capacity.project(library, proposed, **kwargs)
 
 
 def upload_bytes(data, name="guide.pdf"):
@@ -84,9 +92,13 @@ def upload_bytes(data, name="guide.pdf"):
 
 
 def warning(actor, library, data):
-    with pytest.raises(services.CapacityWarning) as error:
-        services.upload_pdf(actor=actor, library_id=library.id, upload=upload_bytes(data))
-    return error.value.review
+    services.upload_pdf(actor=actor, library_id=library.id, upload=upload_bytes(data))
+    return CapacityReview.objects.get(
+        library=library,
+        publication_snapshot__isnull=False,
+        superseded_at__isnull=True,
+        consumed_at__isnull=True,
+    )
 
 
 def approve(actor, review, **kwargs):
@@ -202,28 +214,31 @@ def test_published_artifact_reuse_and_document_identity(scope, pdf_pipeline, cry
     assert installation.free_storage_bytes == 1_000_000
 
 
-def test_override_is_specific_atomic_single_use_and_audited(scope, pdf_pipeline):
+def test_override_is_specific_atomic_single_use_and_audited(scope, pdf_pipeline, crypto):
     library = library_for(scope)
     _tablet, installation = tablet_for(scope, free=10, total=1000)
     data = pdf().read()
     review = warning(scope[0], library, data)
     library.refresh_from_db()
-    assert library.usage_bytes == library.source_revision == 0
-    assert not Entry.objects.exists() and not Content.objects.exists()
-    assert not list((pdf_pipeline / "accepted").rglob("*.pdf"))
+    assert library.usage_bytes == len(data) and library.source_revision == 1
+    document = Entry.objects.get(library=library)
+    assert services.content_path(document.content).read_bytes() == data
+    assert review.expires_at is None
+    from apps.file_library.publication import publish_now
+    from apps.publications.services import process_next_job
+
+    publish_now(actor=scope[0], library_id=library.id)
+    assert process_next_job() is None
     approve(scope[0], review)
-    document = services.upload_pdf(
-        actor=scope[0], library_id=library.id, upload=upload_bytes(data), approval_id=review.id
-    )
-    assert str(document.id) == review.operation["document_id"]
+    generation = publish(scope[0], library)
     review.refresh_from_db()
-    assert review.consumed_at is not None
+    assert review.consumed_at is not None and review.publication_id == generation.id
+    assert Entry.objects.get(pk=document.id).content_id == document.content_id
     with pytest.raises(services.LibraryError):
-        services.upload_pdf(
-            actor=scope[0], library_id=library.id, upload=upload_bytes(data), approval_id=review.id
-        )
+        approve(scope[0], review)
     approved_event = AuditEvent.objects.get(
-        action="file_library.capacity_override_approved", target_uuid=review.id
+        action="file_library.capacity_override_approved",
+        target_uuid=review.id,
     )
     values = approved_event.metadata["projection"]["tablets"][0]
     assert values["free_storage_bytes"] == 10
@@ -232,6 +247,7 @@ def test_override_is_specific_atomic_single_use_and_audited(scope, pdf_pipeline)
     assert values["projected_free_bytes"] == 10 - len(data) - 16
     assert values["reason"] == "projected_low_storage"
     assert approved_event.actor_user_id == scope[0].id
+    assert AuditEvent.objects.filter(action="file_library.capacity_override_consumed").count() == 1
     installation.refresh_from_db()
     assert installation.free_storage_bytes == 10
     assert StorageImpact.objects.count() == 1
@@ -239,28 +255,35 @@ def test_override_is_specific_atomic_single_use_and_audited(scope, pdf_pipeline)
 
 @pytest.mark.parametrize("change", ["source", "telemetry", "expiry", "reviewer_authority"])
 def test_stale_confirmation_is_rejected(scope, pdf_pipeline, change):
+    from apps.file_library.publication import publish_now
+    from apps.publications.services import claim_next_job
+
     library = library_for(scope)
     _tablet, installation = tablet_for(scope, free=10, total=1000)
-    data = pdf().read()
-    review = warning(scope[0], library, data)
+    review = warning(scope[0], library, pdf().read())
     approve(scope[0], review)
     if change == "source":
         services.create_folder(actor=scope[0], library_id=library.id, name="Changed")
     elif change == "telemetry":
         AppInstallation.objects.filter(pk=installation.pk).update(free_storage_bytes=11)
     elif change == "expiry":
-        CapacityReview.objects.filter(pk=review.pk).update(expires_at=timezone.now())
+        AppInstallation.objects.filter(pk=installation.pk).update(
+            authorization_valid_until=timezone.now() - timedelta(seconds=1),
+        )
     else:
         from apps.authorization.models import DepartmentMembership
 
         DepartmentMembership.objects.filter(user=scope[0]).update(status="SUSPENDED")
-    with pytest.raises((services.LibraryError, PermissionDenied)):
-        services.upload_pdf(
-            actor=scope[0], library_id=library.id, upload=upload_bytes(data), approval_id=review.id
-        )
-    assert not Entry.objects.filter(is_folder=False).exists()
+    if change != "reviewer_authority":
+        publish_now(actor=scope[0], library_id=library.id)
+    else:
+        from apps.publications.models import PublicationJob
+
+        PublicationJob.objects.filter(status="PENDING").update(not_before=timezone.now())
+    assert claim_next_job() is None
     review.refresh_from_db()
-    assert review.consumed_at is None
+    assert review.consumed_at is None and review.superseded_at is not None
+    assert Entry.objects.filter(library=library, is_folder=False).count() == 1
 
 
 def test_station_escalation_and_temporary_permission_boundaries(scope, pdf_pipeline, client):
@@ -305,10 +328,10 @@ def test_station_escalation_and_temporary_permission_boundaries(scope, pdf_pipel
     )
     review.refresh_from_db()
     assert review.decision == "approved"
-    assert client.post(url, {"action": "retry", "pdf": upload_bytes(data)}).status_code == 403
+    assert client.post(url, {"action": "retry", "pdf": upload_bytes(data)}).status_code == 400
     client.force_login(scope[1])
     assert client.post(url, {"action": "approve", "confirm": "yes"}).status_code == 403
-    assert client.post(url, {"action": "retry", "pdf": upload_bytes(data)}).status_code == 302
+    assert client.post(url, {"action": "retry", "pdf": upload_bytes(data)}).status_code == 400
     assert Entry.objects.filter(library=library, is_folder=False).count() == 1
 
 
@@ -355,8 +378,6 @@ def test_cross_scope_concurrent_uploads_share_reservations(scope, pdf_pipeline):
             barrier.wait(timeout=10)
             services.upload_pdf(actor=actor, library_id=library.id, upload=upload_bytes(data))
             return "accepted"
-        except services.CapacityWarning:
-            return "warning"
         finally:
             close_old_connections()
 
@@ -365,28 +386,40 @@ def test_cross_scope_concurrent_uploads_share_reservations(scope, pdf_pipeline):
             executor.submit(upload, scope[0], department_library),
             executor.submit(upload, scope[1], station_library),
         )
-        assert sorted(f.result(timeout=30) for f in futures) == ["accepted", "warning"]
-    assert Entry.objects.filter(is_folder=False).count() == StorageImpact.objects.count() == 1
+        assert sorted(f.result(timeout=30) for f in futures) == ["accepted", "accepted"]
+    assert Entry.objects.filter(is_folder=False).count() == StorageImpact.objects.count() == 2
+    assert CapacityReview.objects.filter(superseded_at=None, decision="pending").count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
-def test_failure_after_override_consumption_rolls_back(scope, pdf_pipeline, monkeypatch):
+def test_failure_after_override_consumption_rolls_back(scope, pdf_pipeline, crypto, monkeypatch):
+    from apps.file_library.publication import publish_now
+    from apps.publications import services as publication_services
+    from apps.publications.models import DatasetScopeState
+
     library = library_for(scope)
     tablet_for(scope, free=10, total=1000)
-    data = pdf().read()
-    review = warning(scope[0], library, data)
+    review = warning(scope[0], library, pdf().read())
     approve(scope[0], review)
-    monkeypatch.setattr(
-        services, "changed", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("rollback"))
-    )
+    publish_now(actor=scope[0], library_id=library.id)
+    job = publication_services.claim_next_job()
+    assert job is not None
+    original = publication_services.record_event
+
+    def fail(**kwargs):
+        if kwargs["action"] == "publication.published":
+            raise RuntimeError("rollback")
+        return original(**kwargs)
+
+    monkeypatch.setattr(publication_services, "record_event", fail)
     with pytest.raises(RuntimeError, match="rollback"):
-        services.upload_pdf(
-            actor=scope[0], library_id=library.id, upload=upload_bytes(data), approval_id=review.id
-        )
+        publication_services.build_claimed_job(job_id=job.id)
     review.refresh_from_db()
     assert review.consumed_at is None
-    assert not Entry.objects.exists() and not StorageImpact.objects.exists()
-    assert not Content.objects.exists()
+    assert (
+        DatasetScopeState.objects.get(pk=job.scope_state_id).current_published_publication is None
+    )
+    assert Entry.objects.count() == Content.objects.count() == StorageImpact.objects.count() == 1
     assert not AuditEvent.objects.filter(action="file_library.capacity_override_consumed").exists()
 
 
@@ -416,7 +449,9 @@ def test_metadata_edits_and_unchanged_ciphertext_do_not_require_overrides(scope,
     services.upload_pdf(
         actor=scope[0], library_id=library.id, replace_id=document.id, upload=upload_bytes(data)
     )
-    assert not CapacityReview.objects.exists()
+    assert CapacityReview.objects.filter(
+        publication_snapshot__isnull=False, decision="pending"
+    ).exists()
     assert StorageImpact.objects.count() == 1
 
 
@@ -426,16 +461,16 @@ def test_reducing_source_replacement_reserves_full_new_ciphertext(scope, pdf_pip
     publish(scope[0], library)
     tablet_for(scope, free=10, total=1000)
     smaller = pdf().read()
-    with pytest.raises(services.CapacityWarning) as error:
-        services.upload_pdf(
-            actor=scope[0],
-            library_id=library.id,
-            replace_id=document.id,
-            upload=upload_bytes(smaller),
-        )
-    result = error.value.review.projection["tablets"][0]
+    services.upload_pdf(
+        actor=scope[0],
+        library_id=library.id,
+        replace_id=document.id,
+        upload=upload_bytes(smaller),
+    )
+    result = CapacityReview.objects.get(superseded_at=None).projection["tablets"][0]
     assert result["incremental_ciphertext_bytes"] == len(smaller) + 16
-    assert document.content.size_bytes > len(smaller)
+    document.refresh_from_db()
+    assert document.content.size_bytes == len(smaller)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -468,51 +503,38 @@ def test_native_deployment_check_fails_closed_on_windows(monkeypatch):
 def test_override_does_not_bypass_quota_or_accept_different_bytes(scope, pdf_pipeline):
     library = library_for(scope)
     tablet_for(scope, free=10, total=1000)
-    data = pdf().read()
-    review = warning(scope[0], library, data)
+    review = warning(scope[0], library, pdf().read())
     approve(scope[0], review)
-    with pytest.raises(services.LibraryError, match="stale"):
+    with pytest.raises(services.LibraryError, match="obsolete"):
         services.upload_pdf(
-            actor=scope[0], library_id=library.id, upload=pdf(pages=2), approval_id=review.id
+            actor=scope[0],
+            library_id=library.id,
+            upload=pdf(pages=2),
+            approval_id=review.id,
         )
     services.set_library_quota(actor=scope[0], library_id=library.id, quota_bytes=0)
     with pytest.raises(services.LibraryError, match="quota"):
-        services.upload_pdf(
-            actor=scope[0], library_id=library.id, upload=upload_bytes(data), approval_id=review.id
-        )
+        services.upload_pdf(actor=scope[0], library_id=library.id, upload=pdf("another.pdf"))
     review.refresh_from_db()
     assert review.consumed_at is None
-    assert not Entry.objects.exists()
+    assert Entry.objects.filter(library=library).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
-def test_concurrent_override_consumption_is_single_use(scope, pdf_pipeline):
+def test_concurrent_override_consumption_is_single_use(scope, pdf_pipeline, crypto):
+    from apps.file_library.publication import publish_now
+    from apps.publications.services import build_claimed_job, claim_next_job
+
     library = library_for(scope)
     tablet_for(scope, free=10, total=1000)
-    data = pdf().read()
-    review = warning(scope[0], library, data)
+    review = warning(scope[0], library, pdf().read())
     approve(scope[0], review)
-    barrier = Barrier(2)
-
-    def commit():
-        close_old_connections()
-        try:
-            barrier.wait(timeout=10)
-            services.upload_pdf(
-                actor=scope[0],
-                library_id=library.id,
-                upload=upload_bytes(data),
-                approval_id=review.id,
-            )
-            return "accepted"
-        except services.LibraryError:
-            return "rejected"
-        finally:
-            close_old_connections()
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = (executor.submit(commit), executor.submit(commit))
-        assert sorted(f.result(timeout=30) for f in futures) == ["accepted", "rejected"]
+    publish_now(actor=scope[0], library_id=library.id)
+    first, second = serialized_operations(claim_next_job, claim_next_job)
+    assert first is not None and second is None
+    assert build_claimed_job(job_id=first.id).status == "SUCCEEDED"
+    review.refresh_from_db()
+    assert review.consumed_at is not None
     assert Entry.objects.count() == StorageImpact.objects.count() == 1
     assert AuditEvent.objects.filter(action="file_library.capacity_override_consumed").count() == 1
 
@@ -685,16 +707,13 @@ def test_review_rechecks_population_after_concurrent_mutation(scope, pdf_pipelin
     mutation = capacity_mutation(scope, tablet, change)
 
     def use_review():
-        with pytest.raises(services.LibraryError, match="changed|stale"):
-            if phase == "confirm":
-                approve(scope[0], review)
-            else:
-                services.upload_pdf(
-                    actor=scope[0],
-                    library_id=library.id,
-                    upload=upload_bytes(data),
-                    approval_id=review.id,
-                )
+        if phase == "confirm":
+            return approve(scope[0], review)
+        from apps.file_library.publication import publish_now
+        from apps.publications.services import claim_next_job
+
+        publish_now(actor=scope[0], library_id=library.id)
+        return claim_next_job()
 
     outside = services.get_library(scope[2], department_id=scope[4].id)
 
@@ -708,8 +727,8 @@ def test_review_rechecks_population_after_concurrent_mutation(scope, pdf_pipelin
     review.refresh_from_db()
     assert review.consumed_at is None
     assert review.decision == ("pending" if phase == "confirm" else "approved")
-    assert not Entry.objects.exists()
-    assert not StorageImpact.objects.exists()
+    assert Entry.objects.count() == StorageImpact.objects.count() == 1
+    assert review.superseded_at is not None
     assert not AuditEvent.objects.filter(action="file_library.capacity_override_consumed").exists()
     current = projection(library, review.operation)
     assert capacity.fingerprint(current) != review.fingerprint
@@ -746,20 +765,19 @@ def test_vehicle_retirement_and_reassignment_serialize_under_capacity_lock(scope
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("phase", ["confirm", "consume"])
 def test_review_commits_before_waiting_vehicle_retirement(scope, pdf_pipeline, phase):
+    from apps.file_library.publication import publish_now
+    from apps.publications.services import claim_next_job
+
     library = library_for(scope)
     tablet, _ = tablet_for(scope, free=10, total=1000)
     assignment = TabletVehicleAssignment.objects.get(tablet=tablet)
-    data = pdf().read()
-    review = warning(scope[0], library, data)
+    review = warning(scope[0], library, pdf().read())
     if phase == "consume":
         approve(scope[0], review)
+        publish_now(actor=scope[0], library_id=library.id)
 
     def use_review():
-        if phase == "confirm":
-            return approve(scope[0], review)
-        return services.upload_pdf(
-            actor=scope[0], library_id=library.id, upload=upload_bytes(data), approval_id=review.id
-        )
+        return approve(scope[0], review) if phase == "confirm" else claim_next_job()
 
     serialized_operations(
         use_review,
@@ -770,20 +788,10 @@ def test_review_commits_before_waiting_vehicle_retirement(scope, pdf_pipeline, p
     library.refresh_from_db()
     assert assignment.ended_at is not None
     assert not Vehicle.objects.get(pk=assignment.vehicle_id).active
-    assert review.decision == "approved"
-    assert (review.consumed_at is not None) == (phase == "consume")
-    assert Entry.objects.count() == StorageImpact.objects.count() == (phase == "consume")
-    assert library.source_revision == (phase == "consume")
-    if phase == "confirm":
-        with pytest.raises(services.LibraryError, match="stale"):
-            services.upload_pdf(
-                actor=scope[0],
-                library_id=library.id,
-                upload=upload_bytes(data),
-                approval_id=review.id,
-            )
-        review.refresh_from_db()
-        assert review.consumed_at is None
+    assert review.decision == "approved" and review.consumed_at is None
+    assert Entry.objects.count() == StorageImpact.objects.count() == 1
+    assert library.source_revision == 1
+    assert projection(library, review.operation)["tablets"] == []
 
 
 @pytest.mark.django_db(transaction=True)

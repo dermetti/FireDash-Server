@@ -1,4 +1,4 @@
-"""Conservative PDF ciphertext estimates and one-operation administrative reviews.
+"""Conservative PDF ciphertext estimates and publication administrative reviews.
 
 No installation acknowledgments or cache receipts are inferred. Published-at-
 measurement content is an estimated baseline; new ciphertext is reserved at full
@@ -23,7 +23,6 @@ from apps.file_library.models import CapacityReview, Content, Entry, Library, St
 from apps.publications.models import DatasetPublication, DocumentArtifact
 from apps.tablets.models import AppInstallation, Tablet
 
-REVIEW_LIFETIME = timedelta(minutes=15)
 GCM_TAG_BYTES = 16
 
 
@@ -33,9 +32,11 @@ def pending_department_reviews(department):
         CapacityReview.objects.filter(
             Q(library__department=department) | Q(library__station__department=department),
             decision="pending",
-            expires_at__gt=timezone.now(),
+            publication_snapshot__isnull=False,
+            superseded_at__isnull=True,
             consumed_at__isnull=True,
         )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
         .select_related("library__station", "requested_by")
         .order_by("created_at", "id")
     )
@@ -50,7 +51,7 @@ def lock_capacity(library):
     lock_department_capacity(department_for(library).id)
 
 
-def lock_department_capacity(department_id):
+def lock_department_capacity(department_id, *, reassess=True):
     """Acquire inside atomic(), before any conflicting row locks.
 
     Source operations take this lock before scope/library/review/installation
@@ -66,13 +67,17 @@ def lock_department_capacity(department_id):
     )
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_advisory_xact_lock(%s)", [key])
+    if reassess:
+        from apps.file_library.publication_capacity import schedule_reassessment
+
+        schedule_reassessment(department_id)
 
 
 def _identity(library_id, document_id, sha256):
     return f"{library_id}:{document_id}:{sha256}"
 
 
-def project(library, operation):
+def project(library, operation, *, candidate_snapshot=None):
     """Called within a transaction under the department capacity/source lock.
 
     Lock current installations to keep telemetry/replacement stable until this
@@ -143,17 +148,27 @@ def project(library, operation):
             cast(Content, entry.content).sha256,
             cast(Content, entry.content).size_bytes,
         )
-    # A replacement never takes credit for reclaiming the previous ciphertext.
-    for key in list(desired):
-        if desired[key][:2] == (str(library.id), operation["document_id"]):
-            del desired[key]
-    candidate = (
-        str(library.id),
-        operation["document_id"],
-        operation["sha256"],
-        operation["size_bytes"],
-    )
-    desired[_identity(*candidate[:3])] = candidate
+    if operation["kind"] == "publication":
+        # Replace this library's live set with the exact candidate, never add a
+        # synthetic upload to a source set which already contains that upload.
+        desired = {key: value for key, value in desired.items() if value[0] != str(library.id)}
+        if candidate_snapshot is None:
+            raise ValueError("A frozen publication snapshot is required for capacity assessment.")
+        for doc in candidate_snapshot["documents"]:
+            value = (str(library.id), doc["id"], doc["sha256"], doc["size_bytes"])
+            desired[_identity(*value[:3])] = value
+    else:
+        # A replacement never takes credit for reclaiming the previous ciphertext.
+        for key in list(desired):
+            if desired[key][:2] == (str(library.id), operation["document_id"]):
+                del desired[key]
+        candidate = (
+            str(library.id),
+            operation["document_id"],
+            operation["sha256"],
+            operation["size_bytes"],
+        )
+        desired[_identity(*candidate[:3])] = candidate
     cutoff = now - timedelta(seconds=max(1, settings.TABLET_STORAGE_TELEMETRY_MAX_AGE_SECONDS))
     impacts = list(StorageImpact.objects.filter(library__in=libraries, created_at__gte=cutoff))
     publications = list(
@@ -347,6 +362,7 @@ def presentation_summary(projection):
         "tablets": rows,
         "lowest_free": lowest,
         "worst_percentage": worst,
+        "low_count": sum(t["state"] == "warning" for t in projection["tablets"]),
         "unknown_count": len(rows) - len(measured),
         "different_worst_percentage": bool(
             lowest and worst and lowest["tablet_id"] != worst["tablet_id"]
@@ -370,66 +386,17 @@ def event(review, actor, decision):
         target_uuid=review.id,
         metadata={
             "decision": decision,
-            "requested_by": str(review.requested_by_id),
+            "requested_by": str(review.requested_by_id) if review.requested_by_id else None,
             "decided_by": str(review.decided_by_id) if review.decided_by_id else None,
             "decided_at": review.decided_at.isoformat() if review.decided_at else None,
             "review_id": str(review.id),
+            "publication_id": str(review.publication_id) if review.publication_id else None,
+            "superseded_at": review.superseded_at.isoformat() if review.superseded_at else None,
             "projection": review.projection,
             "fingerprint": review.fingerprint,
-            "expires_at": review.expires_at.isoformat(),
+            "expires_at": review.expires_at.isoformat() if review.expires_at else None,
         },
     )
-
-
-def review_upload(*, actor, library, operation, approval_id=None):
-    """Return a committed warning request, or authorize this exact source write."""
-    from apps.file_library.services import LibraryError, active_temporary_access
-
-    projection = project(library, operation)
-    digest = fingerprint(projection)
-    if approval_id:
-        review = (
-            CapacityReview.objects.select_for_update()
-            .filter(pk=approval_id, library=library, requested_by=actor)
-            .first()
-        )
-        if review is None:
-            raise PermissionDenied("This capacity review does not authorize this operation.")
-        if (
-            review.decision != "approved"
-            or review.consumed_at
-            or review.expires_at <= timezone.now()
-            or review.operation != operation
-            or review.fingerprint != digest
-        ):
-            raise LibraryError("Capacity confirmation is stale or unavailable. Start a new upload.")
-        require_department_admin(review.decided_by, department_for(library))
-        if active_temporary_access(review.decided_by):
-            raise PermissionDenied("Release temporary station access before using an override.")
-        review.consumed_at = timezone.now()
-        review.save(update_fields=("consumed_at",))
-        event(review, actor, "consumed")
-        return None
-    if not any(tablet["reason"] for tablet in projection["tablets"]):
-        return None
-    review = CapacityReview.objects.filter(
-        library=library,
-        requested_by=actor,
-        fingerprint=digest,
-        decision="pending",
-        expires_at__gt=timezone.now(),
-    ).first()
-    if review is None:
-        review = CapacityReview.objects.create(
-            library=library,
-            requested_by=actor,
-            operation=operation,
-            projection=projection,
-            fingerprint=digest,
-            expires_at=timezone.now() + REVIEW_LIFETIME,
-        )
-        event(review, actor, "requested")
-    return review
 
 
 def decide(*, actor, **kwargs):
@@ -452,8 +419,6 @@ def _decide(*, actor, review_id, confirm, reauthenticated_at, approve=True, expe
     ).get(pk=review_id)
     library = review.library
     require_department_admin(actor, department_for(library))
-    if active_temporary_access(actor):
-        raise PermissionDenied("Release temporary station access before reviewing overrides.")
     now = timezone.now()
     if (
         confirm is not True
@@ -463,6 +428,8 @@ def _decide(*, actor, review_id, confirm, reauthenticated_at, approve=True, expe
     ):
         raise PermissionDenied("Explicit confirmation and recent reauthentication are required.")
     lock_capacity(library)
+    if active_temporary_access(actor):
+        raise PermissionDenied("Release temporary station access before reviewing overrides.")
     # Same source lock as ingestion; never acquire a review row ahead of its library.
     from apps.file_library.publication import lock_scope
 
@@ -473,13 +440,27 @@ def _decide(*, actor, review_id, confirm, reauthenticated_at, approve=True, expe
     now = timezone.now()
     if now - reauthenticated_at > timedelta(seconds=settings.RECENT_REAUTH_MAX_AGE_SECONDS):
         raise PermissionDenied("Reauthenticate before reviewing this capacity request.")
-    if review.decision != "pending" or review.expires_at <= now or review.consumed_at:
+    if review.publication_snapshot is None:
+        raise LibraryError("Historical upload reviews cannot authorize publication.")
+    if review.decision != "pending" or review.superseded_at or review.consumed_at:
         raise LibraryError("This capacity review is no longer pending.")
-    current = fingerprint(project(library, review.operation))
-    if current != review.fingerprint or expected_fingerprint != review.fingerprint:
-        raise LibraryError("Source or tablet capacity changed. Start a new upload and review.")
+    if expected_fingerprint != review.fingerprint:
+        raise LibraryError("The capacity assessment changed. Reload this review.")
+    from apps.file_library.publication import source_payload
+    from apps.file_library.publication_capacity import assess
+
+    scope = lock_scope(library)
+    snapshot = source_payload(department=department_for(library), station=library.station)
+    _admitted, current = assess(scope=scope, snapshot=snapshot, actor=review.requested_by)
+    review.refresh_from_db()
+    if current is None or current.pk != review.pk or review.superseded_at:
+        # Return the superseded record so the transaction commits the fresh
+        # assessment. Raising here would roll back the invalidation itself.
+        return review
     review.decision = "approved" if approve else "rejected"
     review.decided_at, review.decided_by = now, actor
     review.save(update_fields=("decision", "decided_at", "decided_by"))
     event(review, actor, review.decision)
+    # The capacity lock registered a post-commit reassessment, which resumes
+    # this candidate through the existing worker after a successful approval.
     return review

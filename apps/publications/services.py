@@ -97,6 +97,9 @@ def _validate_scope(*, department, station, dataset_type_code: str, scope_type=N
 def _locked_scope(
     *, department, station, dataset_type_code: str, scope_type=None
 ) -> DatasetScopeState:
+    from apps.file_library.publication_capacity import lock_scope_capacity
+
+    lock_scope_capacity(department=department, dataset_type_code=dataset_type_code)
     scope_type = scope_type or _registered_scope_type(dataset_type_code)
     scope = (
         DatasetScopeState.objects.select_for_update()
@@ -282,6 +285,9 @@ def mark_dirty(
 ) -> DatasetScopeState:
     """Advance a scope revision and queue exactly one build after commit."""
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
+    from apps.file_library.publication_capacity import lock_scope_capacity
+
+    lock_scope_capacity(department=department, dataset_type_code=dataset_type_code)
     now = timezone.now()
     scope = (
         DatasetScopeState.objects.select_for_update()
@@ -416,6 +422,9 @@ def enqueue_publication_job(
         fingerprint = source_fingerprint_value
     if not allow_clean_rebuild and not _scope_is_dirty(scope=scope, fingerprint=fingerprint):
         return None
+    from apps.file_library.publication_capacity import assess
+
+    assess(scope=scope, snapshot=snapshot, actor=requested_by)
     now = timezone.now()
     active = (
         PublicationJob.objects.select_for_update()
@@ -523,22 +532,29 @@ def _data_change_not_before(*, now: datetime, debounce_started_at: datetime | No
     return nightly
 
 
-@transaction.atomic
 def claim_next_job() -> PublicationJob | None:
     now = timezone.now()
-    # All multi-row publication transitions lock scope -> job -> publication.
-    # Pick a candidate without a row lock first, then acquire the canonical
-    # scope lock before locking the job. A competing worker can harmlessly find
-    # that the job is no longer pending after it obtains the same scope lock.
-    candidate = (
+    candidates = (
         PublicationJob.objects.filter(status=PublicationJob.Status.PENDING)
         .filter(Q(not_before__isnull=True) | Q(not_before__lte=now))
-        .order_by("created_at")
-        .first()
+        .order_by("created_at", "id")
     )
-    if candidate is None:
-        return None
-    scope = DatasetScopeState.objects.select_for_update().get(pk=candidate.scope_state_id)
+    # A blocked department must not starve other scopes. Each attempt has its
+    # own transaction so locks are released before trying the next candidate.
+    for candidate in candidates.iterator(chunk_size=100):
+        job = _claim_job(candidate)
+        if job is not None:
+            return job
+    return None
+
+
+@transaction.atomic
+def _claim_job(candidate) -> PublicationJob | None:
+    scope = _locked_scope(
+        department=candidate.department,
+        station=candidate.station,
+        dataset_type_code=candidate.dataset_type_code,
+    )
     job = (
         PublicationJob.objects.select_for_update()
         .filter(pk=candidate.pk, status=PublicationJob.Status.PENDING)
@@ -580,6 +596,21 @@ def claim_next_job() -> PublicationJob | None:
         job.completed_at = timezone.now()
         job.save(update_fields=("status", "completed_at"))
         return job
+    if job.build_publication_id != publication.id:
+        # Recovery/legacy allocation must survive a blocked claim too. Otherwise
+        # every reassessment would allocate an unlinked staged generation.
+        job.build_publication = publication
+        job.save(update_fields=("build_publication", "source_revision"))
+    from apps.file_library.publication_capacity import assess
+
+    admitted, _review = assess(
+        scope=scope,
+        snapshot=snapshot,
+        actor=job.requested_by,
+        publication=publication,
+    )
+    if not admitted:
+        return None
     # The scope lock makes this the mutable-candidate freeze boundary. A
     # canonical edit that committed first has already refreshed this STAGED
     # row; a later edit sees BUILDING and belongs to a following attempt.
@@ -933,6 +964,35 @@ def finalize_publication_job(
             },
         )
         return job
+    from apps.file_library.publication_capacity import assess
+
+    admitted, _review = assess(
+        scope=scope,
+        snapshot=publication.source_snapshot,
+        actor=job.requested_by,
+        publication=publication,
+        consume=True,
+    )
+    if not admitted:
+        # Includes pre-deployment BUILDING jobs and risk changes during encryption.
+        # Keep the old active generation; retire this attempt and queue a fresh,
+        # capacity-blocked candidate instead of recording a normal build failure.
+        _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
+        publication.status = DatasetPublication.Status.OBSOLETE
+        publication.source_snapshot = None
+        publication.save(update_fields=("status", "source_snapshot"))
+        release_terminal_document_artifact_references(publication=publication)
+        job.status = PublicationJob.Status.OBSOLETE
+        job.completed_at = now
+        job.save(update_fields=("status", "completed_at"))
+        enqueue_publication_job(
+            department=job.department,
+            station=job.station,
+            dataset_type_code=job.dataset_type_code,
+            requested_by=job.requested_by,
+            trigger_type=job.trigger_type,
+        )
+        return job
     if previous_current is not None:
         revoke_publication_dataset_key_grants(publication=previous_current)
         previous_current.status = DatasetPublication.Status.SUPERSEDED
@@ -999,6 +1059,10 @@ def finalize_publication_job(
                 debounce_started_at=scope.dirty_since,
             )
         )
+    if job.dataset_type_code in {"department_files", "station_files"}:
+        from apps.file_library.publication_capacity import schedule_reassessment
+
+        schedule_reassessment(job.department_id)
     return job
 
 
@@ -1031,6 +1095,9 @@ def fail_publication_job(
         if publication is not None:
             _schedule_artifact_removal(publication.artifact_path)
             if publication.status == DatasetPublication.Status.BUILDING:
+                from apps.file_library.publication_capacity import retire_attempt_review
+
+                retire_attempt_review(publication, actor=job.requested_by)
                 publication.status = DatasetPublication.Status.FAILED
                 publication.artifact_status = DatasetPublication.ArtifactStatus.FAILED
                 publication.build_error = job.error_message
@@ -1059,7 +1126,9 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
         PublicationJob.objects.filter(
             status=PublicationJob.Status.RUNNING,
             heartbeat_at__lt=cutoff,
-        ).values_list("id", flat=True)
+        )
+        .order_by("department_id", "scope_state_id", "id")
+        .values_list("id", flat=True)
     )
     recovered = 0
     for job_id in job_ids:
@@ -1088,6 +1157,9 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
                 .first()
             )
             if publication is not None and publication.status == DatasetPublication.Status.BUILDING:
+                from apps.file_library.publication_capacity import retire_attempt_review
+
+                retire_attempt_review(publication, actor=job.requested_by)
                 publication.status = DatasetPublication.Status.FAILED
                 publication.build_error = "Worker heartbeat timed out."
                 publication.save(update_fields=("status", "build_error"))
@@ -1145,6 +1217,17 @@ def publish_publication(*, actor, publication: DatasetPublication) -> DatasetPub
         dataset_type_code=publication.dataset_type_code,
     )
     publication = DatasetPublication.objects.select_for_update().get(pk=publication.pk)
+    from apps.file_library.publication_capacity import assess
+
+    admitted, _review = assess(
+        scope=scope,
+        snapshot=publication.source_snapshot,
+        actor=actor,
+        publication=publication,
+        consume=True,
+    )
+    if not admitted:
+        raise PublicationError("Publication capacity requires department approval.")
     previous = scope.current_published_publication
     if previous is not None:
         revoke_publication_dataset_key_grants(publication=previous)
@@ -1387,6 +1470,9 @@ def delete_staged_publication(*, actor, publication: DatasetPublication) -> Data
     # An unstarted attempt was never a successful publication.  Retain its
     # immutable identity as CANCELLED; OBSOLETE is reserved for successful
     # publication artifacts retired by lifecycle deletion/retention.
+    from apps.file_library.publication_capacity import retire_attempt_review
+
+    retire_attempt_review(candidate, actor=actor)
     candidate.status = DatasetPublication.Status.CANCELLED
     candidate.save(update_fields=("status",))
     if job is not None:
@@ -1438,6 +1524,9 @@ def cancel_publication_build(*, actor, publication: DatasetPublication) -> Datas
         raise PublicationError("Only a building publication can be cancelled.")
     if candidate.status != DatasetPublication.Status.BUILDING:
         raise PublicationError("Only a building publication can be cancelled.")
+    from apps.file_library.publication_capacity import retire_attempt_review
+
+    retire_attempt_review(candidate, actor=actor)
     candidate.status = DatasetPublication.Status.CANCELLED
     candidate.build_error = "Build cancelled by an administrator."
     candidate.save(update_fields=("status", "build_error"))

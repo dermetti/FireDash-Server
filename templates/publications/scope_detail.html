@@ -7,6 +7,12 @@
 <p class="text-body-secondary">Publication history and current distributed state for this dataset scope.</p>
 
 <section class="mb-4">{% include "publications/_scope_detail_status.html" %}</section>
+{% if file_publication.capacity_review %}
+<section class="mb-4" aria-label="Publication capacity assessment">
+  {% if not file_publication.capacity_review.superseded_at %}{% include "file_library/_capacity_warning.html" with summary=file_publication.capacity_summary review=file_publication.capacity_review %}{% endif %}
+  <p>Capacity review: {% if file_publication.capacity_review.superseded_at %}Superseded{% elif file_publication.capacity_review.decision == "pending" %}Awaiting approval{% else %}{{ file_publication.capacity_review.decision|capfirst }}{% endif %}. <a href="{% url 'file-library-capacity-review' file_publication.capacity_review.id %}">Review publication capacity</a></p>
+</section>
+{% endif %}
 {% if scope.dataset_type_code == "department_files" and scope.station_id is None %}
 <section class="mb-4" aria-label="Department file publication">
   <form method="post" action="{% url 'publications-department-files-publish' scope.department_id %}">

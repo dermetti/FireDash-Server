@@ -8,11 +8,11 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
+from django.db.models import Q
 from django.http import FileResponse, Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import format_html
 from django.views.decorators.http import require_http_methods
 
 from apps.accounts.reauth import require_recent_reauthentication
@@ -99,15 +99,6 @@ def library_view(request, library_id):
                             **common, upload=upload, parent_id=current.id if current else None
                         )
                         messages.success(request, f"Uploaded {upload.name}.")
-                    except services.CapacityWarning as error:
-                        messages.warning(
-                            request,
-                            format_html(
-                                '{} <a href="{}">Review tablet capacity</a>',
-                                str(error),
-                                reverse("file-library-capacity-review", args=(error.review.id,)),
-                            ),
-                        )
                     except (services.LibraryError, PdfValidationError) as error:
                         messages.error(request, f"{upload.name}: {error}")
                     except (PdfSanitizerError, StorageError, OSError):
@@ -152,8 +143,6 @@ def library_view(request, library_id):
                 messages.success(
                     request, "Library renamed." if action == "library_name" else "Library updated."
                 )
-        except services.CapacityWarning as error:
-            return redirect("file-library-capacity-review", review_id=error.review.id)
         except (services.LibraryError, PdfValidationError, ValidationError) as error:
             if action == "library_name":
                 library_name_error = str(error)
@@ -189,13 +178,10 @@ def library_view(request, library_id):
             "capacity_reviews": (
                 CapacityReview.objects.filter(
                     library=library,
-                    requested_by=request.user,
                     consumed_at__isnull=True,
-                    expires_at__gt=timezone.now(),
                 )
-                .exclude(
-                    decision__in=("pending", "rejected") if department_admin else ("rejected",)
-                )
+                .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+                .filter(Q(requested_by=request.user) | Q(publication_snapshot__isnull=False))
                 .order_by("-created_at", "id")[:10]
                 if station_admin or department_admin
                 else ()
@@ -315,14 +301,14 @@ def capacity_review(request, review_id):
     library = review.library
     department = department_for(library)
     department_admin = department.id in active_department_ids(request.user)
-    can_retry = False
-    if request.user.id == review.requested_by_id:
+    can_view = False
+    if request.user.id == review.requested_by_id or review.publication_snapshot is not None:
         try:
             services.require_library(request.user, library)
-            can_retry = True
+            can_view = True
         except PermissionDenied:
             pass
-    if not department_admin and not can_retry:
+    if not department_admin and not can_view:
         raise PermissionDenied
     temporary = services.active_temporary_access(request.user)
     if request.method == "POST":
@@ -334,7 +320,7 @@ def capacity_review(request, review_id):
                 require_recent_reauthentication(
                     request, return_url=reverse("file-library-capacity-review", args=(review.id,))
                 )
-                decide(
+                decision = decide(
                     actor=request.user,
                     review_id=review.id,
                     confirm=request.POST.get("confirm") == "yes",
@@ -344,23 +330,12 @@ def capacity_review(request, review_id):
                     approve=action == "approve",
                     expected_fingerprint=request.POST.get("fingerprint", ""),
                 )
-                messages.success(request, "Capacity review decision recorded.")
-            elif action == "retry":
-                if not can_retry:
-                    raise PermissionDenied
-                upload = request.FILES.get("pdf")
-                if upload is None:
-                    raise services.LibraryError("Select the original PDF again.")
-                services.upload_pdf(
-                    actor=request.user,
-                    library_id=library.id,
-                    upload=upload,
-                    parent_id=identifier(review.operation["parent_id"]),
-                    replace_id=identifier(review.operation["replace_id"]),
-                    approval_id=review.id,
-                )
-                messages.success(request, "PDF accepted with the specific capacity override.")
-                return redirect("file-library", library_id=library.id)
+                if decision.superseded_at:
+                    messages.warning(
+                        request, "This assessment was superseded. Review the current candidate."
+                    )
+                else:
+                    messages.success(request, "Publication capacity decision recorded.")
             else:
                 return HttpResponseBadRequest("Unknown review operation.")
         except (services.LibraryError, PdfValidationError, ValidationError) as error:
@@ -378,11 +353,13 @@ def capacity_review(request, review_id):
             "department": department,
             "department_admin": department_admin,
             "can_decide": department_admin and not temporary,
-            "can_retry": can_retry,
-            "pending": review.decision == "pending" and review.expires_at > timezone.now(),
+            "can_view": can_view,
+            "pending": review.decision == "pending"
+            and not review.superseded_at
+            and review.publication_snapshot is not None,
             "approved": review.decision == "approved"
             and not review.consumed_at
-            and review.expires_at > timezone.now(),
+            and not review.superseded_at,
             "temporary": temporary,
         },
     )

@@ -391,6 +391,17 @@ def publication_scope_status(request: HttpRequest, scope_id) -> HttpResponse:
 def publication_scope_detail(request: HttpRequest, scope_id) -> HttpResponse:
     scope = _scope_or_403(request, scope_id)
     context = _scope_row_context(scope) | _scope_history_context(scope, request.GET.get("page"))
+    if scope.dataset_type_code in {"department_files", "station_files"}:
+        from apps.file_library.models import Library
+        from apps.file_library.publication import publication_state
+
+        libraries = (
+            Library.objects.filter(station=scope.station)
+            if scope.station_id
+            else Library.objects.filter(department=scope.department)
+        )
+        library = libraries.first()
+        context["file_publication"] = publication_state(library) if library else None
     context.update({"scope": scope, "scope_title": _scope_title(scope)})
     return render(request, "publications/scope_detail.html", context)
 

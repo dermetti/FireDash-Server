@@ -5,6 +5,8 @@ from typing import Any, cast
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
 
 from apps.file_library.models import Content, Library, PublicationContent
 from apps.publications.builders import PublicationBuildError
@@ -22,6 +24,9 @@ def scope_kwargs(library):
 
 
 def lock_scope(library):
+    from apps.file_library.capacity import department_for, lock_department_capacity
+
+    lock_department_capacity(department_for(library).id, reassess=False)
     scope, _ = DatasetScopeState.objects.get_or_create(
         **scope_kwargs(library), defaults={"source_revision": library.source_revision}
     )
@@ -30,6 +35,9 @@ def lock_scope(library):
 
 @transaction.atomic
 def source_payload(*, department, station):
+    from apps.file_library.capacity import lock_department_capacity
+
+    lock_department_capacity(department.id, reassess=False)
     library, _ = Library.objects.get_or_create(
         **({"station": station} if station else {"department": department})
     )
@@ -204,7 +212,22 @@ def publication_state(library):
     )
     if job and job.status in {"PENDING", "RUNNING", "FAILED"}:
         label = {"PENDING": "Queued", "RUNNING": "Building", "FAILED": "Failed"}[job.status]
+    from apps.file_library.capacity import presentation_summary
+    from apps.file_library.models import CapacityReview
+
+    review = (
+        CapacityReview.objects.filter(
+            library=library,
+            publication_snapshot__isnull=False,
+            consumed_at__isnull=True,
+        )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+        .order_by("-created_at", "id")
+        .first()
+    )
     return {
+        "capacity_review": review,
+        "capacity_summary": presentation_summary(review.projection) if review else None,
         "label": label,
         "current": current,
         "job": job,

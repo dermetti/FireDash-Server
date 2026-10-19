@@ -72,8 +72,9 @@ def test_system_navigation_is_isolated_and_all_roles_keep_their_scoped_entries(
     client.force_login(station_admin)
     content = client.get(reverse("dashboard")).content.decode()
     assert "Personnel" in content and "Tablets" in content
-    assert "Data Hub" in content and "Administrator Accounts" not in content
-    assert reverse("station-data-hub", args=(station.id,)) in content
+    assert "Data Hub" not in content and "Administrator Accounts" not in content
+    assert reverse("file-library-index") in content
+    assert reverse("station-data-hub", args=(station.id,)) not in content
     assert reverse("portal-data-hub", args=(department.id,)) not in content
     assert "System Data Hub" not in content
 

@@ -1,0 +1,10 @@
+{% if summary.low_count or summary.unknown_count %}
+<div class="alert {% if summary.low_count %}alert-danger{% else %}alert-warning{% endif %}" role="alert">
+  {% if summary.low_count %}<strong>Known insufficient tablet capacity.</strong> One or more tablets are projected to fall below the 20% free-storage safety threshold. Publication may fail on affected devices.{% if summary.unknown_count %} Capacity is also unknown for {{ summary.unknown_count }} tablet{{ summary.unknown_count|pluralize }}.{% endif %}
+  {% else %}<strong>Tablet capacity unknown.</strong> Tablet storage capacity cannot be reliably determined.{% endif %}
+  {% if review.superseded_at %}This assessment was superseded and cannot authorize publication.
+  {% elif review.decision == "approved" %}Department approval recorded for this assessment. Successful installation is not guaranteed.
+  {% elif review.decision == "rejected" %}Publication has been rejected for this assessment.
+  {% else %}Department approval is required before publication.{% endif %}
+</div>
+{% endif %}

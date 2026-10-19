@@ -173,13 +173,16 @@ class CapacityReview(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     library = models.ForeignKey(Library, on_delete=models.PROTECT)
     requested_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="capacity_requests"
+        settings.AUTH_USER_MODEL,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="capacity_requests",
     )
     operation = models.JSONField()
     projection = models.JSONField()
     fingerprint = models.CharField(max_length=64)
     created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
+    expires_at = models.DateTimeField(null=True)
     decision = models.CharField(max_length=12, default="pending")
     decided_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -189,6 +192,15 @@ class CapacityReview(models.Model):
     )
     decided_at = models.DateTimeField(null=True)
     consumed_at = models.DateTimeField(null=True)
+    # NULL identifies historical upload reviews, which never authorize publication.
+    publication_snapshot = models.JSONField(null=True)
+    superseded_at = models.DateTimeField(null=True)
+    publication = models.ForeignKey(
+        "publications.DatasetPublication",
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="capacity_reviews",
+    )
 
     class Meta:
         constraints = [

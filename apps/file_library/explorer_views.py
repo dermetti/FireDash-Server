@@ -124,7 +124,6 @@ def action(request, library_id, action):
         action=action,
         initial={"name": entry.name if entry else ""},
     )
-    review_links = []
     if request.method == "POST" and form.is_valid():
         common = {"actor": request.user, "library_id": library.id}
         try:
@@ -142,9 +141,6 @@ def action(request, library_id, action):
                             replace_id=entry.id if action == "replace" and entry else None,
                         )
                         messages.success(request, f"Accepted {upload.name}.")
-                    except services.CapacityWarning as error:
-                        form.add_error(None, f"{upload.name}: {error}")
-                        review_links.append(error.review)
                     except (services.LibraryError, PdfValidationError, ValidationError) as error:
                         form.add_error(None, f"{upload.name}: {error}")
                     except (PdfSanitizerError, StorageError, OSError):
@@ -219,7 +215,6 @@ def action(request, library_id, action):
         "submit_label": ACTION_LABELS[action][1],
         "action_url": request.get_full_path(),
         "multipart": action in {"upload", "replace"},
-        "review_links": review_links,
         "max_file_bytes": settings.FILE_LIBRARY_MAX_FILE_BYTES,
         "back_url": reverse("file-library-explorer", args=(library.id,))
         + ("?" + urlencode({"folder": str(current.id)}) if current else ""),

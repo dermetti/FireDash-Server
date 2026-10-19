@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 from django.core.exceptions import PermissionDenied
-from django.db import connection
+from django.db import connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test import RequestFactory
 from django.urls import reverse
@@ -42,13 +42,22 @@ def reauth(client):
 
 
 def review_for(actor, library, **changes):
+    from apps.file_library.publication import scope_kwargs, source_payload
+    from apps.file_library.publication_capacity import candidate_operation
+
+    with transaction.atomic():
+        snapshot = source_payload(
+            department=capacity.department_for(library), station=library.station
+        )
+    scope_state = DatasetScopeState.objects.get(**scope_kwargs(library))
     values = dict(
         library=library,
         requested_by=actor,
-        operation=operation(),
+        operation=candidate_operation(scope_state, snapshot),
+        publication_snapshot=snapshot,
         projection={"tablets": []},
         fingerprint="a" * 64,
-        expires_at=timezone.now() + timedelta(minutes=10),
+        expires_at=None,
     )
     values.update(changes)
     return CapacityReview.objects.create(**values)
@@ -99,10 +108,15 @@ def test_file_card_metrics_current_version_order_and_scope(
 
 
 @pytest.mark.parametrize("role", ["department", "station"])
-def test_overview_has_no_file_navigation_tile_but_retains_sidebar(client, scope, role):
+def test_overview_has_no_file_navigation_tile_and_role_scoped_sidebar(client, scope, role):
     client.force_login(scope[0] if role == "department" else scope[1])
     content = client.get(reverse("dashboard")).content.decode()
-    assert reverse("file-library-index") in content
+    if role == "department":
+        assert reverse("file-library-index") not in content
+        assert reverse("portal-data-hub", args=(scope[3].id,)) in content
+    else:
+        assert reverse("file-library-index") in content
+        assert reverse("station-data-hub", args=(scope[5].id,)) not in content
     assert '<h2 class="h5">File Management' not in content
     assert "Dateiverwaltung" not in content
 

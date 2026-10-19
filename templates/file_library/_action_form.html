@@ -3,7 +3,6 @@
 <div class="modal-body">
 {% if is_modal %}{% include "components/_alerts.html" %}{% endif %}
 {% for error in form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endfor %}
-{% for review in review_links %}<p><a href="{% url 'file-library-capacity-review' review.id %}">Review tablet capacity: {{ review.operation.name }}</a></p>{% endfor %}
 {% if entry %}<p><strong>{{ entry.name }}</strong></p>{% endif %}
 {% if action == 'upload' or action == 'new-folder' %}<p class="small text-body-secondary">Destination: {{ folder_display_path }}</p>{% endif %}
 {% if action == 'upload' %}<p class="form-text">PDFs are validated and sanitized before being accepted. Maximum size per PDF: {{ max_file_bytes|filesizeformat }}.</p>{% endif %}

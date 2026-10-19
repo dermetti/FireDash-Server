@@ -144,10 +144,14 @@ current-source quota, so physical disk capacity still needs ordinary monitoring.
 
 ## Projected capacity and administrative overrides
 
-Uploads and replacements with changed sanitized hashes pass a capacity guard before
-canonical writes. Unchanged document/hash replacements and metadata edits do not
-create new encrypted PDF bytes and do not require an override. Quotas remain a
-separate mandatory check, including when an override is approved.
+Valid sanitized PDFs are accepted into the canonical library immediately, subject
+only to authorization, PDF validation, integrity and server quotas. They are
+visible, previewable and downloadable before publication. Upload success is not
+publication or delivery. Tablet storage approval never bypasses a server quota.
+
+Capacity gates the actual frozen `department_files` or `station_files` candidate,
+not an upload or replacement operation. The candidate's document set replaces
+its own live-source set in the estimate, so new content is not counted twice.
 
 Affected tablets are ACTIVE physical assets with current operational vehicle and
 station assignments: all department tablets for `department_files`, and only the
@@ -191,42 +195,53 @@ updates use the department advisory lock followed by the quota-policy row lock;
 publication workers retain the
 existing frozen-snapshot, supersession and reference-protection lifecycle.
 
-A blocked PDF creates a `CapacityReview` and audit event, **not** a document,
-canonical content blob, quota usage, source revision, or publication intent.
-Temporary ingestion files are removed. Bulk uploads report each PDF independently.
-The review page shows scope, operation, all affected tablets, measurements and
-timestamps, reserved bytes, projected free bytes, and warning/unknown reasons.
+Unknown capacity requires department approval (warning); measured projected free
+storage below 20% requires approval with a stronger danger warning. Mixed
+populations show the stronger warning and retain all unknown diagnostics. No
+eligible tablets is clear, not unknown.
 
-Department administrators review pending requests in System Settings. They must
-explicitly confirm and recently reauthenticate (the existing reauthentication
-policy) to approve or reject. A review expires **15 minutes after its creation**.
-Approval binds the requesting actor, scope, operation kind, logical document UUID,
-name/folder/replacement target, sanitized hash/size, source revisions, installation
-and assignment identities, telemetry, and calculated projection. It does not
-change telemetry, quotas, publication permissions, or subsequent operations.
-The user retries the same PDF through the review page; the deployed sanitizer uses
-deterministic IDs, and any changed sanitized result requires a fresh review.
+`CapacityReview` retains the exact snapshot/revision, dataset and tenant scope,
+projection fingerprint, tablet/assignment/installation identities, measurements,
+decision actor and timestamps. Pending reviews have no upload retry deadline.
+Department administrators must confirm and recently reauthenticate. Station
+administrators can inspect their library's review but cannot decide. Temporary
+station access confers no approval or publication rights. Approval accepts the
+recorded publication risk, not a guarantee of installation or delivery; no
+second upload is required.
 
-Only the original requester, still normally authorized to manage the library,
-can commit an approved operation. Source and telemetry are recomputed under locks;
-a stale/expired/rejected/used approval fails closed even if the old page is open.
-Successful commit consumes approval atomically with the source write, usage,
-revision, dirty intent, reservation and audit. Failure rolls back consumption.
-Audit records include request/decision/consumption, actor and decision maker,
-operation, affected scope/tablet IDs, measurements/timestamps, projections/reasons,
-fingerprint and expiry.
+Queueing/coalescing assesses the candidate; claiming rechecks and binds approval
+to that generation; finalization rechecks before activation and consumes approval
+atomically. An unapproved or stale BUILDING attempt (including one predating the
+deployment) becomes obsolete and queues a fresh candidate. Current and retained
+successful generations remain available. Failed encryption is still an ordinary
+build failure; a capacity-blocked candidate stays pending, not failed. Edits
+remain available and supersede reviews when their assessment context changes.
+Repeated unchanged assessments reuse the same review without duplicate audit.
+Failed or cancelled attempts supersede their unconsumed reviews. A recovered or
+new attempt receives a fresh assessment and cannot inherit that authorization;
+the accepted source PDF remains available throughout.
 
-Station administrators **cannot** approve. Their safe escalation is: blocked
-operation -> department administrator decision -> original station administrator
-retries the specific PDF. Department approval gives no station browsing/upload,
-replacement or publication authority. Six-hour temporary station access remains
-read/download/delete only; an administrator must release it before approving or
-using an override. Direct service and URL authorization enforce these boundaries.
+The department capacity lock precedes publication scope, library, review and
+installation locks. Existing vehicle/tablet/assignment ordering is preserved.
+Telemetry, installation, eligibility and source mutations schedule a committed
+reassessment of pending candidates; a newly clear candidate or approved risk
+wakes the existing worker. No build/encryption runs during a check-in. The worker
+also rechecks clock-based expiry and recovers a missed refresh after restart.
+Approval never transfers to another generation or source revision.
 
-Migration `file_library.0007` adds only source-capacity reservations and reviews.
-Safe rollback requires quiescing file writers and resolving pending reviews. It
-removes reservation history; obtain fresh measurements before re-enabling capacity
-guards after a rollback/redeploy. The earlier over-quota rollback caveat still applies.
+Migration `file_library.0010` adds nullable publication snapshot, generation and
+supersession fields, permits automatic requesters and nonexpiring publication
+reviews. Existing unconsumed upload reviews are marked superseded without
+changing their decisions or immutable audit rows. They never authorize a
+publication. Historically blocked uploads have no accepted source bytes to migrate;
+those PDFs can be uploaded normally. Previously accepted PDFs need no second upload.
+No content, quota usage, source revisions or jobs are rewritten.
+Quiesce file writers and publication workers for the upgrade. Apply migration
+`0010` before starting updated workers; an old worker process cannot enforce the
+new gate. Existing queued and recoverable building attempts are reassessed by the
+updated claim/finalization paths. Rollback requires quiescing writers
+and workers and a compatible database restore: switching code alone would restore
+the obsolete upload gate and cannot preserve this approval contract.
 
 ## Deployment validation
 
@@ -246,6 +261,10 @@ the isolated broker, configured UID/GID boundaries and accepted-storage modes:
    and verify signed metadata, ciphertext hash and decrypted sanitized PDF hash.
 4. Replace/delete source content, exercise retained-history cleanup, and run
    reconciliation with a deliberate aged orphan and an in-progress upload.
+5. With unknown and measured below-20% storage, verify the source remains readable
+   while publication waits. Approve as a recently reauthenticated department
+   administrator and verify the queued candidate publishes without another upload.
+   Refresh telemetry to safe values and verify a pending review clears automatically.
 
 Stage 4 stores the latest device-reported storage measurement at authenticated
 check-in and displays it in Tablet Management. An expired lease or stale
@@ -280,7 +299,8 @@ missing broker, native dependency, or sandbox fails the command. Also complete t
 four upload-to-publication checks above using authorized deployment test accounts;
 the smoke command alone does not verify HTTP authorization, Nginx serving modes,
 or publication-worker accepted-root access. Confirm deterministic sanitized hashes
-when selecting the same PDF twice for an override retry.
+across repeated sanitization of the same PDF; publication approval never requires
+a second upload.
 
 Reconciliation is appended to the existing daily
 `fire-import-staging-maintenance.service` as `fire_backend`, the accepted-root
@@ -404,7 +424,7 @@ normal publication queue, and redirects to department Publications (HTMX receive
 administrators. It displays scope, storage usage and an Open File Explorer link.
 The department parent includes paginated department-wide pending capacity
 approvals and temporary station-access selection. Normal station administrators
-see their own unexpired capacity requests and a compact station publication panel.
+see their library publication-capacity requests and a compact station publication panel.
 Department-file publication controls and history live exclusively in Publications;
 its department-files scope invokes `publications-department-files-publish`.
 

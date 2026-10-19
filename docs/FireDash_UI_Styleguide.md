@@ -1127,7 +1127,10 @@ controls and history live in Publications, while the Data Hub card keeps a
 read-only publication summary. Normal station administrators publish only from
 the station parent, since they have no department Publications access. The
 parent's department-wide approval queue and station requester-review links are
-separate authorized workflows; approved requests retain the existing retry page.
+separate authorized workflows. Capacity reviews authorize one publication candidate;
+accepted source PDFs never require a second upload. Unknown capacity uses warning
+styling; measured projected free storage below 20% uses danger styling, while
+retaining any unknown-device diagnostics.
 
 Temporary station grants use the same explorer in browse/download/single-delete
 mode, with an explicit station/expiry/release banner and no normal mutation or
