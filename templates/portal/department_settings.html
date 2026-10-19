@@ -14,19 +14,25 @@
     {{ quota_form.non_field_errors }}
     <div class="mb-3">
       <label class="form-label" for="{{ quota_form.department_amount.id_for_label }}">Department files</label>
-      {{ quota_form.department_amount }}
+      <label class="visually-hidden" for="{{ quota_form.department_unit.id_for_label }}">Department files unit</label>
+      <div class="input-group flex-nowrap">
+        {{ quota_form.department_amount }}
+        {{ quota_form.department_unit }}
+      </div>
       {% for error in quota_form.department_amount.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
-      <label class="form-label mt-2" for="{{ quota_form.department_unit.id_for_label }}">Unit</label>{{ quota_form.department_unit }}
       {% for error in quota_form.department_unit.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
       <div class="form-text">Current usage: {{ department_library.usage_bytes|filesizeformat }}.</div>
     </div>
     <div class="mb-3">
       <label class="form-label" for="{{ quota_form.station_amount.id_for_label }}">Station files</label>
-      {{ quota_form.station_amount }}
+      <label class="visually-hidden" for="{{ quota_form.station_unit.id_for_label }}">Station files unit</label>
+      <div class="input-group flex-nowrap">
+        {{ quota_form.station_amount }}
+        {{ quota_form.station_unit }}
+      </div>
       {% for error in quota_form.station_amount.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
-      <label class="form-label mt-2" for="{{ quota_form.station_unit.id_for_label }}">Unit</label>{{ quota_form.station_unit }}
       {% for error in quota_form.station_unit.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
-      <div class="form-text">This limit applies to each station library.</div>
+      <div class="form-text">This limit applies separately to every station library.</div>
     </div>
     <p class="form-text">1 MB = 1,000,000 bytes. 1 GB = 1,000,000,000 bytes. Limits must resolve to whole bytes. Reducing a limit below usage blocks further growth.</p>
     <button type="submit" class="btn btn-primary">Save quotas</button>

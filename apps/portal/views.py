@@ -91,6 +91,7 @@ from apps.portal.forms import (
     SystemMailDeliveryModeForm,
     VehicleForm,
     VehicleRescueGuidesWebUrlForm,
+    quota_display_value,
 )
 from apps.portal.overview import attention_for_request, attention_total, operational_summary
 
@@ -1224,8 +1225,6 @@ def department_admin_revoke_modal(
 def department_settings(request: HttpRequest, department_id) -> HttpResponse:
     """Edit only existing, authoritative per-department settings."""
     department = _department_or_403(request, department_id)
-    from decimal import Decimal
-
     from apps.file_library.models import DepartmentQuotaPolicy, Library
     from apps.file_library.services import set_department_quotas
 
@@ -1258,13 +1257,15 @@ def department_settings(request: HttpRequest, department_id) -> HttpResponse:
         initial={"locale": department.locale, "timezone": department.timezone},
     )
     quota_policy, _ = DepartmentQuotaPolicy.objects.get_or_create(department=department)
+    department_amount, department_unit = quota_display_value(quota_policy.department_files_bytes)
+    station_amount, station_unit = quota_display_value(quota_policy.station_files_bytes)
     quota_form = FileLibraryQuotaForm(
         request.POST if action == "file-library-quota" else None,
         initial={
-            "department_amount": Decimal(quota_policy.department_files_bytes) / 1_000_000,
-            "department_unit": "MB",
-            "station_amount": Decimal(quota_policy.station_files_bytes) / 1_000_000,
-            "station_unit": "MB",
+            "department_amount": department_amount,
+            "department_unit": department_unit,
+            "station_amount": station_amount,
+            "station_unit": station_unit,
         },
     )
     from apps.outbound_mail.services import (

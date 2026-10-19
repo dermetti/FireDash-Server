@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -141,6 +142,15 @@ class DepartmentTabletLeaseForm(forms.Form):
     )
 
 
+def quota_display_value(quota_bytes: int) -> tuple[str, str]:
+    """Choose decimal units without losing any stored bytes or using exponent notation."""
+    unit, divisor = ("GB", 1_000_000_000) if quota_bytes >= 1_000_000_000 else ("MB", 1_000_000)
+    amount = format(Decimal(quota_bytes) / divisor, "f")
+    if "." in amount:
+        amount = amount.rstrip("0").rstrip(".")
+    return amount, unit
+
+
 class FileLibraryQuotaForm(forms.Form):
     department_amount = forms.DecimalField(
         min_value=0, max_digits=24, decimal_places=9, label="Department files"
@@ -157,6 +167,10 @@ class FileLibraryQuotaForm(forms.Form):
             field.widget.attrs["class"] = "form-select" if name.endswith("unit") else "form-control"
             if name.endswith("amount"):
                 field.widget.attrs["step"] = "any"
+            else:
+                field.widget.attrs.update(
+                    {"class": "form-select flex-grow-0", "style": "width: 100px;"}
+                )
 
     def clean(self):
         cleaned = super().clean() or {}
