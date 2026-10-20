@@ -6,19 +6,16 @@
     <a id="scope-all" class="btn btn-outline-primary{% if scope_mode == 'all' %} active{% endif %}"{% if scope_mode == 'all' %} aria-current="page"{% endif %} href="{{ publications_url }}?{{ scope_queries.all }}" hx-get="{{ publications_url }}?{{ scope_queries.all }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true">All scopes</a>
   </div>
 </nav>
-<form id="publication-filter-form" method="get" action="{{ publications_url }}" class="row g-2 align-items-end mb-3" hx-get="{{ publications_url }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true" hx-params="scope,station_id,state" hx-sync="this:replace">
+<form id="publication-filter-form" method="get" action="{{ publications_url }}" class="mb-3" hx-get="{{ publications_url }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true" hx-params="scope,station_id,state" hx-sync="this:replace">
   <input type="hidden" name="scope" value="{{ scope_mode }}">
   {% if scope_mode == 'station' %}
-  <div data-station-selector data-publication-station class="col-12 col-lg-5">
+  <div data-station-selector data-publication-station class="mb-3" style="max-width: 32rem">
     <input type="hidden" name="station_id" id="chosen-station-id" value="{{ station_value }}" disabled>
     <div data-station-enhanced hidden>
       <label class="form-label" for="station-combobox">Station</label>
       <input id="station-combobox" type="search" class="form-control" placeholder="Search station name or short code" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="station-listbox" aria-describedby="station-selection-status" autocomplete="off" maxlength="255" name="q" value="{% if selected_station %}{{ selected_station.name }} ({{ selected_station.short_code }}){% endif %}" hx-get="{% url 'publications-station-search' department.id %}" hx-trigger="input changed delay:250ms, focus" hx-sync="this:replace" hx-target="#station-search-results" hx-swap="innerHTML" hx-params="q" disabled>
       <div id="station-search-results" class="mt-1" hidden><ul id="station-listbox" role="listbox" class="list-group shadow-sm" aria-label="Matching stations"></ul></div>
-      <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
-        <p id="station-selection-status" role="status" aria-live="polite" class="small text-body-secondary mb-0">{% if selected_station %}Selected: {{ selected_station.name }} ({{ selected_station.short_code }}){% elif station_invalid %}Station unavailable.{% else %}Showing all stations{% endif %}</p>
-        <a data-station-clear class="small" href="{{ publications_url }}?{{ scope_queries.station }}" hx-get="{{ publications_url }}?{{ scope_queries.station }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true"{% if not station_value %} hidden{% endif %}>Clear selection</a>
-      </div>
+      <p id="station-selection-status" role="status" aria-live="polite" class="visually-hidden">{% if selected_station %}Selected: {{ selected_station.name }} ({{ selected_station.short_code }}){% elif station_invalid %}Station unavailable.{% else %}Showing all stations{% endif %}</p>
     </div>
     <div data-station-fallback>
       <label class="form-label" for="publication-station-query">Search stations</label>
@@ -26,15 +23,16 @@
       <label class="form-label" for="station-select-fallback">Station</label>
       <select id="station-select-fallback" name="station_id" class="form-select"><option value=""{% if not station_value %} selected{% endif %}>All stations</option>{% if station_invalid %}<option value="{{ station_value }}" selected>Station unavailable</option>{% endif %}{% for station in station_options %}<option value="{{ station.id }}"{% if station == selected_station %} selected{% endif %}>{{ station.name }} ({{ station.short_code }})</option>{% endfor %}</select>
     </div>
+    <div class="text-end mt-2"><a data-station-clear class="small" aria-label="Reset station selection" href="{{ publications_url }}?{{ scope_queries.station }}" hx-get="{{ publications_url }}?{{ scope_queries.station }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true"{% if not station_value %} hidden{% endif %}>Reset</a></div>
     {% if station_invalid %}<div class="invalid-feedback d-block" role="alert">The selected station is unavailable. Select an active station in this department.</div>{% endif %}
   </div>
   {% endif %}
-  <div class="col-12 col-md-6 col-lg-4">
+  <div class="mb-3" style="max-width: 22rem">
     <label for="publication-state-filter" class="form-label">Publication status</label>
     <select id="publication-state-filter" name="state" class="form-select" hx-get="{{ publications_url }}" hx-trigger="change" hx-target="#publication-browser" hx-swap="outerHTML" hx-include="#publication-filter-form" hx-push-url="true" hx-params="scope,station_id,state" hx-sync="#publication-filter-form:replace">{% for value,label in scope_filters.items %}<option value="{{ value }}"{% if value == selected_filter %} selected{% endif %}>{% if not value %}All statuses{% else %}{{ label }}{% endif %}</option>{% endfor %}</select>
+    <div class="text-end mt-2"><a id="publication-reset" class="small" aria-label="Reset all publication filters" hx-get="{{ publications_url }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true" href="{{ publications_url }}">Reset</a></div>
   </div>
-  <div class="col-auto"><a id="publication-reset" class="btn btn-link" hx-get="{{ publications_url }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true" href="{{ publications_url }}">Reset</a></div>
-  <noscript class="col-12"><button class="btn btn-outline-secondary" type="submit">Show publications</button></noscript>
+  <noscript><button class="btn btn-outline-secondary" type="submit">Show publications</button></noscript>
 </form>
 {% include "publications/_scope_results.html" %}
 </div>

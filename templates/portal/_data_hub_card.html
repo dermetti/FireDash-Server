@@ -15,9 +15,11 @@
           </dl>
           {% else %}
           <dl class="row small mb-0">
-            <dt class="col-7">{{ count_label }}</dt>
-            <dd class="col-5 text-end">{{ module.count }}</dd>
-            {% if module.id == "file_management" %}<dt class="col-7">Total size</dt><dd class="col-5 text-end">{{ module.usage_bytes|filesizeformat }}</dd>{% endif %}
+            {% if module.id == "file_management" %}
+            <dt class="col-7">Total size</dt><dd class="col-5 text-end">{{ module.usage_bytes|filesizeformat }}</dd>
+            {% else %}
+            <dt class="col-7">{{ count_label }}</dt><dd class="col-5 text-end">{{ module.count }}</dd>
+            {% endif %}
             <dt class="col-7">Publication</dt>
             <dd class="col-5 text-end text-body-secondary">{% if module.publication_version %}v{{ module.publication_version }} &middot; {{ module.publication_state|default:"Not published" }}{% else %}{{ module.publication_state|default:"Not published" }}{% endif %}</dd>
           </dl>

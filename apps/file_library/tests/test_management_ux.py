@@ -325,7 +325,7 @@ def test_department_pending_reviews_counts_pagination_and_station_isolation(clie
     items = department_attention(department)
     requests = [item for item in items if "file capacity" in item.text]
     assert len(requests) == 1 and requests[0].count == 28
-    assert requests[0].url == reverse("file-library-capacity-review", args=(first.id,))
+    assert requests[0].url == reverse("file-library", args=(library.id,))
     request = RequestFactory().get(reverse("dashboard"))
     request.user = admin
     context = _nav_context(request)
@@ -346,6 +346,28 @@ def test_department_pending_reviews_counts_pagination_and_station_isolation(clie
     assert station_page.context["pending_review_page"] is None
     assert "Capacity reviews requiring approval" not in station_page.content.decode()
     assert client.get(reverse("file-library-capacity-review", args=(first.id,))).status_code == 403
+
+
+@pytest.mark.parametrize("department_library_exists", [True, False])
+def test_single_station_review_attention_is_read_only_and_opens_file_management(
+    scope, department_library_exists
+):
+    from django.test.utils import CaptureQueriesContext
+
+    admin, station_admin, _, department, _, station, _ = scope
+    library = library_for(scope) if department_library_exists else None
+    station_library = services.get_library(station_admin, station_id=station.id)
+    review = review_for(station_admin, station_library)
+    with CaptureQueriesContext(connection) as queries:
+        attention = [
+            item for item in department_attention(department) if "file capacity" in item.text
+        ]
+    assert len(attention) == 1 and attention[0].count == 1
+    assert attention[0].url == (
+        reverse("file-library", args=(library.id,)) if library else reverse("file-library-index")
+    )
+    assert str(review.id) not in attention[0].url
+    assert all(q["sql"].lstrip().upper().startswith("SELECT") for q in queries)
 
 
 def test_capacity_summary_lowest_bytes_distinct_percentage_unknown_and_scope(client, scope):
@@ -382,6 +404,19 @@ def test_capacity_summary_lowest_bytes_distinct_percentage_unknown_and_scope(cli
     assert "Capacity unknown" in content and unknown.display_name in content
     assert "36.80%" in content and "8.84%" in content
     assert len(summary["tablets"]) == 3
+    listing = client.get(reverse("file-library", args=(library.id,))).content.decode()
+    table = listing.split('<table class="table table-hover align-middle">', 1)[1].split(
+        "</table>", 1
+    )[0]
+    assert table.count('<th scope="col"') == 4
+    assert "Publication</th>" in table and "Capacity assessment</th>" in table
+    assert '<strong class="text-danger">Insufficient capacity</strong>' in table
+    assert "3 affected tablets &middot; 1 below 20% &middot; 1 unknown" in table
+    assert f"Source revision {review.operation['source_revision']}" in table
+    assert f"Requested by {scope[0].display_name}" in table
+    assert f'id="capacity-review-{review.id}"' in table
+    assert reverse("file-library-capacity-review", args=(review.id,)) in table
+    assert "Awaiting approval" not in table
 
 
 @pytest.mark.parametrize("authority", ["department", "station"])

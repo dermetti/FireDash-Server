@@ -121,7 +121,7 @@ def test_default_reset_and_accessible_filter_panel(client, publication_ui_contex
         in content
     )
     assert 'class="btn-group flex-wrap" role="group" aria-label="Publication scope"' in content
-    assert 'class="row g-2 align-items-end mb-3"' in content
+    assert 'class="row g-2 align-items-end mb-3"' not in content
     assert "Filter publications" not in content and "Apply filters" not in content
     assert ">Stations</a>" in content and "Specific station" not in content
     assert "data-publication-station" not in content
@@ -134,10 +134,62 @@ def test_default_reset_and_accessible_filter_panel(client, publication_ui_contex
     assert 'name="page"' not in content  # Applying any changed criteria resets pagination.
     assert 'hx-trigger="change"' in content
     assert 'hx-include="#publication-filter-form"' in content
-    assert '<noscript class="col-12"><button' in content
+    assert "<noscript><button" in content
     assert "Department-wide bulk action" in content
     assert "regardless of the filters below" in content
     assert 'href="' + url + '">Reset</a>' in content
+
+
+@pytest.mark.parametrize("station_value", ["selected", "invalid"])
+def test_station_and_overall_resets_preserve_their_distinct_scope(
+    client, publication_ui_context, scopes, station_value
+):
+    admin, _, department, _, station = publication_ui_context
+    client.force_login(admin)
+    url = reverse("publications-list", args=(department.id,))
+    response = client.get(
+        url,
+        {
+            "scope": "station",
+            "station_id": station.id if station_value == "selected" else "bad",
+            "state": "scheduled",
+            "page": 2,
+        },
+    )
+    content = response.content.decode()
+    assert (
+        'class="visually-hidden">Selected:' in content
+        if station_value == "selected"
+        else "Station unavailable." in content
+    )
+    assert (
+        'id="station-selection-status" role="status" aria-live="polite" class="visually-hidden"'
+        in content
+    )
+    if station_value == "selected":
+        assert f'value="{station.name} ({station.short_code})"' in content
+    links = {}
+    for label in ("Reset station selection", "Reset all publication filters"):
+        match = re.search(r'<a[^>]*aria-label="' + label + r'"[^>]*>Reset</a>', content)
+        assert match is not None
+        assert " hidden" not in match[0]
+        assert 'hx-push-url="true"' in match[0]
+        href = re.search(r' href="([^"]+)"', match[0])
+        assert href is not None
+        links[label] = unescape(href[1])
+    cleared = client.get(links["Reset station selection"], HTTP_HX_REQUEST="true")
+    assert cleared.context["scope_mode"] == "station"
+    assert cleared.context["selected_filter"] == "scheduled"
+    assert not cleared.context["station_value"]
+    assert cleared.context["page"].number == 1
+    assert cleared.context["total_count"] == 1
+    assert b'placeholder="Search station name or short code"' in cleared.content
+    assert b'value="" hx-get=' in cleared.content
+    assert re.search(r"<a data-station-clear[^>]* hidden>Reset</a>", cleared.content.decode())
+    reset = client.get(links["Reset all publication filters"], HTTP_HX_REQUEST="true")
+    assert reset.context["scope_mode"] == "department"
+    assert not reset.context["selected_filter"] and not reset.context["station_value"]
+    assert reset.context["page"].number == 1 and reset.context["total_count"] == 1
 
 
 @pytest.mark.parametrize("state", ["building", "failed"])
@@ -438,7 +490,8 @@ def test_scope_links_preserve_status_reset_page_and_clear_station(
     assert 'hx-target="#publication-browser"' in clear[0]
     assert 'name="q"' in content and 'hx-params="q"' in content
     assert 'hx-params="scope,station_id,state"' in content
-    assert 'class="col-12 col-lg-5"' in content
+    assert 'data-publication-station class="mb-3" style="max-width: 32rem"' in content
+    assert 'class="mb-3" style="max-width: 22rem"' in content
     assert 'aria-describedby="station-selection-status"' in content
     assert 'hx-trigger="input changed delay:250ms, focus"' in content
     assert 'name="page"' not in content

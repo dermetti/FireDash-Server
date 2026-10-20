@@ -1,5 +1,6 @@
 """Data Hub publication-state presentation regressions."""
 
+import re
 import uuid
 from datetime import timedelta
 from html.parser import HTMLParser
@@ -370,7 +371,11 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
         cards[0], title="File Management", icon="files", url=reverse("file-library-index")
     )
     assert "Manage department files and tablet publications." in cards[0]["text"]
-    assert "Files" in cards[0]["text"] and "Total size" in cards[0]["text"]
+    assert "Files" not in cards[0]["text"] and "Total size" in cards[0]["text"]
+    assert re.findall(r'<dt class="col-7">(.*?)</dt>', cards[0]["html"]) == [
+        "Total size",
+        "Publication",
+    ]
     assert [tag for tag, _ in cards[0]["elements"] if tag in {"a", "button"}] == ["a"]
     for card, (module_id, title, icon, count_label, description, route) in zip(
         cards[1:7], expected, strict=True

@@ -309,7 +309,7 @@ Do not select cards or key tests by mutable display titles.
 Department module IDs, in card order, are `file_management`, `dangerous_goods`,
 `department_phonebook`, `department_hydrants`, `station_personnel`,
 `department_fire_plans` and `department_klgv_plans`. File Management uses the shared `_data_hub_module.html` and `_data_hub_card.html`
-renderer, with Files, Total size and Publication metrics. The System Data Hub
+renderer, with Total size and Publication metrics. The System Data Hub
 module ID is `system_vehicle_rescue_guides`; Outbound Email belongs in System
 Settings, not either Data Hub. Inherited rescue
 configuration uses the same `system_vehicle_rescue_guides` ID in a read-only

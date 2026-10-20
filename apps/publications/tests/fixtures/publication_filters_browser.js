@@ -20,6 +20,8 @@
   try {
     await waitFor(() => find('#station-combobox') && !find('#station-combobox').disabled);
     check(rows() === 2 && query().get('scope') === 'station', 'all-stations initial results');
+    check(find('#publication-state-filter').getBoundingClientRect().top > find('#station-combobox').getBoundingClientRect().bottom, 'station and status stack at every viewport');
+    check(getComputedStyle(find('#station-selection-status')).position === 'absolute', 'selection announcement stays visually hidden');
     const input = find('#station-combobox');
     input.value = 'North'; input.dispatchEvent(new Event('input', {bubbles:true}));
     await waitFor(() => find('#station-option-0') && find('#station-option-0').textContent.includes('North'));
@@ -38,6 +40,8 @@
     find('[data-station-clear]').click();
     await waitFor(() => !query().has('station_id') && find('#station-selection-status').textContent.includes('Showing all stations'));
     check(query().get('state') === 'scheduled' && rows() === 1, 'clear keeps status');
+    check(find('#station-combobox').value === '' && find('#station-combobox').placeholder === 'Search station name or short code', 'reset restores empty input and placeholder');
+    check(find('[data-station-clear]').hidden, 'station reset hides without selection');
     history.back();
     await waitFor(() => query().has('station_id') && !find('#station-combobox').disabled);
     // Cached HTMX DOM must initialize again; searches must fetch after restoration.

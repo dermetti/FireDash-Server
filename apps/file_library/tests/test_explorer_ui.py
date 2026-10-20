@@ -1,12 +1,18 @@
 # ruff: noqa: F811
+import re
 import shutil
 import subprocess
 import sys
+import threading
 from datetime import timedelta
+from html import unescape
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import close_old_connections
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -531,6 +537,19 @@ def test_library_rename_overview_form_and_authorization(client, scope, role):
     library.refresh_from_db()
     revision, usage, original_name = library.source_revision, library.usage_bytes, library.name
     overview = client.get(parent_url)
+    card = (
+        overview.content.decode()
+        .split('aria-label="Library overview">', 1)[1]
+        .split("</section>", 1)[0]
+    )
+    assert '<div class="card-body">' in card
+    assert library.name in card and 'aria-label="Rename library"' in card
+    assert " used</p>" in card
+    assert "justify-content-between" not in card
+    assert card.rstrip().endswith(
+        'Open File Explorer <span aria-hidden="true">&rarr;</span></a>\n  </div>'
+    )
+
     assert 'aria-label="Rename library"' in overview.content.decode()
     assert f'href="{parent_url}?rename=1#library-rename"' in overview.content.decode()
     edit = client.get(parent_url, {"rename": "1"})
@@ -615,8 +634,31 @@ def test_move_destination_presentation_and_navigation(client, scope, role):
         actor=actor, library_id=library.id, name="Subfolder", parent_id=plans.id
     )
     client.force_login(actor)
+
+    def browser_links(response, enhanced):
+        browser = re.search(
+            r'<div id="move-destination-browser">(.*?)</div>', response.content.decode(), re.S
+        )
+        assert browser is not None
+        assert browser[1].count('name="destination"') == 1
+        links = re.findall(r"<a [^>]+>", browser[1])
+        assert links
+        for link in links:
+            href = re.search(r'href="([^"]+)"', link)
+            assert href is not None
+            if enhanced:
+                assert f'hx-get="{href[1]}"' in link
+                assert 'hx-target="#move-destination-browser"' in link
+                assert 'hx-select="#move-destination-browser"' in link
+                assert 'hx-swap="outerHTML"' in link
+                assert 'hx-target="#file-explorer-action-modal"' not in link
+            else:
+                assert "hx-get=" not in link
+        return browser[1]
+
     for headers in ({}, {"HTTP_HX_REQUEST": "true"}):
         root = client.get(url(library, "move"), {"entry": item.id}, **headers)
+        browser_links(root, bool(headers))
         assert root.status_code == 200
         assert (
             '<strong>Destination:</strong> <em class="text-body-secondary">Files</em>'
@@ -627,6 +669,7 @@ def test_move_destination_presentation_and_navigation(client, scope, role):
             url(library, "move"), {"entry": item.id, "destination": child.id}, **headers
         )
         html = response.content.decode()
+        browser_links(response, bool(headers))
         assert "<strong>Test</strong>" in html
         assert (
             '<strong>Destination:</strong> <em class="text-body-secondary">'
@@ -650,8 +693,33 @@ def test_move_destination_presentation_and_navigation(client, scope, role):
     assert 'aria-label="Destination pages"' in page.content.decode()
     assert "Page 1 of 2" in page.content.decode()
     assert page.context["destinations"].has_next()
-    response = client.post(url(library, "move"), {"entry": item.id, "destination": child.id})
-    assert response.status_code == 302
+    browser = browser_links(page, True)
+    next_link = re.search(r'href="([^"]+)"[^>]*>Next</a>', browser)
+    assert next_link is not None
+    page2 = client.get(unescape(next_link[1]), HTTP_HX_REQUEST="true")
+    assert page2.context["destinations"].number == 2
+    previous = re.search(r'href="([^"]+)"[^>]*>Previous</a>', browser_links(page2, True))
+    assert previous is not None
+    assert client.get(unescape(previous[1])).context["destinations"].number == 1
+    assert f'name="destination" value="{plans.id}"' in page2.content.decode()
+    selected = client.get(
+        url(library, "move"), {"entry": item.id, "destination": child.id}, HTTP_HX_REQUEST="true"
+    )
+    browser = browser_links(selected, True)
+    for label, expected in (("Files", None), ("Up one level", plans.id)):
+        link = re.search(r'href="([^"]+)"[^>]*>' + label + r"</a>", browser)
+        assert link is not None
+        navigated = client.get(unescape(link[1]), HTTP_HX_REQUEST="true")
+        assert (navigated.context["destination"].id if expected else None) == expected
+        assert f'name="destination" value="{expected or ""}"' in navigated.content.decode()
+    destination = re.search(r'name="destination" value="([^"]*)"', browser)
+    assert destination is not None
+    response = client.post(
+        url(library, "move"),
+        {"entry": item.id, "destination": destination[1]},
+        HTTP_HX_REQUEST="true",
+    )
+    assert response.status_code == 204
     item.refresh_from_db()
     assert item.parent_id == child.id
 
@@ -678,3 +746,131 @@ def test_actions_reject_missing_or_invalid_entries(client, scope, role, action):
     assert library.source_revision == revision
     assert AuditEvent.objects.count() == events
     assert not library.entries.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_move_destination_navigation_keeps_bootstrap_modal_mounted_in_browser(
+    tmp_path, client, scope
+):
+    if sys.platform == "win32":
+        pytest.skip(
+            "Native Linux browser check: this Windows sandbox cannot launch Edge's GPU process."
+        )
+    browser = shutil.which("google-chrome") or shutil.which("chromium")
+    if not browser:
+        pytest.skip("Requires native Linux Chrome or Chromium for live HTMX interaction tests.")
+    actor, library = normal(scope, "department")
+    item = services.create_folder(actor=actor, library_id=library.id, name="Moving")
+    target = services.create_folder(actor=actor, library_id=library.id, name="Target")
+    Entry.objects.bulk_create(
+        [
+            Entry(
+                library=library,
+                parent=target,
+                name=f"Child {index:02}",
+                is_folder=True,
+                modified_by=actor,
+            )
+            for index in range(26)
+        ]
+    )
+    client.force_login(actor)
+    cookies = client.cookies.output(header="", sep=";").strip()
+    assets = {
+        "/static/" + path: Path("static", path).read_bytes()
+        for path in (
+            "vendor/bootstrap/bootstrap.min.css",
+            "vendor/bootstrap/bootstrap.bundle.min.js",
+            "vendor/htmx/htmx.min.js",
+            "vendor/alpine/alpine.min.js",
+        )
+    }
+    driver = (
+        Path(__file__)
+        .with_name("fixtures")
+        .joinpath("move_destination_browser.js")
+        .read_text(encoding="utf-8")
+    )
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = urlsplit(self.path).path
+            if path in assets:
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    "text/css" if path.endswith(".css") else "application/javascript",
+                )
+                self.end_headers()
+                self.wfile.write(assets[path])
+                return
+            self.respond("get")
+
+        def do_POST(self):
+            self.respond("post")
+
+        def respond(self, method):
+            close_old_connections()
+            try:
+                headers = {"HTTP_COOKIE": cookies}
+                if self.headers.get("HX-Request"):
+                    headers["HTTP_HX_REQUEST"] = "true"
+                if method == "post":
+                    body = self.rfile.read(int(self.headers["Content-Length"]))
+                    response = Client().post(
+                        self.path,
+                        data=body,
+                        content_type="application/x-www-form-urlencoded",
+                        **headers,
+                    )
+                else:
+                    response = Client().get(self.path, **headers)
+                content = response.content
+                if method == "get" and urlsplit(self.path).path == url(library):
+                    marker = (
+                        f'<pre id="result" data-move-test-entry="{item.id}" '
+                        f'data-move-test-target="{target.id}">WAIT</pre><script>{driver}</script>'
+                    )
+                    content = content.replace(b"</body>", marker.encode() + b"</body>")
+                self.send_response(response.status_code)
+                for name in ("Content-Type", "HX-Redirect"):
+                    if name in response:
+                        self.send_header(name, response[name])
+                self.end_headers()
+                self.wfile.write(content)
+            finally:
+                close_old_connections()
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = subprocess.run(
+            [
+                browser,
+                "--headless",
+                "--disable-gpu",
+                "--no-first-run",
+                f"--user-data-dir={tmp_path / 'browser'}",
+                "--virtual-time-budget=15000",
+                "--dump-dom",
+                f"http://127.0.0.1:{server.server_port}{url(library)}",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=40,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert re.search(r'<pre id="result"[^>]*>PASS</pre>', result.stdout), (
+        result.stdout + result.stderr
+    )
+    item.refresh_from_db()
+    assert item.parent_id == target.id

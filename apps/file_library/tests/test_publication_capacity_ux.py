@@ -74,8 +74,8 @@ def test_reviews_live_only_in_department_file_management(client, scope, pdf_pipe
         match = re.search(rf'<tr id="capacity-review-{review.id}">(.*?)</tr>', html, re.S)
         assert match is not None
         row = match.group(1)
-        assert "Known insufficient capacity" in row
-        assert "1 affected" in row and "Awaiting approval" in row
+        assert '<strong class="text-danger">Insufficient capacity</strong>' in row
+        assert "1 affected tablet" in row and "Awaiting approval" not in row
         assert reverse("file-library-capacity-review", args=(review.id,)) in row
     assert scope[5].name in html
     detail = client.get(reverse("file-library-capacity-review", args=(station_review.id,)))
