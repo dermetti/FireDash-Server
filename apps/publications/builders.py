@@ -4,7 +4,7 @@ import logging
 import zipfile
 from collections.abc import Callable
 from io import BytesIO
-from typing import Any
+from typing import Any, cast
 
 from django.conf import settings
 from django.db.models import Count, Q, Sum
@@ -47,13 +47,59 @@ def source_fingerprint_for_payload(payload: dict[str, Any]) -> str:
         payload["_exact_source_sha256"], str
     ):
         return payload["_exact_source_sha256"]
+    if is_file_library_snapshot(payload):
+        # The snapshot remains intact for pinning and approval. Only comparison
+        # ignores bookkeeping that does not change what tablets receive.
+        payload = {
+            **{key: value for key, value in payload.items() if key != "source_revision"},
+            "folders": sorted(payload["folders"], key=lambda item: item["id"]),
+            "documents": sorted(
+                (
+                    {key: value for key, value in document.items() if key != "content_id"}
+                    for document in payload["documents"]
+                ),
+                key=lambda item: item["id"],
+            ),
+        }
     return hashlib.sha256(_json_bytes(payload)).hexdigest()
+
+
+def is_file_library_snapshot(payload: object) -> bool:
+    return (
+        isinstance(payload, dict)
+        and set(payload) == {"library", "source_revision", "folders", "documents"}
+        and isinstance(payload["library"], dict)
+        and {"id", "name", "scope"} <= payload["library"].keys()
+        and isinstance(payload["folders"], list)
+        and isinstance(payload["documents"], list)
+        and all(
+            isinstance(item, dict) and {"id", "name", "parent_id"} <= item.keys()
+            for item in payload["folders"]
+        )
+        and all(
+            isinstance(item, dict)
+            and {"id", "name", "folder_id", "sha256", "size_bytes", "content_id"} <= item.keys()
+            for item in payload["documents"]
+        )
+    )
+
+
+def publication_source_fingerprint(publication) -> str:
+    """Compare legacy file publications without rewriting immutable history.
+
+    Missing historical snapshots fail closed to the original fingerprint.
+    """
+    if publication.dataset_type_code in {"department_files", "station_files"} and (
+        is_file_library_snapshot(publication.source_snapshot)
+    ):
+        return source_fingerprint_for_payload(publication.source_snapshot)
+    return cast(str, publication.source_fingerprint)
 
 
 def build_source_payload(
     *, definition: DatasetTypeDefinition, department, station
 ) -> dict[str, Any]:
-    """Build deterministic publishable source content without volatile fields."""
+    """Build a frozen source projection, including any consistency/pinning fields."""
     try:
         builder = SOURCE_BUILDERS[definition.builder_service]
     except KeyError as error:

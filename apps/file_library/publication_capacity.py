@@ -6,6 +6,7 @@ processing, encryption or filesystem work belongs inside this boundary.
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.authorization.services import require_department_admin
@@ -30,7 +31,17 @@ def candidate_operation(scope, snapshot):
     }
 
 
-def assess(*, scope, snapshot, actor=None, publication=None, consume=False, bind=True):
+def assess(
+    *,
+    scope,
+    snapshot,
+    actor=None,
+    publication=None,
+    consume=False,
+    bind=True,
+    persist=True,
+    allow_clean_rebuild=False,
+):
     """Return (admitted, review). Re-evaluate immediately before promotion too.
 
     A review records the frozen source and complete risk/identity fingerprint.
@@ -49,6 +60,27 @@ def assess(*, scope, snapshot, actor=None, publication=None, consume=False, bind
         or library.station_id != scope.station_id
     ):
         raise PermissionDenied("Publication library does not belong to this scope.")
+    from apps.publications.builders import source_fingerprint_for_payload
+    from apps.publications.models import PublicationJob
+    from apps.publications.services import _reconcile_clean_source, _scope_is_dirty
+
+    force = (
+        allow_clean_rebuild
+        or PublicationJob.objects.filter(
+            scope_state=scope, status__in=("PENDING", "RUNNING"), allow_clean_rebuild=True
+        ).exists()
+    )
+    logical_fingerprint = source_fingerprint_for_payload(snapshot)
+    if (
+        library.source_revision == snapshot["source_revision"]
+        and not force
+        and not _scope_is_dirty(scope=scope, fingerprint=logical_fingerprint)
+    ):
+        if persist:
+            _reconcile_clean_source(
+                scope=scope, snapshot=snapshot, fingerprint=logical_fingerprint, actor=actor
+            )
+        return True, None
     reviews = list(
         CapacityReview.objects.select_for_update()
         .filter(
@@ -62,7 +94,7 @@ def assess(*, scope, snapshot, actor=None, publication=None, consume=False, bind
     if library.source_revision != snapshot["source_revision"]:
         # A finishing older build must not supersede the newer pending review.
         for review in reviews:
-            if review.publication_snapshot == snapshot:
+            if persist and review.publication_snapshot == snapshot:
                 review.superseded_at = timezone.now()
                 review.save(update_fields=("superseded_at",))
                 capacity.event(review, actor, "superseded")
@@ -82,11 +114,33 @@ def assess(*, scope, snapshot, actor=None, publication=None, consume=False, bind
             )
         ):
             current = review
-        else:
+        elif persist:
             review.superseded_at = timezone.now()
             review.save(update_fields=("superseded_at",))
             capacity.event(review, actor, "superseded")
     risky = any(tablet["reason"] for tablet in projection["tablets"])
+    if not persist:
+        # Readiness cannot mint or retire authorization. An existing approval is
+        # usable only if it still matches this complete projection and source.
+        admitted = not risky
+        if current:
+            if current.decision == "approved":
+                try:
+                    require_department_admin(current.decided_by, capacity.department_for(library))
+                    from apps.file_library.models import TemporaryStationAccess
+
+                    # No expired-grant cleanup in status rendering. Admission
+                    # still performs authoritative grant validation and audit.
+                    temporary = TemporaryStationAccess.objects.filter(
+                        user=current.decided_by, revoked_at=None, expires_at__gt=timezone.now()
+                    ).exists()
+                    admitted = not temporary and (
+                        not current.publication_id
+                        or (publication is not None and current.publication_id == publication.id)
+                    )
+                except PermissionDenied:
+                    admitted = False
+        return admitted, current
     if not risky:
         if current:
             current.superseded_at = timezone.now()
@@ -157,6 +211,20 @@ def reassess_department(department_id):
     ):
         scope = DatasetScopeState.objects.select_for_update().get(pk=scope.pk)
         snapshot = source_payload(department=scope.department, station=scope.station)
+        from apps.publications.builders import source_fingerprint_for_payload
+        from apps.publications.services import _reconcile_clean_source
+
+        if (
+            _reconcile_clean_source(
+                scope=scope,
+                snapshot=snapshot,
+                fingerprint=source_fingerprint_for_payload(snapshot),
+            )
+            and not PublicationJob.objects.filter(
+                scope_state=scope, status="PENDING", allow_clean_rebuild=True
+            ).exists()
+        ):
+            continue
         had_review = CapacityReview.objects.filter(
             library_id=snapshot["library"]["id"],
             publication_snapshot__isnull=False,
@@ -188,12 +256,64 @@ def retire_attempt_review(publication, *, actor=None):
     library = Library.objects.select_for_update().get(
         pk=publication.source_snapshot["library"]["id"]
     )
+    for review in (
+        CapacityReview.objects.select_for_update()
+        .filter(
+            library=library,
+            publication_snapshot=publication.source_snapshot,
+            superseded_at=None,
+            consumed_at=None,
+        )
+        .filter(Q(publication=publication) | Q(publication__isnull=True))
+    ):
+        review.superseded_at = timezone.now()
+        review.save(update_fields=("superseded_at",))
+        capacity.event(review, actor, "superseded")
+
+
+def retire_clean_reviews(*, scope, snapshot, actor=None):
+    """Retire obsolete source requests, preserving running/forced candidates.
+
+    An unbound review belongs to the full frozen source, not just an attempt
+    FK. Never retire a newer source or another library/tenant's authorization.
+    """
+    from apps.publications.models import DatasetPublication, PublicationJob
+
+    library = Library.objects.select_for_update().get(pk=snapshot["library"]["id"])
+    protected = list(
+        DatasetPublication.objects.filter(scope_state=scope).filter(
+            Q(status="BUILDING")
+            | Q(build_jobs__status="PENDING", build_jobs__allow_clean_rebuild=True)
+        )
+    )
+    protected_ids = {item.id for item in protected}
+    protected_snapshots = [item.source_snapshot for item in protected]
+    if PublicationJob.objects.filter(
+        scope_state=scope,
+        status="PENDING",
+        allow_clean_rebuild=True,
+        build_publication__isnull=True,
+    ).exists():
+        # Recovery allocates its next immutable attempt only at claim time.
+        protected_snapshots.append(snapshot)
     for review in CapacityReview.objects.select_for_update().filter(
         library=library,
-        publication_snapshot=publication.source_snapshot,
+        publication_snapshot__isnull=False,
         superseded_at=None,
         consumed_at=None,
     ):
+        review_snapshot = review.publication_snapshot
+        if not isinstance(review_snapshot, dict):
+            continue
+        revision = review_snapshot.get("source_revision")
+        if (
+            type(revision) is not int
+            or revision > snapshot["source_revision"]
+            or review_snapshot.get("library", {}).get("id") != str(library.id)
+            or review.publication_id in protected_ids
+            or review.publication_snapshot in protected_snapshots
+        ):
+            continue
         review.superseded_at = timezone.now()
         review.save(update_fields=("superseded_at",))
         capacity.event(review, actor, "superseded")

@@ -42,7 +42,14 @@ def source_payload(*, department, station):
         **({"station": station} if station else {"department": department})
     )
     lock_scope(library)
-    library.refresh_from_db()
+    library = Library.objects.select_for_update().get(pk=library.pk)
+    return snapshot_for_library(library)
+
+
+def snapshot_for_library(library):
+    """Read the full source, retaining revision and content IDs for freezing."""
+    department = library.department if library.department_id else library.station.department
+    station = library.station
     entries = list(library.entries.select_related("content").order_by("id"))
     return {
         "library": {
@@ -211,22 +218,26 @@ def candidate_readiness(library):
     Reuse the durable assessment; never treat a stored approval as readiness
     without checking its current source, population and telemetry fingerprint.
     """
+    from apps.file_library.capacity import department_for, lock_department_capacity
     from apps.file_library.publication_capacity import assess
+    from apps.publications.builders import source_fingerprint_for_payload
     from apps.publications.models import PublicationJob
+    from apps.publications.services import _scope_is_dirty
 
-    scope = lock_scope(library)
-    library.refresh_from_db()
-    snapshot = source_payload(department=scope.department, station=scope.station)
+    lock_department_capacity(department_for(library).id, reassess=False)
+    scope = DatasetScopeState.objects.select_for_update().filter(**scope_kwargs(library)).first()
+    library = Library.objects.select_for_update().get(pk=library.pk)
+    if scope is None:
+        return {"capacity_ready": False, "can_publish": False, "can_build": False}
+    snapshot = snapshot_for_library(library)
     job = (
         PublicationJob.objects.filter(scope_state=scope, status__in=("PENDING", "RUNNING"))
         .select_related("build_publication")
         .order_by("created_at", "id")
         .first()
     )
-    if (
-        job is None
-        and scope.current_published_publication
-        and scope.current_published_publication.source_revision == library.source_revision
+    if not (job and job.allow_clean_rebuild) and not _scope_is_dirty(
+        scope=scope, fingerprint=source_fingerprint_for_payload(snapshot)
     ):
         return {
             "capacity_ready": True,
@@ -239,6 +250,7 @@ def candidate_readiness(library):
         snapshot=snapshot,
         publication=job.build_publication if job else None,
         bind=False,
+        persist=False,
     )
     building = PublicationJob.objects.filter(scope_state=scope, status="RUNNING").exists()
     return {
@@ -265,12 +277,13 @@ def publication_state(library):
         return {"label": "Unpublished changes"}
     current = scope.current_published_publication
     job = PublicationJob.objects.filter(scope_state=scope).order_by("-created_at").first()
-    label = (
-        "Published"
-        if current and current.source_revision == library.source_revision
-        else "Unpublished changes"
-    )
-    if job and job.status in {"PENDING", "RUNNING", "FAILED"}:
+    is_current = readiness.get("publication_current", False)
+    label = "Current" if is_current else "Unpublished changes"
+    if (
+        job
+        and job.status in {"PENDING", "RUNNING", "FAILED"}
+        and (not is_current or job.status == "RUNNING")
+    ):
         label = {"PENDING": "Queued", "RUNNING": "Building", "FAILED": "Failed"}[job.status]
     from apps.file_library.capacity import presentation_summary
     from apps.file_library.models import CapacityReview
@@ -279,11 +292,14 @@ def publication_state(library):
         CapacityReview.objects.filter(
             library=library,
             publication_snapshot__isnull=False,
+            superseded_at__isnull=True,
             consumed_at__isnull=True,
         )
         .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
         .order_by("-created_at", "id")
         .first()
+        if not is_current
+        else None
     )
     return {
         **readiness,
@@ -292,7 +308,7 @@ def publication_state(library):
         "label": label,
         "current": current,
         "job": job,
-        "unpublished": not current or current.source_revision != library.source_revision,
+        "unpublished": not is_current,
     }
 
 

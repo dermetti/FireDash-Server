@@ -391,11 +391,18 @@ def test_publication_relocation_and_requester_review_visibility(client, scope):
     for review in (private, expired):
         assert reverse("file-library-capacity-review", args=(review.id,)) not in html
     assert "Your capacity reviews" in html and "Publish Now" in html
-    # The synthetic snapshots do not match the current candidate. A fresh
-    # assessment clears them; historical decisions cannot stay actionable.
+    # Status rendering checks readiness without retiring durable reviews.
+    pending.refresh_from_db()
+    approved.refresh_from_db()
+    assert pending.superseded_at is None and approved.superseded_at is None
+    from apps.file_library.publication_capacity import reassess_department
+
+    # Explicit reassessment owns retirement of these synthetic stale snapshots.
+    reassess_department(department.id)
     pending.refresh_from_db()
     approved.refresh_from_db()
     assert pending.superseded_at and approved.superseded_at
+    html = client.get(reverse("file-library", args=(station_library.id,))).content.decode()
     assert "Superseded" in html
     assert (
         client.post(

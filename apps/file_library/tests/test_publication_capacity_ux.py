@@ -14,7 +14,8 @@ from apps.audit.models import AuditEvent
 from apps.authorization.models import SystemRole
 from apps.file_library import services
 from apps.file_library.models import CapacityReview
-from apps.file_library.publication import publication_state, scope_kwargs
+from apps.file_library.publication import scope_kwargs
+from apps.file_library.publication_capacity import reassess_department
 from apps.file_library.tests.test_capacity import approve, tablet_for
 from apps.file_library.tests.test_libraries import (  # noqa: F401
     library_for,
@@ -113,7 +114,7 @@ def test_station_publish_and_department_build_share_current_capacity(
         AppInstallation.objects.filter(pk=installation.pk).update(
             free_storage_bytes=None, total_storage_bytes=None, storage_observed_at=None
         )
-        publication_state(library)
+        reassess_department(scope[3].id)
         review = current_review(library)
     if decision in {"approved", "rejected"}:
         approve(scope[0], review, approve=decision == "approved")
@@ -166,11 +167,16 @@ def test_telemetry_clear_and_stale_approval_update_controls_without_reupload(
     assert "disabled" not in button(client.get(url), "Publish Now")
     AppInstallation.objects.filter(pk=installation.pk).update(free_storage_bytes=2)
     assert "disabled" in button(client.get(url), "Publish Now")
+    # Rendering checks the new telemetry without writing a replacement review.
+    review.refresh_from_db()
+    assert review.superseded_at is None
+    reassess_department(scope[3].id)
     review.refresh_from_db()
     assert review.superseded_at and current_review(library).id != review.id
     AppInstallation.objects.filter(pk=installation.pk).update(
         free_storage_bytes=900000, total_storage_bytes=1000000
     )
+    reassess_department(scope[3].id)
     assert "disabled" not in button(client.get(url), "Publish Now")
     state = DatasetScopeState.objects.get(**scope_kwargs(library))
     client.force_login(scope[0])

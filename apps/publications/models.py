@@ -732,6 +732,7 @@ class PublicationJob(models.Model):
         related_name="requested_publication_jobs",
     )
     trigger_type = models.CharField(max_length=16, choices=TriggerType.choices)
+    allow_clean_rebuild = models.BooleanField(default=False)
     not_before = models.DateTimeField(null=True, blank=True)
     debounce_started_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

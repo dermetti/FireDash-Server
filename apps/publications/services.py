@@ -20,6 +20,7 @@ from apps.publications.builders import (
     build_change_summary,
     build_source_payload,
     build_summary,
+    publication_source_fingerprint,
     source_fingerprint_for_payload,
     validate_built_summary,
 )
@@ -115,6 +116,15 @@ def _locked_scope(
     )
     if scope is None:
         raise PublicationError("Dataset scope has not been initialized.")
+    if dataset_type_code in {"department_files", "station_files"}:
+        from apps.file_library.models import Library
+
+        # Every lifecycle entry point takes the source row before jobs/reviews.
+        Library.objects.select_for_update().filter(
+            Q(station_id=scope.station_id)
+            if scope.station_id
+            else Q(department_id=scope.department_id)
+        ).first()
     return scope
 
 
@@ -251,7 +261,70 @@ def _scope_is_dirty(*, scope: DatasetScopeState, fingerprint: str | None = None)
     # publication operation computes the authoritative canonical fingerprint.
     if not current_fingerprint or not current.source_fingerprint:
         return True
-    return current_fingerprint != current.source_fingerprint
+    return current_fingerprint not in (
+        current.source_fingerprint,
+        publication_source_fingerprint(current),
+    )
+
+
+def _stored_source_fingerprint(*, scope, fingerprint):
+    # Keep the SQL-only list/filter read models compatible with immutable legacy
+    # publication hashes. Changed source always stores the new logical hash.
+    current = scope.current_published_publication
+    if current and fingerprint == publication_source_fingerprint(current):
+        return current.source_fingerprint or fingerprint
+    return fingerprint
+
+
+def _cancel_redundant_pending(*, scope, actor=None):
+    """Called under capacity -> scope -> library locks after a clean comparison."""
+    from apps.file_library.publication_capacity import retire_attempt_review
+
+    now = timezone.now()
+    for pending in PublicationJob.objects.select_for_update().filter(
+        scope_state=scope, status=PublicationJob.Status.PENDING, allow_clean_rebuild=False
+    ):
+        if pending.build_publication_id:
+            staged = DatasetPublication.objects.select_for_update().get(
+                pk=pending.build_publication_id
+            )
+            if staged.status == DatasetPublication.Status.STAGED:
+                retire_attempt_review(staged, actor=actor)
+                staged.status = DatasetPublication.Status.CANCELLED
+                staged.build_error = "Source matches the active publication."
+                staged.save(update_fields=("status", "build_error"))
+        pending.status = PublicationJob.Status.CANCELLED
+        pending.completed_at = now
+        pending.error_category = "source_reverted"
+        pending.error_message = "Source matches the active publication."
+        pending.save(update_fields=("status", "completed_at", "error_category", "error_message"))
+    # Also cover historical unlinked STAGED attempts, without touching BUILDING.
+    for staged in (
+        DatasetPublication.objects.select_for_update()
+        .filter(scope_state=scope, status=DatasetPublication.Status.STAGED)
+        .exclude(
+            build_jobs__status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING)
+        )
+    ):
+        retire_attempt_review(staged, actor=actor)
+        staged.status = DatasetPublication.Status.CANCELLED
+        staged.save(update_fields=("status",))
+
+
+def _reconcile_clean_source(*, scope, snapshot, fingerprint, actor=None):
+    if _scope_is_dirty(scope=scope, fingerprint=fingerprint):
+        return False
+    stored = _stored_source_fingerprint(scope=scope, fingerprint=fingerprint)
+    if scope.current_source_fingerprint != stored or scope.dirty_since is not None:
+        scope.current_source_fingerprint = stored
+        scope.dirty_since = None
+        scope.save(update_fields=("current_source_fingerprint", "dirty_since", "updated_at"))
+    _cancel_redundant_pending(scope=scope, actor=actor)
+    if scope.dataset_type_code in {"department_files", "station_files"}:
+        from apps.file_library.publication_capacity import retire_clean_reviews
+
+        retire_clean_reviews(scope=scope, snapshot=snapshot, actor=actor)
+    return True
 
 
 def _newer_live_attempt_exists(*, scope: DatasetScopeState, version_number: int) -> bool:
@@ -317,51 +390,16 @@ def mark_dirty(
     snapshot, fingerprint = _current_source_state(scope=scope)
     if dataset_type_code in {"department_files", "station_files"}:
         scope.source_revision = snapshot["source_revision"]
-    scope.current_source_fingerprint = fingerprint
+    scope.current_source_fingerprint = _stored_source_fingerprint(
+        scope=scope, fingerprint=fingerprint
+    )
     dirty = _scope_is_dirty(scope=scope, fingerprint=fingerprint)
     if dirty and scope.dirty_since is None:
         scope.dirty_since = now
     if not dirty:
-        scope.dirty_since = None
-        # A canonical revert can make a queued automatic attempt redundant.
-        # Keep its immutable version row, but prevent it from later publishing
-        # an identical copy of the active source.
-        # `build_publication` is nullable.  Lock the job row first and lock its
-        # attempt separately below: combining select_for_update() with
-        # select_related("build_publication") would issue FOR UPDATE across a
-        # nullable outer join on PostgreSQL.
-        pending = (
-            PublicationJob.objects.select_for_update()
-            .filter(scope_state=scope, status=PublicationJob.Status.PENDING)
-            .first()
+        _reconcile_clean_source(
+            scope=scope, snapshot=snapshot, fingerprint=fingerprint, actor=actor
         )
-        if pending is not None:
-            pending_publication = None
-            if pending.build_publication_id is not None:
-                pending_publication = (
-                    DatasetPublication.objects.select_for_update()
-                    .filter(pk=pending.build_publication_id)
-                    .first()
-                )
-            if (
-                pending_publication is not None
-                and pending_publication.status == DatasetPublication.Status.STAGED
-            ):
-                pending_publication.status = DatasetPublication.Status.CANCELLED
-                pending_publication.build_error = (
-                    "Source reverted to the active publication; staged candidate "
-                    "is no longer required."
-                )
-                pending_publication.save(update_fields=("status", "build_error"))
-            pending.status = PublicationJob.Status.CANCELLED
-            pending.completed_at = now
-            pending.error_category = "source_reverted"
-            pending.error_message = (
-                "Source reverted to the active publication; staged candidate was cancelled."
-            )
-            pending.save(
-                update_fields=("status", "completed_at", "error_category", "error_message")
-            )
     scope.save(
         update_fields=(
             "source_revision",
@@ -414,17 +452,26 @@ def enqueue_publication_job(
     )
     if source_snapshot is None or source_fingerprint_value is None:
         snapshot, fingerprint = _current_source_state(scope=scope)
-        if scope.current_source_fingerprint != fingerprint:
-            scope.current_source_fingerprint = fingerprint
+        stored_fingerprint = _stored_source_fingerprint(scope=scope, fingerprint=fingerprint)
+        if scope.current_source_fingerprint != stored_fingerprint:
+            scope.current_source_fingerprint = stored_fingerprint
             scope.save(update_fields=("current_source_fingerprint", "updated_at"))
     else:
         snapshot = source_snapshot
         fingerprint = source_fingerprint_value
     if not allow_clean_rebuild and not _scope_is_dirty(scope=scope, fingerprint=fingerprint):
+        _reconcile_clean_source(
+            scope=scope, snapshot=snapshot, fingerprint=fingerprint, actor=requested_by
+        )
         return None
     from apps.file_library.publication_capacity import assess
 
-    assess(scope=scope, snapshot=snapshot, actor=requested_by)
+    assess(
+        scope=scope,
+        snapshot=snapshot,
+        actor=requested_by,
+        allow_clean_rebuild=allow_clean_rebuild,
+    )
     now = timezone.now()
     active = (
         PublicationJob.objects.select_for_update()
@@ -441,6 +488,7 @@ def enqueue_publication_job(
             return None
         # Coalesce an existing PENDING job to the latest source revision.
         active.source_revision = scope.source_revision
+        active.allow_clean_rebuild = active.allow_clean_rebuild or allow_clean_rebuild
         if trigger_type in (
             PublicationJob.TriggerType.USER_REQUEST,
             PublicationJob.TriggerType.BULK_REQUEST,
@@ -453,7 +501,15 @@ def enqueue_publication_job(
             active.not_before = _data_change_not_before(
                 now=now, debounce_started_at=active.debounce_started_at
             )
-        active.save(update_fields=("source_revision", "trigger_type", "requested_by", "not_before"))
+        active.save(
+            update_fields=(
+                "source_revision",
+                "trigger_type",
+                "requested_by",
+                "not_before",
+                "allow_clean_rebuild",
+            )
+        )
         # A pending job may coalesce newer source data before its attempt
         # starts. Keep its staged record aligned with that final build input;
         # the immutable attempt/version identity itself is unchanged.
@@ -483,6 +539,7 @@ def enqueue_publication_job(
         scope_state=scope,
         requested_by=requested_by,
         trigger_type=trigger_type,
+        allow_clean_rebuild=allow_clean_rebuild,
     )
     if trigger_type == PublicationJob.TriggerType.DATA_CHANGE:
         job.debounce_started_at = debounce_started_at or now
@@ -576,9 +633,18 @@ def _claim_job(candidate) -> PublicationJob | None:
     # legacy staged-attempt allocation and the STAGED -> BUILDING freeze.
     snapshot, fingerprint = _current_source_state(scope=scope)
     job.source_revision = scope.source_revision
-    if scope.current_source_fingerprint != fingerprint:
-        scope.current_source_fingerprint = fingerprint
+    stored_fingerprint = _stored_source_fingerprint(scope=scope, fingerprint=fingerprint)
+    if scope.current_source_fingerprint != stored_fingerprint:
+        scope.current_source_fingerprint = stored_fingerprint
         scope.save(update_fields=("current_source_fingerprint", "updated_at"))
+    if (
+        scope.dataset_type_code in {"department_files", "station_files"}
+        and not job.allow_clean_rebuild
+        and _reconcile_clean_source(
+            scope=scope, snapshot=snapshot, fingerprint=fingerprint, actor=job.requested_by
+        )
+    ):
+        return None
     # Legacy pending jobs created before Phase 4A have no staged attempt. Give
     # them one under the same locked scope; normal jobs already own their row.
     publication = (
@@ -887,6 +953,8 @@ def finalize_publication_job(
         _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         return job
     source_fingerprint_value = source_fingerprint_value or publication.source_fingerprint
+    if publication.dataset_type_code in {"department_files", "station_files"}:
+        source_fingerprint_value = publication_source_fingerprint(publication)
     definition = get_dataset_definition(job.dataset_type_code)
     validate_built_summary(definition=definition, summary=summary)
     publication.build_summary = summary
@@ -905,6 +973,9 @@ def finalize_publication_job(
         publication.dataset_type_code in {"department_files", "station_files"}
         and scope.source_revision != publication.source_revision
     ):
+        from apps.file_library.publication_capacity import retire_attempt_review
+
+        retire_attempt_review(publication, actor=job.requested_by)
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
         publication.save(update_fields=("status", "source_snapshot"))
@@ -938,9 +1009,12 @@ def finalize_publication_job(
     if (
         previous_current is not None
         and previous_current.source_fingerprint
-        and previous_current.source_fingerprint == source_fingerprint_value
+        and publication_source_fingerprint(previous_current) == source_fingerprint_value
         and not delivery_transition
     ):
+        from apps.file_library.publication_capacity import retire_attempt_review
+
+        retire_attempt_review(publication, actor=job.requested_by)
         _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
@@ -977,6 +1051,9 @@ def finalize_publication_job(
         # Includes pre-deployment BUILDING jobs and risk changes during encryption.
         # Keep the old active generation; retire this attempt and queue a fresh,
         # capacity-blocked candidate instead of recording a normal build failure.
+        from apps.file_library.publication_capacity import retire_attempt_review
+
+        retire_attempt_review(publication, actor=job.requested_by)
         _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
@@ -1302,6 +1379,9 @@ def request_rebuild(
         actor, department=department, station=station, dataset_type_code=dataset_type_code
     )
     _validate_scope(department=department, station=station, dataset_type_code=dataset_type_code)
+    from apps.file_library.publication_capacity import lock_scope_capacity
+
+    lock_scope_capacity(department=department, dataset_type_code=dataset_type_code)
     with transaction.atomic():
         scope = (
             DatasetScopeState.objects.select_for_update()
@@ -1358,6 +1438,12 @@ def stage_publication_update(
     scope = _locked_scope(
         department=department, station=station, dataset_type_code=dataset_type_code
     )
+    if dataset_type_code in {"department_files", "station_files"}:
+        snapshot, fingerprint = _current_source_state(scope=scope)
+        if _reconcile_clean_source(
+            scope=scope, snapshot=snapshot, fingerprint=fingerprint, actor=actor
+        ):
+            return scope
     if not _scope_is_dirty(scope=scope):
         raise PublicationError("This dataset scope has no unpublished changes.")
     live = PublicationJob.objects.select_for_update().filter(
@@ -1429,6 +1515,14 @@ def build_staged_publication(*, actor, scope: DatasetScopeState) -> PublicationJ
             station=locked_scope.station,
             definition=get_dataset_definition(locked_scope.dataset_type_code),
         )
+        if not job.allow_clean_rebuild and _reconcile_clean_source(
+            scope=locked_scope,
+            snapshot=snapshot,
+            fingerprint=source_fingerprint_for_payload(snapshot),
+            actor=actor,
+        ):
+            job.refresh_from_db()
+            return job
         admitted, _review = assess(
             scope=locked_scope, snapshot=snapshot, actor=actor, publication=publication, bind=False
         )
@@ -1498,6 +1592,11 @@ def delete_staged_publication(*, actor, publication: DatasetPublication) -> Data
         job.status = PublicationJob.Status.CANCELLED
         job.completed_at = timezone.now()
         job.save(update_fields=("status", "completed_at"))
+    if candidate.dataset_type_code in {"department_files", "station_files"}:
+        snapshot, fingerprint = _current_source_state(scope=scope)
+        _reconcile_clean_source(
+            scope=scope, snapshot=snapshot, fingerprint=fingerprint, actor=actor
+        )
     record_event(
         action="publication.staged_deleted",
         actor_user=actor,
