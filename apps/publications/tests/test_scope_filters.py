@@ -137,12 +137,24 @@ def test_default_reset_and_accessible_filter_panel(client, publication_ui_contex
     assert "<noscript><button" in content
     assert "Department-wide bulk action" in content
     assert "regardless of the filters below" in content
-    assert 'href="' + url + '">Reset</a>' in content
+    assert 'href="' + url + '">Reset all filters</a>' in content
+    heading_row = re.search(
+        r'<div class="d-flex align-items-center justify-content-between gap-2 mb-2">(.*?)</div>',
+        content,
+        re.DOTALL,
+    )
+    assert heading_row is not None
+    assert '<h2 class="h6 mb-0">Publication scope</h2>' in heading_row[1]
+    assert 'id="publication-reset"' in heading_row[1]
+    assert content.count('id="publication-reset"') == 1
+    assert heading_row.end() < content.index('id="scope-department"')
+    assert 'id="publication-reset"' not in content.split('id="publication-filter-form"', 1)[1]
 
 
 @pytest.mark.parametrize("station_value", ["selected", "invalid"])
+@pytest.mark.parametrize("htmx", [False, True])
 def test_station_and_overall_resets_preserve_their_distinct_scope(
-    client, publication_ui_context, scopes, station_value
+    client, publication_ui_context, scopes, station_value, htmx
 ):
     admin, _, department, _, station = publication_ui_context
     client.force_login(admin)
@@ -169,15 +181,20 @@ def test_station_and_overall_resets_preserve_their_distinct_scope(
     if station_value == "selected":
         assert f'value="{station.name} ({station.short_code})"' in content
     links = {}
-    for label in ("Reset station selection", "Reset all publication filters"):
-        match = re.search(r'<a[^>]*aria-label="' + label + r'"[^>]*>Reset</a>', content)
+    for label, text in (
+        ("Reset station selection", "Reset"),
+        ("Reset all filters", "Reset all filters"),
+    ):
+        match = re.search(r'<a[^>]*aria-label="' + label + r'"[^>]*>' + text + r"</a>", content)
         assert match is not None
         assert " hidden" not in match[0]
         assert 'hx-push-url="true"' in match[0]
         href = re.search(r' href="([^"]+)"', match[0])
         assert href is not None
+        assert f'hx-get="{href[1]}"' in match[0]
         links[label] = unescape(href[1])
-    cleared = client.get(links["Reset station selection"], HTTP_HX_REQUEST="true")
+    headers = {"HTTP_HX_REQUEST": "true"} if htmx else {}
+    cleared = client.get(links["Reset station selection"], **headers)
     assert cleared.context["scope_mode"] == "station"
     assert cleared.context["selected_filter"] == "scheduled"
     assert not cleared.context["station_value"]
@@ -186,7 +203,7 @@ def test_station_and_overall_resets_preserve_their_distinct_scope(
     assert b'placeholder="Search station name or short code"' in cleared.content
     assert b'value="" hx-get=' in cleared.content
     assert re.search(r"<a data-station-clear[^>]* hidden>Reset</a>", cleared.content.decode())
-    reset = client.get(links["Reset all publication filters"], HTTP_HX_REQUEST="true")
+    reset = client.get(links["Reset all filters"], **headers)
     assert reset.context["scope_mode"] == "department"
     assert not reset.context["selected_filter"] and not reset.context["station_value"]
     assert reset.context["page"].number == 1 and reset.context["total_count"] == 1

@@ -1,5 +1,9 @@
 <div id="publication-browser">
 <nav class="mb-3" aria-label="Publication scope">
+  <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+    <h2 class="h6 mb-0">Publication scope</h2>
+    <a id="publication-reset" class="small" aria-label="Reset all filters" hx-get="{{ publications_url }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true" href="{{ publications_url }}">Reset all filters</a>
+  </div>
   <div class="btn-group flex-wrap" role="group" aria-label="Publication scope">
     <a id="scope-department" class="btn btn-outline-primary{% if scope_mode == 'department' %} active{% endif %}"{% if scope_mode == 'department' %} aria-current="page"{% endif %} href="{{ publications_url }}?{{ scope_queries.department }}" hx-get="{{ publications_url }}?{{ scope_queries.department }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true">Department</a>
     <a id="scope-station" class="btn btn-outline-primary{% if scope_mode == 'station' %} active{% endif %}"{% if scope_mode == 'station' %} aria-current="page"{% endif %} href="{{ publications_url }}?{{ scope_queries.station }}" hx-get="{{ publications_url }}?{{ scope_queries.station }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true">Stations</a>
@@ -30,7 +34,6 @@
   <div class="mb-3" style="max-width: 22rem">
     <label for="publication-state-filter" class="form-label">Publication status</label>
     <select id="publication-state-filter" name="state" class="form-select" hx-get="{{ publications_url }}" hx-trigger="change" hx-target="#publication-browser" hx-swap="outerHTML" hx-include="#publication-filter-form" hx-push-url="true" hx-params="scope,station_id,state" hx-sync="#publication-filter-form:replace">{% for value,label in scope_filters.items %}<option value="{{ value }}"{% if value == selected_filter %} selected{% endif %}>{% if not value %}All statuses{% else %}{{ label }}{% endif %}</option>{% endfor %}</select>
-    <div class="text-end mt-2"><a id="publication-reset" class="small" aria-label="Reset all publication filters" hx-get="{{ publications_url }}" hx-target="#publication-browser" hx-swap="outerHTML" hx-push-url="true" href="{{ publications_url }}">Reset</a></div>
   </div>
   <noscript><button class="btn btn-outline-secondary" type="submit">Show publications</button></noscript>
 </form>

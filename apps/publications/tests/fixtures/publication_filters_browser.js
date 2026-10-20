@@ -20,6 +20,14 @@
   try {
     await waitFor(() => find('#station-combobox') && !find('#station-combobox').disabled);
     check(rows() === 2 && query().get('scope') === 'station', 'all-stations initial results');
+    const scopeHeading = find('#publication-browser nav h2');
+    const reset = find('#publication-reset');
+    check(scopeHeading.textContent === 'Publication scope' && reset.textContent === 'Reset all filters', 'scope heading and global reset label');
+    check(reset.parentElement === scopeHeading.parentElement && !reset.closest('form'), 'global reset belongs to scope heading row');
+    const headingBounds = scopeHeading.getBoundingClientRect();
+    const resetBounds = reset.getBoundingClientRect();
+    check(resetBounds.left > headingBounds.right && resetBounds.top < headingBounds.bottom, 'global reset sits to the right of the heading');
+    check(find('#scope-department').getBoundingClientRect().top >= headingBounds.bottom, 'scope buttons sit beneath heading');
     check(find('#publication-state-filter').getBoundingClientRect().top > find('#station-combobox').getBoundingClientRect().bottom, 'station and status stack at every viewport');
     check(getComputedStyle(find('#station-selection-status')).position === 'absolute', 'selection announcement stays visually hidden');
     const input = find('#station-combobox');
@@ -62,9 +70,17 @@
     await waitFor(() => !query().get('state') && rows() === 1);
     find('#scope-all').click();
     await waitFor(() => query().get('scope') === 'all' && rows() === 3);
+    find('#publication-state-filter').value = 'scheduled';
+    find('#publication-state-filter').dispatchEvent(new Event('change', {bubbles:true}));
+    await waitFor(() => query().get('state') === 'scheduled' && rows() === 1);
     find('#publication-reset').click();
     await waitFor(() => !query().has('scope') && rows() === 1);
     check(find('#scope-department').getAttribute('aria-current') === 'page', 'reset restores department');
+    check(!query().has('state') && !query().has('station_id') && !query().has('page') && find('#publication-state-filter').value === '', 'reset clears all filter URL state');
+    history.back();
+    await waitFor(() => query().get('scope') === 'all' && find('#publication-state-filter').value === 'scheduled');
+    history.forward();
+    await waitFor(() => !query().has('scope') && find('#scope-department').getAttribute('aria-current') === 'page');
     for (const control of document.querySelectorAll('#publication-browser nav a, #publication-filter-form select, #publication-reset')) {
       const bounds = control.getBoundingClientRect();
       check(bounds.left >= 0 && bounds.right <= innerWidth, 'filter controls fit viewport');
