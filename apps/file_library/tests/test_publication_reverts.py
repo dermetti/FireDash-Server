@@ -12,7 +12,7 @@ import pytest
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
-from django.db import connection
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -422,6 +422,91 @@ def test_explicit_clean_rebuild_is_not_cancelled_or_exempted_from_capacity(scope
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("station", [False, True])
+@pytest.mark.parametrize("change_during_build", [False, True])
+def test_legacy_alias_transition_during_explicit_rebuild(
+    scope, pdf_pipeline, crypto, monkeypatch, station, change_during_build
+):
+    actor = scope[1] if station else scope[0]
+    library = services.get_library(actor, station_id=scope[5].id) if station else library_for(scope)
+    common = dict(actor=actor, library_id=library.id)
+    services.upload_pdf(**common, upload=pdf())
+    with monkeypatch.context() as old:
+        old_comparisons(old)
+        publish(actor, library)
+        services.create_folder(**common, name="Guides")
+        active = publish(actor, library)
+    historical_snapshot = deepcopy(active.source_snapshot)
+    historical_fingerprint = active.source_fingerprint
+    assert active.version_number == 2
+    assert historical_fingerprint == legacy_hash(historical_snapshot)
+    logical_fingerprint = source_fingerprint_for_payload(historical_snapshot)
+    assert historical_fingerprint != logical_fingerprint
+    # Reverting real service mutations advances the revision while retaining
+    # any cancelled automatic attempt in immutable version history.
+    with transaction.atomic():
+        services.rename_library(**common, name="Temporary")
+        services.rename_library(**common, name=library.name)
+    reconcile_file_scope(scope_id=active.scope_state_id, department_id=scope[3].id, apply=True)
+    assert_clean(library, active)
+    state = DatasetScopeState.objects.get(pk=active.scope_state_id)
+    assert state.source_revision > active.source_revision
+    assert state.current_source_fingerprint == historical_fingerprint
+    prior_versions = list(
+        DatasetPublication.objects.filter(scope_state=state)
+        .order_by("version_number")
+        .values_list("version_number", flat=True)
+    )
+    request_rebuild(actor=actor, **kwargs(library))
+    job = claim_next_job()
+    assert job is not None and job.allow_clean_rebuild and job.build_publication is not None
+    attempt = job.build_publication
+    frozen = deepcopy(attempt.source_snapshot)
+    assert attempt.version_number == prior_versions[-1] + 1
+    assert attempt.source_fingerprint == logical_fingerprint
+    if change_during_build:
+        services.create_folder(**common, name="New canonical change")
+        attempt.refresh_from_db()
+        assert attempt.source_snapshot == frozen
+    # Inspect committed scope fields before on-commit scheduling can reconcile
+    # away an erroneous dirty window or redundant successor.
+    with transaction.atomic():
+        result = build_claimed_job(job_id=job.id)
+        state.refresh_from_db()
+        if not change_during_build:
+            assert result.status == "SUCCEEDED"
+            assert state.current_source_fingerprint == logical_fingerprint
+            assert state.dirty_since is None
+            assert scope_operational_states_for_scopes([state])[0]["state"] == "CURRENT"
+        else:
+            assert result.status == "OBSOLETE"
+            assert state.current_published_publication_id == active.id
+            assert state.current_source_fingerprint != logical_fingerprint
+            assert state.dirty_since is not None
+    active.refresh_from_db()
+    attempt.refresh_from_db()
+    assert active.source_fingerprint == historical_fingerprint
+    assert active.source_snapshot == historical_snapshot
+    if change_during_build:
+        assert active.status == "PUBLISHED" and attempt.status == "OBSOLETE"
+        successor = PublicationJob.objects.get(scope_state=state, status="PENDING")
+        assert successor.build_publication is not None and successor.allow_clean_rebuild
+        assert successor.build_publication.source_fingerprint == state.current_source_fingerprint
+        assert scope_operational_states_for_scopes([state])[0]["state"] != "CURRENT"
+    else:
+        assert active.status == "SUPERSEDED" and attempt.status == "PUBLISHED"
+        assert attempt.source_snapshot == frozen and attempt.supersedes_id == active.id
+        assert attempt.document_artifact_references.get().document_artifact_id == (
+            active.document_artifact_references.get().document_artifact_id
+        )
+        assert (
+            DatasetPublication.objects.filter(scope_state=state).count() == len(prior_versions) + 1
+        )
+        assert not DatasetPublication.objects.filter(scope_state=state, status="STAGED").exists()
+        assert_clean(library, attempt)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("station", [False, True])
 def test_explicit_clean_rebuild_publishes_discoverable_document_generation(
     scope, pdf_pipeline, crypto, settings, client, station
 ):
@@ -486,6 +571,8 @@ def test_explicit_clean_rebuild_publishes_discoverable_document_generation(
         action="publication.published", target_uuid=rebuilt.id
     ).exists()
     assert AuditEvent.objects.filter(action="publication.job_queued", target_uuid=job.id).exists()
+    assert_clean(library, rebuilt)
+    assert not DatasetPublication.objects.filter(scope_state=state, status="STAGED").exists()
     # A later ordinary bulk request must not inherit completed explicit intent.
     assert enqueue_publication_job(**kwargs(library), trigger_type="BULK_REQUEST") is None
 

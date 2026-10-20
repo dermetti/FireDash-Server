@@ -1098,6 +1098,17 @@ def finalize_publication_job(
             "supersedes",
         )
     )
+    # A reconciled file scope may still store the previous generation's legacy
+    # hash as its clean-source alias. Translate only that proven logical match
+    # before activation makes the alias invalid for dirty-source detection.
+    if (
+        publication.dataset_type_code in {"department_files", "station_files"}
+        and previous_current is not None
+        and previous_current.source_fingerprint
+        and scope.current_source_fingerprint == previous_current.source_fingerprint
+        and publication_source_fingerprint(previous_current) == source_fingerprint_value
+    ):
+        scope.current_source_fingerprint = source_fingerprint_value
     scope.latest_built_publication = publication
     scope.current_published_publication = publication
     # A canonical edit can commit while this attempt is BUILDING.  Do not clear
@@ -1109,6 +1120,7 @@ def finalize_publication_job(
         update_fields=(
             "latest_built_publication",
             "current_published_publication",
+            "current_source_fingerprint",
             "dirty_since",
             "updated_at",
         )
