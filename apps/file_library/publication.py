@@ -5,8 +5,6 @@ from typing import Any, cast
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Q
-from django.utils import timezone
 
 from apps.file_library.models import Content, Library, PublicationContent
 from apps.publications.builders import PublicationBuildError
@@ -286,21 +284,8 @@ def publication_state(library):
     ):
         label = {"PENDING": "Queued", "RUNNING": "Building", "FAILED": "Failed"}[job.status]
     from apps.file_library.capacity import presentation_summary
-    from apps.file_library.models import CapacityReview
 
-    review = (
-        CapacityReview.objects.filter(
-            library=library,
-            publication_snapshot__isnull=False,
-            superseded_at__isnull=True,
-            consumed_at__isnull=True,
-        )
-        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
-        .order_by("-created_at", "id")
-        .first()
-        if not is_current
-        else None
-    )
+    review = readiness.get("assessed_review")
     return {
         **readiness,
         "capacity_review": review,

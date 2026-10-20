@@ -352,7 +352,7 @@ def _scope_row_context(scope: DatasetScopeState) -> dict[str, Any]:
         rows[0]["actions"]["build_now"] = bool(
             rows[0]["actions"]["build_now"] and state and state["can_build"]
         )
-        if library:
+        if state and state.get("capacity_review"):
             from apps.file_library.capacity import review_management_url
 
             context["capacity_management_url"] = review_management_url(
@@ -545,15 +545,30 @@ def publication_inspect_changes(request: HttpRequest, scope_id) -> HttpResponse:
             "publications/_inspect_changes_modal.html",
             {"scope": scope, "scope_title": _scope_title(scope), "legacy": True},
         )
-    target_snapshot = (
-        candidate.source_snapshot
-        if candidate is not None
-        else build_source_payload(
+    if candidate is not None:
+        target_snapshot = candidate.source_snapshot
+    elif row["is_file_publication"]:
+        from apps.file_library.models import Library
+        from apps.file_library.publication import snapshot_for_library
+
+        library = Library.objects.filter(
+            Q(station_id=scope.station_id)
+            if scope.station_id
+            else Q(department_id=scope.department_id)
+        ).first()
+        if library is None:
+            return render(
+                request,
+                "publications/_inspect_changes_modal.html",
+                {"scope": scope, "scope_title": _scope_title(scope), "legacy": True},
+            )
+        target_snapshot = snapshot_for_library(library)
+    else:
+        target_snapshot = build_source_payload(
             definition=get_dataset_definition(scope.dataset_type_code),
             department=scope.department,
             station=scope.station,
         )
-    )
     return render(
         request,
         "publications/_inspect_changes_modal.html",

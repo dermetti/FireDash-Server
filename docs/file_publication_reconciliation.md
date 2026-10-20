@@ -13,9 +13,32 @@ document artifacts can be reused by the existing document builder.
 
 Apply migrations with the normal deployment procedure before restarting workers.
 `publications.0029_publicationjob_allow_clean_rebuild` adds a durable flag for the
-existing `allow_clean_rebuild` service option. Legacy un-debounced explicit
-USER_REQUEST/BULK_REQUEST jobs are conservatively preserved as force requests.
-Reconciliation never bypasses capacity approval for those requests.
+existing `allow_clean_rebuild` service option. Apply
+`publications.0030_correct_legacy_bulk_rebuild_intent` as well: 0029 incorrectly
+classified un-debounced BULK_REQUEST jobs as force rebuilds. 0029 is retained
+unchanged because it may already be deployed. 0030 corrects active bulk jobs
+created before 0029 was applied, including RUNNING jobs, without changing their
+worker state, snapshot or version. Each correction appends a
+`publication.legacy_bulk_intent_corrected` audit event. It is idempotent.
+
+Explicit USER_REQUEST jobs retain 0029's classification: jobs with a debounce
+origin (including Build Now promotions) remain ordinary updates. Bulk jobs with
+a `publication.rebuild_requested` audit event matching the exact department,
+station, scope and dataset since the previous terminal job retain force protection.
+This preserves requests subsequently coalesced into a bulk job, even if its
+requester or revision changed. Jobs created
+after 0029 are untouched, since their explicit flag is authoritative. New bulk
+request semantics are unchanged.
+
+Legacy bulk intent cannot be reconstructed perfectly: a direct internal force
+enqueue without a rebuild audit event is indistinguishable from 0029's erroneous
+backfill. Such legacy bulk jobs are classified as ordinary bulk work. Conversely,
+an ambiguous older explicit request since the previous job's terminal timestamp
+(or creation time when completion is unavailable) conservatively retains
+protection. Review the correction audit events and any protected legacy
+jobs when reconciling. No review decision is approved or consumed by migration.
+Running builds finish or recover normally before pending clean-source work can
+be reconciled. Reconciliation never bypasses capacity approval for force requests.
 
 No fingerprint backfill of immutable publications is required. Comparisons derive
 a logical fingerprint from the retained active snapshot. When it matches, the

@@ -107,10 +107,11 @@ def assess(
         if (
             review.fingerprint == digest
             and review.publication_snapshot == snapshot
+            and (review.expires_at is None or review.expires_at > timezone.now())
             and (
-                publication is None
+                (persist and publication is None)
                 or review.publication_id is None
-                or review.publication_id == publication.id
+                or (publication is not None and review.publication_id == publication.id)
             )
         ):
             current = review
@@ -140,7 +141,7 @@ def assess(
                     )
                 except PermissionDenied:
                     admitted = False
-        return admitted, current
+        return admitted, current if risky else None
     if not risky:
         if current:
             current.superseded_at = timezone.now()

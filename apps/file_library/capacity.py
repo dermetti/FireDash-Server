@@ -34,8 +34,12 @@ def review_management_url(department, review=None):
     """Link to the exact pending queue row, or the department review area."""
     from django.urls import reverse
 
-    lock_department_capacity(department.id, reassess=False)
-    library, _ = Library.objects.get_or_create(department=department)
+    library = Library.objects.filter(department=department).first()
+    if library is None:
+        # Station reviews remain reachable before department-library setup.
+        if review and department_for(review.library).id == department.id:
+            return reverse("file-library-capacity-review", args=(review.id,))
+        return reverse("file-library-index")
     url = reverse("file-library", args=(library.id,))
     pending = pending_department_reviews(department)
     if review and pending.filter(pk=review.pk).exists():

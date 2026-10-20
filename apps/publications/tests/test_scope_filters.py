@@ -139,7 +139,8 @@ def test_default_reset_and_accessible_filter_panel(client, publication_ui_contex
     assert "regardless of the filters below" in content
     assert 'href="' + url + '">Reset all filters</a>' in content
     heading_row = re.search(
-        r'<div class="d-flex align-items-center justify-content-between gap-2 mb-2">(.*?)</div>',
+        r'<div class="d-flex align-items-center justify-content-between gap-2 mb-2"'
+        r"[^>]*>(.*?)</div>",
         content,
         re.DOTALL,
     )
