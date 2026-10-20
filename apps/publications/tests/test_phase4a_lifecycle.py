@@ -203,6 +203,70 @@ def test_terminal_attempts_never_reuse_versions_after_cancel_or_failure(lifecycl
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("force", [False, True])
+def test_same_source_hydrant_finalization_honors_only_persisted_force(lifecycle_scope, force):
+    admin, _, department, _, scope = lifecycle_scope
+    request_rebuild(actor=admin, department=department, dataset_type_code=scope.dataset_type_code)
+    first_job = claim_next_job()
+    assert first_job is not None and first_job.build_publication is not None
+    first = first_job.build_publication
+    summary = {"active_count": 0, "source_revision": scope.source_revision, "status_counts": {}}
+    assert (
+        finalize_publication_job(
+            job_id=first_job.id, summary=summary, artifact=_metadata(department, first.id)
+        ).status
+        == "SUCCEEDED"
+    )
+    assert (
+        enqueue_publication_job(
+            department=department,
+            dataset_type_code=scope.dataset_type_code,
+            trigger_type="BULK_REQUEST",
+        )
+        is None
+    )
+    if force:
+        request_rebuild(
+            actor=admin, department=department, dataset_type_code=scope.dataset_type_code
+        )
+    else:
+        # A stale queued snapshot can still reach finalization. USER_REQUEST alone
+        # (as used by Build Now) is not an instruction to publish identical content.
+        enqueue_publication_job(
+            department=department,
+            dataset_type_code=scope.dataset_type_code,
+            trigger_type="USER_REQUEST",
+            source_snapshot=first.source_snapshot,
+            source_fingerprint_value="outdated-source",
+        )
+    job = claim_next_job()
+    assert job is not None and job.build_publication is not None
+    rebuilt = job.build_publication
+    assert job.allow_clean_rebuild == force
+    result = finalize_publication_job(
+        job_id=job.id, summary=summary, artifact=_metadata(department, rebuilt.id)
+    )
+    first.refresh_from_db()
+    rebuilt.refresh_from_db()
+    scope.refresh_from_db()
+    assert rebuilt.source_fingerprint == first.source_fingerprint
+    if force:
+        assert result.status == "SUCCEEDED" and rebuilt.status == "PUBLISHED"
+        assert first.status == "SUPERSEDED" and rebuilt.supersedes_id == first.id
+        assert (
+            scope.current_published_publication_id
+            == scope.latest_built_publication_id
+            == rebuilt.id
+        )
+        assert AuditEvent.objects.filter(
+            action="publication.published", target_uuid=rebuilt.id
+        ).exists()
+    else:
+        assert result.status == rebuilt.status == "OBSOLETE"
+        assert first.status == "PUBLISHED" and scope.current_published_publication_id == first.id
+
+
+@pytest.mark.django_db(transaction=True)
 def test_artifact_cleanup_is_not_run_when_lifecycle_transaction_rolls_back(monkeypatch):
     removed = []
     monkeypatch.setattr(services, "remove_artifact_path", lambda path: removed.append(path))

@@ -17,6 +17,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.audit.models import AuditEvent
 from apps.file_library import services
 from apps.file_library.models import CapacityReview, Content
 from apps.file_library.publication import publication_state, scope_kwargs
@@ -29,16 +30,24 @@ from apps.file_library.tests.test_libraries import (  # noqa: F401
     pdf_pipeline,
     scope,
 )
-from apps.file_library.tests.test_publication import crypto, publish  # noqa: F401
+from apps.file_library.tests.test_publication import crypto, installation_for, publish  # noqa: F401
 from apps.file_library.tests.test_publication_capacity import current_review
 from apps.publications.builders import source_fingerprint_for_payload
-from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
+from apps.publications.manifests import canonical_manifest_payload, manifest_publications
+from apps.publications.models import (
+    DatasetPublication,
+    DatasetScopeState,
+    DocumentGenerationManifest,
+    PublicationJob,
+)
 from apps.publications.services import (
     build_claimed_job,
+    build_staged_publication,
     claim_next_job,
     delete_staged_publication,
     enqueue_publication_job,
     recover_stale_jobs,
+    request_rebuild,
     stage_publication_update,
 )
 from apps.publications.state import scope_operational_states_for_scopes
@@ -368,9 +377,11 @@ def test_running_build_and_revert_do_not_queue_redundant_successor(scope, pdf_pi
     assert_clean(library, active)
 
 
-def test_explicit_clean_rebuild_is_not_cancelled_or_exempted_from_capacity(scope, crypto):
-    library = library_for(scope)
-    active = publish(scope[0], library)
+@pytest.mark.parametrize("station", [False, True])
+def test_explicit_clean_rebuild_is_not_cancelled_or_exempted_from_capacity(scope, crypto, station):
+    actor = scope[1] if station else scope[0]
+    library = services.get_library(actor, station_id=scope[5].id) if station else library_for(scope)
+    active = publish(actor, library)
     _, installation = tablet_for(scope)
     AppInstallation.objects.filter(pk=installation.pk).update(
         storage_observed_at=None, free_storage_bytes=None, total_storage_bytes=None
@@ -399,8 +410,187 @@ def test_explicit_clean_rebuild_is_not_cancelled_or_exempted_from_capacity(scope
     approve(scope[0], fresh)
     retry = claim_next_job()
     assert retry is not None and retry.build_publication_id != failed_attempt
-    assert build_claimed_job(job_id=retry.id).status == "OBSOLETE"
-    assert_clean(library, active)
+    assert retry.allow_clean_rebuild
+    assert build_claimed_job(job_id=retry.id).status == "SUCCEEDED"
+    active.refresh_from_db()
+    assert active.status == "SUPERSEDED"
+    fresh.refresh_from_db()
+    assert fresh.publication_id == retry.build_publication_id and fresh.consumed_at
+    assert retry.build_publication is not None
+    assert_clean(library, retry.build_publication)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("station", [False, True])
+def test_explicit_clean_rebuild_publishes_discoverable_document_generation(
+    scope, pdf_pipeline, crypto, settings, client, station
+):
+    library = (
+        services.get_library(scope[1], station_id=scope[5].id) if station else library_for(scope)
+    )
+    actor = scope[1] if station else scope[0]
+    services.upload_pdf(actor=actor, library_id=library.id, upload=pdf())
+    # Exercise v2 -> v3, with matching fingerprints and distinct delivery identities.
+    publish(actor, library)
+    services.create_folder(actor=actor, library_id=library.id, name="Guides")
+    active = publish(actor, library)
+    installation, _, credential, _ = installation_for(scope, settings)
+    _, outsider = tablet_for(scope, station=scope[6] if station else None)
+    artifact_id = active.document_artifact_references.get().document_artifact_id
+    with pytest.raises(PermissionDenied):
+        request_rebuild(actor=scope[2], **kwargs(library))
+    request_rebuild(actor=actor, **kwargs(library))
+    job = claim_next_job()
+    assert job is not None and job.allow_clean_rebuild
+    assert build_claimed_job(job_id=job.id).status == "SUCCEEDED"
+    job.refresh_from_db()
+    rebuilt = job.build_publication
+    assert rebuilt is not None
+    active.refresh_from_db()
+    assert active.version_number == 2 and rebuilt.version_number == 3
+    assert active.status == "SUPERSEDED" and rebuilt.status == "PUBLISHED"
+    assert rebuilt.supersedes_id == active.id and rebuilt.id != active.id
+    assert rebuilt.source_fingerprint == active.source_fingerprint
+    assert rebuilt.source_snapshot == active.source_snapshot
+    assert rebuilt.document_artifact_references.get().document_artifact_id == artifact_id
+    manifest = DocumentGenerationManifest.objects.get(publication=rebuilt)
+    crypto.verify(bytes(manifest.signature), canonical_manifest_payload(manifest.payload))
+    assert manifest.payload["publication_id"] == str(rebuilt.id)
+    assert manifest.payload["version"] == 3
+    _, _, discovered = manifest_publications(installation=installation)
+    assert rebuilt.id in {p.id for p in discovered} and active.id not in {p.id for p in discovered}
+    if station:
+        assert rebuilt.id not in {p.id for p in manifest_publications(installation=outsider)[2]}
+    from apps.publications.document_v2 import process_next_generation_key_grant
+    from apps.publications.manifests import request_manifest
+    from apps.publications.worker_grants import process_next_signed_manifest
+
+    request_manifest(installation=installation)
+    process_next_signed_manifest()
+    auth = {"HTTP_AUTHORIZATION": f"Bearer {credential}"}
+    response = client.get("/api/v1/tablet/manifest", **auth)
+    assert response.status_code == 200
+    descriptor = next(
+        item for item in response.json()["datasets"] if item["publication_id"] == str(rebuilt.id)
+    )
+    assert descriptor["version"] == 3
+    assert client.get(descriptor["manifest_url"], **auth).status_code == 202
+    grant = process_next_generation_key_grant()
+    assert grant is not None and grant.status == "READY"
+    delivered = client.get(descriptor["manifest_url"], **auth)
+    assert delivered.status_code == 200
+    assert delivered.json()["publication_id"] == str(rebuilt.id)
+    state = DatasetScopeState.objects.get(pk=rebuilt.scope_state_id)
+    assert state.latest_built_publication_id == state.current_published_publication_id == rebuilt.id
+    assert AuditEvent.objects.filter(
+        action="publication.published", target_uuid=rebuilt.id
+    ).exists()
+    assert AuditEvent.objects.filter(action="publication.job_queued", target_uuid=job.id).exists()
+    # A later ordinary bulk request must not inherit completed explicit intent.
+    assert enqueue_publication_job(**kwargs(library), trigger_type="BULK_REQUEST") is None
+
+
+@pytest.mark.parametrize("change", ["telemetry", "source"])
+def test_explicit_rebuild_requeues_unsafe_attempt_with_force_intent(scope, crypto, change):
+    library = library_for(scope)
+    active = publish(scope[0], library)
+    _, installation = tablet_for(scope)
+    if change == "telemetry":
+        AppInstallation.objects.filter(pk=installation.pk).update(
+            storage_observed_at=None, free_storage_bytes=None, total_storage_bytes=None
+        )
+    job = enqueue_publication_job(
+        **kwargs(library),
+        requested_by=scope[0],
+        trigger_type="USER_REQUEST",
+        allow_clean_rebuild=True,
+    )
+    approved = None
+    if change == "telemetry":
+        assert claim_next_job() is None
+        approved = current_review(library)
+        approve(scope[0], approved)
+    claimed = claim_next_job()
+    assert job is not None and claimed is not None
+    assert claimed.build_publication is not None
+    frozen = deepcopy(claimed.build_publication.source_snapshot)
+    assert enqueue_publication_job(**kwargs(library), allow_clean_rebuild=True) is None
+    if change == "source":
+        services.create_folder(actor=scope[0], library_id=library.id, name="Later")
+    if change == "telemetry":
+        AppInstallation.objects.filter(pk=installation.pk).update(
+            storage_observed_at=timezone.now(), free_storage_bytes=1, total_storage_bytes=1000
+        )
+    else:
+        AppInstallation.objects.filter(pk=installation.pk).update(
+            storage_observed_at=None, free_storage_bytes=None, total_storage_bytes=None
+        )
+    claimed.build_publication.refresh_from_db()
+    assert claimed.build_publication.source_snapshot == frozen
+    assert build_claimed_job(job_id=job.id).status == "OBSOLETE"
+    assert not claimed.build_publication.document_artifact_references.exists()
+    if approved:
+        approved.refresh_from_db()
+        assert approved.superseded_at and approved.consumed_at is None
+    replacement = PublicationJob.objects.get(scope_state=active.scope_state, status="PENDING")
+    assert replacement.allow_clean_rebuild and replacement.requested_by_id == scope[0].id
+    assert replacement.build_publication_id != claimed.build_publication_id
+    active.refresh_from_db()
+    assert active.status == "PUBLISHED"
+    assert claim_next_job() is None
+    review = current_review(library)
+    assert review.decision == "pending" and not review.consumed_at
+    approve(scope[0], review)
+    retry = claim_next_job()
+    assert retry is not None
+    assert build_claimed_job(job_id=retry.id).status == "SUCCEEDED"
+    review.refresh_from_db()
+    assert review.consumed_at and review.publication_id == retry.build_publication_id
+
+
+def test_explicit_clean_rebuild_does_not_bypass_rejection(scope, crypto):
+    library = library_for(scope)
+    active = publish(scope[0], library)
+    tablet_for(scope, free=1, total=1000)
+    job = enqueue_publication_job(**kwargs(library), allow_clean_rebuild=True)
+    assert job is not None
+    review = current_review(library)
+    approve(scope[0], review, approve=False)
+    assert claim_next_job() is None
+    job.refresh_from_db()
+    review.refresh_from_db()
+    active.refresh_from_db()
+    assert job.status == "PENDING" and job.allow_clean_rebuild
+    assert review.decision == "rejected" and not review.consumed_at
+    assert active.status == "PUBLISHED"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("explicit", [False, True])
+def test_build_now_and_explicit_pending_coalescing_keep_distinct_intent(scope, crypto, explicit):
+    library = library_for(scope)
+    active = publish(scope[0], library)
+    services.rename_library(actor=scope[0], library_id=library.id, name="Changed")
+    pending = PublicationJob.objects.get(scope_state=active.scope_state, status="PENDING")
+    attempt_id = pending.build_publication_id
+    if explicit:
+        request_rebuild(actor=scope[0], **kwargs(library))
+    else:
+        build_staged_publication(actor=scope[0], scope=active.scope_state)
+    pending.refresh_from_db()
+    assert pending.trigger_type == "USER_REQUEST" and pending.allow_clean_rebuild == explicit
+    assert pending.build_publication_id == attempt_id
+    assert (
+        PublicationJob.objects.filter(scope_state=active.scope_state, status="PENDING").count() == 1
+    )
+    services.rename_library(actor=scope[0], library_id=library.id, name=library.name)
+    pending.refresh_from_db()
+    if explicit:
+        claimed = claim_next_job()
+        assert claimed is not None and claimed.id == pending.id
+        assert build_claimed_job(job_id=claimed.id).status == "SUCCEEDED"
+    else:
+        assert pending.status == "CANCELLED" and claim_next_job() is None
 
 
 def test_identical_changed_payload_coalesces_one_attempt_with_latest_storage_id(

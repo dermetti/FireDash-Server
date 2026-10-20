@@ -9,6 +9,18 @@ Only a match with the **active** publication is redundant. A match with a
 superseded generation still requires a new version and tablet update; eligible
 document artifacts can be reused by the existing document builder.
 
+An authorized explicit **Rebuild** persists `allow_clean_rebuild=True` and publishes
+a new generation even when it matches the active source. Build Now and ordinary
+bulk requests do not acquire this intent. Capacity admission is still mandatory
+at claim and finalization; an invalidated assessment cannot authorize activation.
+Timeout recovery retains intent on the job, and replacements for stale source or
+changed capacity retain it on the new attempt, requiring fresh approval when needed.
+Successful activation supersedes the old generation normally; eligible document
+artifacts may be reused without reusing the generation's delivery identity.
+This finalization correction needs no additional migration. Restart publication
+workers with the updated code; already terminal OBSOLETE attempts are retained
+and require a new explicit Rebuild rather than automatic resurrection.
+
 ## Deployment
 
 Apply migrations with the normal deployment procedure before restarting workers.

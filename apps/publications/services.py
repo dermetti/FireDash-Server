@@ -976,6 +976,7 @@ def finalize_publication_job(
         from apps.file_library.publication_capacity import retire_attempt_review
 
         retire_attempt_review(publication, actor=job.requested_by)
+        _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
         publication.save(update_fields=("status", "source_snapshot"))
@@ -998,7 +999,9 @@ def finalize_publication_job(
             department=job.department,
             station=job.station,
             dataset_type_code=job.dataset_type_code,
+            requested_by=job.requested_by,
             trigger_type=job.trigger_type,
+            allow_clean_rebuild=job.allow_clean_rebuild,
         )
         return job
     delivery_transition = (
@@ -1006,11 +1009,14 @@ def finalize_publication_job(
         and previous_current is not None
         and previous_current.schema_version != 2
     )
+    # Explicit Rebuild may publish identical content as a new delivery generation.
+    # Its persisted intent bypasses only deduplication, never admission below.
     if (
         previous_current is not None
         and previous_current.source_fingerprint
         and publication_source_fingerprint(previous_current) == source_fingerprint_value
         and not delivery_transition
+        and not job.allow_clean_rebuild
     ):
         from apps.file_library.publication_capacity import retire_attempt_review
 
@@ -1068,6 +1074,7 @@ def finalize_publication_job(
             dataset_type_code=job.dataset_type_code,
             requested_by=job.requested_by,
             trigger_type=job.trigger_type,
+            allow_clean_rebuild=job.allow_clean_rebuild,
         )
         return job
     if previous_current is not None:
