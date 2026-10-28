@@ -1,9 +1,20 @@
 from django.urls import path
 
-from apps.report_transfer.api import SubmissionStatusView, SubmissionView
+from apps.report_transfer.api import (
+    SubmissionStatusView,
+    SubmissionView,
+    TransferRevokeView,
+    TransferView,
+)
 from apps.tablets import api
 
 urlpatterns = [
+    path("tablet/report-transfers", TransferView.as_view(), name="api-report-transfers"),
+    path(
+        "tablet/report-transfers/<uuid:transfer_id>/revoke",
+        TransferRevokeView.as_view(),
+        name="api-report-transfer-revoke",
+    ),
     path("tablet/report-submissions", SubmissionView.as_view(), name="api-report-submissions"),
     path(
         "tablet/report-submissions/<uuid:submission_id>/status",

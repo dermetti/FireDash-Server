@@ -1,11 +1,14 @@
 """Private ciphertext-only spool. Never a Django public/media storage backend."""
 
+import json
 import os
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from django.conf import settings
 from django.db import connection
+from django.utils import timezone
 
 from apps.report_transfer.contract import TransferError
 
@@ -69,3 +72,57 @@ def write_payload(raw):
 
 def remove_payload(key):
     payload_path(key).unlink(missing_ok=True)
+
+
+def write_download_receipt(submission_pk, completed_at):
+    """Crash-recoverable completion metadata only; never content or bearer data."""
+    path = root() / f"{submission_pk}-{uuid4()}.receipt"
+    temporary = path.with_suffix(".receipt-tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="ascii") as output:
+        json.dump(
+            {"submission_pk": submission_pk, "completed_at": completed_at.isoformat()}, output
+        )
+        output.flush()
+        os.fsync(output.fileno())
+    os.replace(temporary, path)
+    if os.name == "posix":
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    return path
+
+
+def read_download_receipt(path):
+    try:
+        if path.is_symlink() or path.stat().st_size > 256:
+            raise ValueError
+        receipt = json.loads(path.read_text(encoding="ascii"))
+        pk = receipt["submission_pk"]
+        completed_at = datetime.fromisoformat(receipt["completed_at"])
+        if (
+            type(pk) is not int
+            or pk <= 0
+            or not path.name.startswith(f"{pk}-")
+            or timezone.is_naive(completed_at)
+            or completed_at > timezone.now()
+        ):
+            raise ValueError
+        return pk, completed_at
+    except (ValueError, KeyError, TypeError, UnicodeError):
+        raise TransferError("report_storage_unavailable", 503) from None
+
+
+def pending_downloads(submission_pk):
+    # A read must never provision storage, especially in status-only requests.
+    directory = Path(settings.REPORT_TRANSFER_ROOT)
+    timestamps = []
+    for path in directory.glob(f"{submission_pk}-*.receipt"):
+        try:
+            timestamps.append(read_download_receipt(path)[1])
+        except FileNotFoundError:
+            # A concurrent successful database reconciliation removed it.
+            continue
+    return timestamps

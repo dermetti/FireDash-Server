@@ -7,4 +7,14 @@ keepalive = 5
 accesslog = None
 errorlog = "-"
 capture_output = True
-access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
+# Even if access logging is enabled later, never include bearer paths, query
+# strings, Referer or attacker-controlled user-agent values.
+access_log_format = "%(h)s %(t)s %(m)s %(s)s %(b)s"
+
+
+def post_fork(server, worker):
+    from apps.report_transfer.security import TokenLogFilter
+
+    # Worker diagnostics may contain paths independently of the access logger.
+    server.log.error_log.addFilter(TokenLogFilter())
+    server.log.access_log.addFilter(TokenLogFilter())

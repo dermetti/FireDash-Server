@@ -1,0 +1,20 @@
+{% extends "report_transfer/portal_base.html" %}
+{% block title %}Sicherer Zugang{% endblock %}
+{% block content %}
+<section class="card access-card">
+  <p class="eyebrow">GESCHÜTZTER ZUGANG</p>
+  {% if token_state == "fresh" %}
+    <h1>Berichte sicher öffnen</h1>
+    <p class="muted">Sie erhalten Zugriff auf die für Sie bereitgestellten Berichte. Dieser Zugangslink kann nur einmal verwendet werden.</p>
+    <form method="post" action="{{ redeem_url }}">{% csrf_token %}<button class="btn btn-primary" type="submit">Sicher anmelden</button></form>
+  {% elif token_state == "used" %}
+    <h1>Dieser Zugangslink wurde bereits verwendet.</h1>
+    <p class="muted">Falls Sie sich nicht selbst angemeldet haben oder einen unberechtigten Zugriff vermuten, können Sie diesen Zugang sofort sperren.</p>
+    <div class="warning">Der Widerruf beendet auch bestehende Portal-Sitzungen für diesen Zugang.</div>
+    <form method="post" action="{{ revoke_url }}">{% csrf_token %}<button class="btn btn-danger" type="submit">Zugang unwiderruflich sperren</button></form>
+  {% else %}
+    <h1>Link nicht mehr gültig</h1>
+    <p class="muted">Dieser Zugangslink ist abgelaufen oder wurde gesperrt. Fordern Sie in der Tablet-App einen neuen Link an.</p>
+  {% endif %}
+</section>
+{% endblock %}

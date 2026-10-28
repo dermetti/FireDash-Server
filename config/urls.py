@@ -2,6 +2,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 urlpatterns = [
+    path("reports/", include("apps.report_transfer.urls")),
     path("api/v1/", include("apps.tablets.api_urls")),
     path("api/v1/schema/", SpectacularAPIView.as_view(), name="openapi-schema"),
     path(

@@ -35,3 +35,6 @@ def report_limits(app_configs, **kwargs):
 
 class ReportTransferConfig(AppConfig):
     name = "apps.report_transfer"
+
+    def ready(self):
+        from apps.report_transfer import security  # noqa: F401

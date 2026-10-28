@@ -1,0 +1,23 @@
+{% extends "report_transfer/portal_base.html" %}
+{% block title %}{{ document.title }}{% endblock %}
+{% block content %}
+<a href="{% url 'report-portal-list' %}" class="back-link">← Alle Berichte</a>
+<div class="page-heading"><p class="eyebrow">{{ document.report_type }}</p><h1>{{ document.title }}</h1><p class="muted">Finalisiert in der App (Client-Angabe): {{ document.finalization.finalized_at }}<br>Finalisierende Person (Client-Angabe): {{ document.finalization.author.display_name }} · {{ document.finalization.author.id }}<br>Serverannahme (serverseitig): {{ received_at|date:"d.m.Y H:i:s" }} UTC</p></div>
+<div class="layout"><div class="report-body">
+  <section class="card"><h2>Berichtsdaten</h2><dl class="key-values">{% for field in header_fields %}<div><dt>{{ field.label }}</dt><dd>{{ field.display_value }}</dd></div>{% endfor %}</dl><p class="muted small">Berichts-ID: {{ document.report_id }}<br>Dokumentprüfsumme: {{ document_digest }}</p></section>
+  {% for section in sections %}
+  <section class="card"><h2>{{ section.title }}</h2>
+    {% for block in section.blocks %}
+      {% if block.kind == "text" %}<p class="report-text">{{ block.text|linebreaksbr }}</p>
+      {% elif block.kind == "fields" %}<dl class="key-values">{% for field in block.display_fields %}<div><dt>{{ field.label }}</dt><dd>{{ field.display_value }}</dd></div>{% endfor %}</dl>
+      {% elif block.kind == "table" %}<div class="table-scroll"><table><thead><tr>{% for col in block.columns %}<th scope="col">{{ col.label }}</th>{% endfor %}</tr></thead><tbody>{% for row in block.display_rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+      {% elif block.kind == "attachment_refs" %}<ul>{% for photo in block.photos %}<li><a href="{{ photo.download_url }}">{{ photo.title }} (JPEG herunterladen)</a></li>{% endfor %}</ul>{% endif %}
+    {% endfor %}
+  </section>
+  {% endfor %}
+  <section class="card"><h2>Bilder ({{ photos|length }})</h2><div class="photo-grid">
+    {% for photo in photos %}<article class="photo"><img src="{{ photo.preview_url }}" alt="{{ photo.title }}" loading="lazy"><div class="photo-info"><h3>{{ photo.title }}</h3><p class="muted">{{ photo.caption }}</p><a href="{{ photo.download_url }}">JPEG herunterladen</a></div></article>
+    {% empty %}<p class="muted">Keine Bilder vorhanden.</p>{% endfor %}
+  </div></section>
+</div><aside><section class="card download-card"><h2>Bericht herunterladen</h2><p class="muted">PDF zur Übernahme in das Berichtssystem SyBOS.</p><a class="btn btn-primary btn-full" href="{{ pdf_url }}">PDF herunterladen</a><hr><p class="muted">Verfügbar bis</p><p class="expiry">{{ expires_at|date:"d.m.Y H:i" }} UTC</p><p class="muted small">Nach dem ersten Download noch maximal 48 Stunden, insgesamt höchstens 7 Tage ab Bereitstellung.</p></section></aside></div>
+{% endblock %}

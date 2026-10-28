@@ -1,0 +1,11 @@
+[Unit]
+Description=Expire temporary FireDash reports every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=fire-report-expiry.service
+
+[Install]
+WantedBy=timers.target

@@ -47,3 +47,35 @@ class SubmissionStatusView(ReportAPIView):
         return Response(
             services.status(installation=self.installation, submission_id=submission_id)
         )
+
+
+class BoundedTransferParser(parsers.BaseParser):
+    media_type = "application/json"
+
+    def parse(self, stream, media_type=None, parser_context=None):
+        raw = stream.read(4097)
+        if len(raw) > 4096:
+            raise TransferError("request_too_large", 413)
+        return parse_json(raw)
+
+
+class TransferView(ReportAPIView):
+    parser_classes = [BoundedTransferParser]
+
+    @extend_schema(
+        request={"application/json": {"type": "object"}},
+        responses={201: {"type": "object"}, 200: {"type": "object"}},
+    )
+    def post(self, request):
+        from apps.report_transfer.transfers import request_transfer
+
+        result, created = request_transfer(installation=self.installation, data=request.data)
+        return Response(result, status=201 if created else 200)
+
+
+class TransferRevokeView(ReportAPIView):
+    @extend_schema(responses={200: {"type": "object"}})
+    def post(self, request, transfer_id):
+        from apps.report_transfer.transfers import revoke_tablet
+
+        return Response(revoke_tablet(installation=self.installation, transfer_id=transfer_id))

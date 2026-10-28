@@ -1,0 +1,19 @@
+{% load static %}
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>{% block title %}Berichtsportal{% endblock %} · FireDash</title>
+  <link rel="stylesheet" href="{% static 'report_transfer/portal.css' %}">
+</head>
+<body>
+  <header class="site-header"><div class="container header-inner">
+    <div class="brand"><span class="brand-icon">F</span><div>FireDash <small>Berichtsportal</small></div></div>
+    {% if portal_authenticated %}<form method="post" action="{% url 'report-portal-logout' %}">{% csrf_token %}<button class="text-button">Abmelden</button></form>{% endif %}
+  </div></header>
+  <main class="container main-content">{% block content %}{% endblock %}</main>
+  <footer class="container footer">FireDash · Sichere temporäre Berichtsübermittlung</footer>
+</body>
+</html>

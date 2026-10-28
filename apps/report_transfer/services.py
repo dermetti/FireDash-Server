@@ -131,6 +131,9 @@ def effective_expiry(row):
     deadline = min(row.expires_at, row.created_at + timedelta(days=7))
     if row.first_download_at:
         deadline = min(deadline, row.first_download_at + timedelta(hours=48))
+    for completed_at in storage.pending_downloads(row.pk):
+        if completed_at >= row.created_at:
+            deadline = min(deadline, completed_at + timedelta(hours=48))
     return deadline
 
 
@@ -147,7 +150,7 @@ def record_successful_download(*, submission_pk, completed_at=None):
             completed_at = now
         require(isinstance(completed_at, datetime) and timezone.is_aware(completed_at))
         require(row.created_at <= completed_at <= now)
-        if row.state != "READY" or effective_expiry(row) <= now:
+        if row.state != "READY" or effective_expiry(row) <= completed_at:
             raise TransferError("submission_expired", 410)
         if row.first_download_at is None or completed_at < row.first_download_at:
             row.first_download_at = completed_at
@@ -159,6 +162,19 @@ def record_successful_download(*, submission_pk, completed_at=None):
 def cleanup(*, now=None):
     now = now or timezone.now()
     expired = failed = orphans = 0
+    # Retry only durable evidence of an already completed explicit download.
+    # This never fabricates an event for previews or interrupted streams.
+    for path in storage.root().glob("*.receipt"):
+        try:
+            pk, completed_at = storage.read_download_receipt(path)
+            row = ReportSubmission.objects.filter(pk=pk).first()
+            if row is not None and row.state == "READY":
+                record_successful_download(submission_pk=pk, completed_at=completed_at)
+            path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            continue
+        except (OSError, TransferError):
+            failed += 1
     # One transaction per expired row: an unlink failure preserves the reference
     # for retry; a crash after unlink is safe because missing files are success.
     for pk in (
@@ -196,4 +212,11 @@ def cleanup(*, now=None):
                     orphans += 1
                 except (OSError, TransferError):
                     failed += 1
+        for path in storage.root().glob("*.receipt-tmp"):
+            try:
+                if path.stat().st_mtime < (now - timedelta(hours=1)).timestamp():
+                    path.unlink(missing_ok=True)
+                    orphans += 1
+            except OSError:
+                failed += 1
     return {"expired": expired, "orphans": orphans, "failed": failed}

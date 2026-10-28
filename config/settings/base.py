@@ -62,6 +62,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "apps.report_transfer.security.PortalSecurityMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "apps.audit.middleware.RequestContextMiddleware",
     "apps.accounts.middleware.ReauthRedirectMiddleware",
@@ -348,6 +349,8 @@ REPORT_TRANSFER_MAX_IMAGE_PIXELS = get_typed_env(
 )
 # Product ceiling: seven days from server acceptance; first explicit download may shorten it.
 REPORT_TRANSFER_RETENTION_HOURS = get_typed_env("REPORT_TRANSFER_RETENTION_HOURS", int, default=168)
+REPORT_TRANSFER_MAILS_PER_MINUTE = get_typed_env("REPORT_TRANSFER_MAILS_PER_MINUTE", int, default=3)
+REPORT_TRANSFER_MAILS_PER_HOUR = get_typed_env("REPORT_TRANSFER_MAILS_PER_HOUR", int, default=10)
 
 # Optional deployment-owned HTTPS egress proxy for outbound mail providers.
 # This is intentionally not a database/admin setting.
@@ -379,8 +382,19 @@ TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1"
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "filters": {"report_tokens": {"()": "apps.report_transfer.security.TokenLogFilter"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "filters": ["report_tokens"]}},
     "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "django.server": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+            "filters": ["report_tokens"],
+        },
+        "django.request": {"filters": ["report_tokens"]},
+        "django.security.csrf": {"filters": ["report_tokens"]},
+    },
 }
 
 REST_FRAMEWORK = {

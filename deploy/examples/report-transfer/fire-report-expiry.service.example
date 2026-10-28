@@ -1,0 +1,22 @@
+[Unit]
+Description=Expire temporary FireDash report ciphertext
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=fire_backend
+Group=fire_backend
+WorkingDirectory=/srv/firedash/current
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+EnvironmentFile=/etc/fire-backend/fire-backend.env
+ExecStart=/srv/firedash/current/venv/bin/python manage.py expire_report_submissions
+TimeoutStartSec=120s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/spool/firedash-reports
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

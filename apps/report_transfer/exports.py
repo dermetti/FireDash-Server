@@ -1,4 +1,4 @@
-"""Authorized in-memory exports for later portal use; no HTTP/download events."""
+"""Separately authorized tablet and portal payload loaders, shared integrity checks."""
 
 import hashlib
 
@@ -38,17 +38,34 @@ def load_submission(*, installation, submission_id):
             raise TransferError("submission_not_found", 404)
         if row.state != "READY" or effective_expiry(row) <= timezone.now():
             raise TransferError("submission_expired", 410)
-        if row.document_schema_version != 1:
-            raise TransferError("legacy_report_document", 409)
-        raw = storage.payload_path(row.payload_key).read_bytes()
-        if hashlib.sha256(raw).hexdigest() != row.payload_digest:
-            raise TransferError("report_integrity_failure", 409)
-        envelope = parse_json(raw)
-        header = inspect_envelope(envelope)
-        document, attachments, digest = decrypt_and_validate(envelope, header)
-        if digest != row.document_digest or document["report_id"] != str(row.report_id):
-            raise TransferError("report_integrity_failure", 409)
-        return row, document, attachments
+        return load_verified_payload(row)
+
+
+@sensitive_variables()
+def load_verified_payload(row):
+    """Internal primitive: caller MUST authorize the row and guard cleanup/read."""
+    if row.document_schema_version != 1:
+        raise TransferError("legacy_report_document", 409)
+    raw = storage.payload_path(row.payload_key).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != row.payload_digest:
+        raise TransferError("report_integrity_failure", 409)
+    envelope = parse_json(raw)
+    header = inspect_envelope(envelope)
+    document, attachments, digest = decrypt_and_validate(envelope, header)
+    if digest != row.document_digest or document["report_id"] != str(row.report_id):
+        raise TransferError("report_integrity_failure", 409)
+    return row, document, attachments
+
+
+def load_portal_submission(request, report_id):
+    from apps.report_transfer.transfers import portal_context
+
+    with transaction.atomic():
+        _, rows = portal_context(request, report_id=report_id)
+        row = ReportSubmission.objects.select_for_update().get(pk=rows[0].pk)
+        if row.state != "READY" or effective_expiry(row) <= timezone.now():
+            raise TransferError("submission_expired", 410)
+        return load_verified_payload(row)
 
 
 @sensitive_variables()

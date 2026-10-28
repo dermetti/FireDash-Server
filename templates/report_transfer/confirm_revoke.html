@@ -1,0 +1,9 @@
+{% extends "report_transfer/portal_base.html" %}
+{% block title %}Zugang sperren{% endblock %}
+{% block content %}
+<section class="card access-card">
+  <h1>Zugang wirklich sperren?</h1>
+  <p class="warning">Alle Portal-Sitzungen dieses Zugangs werden unwiderruflich gesperrt. Einen neuen Zugang können Sie in der Tablet-App anfordern.</p>
+  <form method="post" action="{{ action_url }}">{% csrf_token %}<input type="hidden" name="confirm" value="yes"><button class="btn btn-danger" type="submit">Ja, diesen Zugang endgültig sperren</button></form>
+</section>
+{% endblock %}
