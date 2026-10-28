@@ -160,73 +160,6 @@ def _allocate_staged_publication(
     )
 
 
-@transaction.atomic
-def cut_over_fire_plan_scope_to_document_manifest(
-    *, actor, scope: DatasetScopeState
-) -> DatasetScopeState:
-    """Explicitly select v2 delivery and queue its first normal build."""
-    require_publication_scope(
-        actor,
-        department=scope.department,
-        station=scope.station,
-        dataset_type_code=scope.dataset_type_code,
-    )
-    locked = _locked_scope(
-        department=scope.department,
-        station=scope.station,
-        dataset_type_code=scope.dataset_type_code,
-    )
-    if locked.dataset_type_code != "department_fire_plans" or locked.station_id is not None:
-        raise PublicationError(
-            "Only department Fire Plan scopes support document-manifest cutover."
-        )
-    if locked.delivery_format == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2:
-        current = locked.current_published_publication
-        if current is not None and current.schema_version == 2:
-            return locked
-        if (
-            PublicationJob.objects.select_for_update()
-            .filter(
-                scope_state=locked,
-                status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
-            )
-            .exists()
-        ):
-            return locked
-    if (
-        PublicationJob.objects.select_for_update()
-        .filter(
-            scope_state=locked,
-            status__in=(PublicationJob.Status.PENDING, PublicationJob.Status.RUNNING),
-        )
-        .exists()
-    ):
-        raise PublicationError("A publication update is already staged or building.")
-    if locked.delivery_format != DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2:
-        locked.delivery_format = DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
-        locked.save(update_fields=("delivery_format", "updated_at"))
-    transaction.on_commit(
-        lambda: enqueue_publication_job(
-            department=locked.department,
-            station=locked.station,
-            dataset_type_code=locked.dataset_type_code,
-            requested_by=actor,
-            trigger_type=PublicationJob.TriggerType.USER_REQUEST,
-            allow_clean_rebuild=True,
-        )
-    )
-    transaction.on_commit(wake_publication_build_worker)
-    record_event(
-        action="publication.fire_plan_document_manifest_cutover_requested",
-        actor_user=actor,
-        department=locked.department,
-        target_type="dataset_scope_state",
-        target_uuid=locked.id,
-        metadata={"dataset_type_code": locked.dataset_type_code},
-    )
-    return locked
-
-
 def _current_source_snapshot(*, scope: DatasetScopeState) -> dict[str, Any]:
     return build_source_payload(
         definition=get_dataset_definition(scope.dataset_type_code),
@@ -713,6 +646,7 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             error_message="Claim did not allocate a publication.",
         )
     artifact: dict[str, Any] | None = None
+    created_document_artifacts = []
     try:
         definition = get_dataset_definition(job.dataset_type_code)
         _validate_scope(
@@ -776,7 +710,9 @@ def build_claimed_job(*, job_id) -> PublicationJob:
                 if publication.status != DatasetPublication.Status.BUILDING:
                     return PublicationJob.objects.get(pk=job.id)
                 try:
-                    build_document_v2_generation(publication=publication)
+                    build_document_v2_generation(
+                        publication=publication, created_artifacts=created_document_artifacts
+                    )
                     build_document_v2_manifest(publication=publication)
                 except (DocumentV2Error, KeyGrantError, InvalidUnwrap) as error:
                     raise PublicationBuildError("Document encryption or signing failed.") from error
@@ -823,6 +759,19 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             error_message="Publication could not be finalized.",
             error_category="finalization",
         )
+    finally:
+        # A generation transaction can roll back after ciphertext promotion.
+        # Track only this build's freshly allocated IDs, never scan historical
+        # files or remove a reused artifact as compensation.
+        from apps.publications.document_artifacts import _schedule_document_artifact_removal
+        from apps.publications.models import DocumentArtifact
+
+        for artifact_id, artifact_path in created_document_artifacts:
+            with transaction.atomic():
+                if not DocumentArtifact.objects.filter(pk=artifact_id).exists():
+                    _schedule_document_artifact_removal(
+                        artifact_id=artifact_id, artifact_path=artifact_path
+                    )
 
 
 def _is_publication_guard_error(error: DatabaseError) -> bool:
@@ -961,18 +910,12 @@ def finalize_publication_job(
             allow_clean_rebuild=job.allow_clean_rebuild,
         )
         return job
-    delivery_transition = (
-        publication.schema_version == 2
-        and previous_current is not None
-        and previous_current.schema_version != 2
-    )
     # Explicit Rebuild may publish identical content as a new delivery generation.
     # Its persisted intent bypasses only deduplication.
     if (
         previous_current is not None
         and previous_current.source_fingerprint
         and publication_source_fingerprint(previous_current) == source_fingerprint_value
-        and not delivery_transition
         and not job.allow_clean_rebuild
     ):
         _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
@@ -1649,6 +1592,9 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
         )
     ):
         raise PublicationError("Rollback target has no usable artifact.")
+    definition = get_dataset_definition(publication.dataset_type_code)
+    if publication.schema_version not in definition.supported_schema_versions:
+        raise PublicationError("Restore target has an unsupported dataset schema.")
     previous = scope.current_published_publication
     if previous is None:
         raise PublicationError("Dataset scope has no current publication.")

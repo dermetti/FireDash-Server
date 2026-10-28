@@ -40,10 +40,10 @@ from apps.publications.models import (
     DatasetKeyGrant,
     DatasetPublication,
     DatasetScopeState,
-    FirePlanGenerationManifest,
+    DocumentGenerationKey,
+    DocumentGenerationManifest,
     SignedManifest,
 )
-from apps.publications.paths import publication_artifact_relative_path
 from apps.publications.worker_grants import process_next_signed_manifest
 from apps.tablets.api import DownloadView
 from apps.tablets.models import AppInstallation, Tablet
@@ -367,58 +367,50 @@ def test_current_document_generation_is_discovered_without_a_v1_grant(api_contex
     scope = DatasetScopeState.objects.create(
         department=department, dataset_type_code="department_fire_plans", source_revision=1
     )
-    publication_id = uuid.uuid4()
     current = DatasetPublication.objects.create(
-        id=publication_id,
         department=department,
         dataset_type_code="department_fire_plans",
         scope_state=scope,
         version_number=7,
-        schema_version=1,
+        schema_version=2,
         source_revision=1,
-        status=DatasetPublication.Status.PUBLISHED,
-        artifact_ready=True,
-        artifact_status=DatasetPublication.ArtifactStatus.READY,
-        artifact_path=publication_artifact_relative_path(
-            department_id=department.id, publication_id=publication_id
-        ),
-        artifact_size=1,
-        artifact_sha256="d" * 64,
-        artifact_nonce=b"n" * 12,
-        artifact_wrapped_cek=b"k" * 40,
-        artifact_encryption_algorithm="AES-256-GCM",
-        artifact_wrapping_algorithm="AES-KW-RFC3394",
-        artifact_kek_version="1",
-        artifact_signature=b"s" * 64,
-        artifact_signature_algorithm="Ed25519",
-        artifact_signing_key_version="1",
+        source_snapshot={"fire_plans": []},
+        status="BUILDING",
     )
-    scope.current_published_publication = current
-    scope.save(update_fields=("current_published_publication",))
-    FirePlanGenerationManifest.objects.create(
+    DocumentGenerationKey.objects.create(
         publication=current,
-        payload={"format": "fire-plan-generation-v2", "documents": []},
+        wrapped_key=b"k" * 40,
+        wrapping_algorithm="AES-KW-RFC3394",
+        kek_version="1",
+    )
+    DocumentGenerationManifest.objects.create(
+        publication=current,
+        payload={
+            "format": "document-generation-v2",
+            "dataset_type": "department_fire_plans",
+            "publication_id": str(current.id),
+            "version": 7,
+            "schema_version": 2,
+            "documents": [],
+        },
         signature=b"s" * 64,
         signature_algorithm="Ed25519",
         signing_key_version="1",
     )
-    dormant_id = uuid.uuid4()
+    current.status = "PUBLISHED"
+    current.artifact_ready = True
+    current.artifact_status = "READY"
+    current.save(update_fields=("status", "artifact_ready", "artifact_status"))
+    scope.current_published_publication = current
+    scope.save(update_fields=("current_published_publication",))
     dormant = DatasetPublication.objects.create(
-        id=dormant_id,
         department=department,
         dataset_type_code="department_fire_plans",
         scope_state=scope,
         version_number=8,
-        schema_version=1,
+        schema_version=2,
         source_revision=2,
-        status=DatasetPublication.Status.BUILDING,
-    )
-    FirePlanGenerationManifest.objects.create(
-        publication=dormant,
-        payload={"format": "fire-plan-generation-v2", "documents": []},
-        signature=b"s" * 64,
-        signature_algorithm="Ed25519",
-        signing_key_version="1",
+        status="BUILDING",
     )
     signing_path = tmp_path / "signing"
     signing_path.write_bytes(b"s" * 32)
@@ -440,7 +432,7 @@ def test_current_document_generation_is_discovered_without_a_v1_grant(api_contex
         "required": True,
         "minimum_app_version": None,
         "artifact_format": "document-manifest-v2",
-        "manifest_url": f"/api/v1/tablet/fire-plan-generations/{current.id}/manifest",
+        "manifest_url": f"/api/v1/tablet/document-generations/{current.id}/manifest",
     }
     assert all(entry["publication_id"] != str(dormant.id) for entry in entries)
     assert not DatasetKeyGrant.objects.filter(publication=current).exists()

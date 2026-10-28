@@ -310,10 +310,6 @@ def test_normal_worker_builds_generic_generation_without_companion(
 
     monkeypatch.setattr("apps.publications.services.build_artifact", forbidden)
     monkeypatch.setattr("apps.publications.services.build_encrypted_artifact", forbidden)
-    monkeypatch.setattr("apps.publications.fire_plan_v2.build_fire_plan_v2_generation", forbidden)
-    monkeypatch.setattr(
-        "apps.publications.fire_plan_v2_delivery.build_fire_plan_v2_manifest", forbidden
-    )
     user, department, scope, accepted, _, _, _ = v2_delivery_context
     DepartmentMembership.objects.create(user=user, department=department, created_by=user)
     _plan(user, department, accepted, "Canonical", b"PDF canonical")
@@ -337,7 +333,7 @@ def test_normal_worker_builds_generic_generation_without_companion(
     assert publication.artifact_path == ""
     assert publication.artifact_size is None
     assert not hasattr(publication, "fire_plan_generation_manifest")
-    assert not publication.fire_plan_artifact_references.exists()
+    assert not hasattr(publication, "fire_plan_artifact_references")
     assert not (
         settings.PUBLICATION_ARTIFACT_ROOT / str(department.id) / str(publication.id)
     ).exists()
@@ -526,40 +522,6 @@ def test_postgresql_generic_crypto_and_membership_are_immutable(v2_delivery_cont
 
 
 @pytest.mark.django_db(transaction=True)
-def test_forward_migration_allows_complete_fire_plan_without_zip(v2_delivery_context):
-    from django.db import DatabaseError, connection, transaction
-    from django.db.migrations.executor import MigrationExecutor
-
-    user, department, scope, accepted, _, _, _ = v2_delivery_context
-    _plan(user, department, accepted, "A", b"PDF A")
-    executor = MigrationExecutor(connection)
-    latest = executor.loader.graph.leaf_nodes()
-    before = [
-        (app, "0030_correct_legacy_bulk_rebuild_intent") if app == "publications" else (app, name)
-        for app, name in latest
-    ]
-    executor.migrate(before)
-    try:
-        publication = _generation(department, scope, 1)
-        build_document_v2_generation(publication=publication)
-        build_document_v2_manifest(publication=publication)
-        with pytest.raises(DatabaseError, match="complete ready artifacts"):
-            with transaction.atomic():
-                DatasetPublication.objects.filter(pk=publication.pk).update(
-                    status="PUBLISHED", artifact_status="READY", artifact_ready=True
-                )
-        MigrationExecutor(connection).migrate(latest)
-        DatasetPublication.objects.filter(pk=publication.pk).update(
-            status="PUBLISHED", artifact_status="READY", artifact_ready=True
-        )
-        publication.refresh_from_db()
-        assert publication.status == "PUBLISHED" and publication.artifact_path == ""
-        assert publication.artifact_size is None
-    finally:
-        MigrationExecutor(connection).migrate(latest)
-
-
-@pytest.mark.django_db(transaction=True)
 def test_delivery_lane_uses_only_generic_fire_plan_grants(v2_delivery_context, monkeypatch):
     from apps.publications.document_v2 import request_generation_key_grant
     from apps.publications.work_cycle import process_delivery_cycle
@@ -568,13 +530,6 @@ def test_delivery_lane_uses_only_generic_fire_plan_grants(v2_delivery_context, m
     publication = _publish_generic(department, scope)
     request_generation_key_grant(publication=publication, installation=installation)
 
-    def forbidden():
-        pytest.fail("Delivery lane must not invoke the legacy Fire Plan grant worker")
-
-    monkeypatch.setattr(
-        "apps.publications.fire_plan_v2_delivery.process_next_fire_plan_v2_generation_key_grant",
-        forbidden,
-    )
     result = process_delivery_cycle(batch_size=1)
     assert result.key_grants == 1
     assert DocumentGenerationKeyGrant.objects.get(publication=publication).status == "READY"
@@ -693,7 +648,9 @@ def test_generic_endpoints_enforce_app_version(v2_delivery_context):
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("failure", ["pdf", "signing"])
+@pytest.mark.parametrize(
+    "failure", ["pdf", "signing", "signing_new", "missing", "truncated", "corrupted"]
+)
 def test_generic_fire_plan_worker_failure_preserves_current_publication(
     v2_delivery_context, monkeypatch, failure
 ):
@@ -704,7 +661,19 @@ def test_generic_fire_plan_worker_failure_preserves_current_publication(
     current = _publish_generic(department, scope)
     if failure == "pdf":
         (accepted / plan.document_key).unlink()
+    elif failure in {"missing", "truncated", "corrupted"}:
+        artifact = current.document_artifact_references.get().document_artifact
+        path = settings.PUBLICATION_ARTIFACT_ROOT / artifact.artifact_path
+        ciphertext = path.read_bytes()
+        if failure == "missing":
+            path.unlink()
+        elif failure == "truncated":
+            path.write_bytes(ciphertext[:-1])
+        else:
+            path.write_bytes(bytes([ciphertext[0] ^ 1]) + ciphertext[1:])
     else:
+        if failure == "signing_new":
+            _plan(user, department, accepted, "B", b"PDF B")
 
         def fail_signature(**kwargs):
             raise KeyGrantError("Signing credential unavailable")
@@ -726,6 +695,15 @@ def test_generic_fire_plan_worker_failure_preserves_current_publication(
     scope.refresh_from_db()
     assert scope.current_published_publication_id == current.id
     assert current.document_artifact_references.count() == 1
+    if failure == "signing_new":
+        from apps.publications.models import DocumentArtifact, DocumentArtifactCleanup
+
+        assert DocumentArtifact.objects.count() == 1
+        assert not DocumentArtifactCleanup.objects.exists()
+        assert (
+            len(list((settings.PUBLICATION_ARTIFACT_ROOT / "documents").glob("*/artifact.bin")))
+            == 1
+        )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -742,13 +720,143 @@ def test_signed_generic_manifest_preserves_frozen_fire_plan_metadata(v2_delivery
     plan.save(update_fields=("fsd_location", "bmz_location", "rwa_info", "location"))
     publication = _publish_generic(department, scope)
     metadata = publication.document_generation_manifest.payload["documents"][0]["fire_plan"]
-    assert metadata == {
-        key: value
-        for key, value in publication.source_snapshot["fire_plans"][0].items()
-        if key != "path"
-    }
+    assert metadata == publication.source_snapshot["fire_plans"][0]
+    assert "path" not in metadata
     assert metadata["fsd_location"] == ("FSD entrance" if optional else None)
     assert metadata["bmz_location"] == ("BMZ upstairs" if optional else None)
     assert metadata["rwa_info"] == ("RWA manual" if optional else None)
     assert metadata["longitude"] == (10.09873774 if optional else None)
     assert metadata["latitude"] == (53.59229519 if optional else None)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("generation_wrapped_cek", None),
+        ("generation_wrapped_cek", 123),
+        ("generation_wrapped_cek", []),
+        ("generation_wrapped_cek", {}),
+        ("generation_wrapped_cek", "invalid"),
+        ("ciphertext_size", "123"),
+        ("nonce", None),
+        ("signature", []),
+        ("encryption_algorithm", "wrong"),
+    ],
+)
+def test_malformed_stored_document_metadata_fails_validation(v2_delivery_context, field, value):
+    from copy import deepcopy
+
+    from django.db import DatabaseError, transaction
+
+    from apps.publications.document_v2 import DocumentV2Error, validate_ready_document_generation
+    from apps.publications.models import DocumentGenerationManifest
+
+    user, department, scope, accepted, _, _, _ = v2_delivery_context
+    _plan(user, department, accepted, "A", b"PDF A")
+    publication = _generation(department, scope, 1)
+    build_document_v2_generation(publication=publication)
+    manifest = build_document_v2_manifest(publication=publication)
+    payload = deepcopy(manifest.payload)
+    payload["documents"][0][field] = value
+    manifest.delete()  # BUILDING generation: replace only in this negative test.
+    DocumentGenerationManifest.objects.create(
+        publication=publication,
+        payload=payload,
+        signature=b"s" * 64,
+        signature_algorithm="Ed25519",
+        signing_key_version="test",
+    )
+    with pytest.raises(DocumentV2Error):
+        validate_ready_document_generation(publication)
+    with pytest.raises(DatabaseError, match="complete ready document"):
+        with transaction.atomic():
+            DatasetPublication.objects.filter(pk=publication.pk).update(
+                status="PUBLISHED", artifact_status="READY", artifact_ready=True
+            )
+
+
+def test_obsolete_routes_and_schema_entries_are_absent():
+    from django.urls import NoReverseMatch, Resolver404, resolve, reverse
+    from drf_spectacular.generators import SchemaGenerator
+
+    publication_id, artifact_id = uuid.uuid4(), uuid.uuid4()
+    for path in (
+        f"/api/v1/tablet/fire-plan-generations/{publication_id}/manifest",
+        f"/api/v1/tablet/fire-plan-generations/{publication_id}/artifacts/{artifact_id}/download",
+    ):
+        with pytest.raises(Resolver404):
+            resolve(path)
+    with pytest.raises(NoReverseMatch):
+        reverse("publications-scope-fire-plan-document-manifest-cutover", args=(publication_id,))
+    schema = SchemaGenerator().get_schema(request=None, public=True)
+    assert not any("fire-plan-generations" in path for path in schema["paths"])
+    assert resolve(f"/api/v1/tablet/document-generations/{publication_id}/manifest")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_authorization_precedes_matching_artifact_etag(v2_delivery_context):
+    from apps.publications.document_v2 import request_generation_key_grant
+
+    user, department, scope, accepted, installation, _, credential = v2_delivery_context
+    _plan(user, department, accepted, "A", b"PDF A")
+    publication = _publish_generic(department, scope)
+    request_generation_key_grant(publication=publication, installation=installation)
+    process_next_generation_key_grant()
+    artifact = publication.document_artifact_references.get().document_artifact
+    grant = DocumentGenerationKeyGrant.objects.get(publication=publication)
+    grant.status = "REVOKED"
+    grant.save(update_fields=("status",))
+    response = Client().get(
+        f"/api/v1/tablet/document-generations/{publication.id}/artifacts/{artifact.id}/download",
+        HTTP_AUTHORIZATION=f"Bearer {credential}",
+        HTTP_IF_NONE_MATCH=f'"{artifact.ciphertext_sha256}"',
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db(transaction=True)
+def test_document_descriptor_rejects_missing_generation_and_obsolete_schema(v2_delivery_context):
+    from apps.publications.manifests import ManifestError, _publication_manifest_entry
+
+    _, department, scope, _, _, _, _ = v2_delivery_context
+    publication = _generation(department, scope, 1)
+    with pytest.raises(ManifestError, match="complete generic"):
+        _publication_manifest_entry(publication)
+    publication.schema_version = 1
+    with pytest.raises(ManifestError, match="complete generic"):
+        _publication_manifest_entry(publication)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_restore_valid_generic_generation_after_pdf_replacement(v2_delivery_context):
+    from apps.publications.services import rollback_publication
+
+    user, department, scope, accepted, installation, _, credential = v2_delivery_context
+    DepartmentMembership.objects.create(user=user, department=department, created_by=user)
+    plan = _plan(user, department, accepted, "A", b"PDF A")
+    first = _publish_generic(department, scope)
+    original = first.document_artifact_references.get().document_artifact
+    first.status = "SUPERSEDED"
+    first.save(update_fields=("status",))
+    replacement = b"PDF replacement"
+    plan.sha256 = hashlib.sha256(replacement).hexdigest()
+    plan.file_size = len(replacement)
+    plan.save(update_fields=("sha256", "file_size"))
+    (accepted / plan.document_key).write_bytes(replacement)
+    second = _publish_generic(department, scope, version=2)
+    assert second.document_artifact_references.get().document_artifact_id != original.id
+    rollback_publication(actor=user, publication=first)
+    scope.refresh_from_db()
+    second.refresh_from_db()
+    assert scope.current_published_publication_id == first.id
+    assert second.status == "SUPERSEDED"
+    from apps.publications.document_v2 import request_generation_key_grant
+
+    request_generation_key_grant(publication=first, installation=installation)
+    process_next_generation_key_grant()
+    response = Client().get(
+        f"/api/v1/tablet/document-generations/{first.id}/artifacts/{original.id}/download",
+        HTTP_AUTHORIZATION=f"Bearer {credential}",
+    )
+    assert response.status_code == 200

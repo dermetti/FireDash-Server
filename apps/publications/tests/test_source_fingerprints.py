@@ -87,7 +87,8 @@ def test_document_source_manifest_uses_stable_sanitized_pdf_hash_and_logical_met
     payload = build_source_payload(definition=definition, department=department, station=None)
     original = source_fingerprint(definition=definition, department=department, station=None)
     assert payload["fire_plans"][0]["sha256"] == "a" * 64
-    assert payload["fire_plans"][0]["path"] == f"plans/{plan.id}.pdf"
+    assert payload["fire_plans"][0]["id"] == str(plan.id)
+    assert "path" not in payload["fire_plans"][0]
 
     plan.source_pdf_sha256 = "c" * 64
     plan.save(update_fields=("source_pdf_sha256",))
@@ -110,7 +111,6 @@ def test_source_diff_uses_the_canonical_payload_and_hides_pdf_hash_values():
                 "object_name": "Station plan",
                 "address": "Old street 1",
                 "sha256": "a" * 64,
-                "path": "plans/plan-1.pdf",
             }
         ]
     }
@@ -121,13 +121,11 @@ def test_source_diff_uses_the_canonical_payload_and_hides_pdf_hash_values():
                 "object_name": "Station plan",
                 "address": "New street 1",
                 "sha256": "b" * 64,
-                "path": "plans/plan-1.pdf",
             },
             {
                 "id": "plan-2",
                 "object_name": "New plan",
                 "sha256": "c" * 64,
-                "path": "plans/plan-2.pdf",
             },
         ]
     }

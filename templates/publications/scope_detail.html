@@ -7,9 +7,6 @@
 <p class="text-body-secondary">Publication history and current distributed state for this dataset scope.</p>
 
 <section class="mb-4">{% include "publications/_scope_detail_status.html" %}</section>
-{% if scope.dataset_type_code == "department_fire_plans" and scope.station_id is None and scope.delivery_format == "V1_ARTIFACT" %}
-<section class="mb-4"><form method="post" action="{% url 'publications-scope-fire-plan-document-manifest-cutover' scope.id %}">{% csrf_token %}<button class="btn btn-warning" type="submit">Migrate this Fire Plan scope to document-manifest v2</button></form></section>
-{% endif %}
 
 {% include "publications/_scope_actions.html" %}
 

@@ -22,7 +22,7 @@ CORRECTION = "0030_correct_legacy_bulk_rebuild_intent"
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("upgrade", [False, True])
-def test_legacy_queue_migration_fresh_and_upgrade_paths(upgrade):
+def test_legacy_queue_migration_fresh_and_upgrade_paths(upgrade, disposable_migration_database):
     executor = MigrationExecutor(connection)
     leaves = executor.loader.graph.leaf_nodes()
     before = "0029_publicationjob_allow_clean_rebuild" if upgrade else "0028_file_library_registry"

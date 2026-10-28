@@ -327,3 +327,205 @@ def test_existing_generation_rechecks_accepted_pdf(v2_context):
     (root / plan.document_key).write_bytes(b"changed bytes")
     with pytest.raises(PublicationBuildError, match="hash"):
         build_document_v2_generation(publication=publication)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("damage", ["missing", "truncated", "corrupted", "inaccessible", "none"])
+def test_reused_ciphertext_storage_is_verified(v2_context, monkeypatch, damage):
+    from pathlib import Path
+
+    from django.conf import settings
+
+    from apps.publications.document_v2 import DocumentV2Error
+
+    admin, department, scope, accepted = v2_context
+    _plan(admin=admin, department=department, accepted_root=accepted, identifier="A", pdf=b"PDF A")
+    first = _building_publication(department=department, scope=scope, version=1)
+    reference = build_document_v2_generation(publication=first)[0]
+    artifact = reference.document_artifact
+    path = settings.PUBLICATION_ARTIFACT_ROOT / artifact.artifact_path
+    original = path.read_bytes()
+    if damage == "missing":
+        path.unlink()
+    elif damage == "truncated":
+        path.write_bytes(original[:-1])
+    elif damage == "corrupted":
+        path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+    elif damage == "inaccessible":
+        real_open = Path.open
+
+        def denied(target, *args, **kwargs):
+            if target == path:
+                raise PermissionError("Test storage unavailable")
+            return real_open(target, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", denied)
+    second = _building_publication(department=department, scope=scope, version=2)
+    if damage == "none":
+        assert (
+            build_document_v2_generation(publication=second)[0].document_artifact_id == artifact.id
+        )
+    else:
+        with pytest.raises(DocumentV2Error, match="ciphertext"):
+            build_document_v2_generation(publication=second)
+        assert not second.document_artifact_references.exists()
+        # Existing membership must remain untouched; rebuilding it also checks storage.
+        with pytest.raises(DocumentV2Error, match="ciphertext"):
+            build_document_v2_generation(publication=first)
+    assert DocumentArtifact.objects.filter(pk=artifact.id).exists()
+    assert first.document_artifact_references.get().document_artifact_id == artifact.id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_equal_pdf_bytes_do_not_share_artifacts_across_canonical_identities(v2_context):
+    admin, department, scope, accepted = v2_context
+    for identifier in ("A", "B"):
+        _plan(
+            admin=admin,
+            department=department,
+            accepted_root=accepted,
+            identifier=identifier,
+            pdf=b"same PDF",
+        )
+    publication = _building_publication(department=department, scope=scope, version=1)
+    refs = build_document_v2_generation(publication=publication)
+    assert len({ref.document_artifact_id for ref in refs}) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_generic_retention_preserves_shared_artifacts_and_retries_durable_cleanup(
+    v2_context, monkeypatch
+):
+    from django.conf import settings
+    from django.db import transaction
+
+    from apps.publications import document_artifacts
+    from apps.publications.models import DocumentArtifactCleanup
+
+    admin, department, scope, accepted = v2_context
+    _plan(admin=admin, department=department, accepted_root=accepted, identifier="A", pdf=b"PDF A")
+    first = _building_publication(department=department, scope=scope, version=1)
+    artifact = build_document_v2_generation(publication=first)[0].document_artifact
+    second = _building_publication(department=department, scope=scope, version=2)
+    build_document_v2_generation(publication=second)
+    path = settings.PUBLICATION_ARTIFACT_ROOT / artifact.artifact_path
+    with pytest.raises(ValueError, match="terminal"):
+        document_artifacts.release_terminal_document_artifact_references(publication=first)
+    first.status = "FAILED"
+    first.save(update_fields=("status",))
+    with transaction.atomic():
+        assert (
+            document_artifacts.release_terminal_document_artifact_references(publication=first) == 0
+        )
+    assert path.exists() and DocumentArtifact.objects.filter(pk=artifact.pk).exists()
+    assert second.document_artifact_references.exists()
+    second.status = "CANCELLED"
+    second.save(update_fields=("status",))
+    physical_remove = document_artifacts.remove_artifact_path
+
+    def fail_remove(path):
+        raise PermissionError("Test deletion failure")
+
+    monkeypatch.setattr(document_artifacts, "remove_artifact_path", fail_remove)
+    with transaction.atomic():
+        assert (
+            document_artifacts.release_terminal_document_artifact_references(publication=second)
+            == 1
+        )
+        assert path.exists()
+        assert DocumentArtifactCleanup.objects.filter(artifact_id=artifact.id).exists()
+    assert path.exists() and not DocumentArtifact.objects.exists()
+    monkeypatch.setattr(document_artifacts, "remove_artifact_path", physical_remove)
+    assert document_artifacts.cleanup_unreferenced_document_artifacts() == 1
+    assert not path.exists() and not DocumentArtifactCleanup.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_cleanup_rejects_unrelated_paths_and_preserves_historical_ciphertext(v2_context):
+    from django.conf import settings
+
+    from apps.publications.artifacts import cleanup_stale_artifacts
+    from apps.publications.document_artifacts import cleanup_unreferenced_document_artifacts
+    from apps.publications.models import DocumentArtifactCleanup
+
+    root = settings.PUBLICATION_ARTIFACT_ROOT
+    root.mkdir(parents=True)
+    unrelated = root / "unrelated.txt"
+    unrelated.write_bytes(b"keep")
+    DocumentArtifactCleanup.objects.create(artifact_id=uuid.uuid4(), artifact_path="unrelated.txt")
+    assert cleanup_unreferenced_document_artifacts() == 0
+    assert unrelated.read_bytes() == b"keep"
+    historical = root / "documents" / str(uuid.uuid4()) / "artifact.bin"
+    historical.parent.mkdir(parents=True)
+    historical.write_bytes(b"historical")
+    import os
+
+    os.utime(historical, (1, 1))
+    cleanup_stale_artifacts()
+    assert historical.read_bytes() == b"historical"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reuse_rejects_noncanonical_path_and_queue_preserves_live_ciphertext(v2_context):
+    from copy import copy
+
+    from django.conf import settings
+
+    from apps.publications.document_artifacts import cleanup_unreferenced_document_artifacts
+    from apps.publications.document_v2 import DocumentV2Error, validate_document_artifact_storage
+    from apps.publications.models import DocumentArtifactCleanup
+
+    admin, department, scope, accepted = v2_context
+    _plan(admin=admin, department=department, accepted_root=accepted, identifier="A", pdf=b"PDF A")
+    publication = _building_publication(department=department, scope=scope, version=1)
+    artifact = build_document_v2_generation(publication=publication)[0].document_artifact
+    invalid = copy(artifact)
+    invalid.artifact_path = f"documents/{uuid.uuid4()}/artifact.bin"
+    with pytest.raises(DocumentV2Error, match="path"):
+        validate_document_artifact_storage(invalid)
+    DocumentArtifactCleanup.objects.create(
+        artifact_id=artifact.id, artifact_path=artifact.artifact_path
+    )
+    assert cleanup_unreferenced_document_artifacts() == 0
+    assert (settings.PUBLICATION_ARTIFACT_ROOT / artifact.artifact_path).exists()
+    assert publication.document_artifact_references.get().document_artifact_id == artifact.id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_generic_artifact_signature_authenticates_identity_and_storage_metadata(v2_context):
+    import base64
+    import json
+
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    admin, department, scope, accepted = v2_context
+    plan = _plan(
+        admin=admin, department=department, accepted_root=accepted, identifier="A", pdf=b"PDF A"
+    )
+    publication = _building_publication(department=department, scope=scope, version=1)
+    artifact = build_document_v2_generation(publication=publication)[0].document_artifact
+    payload = {
+        "artifact_id": str(artifact.id),
+        "dataset_type_code": "department_fire_plans",
+        "canonical_document_id": str(plan.id),
+        "sanitized_pdf_sha256": artifact.sanitized_pdf_sha256,
+        "ciphertext_sha256": artifact.ciphertext_sha256,
+        "ciphertext_size": artifact.ciphertext_size,
+        "nonce": base64.b64encode(bytes(artifact.nonce)).decode("ascii"),
+        "wrapped_cek": base64.b64encode(bytes(artifact.wrapped_cek)).decode("ascii"),
+        "encryption_algorithm": "AES-256-GCM",
+        "wrapping_algorithm": "AES-KW-RFC3394",
+        "kek_version": "test-kek-v1",
+    }
+    public = Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key()
+    public.verify(
+        bytes(artifact.signature),
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+    )
+    payload["canonical_document_id"] = str(uuid.uuid4())
+    with pytest.raises(InvalidSignature):
+        public.verify(
+            bytes(artifact.signature),
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        )

@@ -67,23 +67,59 @@ def generation_hpke_context(*, publication, installation) -> DocumentGenerationH
     )
 
 
-def get_or_create_document_artifact(*, dataset_type_code, canonical_document_id, sanitized_pdf):
+def validate_document_artifact_storage(artifact):
+    """Stream immutable ciphertext verification before trusting a reusable row."""
+    from apps.publications.paths import document_artifact_relative_path
+
+    expected = document_artifact_relative_path(artifact_id=artifact.id)
+    if artifact.artifact_path != expected:
+        raise DocumentV2Error("Document ciphertext path is invalid.")
+    try:
+        root = settings.PUBLICATION_ARTIFACT_ROOT.resolve()
+        path = (root / expected).resolve()
+        path.relative_to(root)
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > artifact.ciphertext_size:
+                    raise DocumentV2Error(
+                        "Document ciphertext size does not match storage metadata."
+                    )
+                digest.update(chunk)
+    except (OSError, ValueError) as error:
+        raise DocumentV2Error("Document ciphertext is unavailable or invalid.") from error
+    if size != artifact.ciphertext_size or digest.hexdigest() != artifact.ciphertext_sha256:
+        raise DocumentV2Error("Document ciphertext integrity check failed.")
+
+
+@transaction.atomic
+def get_or_create_document_artifact(
+    *, dataset_type_code, canonical_document_id, sanitized_pdf, created_artifacts=None
+):
     digest = hashlib.sha256(sanitized_pdf).hexdigest()
-    with transaction.atomic():
-        existing = (
-            DocumentArtifact.objects.select_for_update()
-            .filter(
-                dataset_type_code=dataset_type_code,
-                canonical_document_id=canonical_document_id,
-                sanitized_pdf_sha256=digest,
-            )
-            .first()
+    existing = (
+        DocumentArtifact.objects.select_for_update()
+        .filter(
+            dataset_type_code=dataset_type_code,
+            canonical_document_id=canonical_document_id,
+            sanitized_pdf_sha256=digest,
         )
-        if existing:
-            return existing, False
+        .first()
+    )
+    if existing:
+        validate_document_artifact_storage(existing)
+        return existing, False
     candidate = DocumentArtifact(
         dataset_type_code=dataset_type_code, canonical_document_id=canonical_document_id
     )
+    if created_artifacts is not None:
+        from apps.publications.paths import document_artifact_relative_path
+
+        created_artifacts.append(
+            (candidate.id, document_artifact_relative_path(artifact_id=candidate.id))
+        )
     metadata = build_encrypted_generic_document_artifact(
         artifact_id=candidate.id,
         dataset_type_code=dataset_type_code,
@@ -96,18 +132,22 @@ def get_or_create_document_artifact(*, dataset_type_code, canonical_document_id,
         with transaction.atomic():
             candidate.save(force_insert=True)
     except IntegrityError:
-        from apps.publications.artifacts import remove_artifact_path
+        from apps.publications.document_artifacts import _schedule_document_artifact_removal
 
-        remove_artifact_path(candidate.artifact_path)
-        return DocumentArtifact.objects.get(
+        _schedule_document_artifact_removal(
+            artifact_id=candidate.id, artifact_path=candidate.artifact_path
+        )
+        winner = DocumentArtifact.objects.select_for_update().get(
             dataset_type_code=dataset_type_code,
             canonical_document_id=canonical_document_id,
             sanitized_pdf_sha256=digest,
-        ), False
+        )
+        validate_document_artifact_storage(winner)
+        return winner, False
     return candidate, True
 
 
-def build_document_v2_generation(*, publication):
+def build_document_v2_generation(*, publication, created_artifacts=None):
     if publication.schema_version != 2:
         raise PublicationBuildError("Document v2 generation requires schema version two.")
     if publication.status != publication.Status.BUILDING:
@@ -145,6 +185,8 @@ def build_document_v2_generation(*, publication):
             )
         ):
             raise PublicationBuildError("Document v2 generation membership is incomplete.")
+        for ref in existing:
+            validate_document_artifact_storage(ref.document_artifact)
         return tuple(existing)
     with transaction.atomic():
         refs = []
@@ -154,6 +196,7 @@ def build_document_v2_generation(*, publication):
                 dataset_type_code=publication.dataset_type_code,
                 canonical_document_id=entry.canonical_document_id,
                 sanitized_pdf=pdf,
+                created_artifacts=created_artifacts,
             )
             refs.append(
                 PublicationDocumentArtifactReference.objects.create(
@@ -374,16 +417,21 @@ def validate_ready_document_generation(publication):
     payload = manifest.payload
     if not isinstance(payload, dict):
         raise DocumentV2Error("Document generation manifest is invalid.")
-    if any(
-        payload.get(k) != v
-        for k, v in {
-            "format": "document-generation-v2",
-            "dataset_type": publication.dataset_type_code,
-            "publication_id": str(publication.id),
-            "schema_version": 2,
-            "version": publication.version_number,
-        }.items()
-    ) or not isinstance(payload.get("documents"), list):
+    if (
+        any(
+            payload.get(k) != v
+            for k, v in {
+                "format": "document-generation-v2",
+                "dataset_type": publication.dataset_type_code,
+                "publication_id": str(publication.id),
+                "schema_version": 2,
+                "version": publication.version_number,
+            }.items()
+        )
+        or type(payload.get("version")) is not int
+        or type(payload.get("schema_version")) is not int
+        or not isinstance(payload.get("documents"), list)
+    ):
         raise DocumentV2Error("Document generation manifest is invalid.")
     refs = list(
         PublicationDocumentArtifactReference.objects.filter(publication=publication).select_related(
@@ -408,6 +456,7 @@ def validate_ready_document_generation(publication):
             or artifact.sanitized_pdf_sha256 != entry.sanitized_pdf_sha256
             or documents[0].get(adapter.manifest_metadata_key) != entry.metadata
             or documents[0].get("ciphertext_sha256") != artifact.ciphertext_sha256
+            or type(documents[0].get("ciphertext_size")) is not int
             or documents[0].get("ciphertext_size") != artifact.ciphertext_size
             or documents[0].get("sanitized_pdf_sha256") != artifact.sanitized_pdf_sha256
             or documents[0].get("nonce") != base64.b64encode(bytes(artifact.nonce)).decode("ascii")
@@ -416,8 +465,19 @@ def validate_ready_document_generation(publication):
                 f"/api/v1/tablet/document-generations/{publication.id}/artifacts/{artifact.id}/download"
             )
             or documents[0].get("generation_key_wrapping_algorithm") != "AES-KW-RFC3394"
-            or not re.fullmatch(
-                r"[A-Za-z0-9+/]{54}==", documents[0].get("generation_wrapped_cek", "")
+            or not isinstance(documents[0].get("generation_wrapped_cek"), str)
+            or not re.fullmatch(r"[A-Za-z0-9+/]{54}==", documents[0]["generation_wrapped_cek"])
+            or any(
+                documents[0].get(field) != getattr(artifact, field)
+                for field in (
+                    "encryption_algorithm",
+                    "wrapping_algorithm",
+                    "kek_version",
+                    "signature_algorithm",
+                    "signing_key_version",
+                )
             )
+            or documents[0].get("signature")
+            != base64.b64encode(bytes(artifact.signature)).decode("ascii")
         ):
             raise DocumentV2Error("Artifact does not match frozen document content.")

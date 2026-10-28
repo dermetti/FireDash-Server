@@ -1,9 +1,7 @@
 import hashlib
 import json
 import logging
-import zipfile
 from collections.abc import Callable
-from io import BytesIO
 from typing import Any, cast
 
 from django.conf import settings
@@ -12,7 +10,6 @@ from django.utils import timezone
 
 from apps.assignments.models import PersonnelStationAssignment
 from apps.publications.models import DatasetSourceRevision
-from apps.publications.pdf_bundles import PdfBundleError, read_accepted_pdf
 from apps.publications.registry import DatasetTypeDefinition
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 
@@ -283,13 +280,6 @@ def _json_bytes(value: object) -> bytes:
     )
 
 
-def _zip_info(name: str) -> zipfile.ZipInfo:
-    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-    info.compress_type = zipfile.ZIP_DEFLATED
-    info.external_attr = 0o100600 << 16
-    return info
-
-
 def _artifact_hydrants(*, department, station, source_revision: int, source_snapshot=None) -> bytes:
     if station is not None:
         raise PublicationBuildError("Hydrant artifact requires a department scope.")
@@ -312,47 +302,6 @@ def _artifact_personnel(
         else _personnel_source_payload(department=department, station=station)
     )
     return _json_bytes(payload | {"source_revision": source_revision})
-
-
-def _artifact_fire_plans(
-    *, department, station, source_revision: int, source_snapshot=None
-) -> bytes:
-    if station is not None:
-        raise PublicationBuildError("Fire-plan artifact requires a department scope.")
-    output = BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        manifest = (
-            source_snapshot
-            if source_snapshot is not None
-            else _fire_plan_source_payload(department=department, station=station)
-        ).get("fire_plans", [])
-        for entry in manifest:
-            try:
-                plan = FirePlan.objects.get(pk=entry["id"], department=department)
-            except FirePlan.DoesNotExist as error:
-                raise PublicationBuildError(
-                    "Accepted fire-plan document is no longer available."
-                ) from error
-            try:
-                document = read_accepted_pdf(
-                    document_key=plan.document_key,
-                    accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT,
-                )
-            except PdfBundleError as error:
-                raise PublicationBuildError(
-                    "Accepted fire-plan document is unavailable."
-                ) from error
-            if hashlib.sha256(document).hexdigest() != entry["sha256"]:
-                raise PublicationBuildError(
-                    "Accepted fire-plan document hash does not match metadata."
-                )
-            archive_name = f"plans/{plan.id}.pdf"
-            archive.writestr(_zip_info(archive_name), document)
-        archive.writestr(
-            _zip_info("manifest.json"),
-            _json_bytes({"source_revision": source_revision, "fire_plans": manifest}),
-        )
-    return output.getvalue()
 
 
 BUILDERS.update(
@@ -472,7 +421,6 @@ def _fire_plan_source_manifest(*, department, station) -> list[dict[str, Any]]:
             "latitude": plan.location.y if plan.location is not None else None,
             "sha256": plan.sha256,
             "page_count": plan.page_count,
-            "path": f"plans/{plan.id}.pdf",
         }
         for plan in FirePlan.objects.filter(department=department, active=True).order_by("id")
     ]
@@ -619,7 +567,6 @@ SOURCE_BUILDERS.update(
 ARTIFACT_BUILDERS.update(
     {
         "department_hydrants": _artifact_hydrants,
-        "department_fire_plans": _artifact_fire_plans,
         "station_personnel": _artifact_personnel,
         "department_phonebook": _artifact_phonebook,
         "station_phonebook": _artifact_phonebook,

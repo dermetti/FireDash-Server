@@ -74,13 +74,11 @@ class DocumentDatasetAdapter:
         ):
             raise PublicationBuildError("Accepted document hash does not match frozen metadata.")
         metadata = {str(entry["id"]): entry for entry in entries}
-        snapshot_fields = set(self.manifest_metadata_fields) | ({"path"} if is_fire_plan else set())
+        snapshot_fields = set(self.manifest_metadata_fields)
         if any(set(entry) != snapshot_fields for entry in metadata.values()):
             raise PublicationBuildError("Frozen document metadata is invalid.")
         if is_fire_plan:
-            for document_id, entry in metadata.items():
-                if entry["path"] != f"plans/{document_id}.pdf":
-                    raise PublicationBuildError("Frozen document path is invalid.")
+            for entry in metadata.values():
                 if type(entry["page_count"]) is not int or entry["page_count"] <= 0:
                     raise PublicationBuildError("Frozen document page count is invalid.")
                 if any(

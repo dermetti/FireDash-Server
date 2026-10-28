@@ -14,7 +14,6 @@ from cryptography.hazmat.primitives.hpke import AEAD, KDF, KEM, Suite
 
 HPKE_CIPHERSUITE = "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM"
 HPKE_PROTOCOL = "firedash-hpke-v1"
-FIRE_PLAN_GENERATION_HPKE_PROTOCOL = "firedash-fire-plan-generation-hpke-v2"
 DOCUMENT_GENERATION_HPKE_PROTOCOL = "firedash-document-generation-hpke-v2"
 _P256_PUBLIC_KEY_LENGTH = 65
 _DATASET_TYPE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
@@ -69,7 +68,7 @@ class HPKEContext:
 
 
 @dataclass(frozen=True)
-class FirePlanGenerationHPKEContext:
+class DocumentGenerationHPKEContext:
     """Wire-reconstructible HPKE ``info`` for a v2 document generation."""
 
     publication_id: uuid.UUID
@@ -87,7 +86,7 @@ class FirePlanGenerationHPKEContext:
         if self.version_number < 1 or self.schema_version < 1:
             raise HPKEError("Publication versions must be positive.")
         return {
-            "protocol": FIRE_PLAN_GENERATION_HPKE_PROTOCOL,
+            "protocol": DOCUMENT_GENERATION_HPKE_PROTOCOL,
             "publication_id": str(self.publication_id),
             "installation_id": str(self.installation_id),
             "tablet_id": str(self.tablet_id),
@@ -104,41 +103,7 @@ class FirePlanGenerationHPKEContext:
         return json.dumps(self.wire(), sort_keys=True, separators=(",", ":")).encode("ascii")
 
     @classmethod
-    def from_wire(cls, value: object) -> "FirePlanGenerationHPKEContext":
-        if not isinstance(value, dict):
-            raise HPKEError("Fire Plan generation HPKE context is invalid.")
-        scope = value.get("scope")
-        if value.get("protocol") != FIRE_PLAN_GENERATION_HPKE_PROTOCOL or not isinstance(
-            scope, dict
-        ):
-            raise HPKEError("Fire Plan generation HPKE protocol is invalid.")
-        try:
-            station = scope["station_id"]
-            return cls(
-                publication_id=uuid.UUID(str(value["publication_id"])),
-                installation_id=uuid.UUID(str(value["installation_id"])),
-                tablet_id=uuid.UUID(str(value["tablet_id"])),
-                department_id=uuid.UUID(str(scope["department_id"])),
-                station_id=uuid.UUID(str(station)) if station is not None else None,
-                dataset_type_code=str(scope["dataset_type_code"]),
-                version_number=int(value["version_number"]),
-                schema_version=int(value["schema_version"]),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise HPKEError("Fire Plan generation HPKE context is invalid.") from error
-
-
-class DocumentGenerationHPKEContext(FirePlanGenerationHPKEContext):
-    """The generic v2 HPKE binding for adapter-backed document datasets."""
-
-    def wire(self) -> dict[str, object]:
-        value = super().wire()
-        value["protocol"] = DOCUMENT_GENERATION_HPKE_PROTOCOL
-        return value
-
-    @classmethod
     def from_wire(cls, value: object) -> "DocumentGenerationHPKEContext":
-        """Parse the public generic-document binding without Fire Plan coupling."""
         if not isinstance(value, dict):
             raise HPKEError("Document generation HPKE context is invalid.")
         scope = value.get("scope")

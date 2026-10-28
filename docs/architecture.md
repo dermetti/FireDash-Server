@@ -62,22 +62,16 @@ and two usable rollback predecessors, marks older successful versions
 `OBSOLETE`, and only purges aged source snapshots for `FAILED`/`CANCELLED`
 attempts without changing their terminal status or permanent attempt identity.
 
-Current required production dataset types are `department_hydrants`,
-`department_fire_plans`, and `station_personnel`. The internal,
-feature-disabled `department_klgv_plans` registry entry proves additive v1
-dataset evolution: it is department-scoped, ZIP-backed, schema version 1, and
-optional, so older tablets ignore it safely until they support it. It remains a
-single complete encrypted artifact; it is not the planned v2 individual-PDF
-delivery design.
+All four PDF datasets (`department_fire_plans`, `department_klgv_plans`,
+`department_files`, `station_files`) use the generic Document Generation v2
+service and schema 2. A signed complete generation references immutable,
+individually encrypted document artifacts. Generic generation keys and
+installation-bound HPKE grants authorize the common `/document-generations/`
+manifest and download endpoints. Dataset adapters own frozen metadata, source
+membership and accepted-PDF lookup; encryption and delivery remain shared.
+There are no document ZIPs or publication-level companion artifacts.
 
-Department Fire Plans are currently published as one monolithic ZIP of every
-active plan (`_artifact_fire_plans`), so a larger `PUBLICATION_ARTIFACT_MAX_BYTES`
-is only a temporary compatibility ceiling, not the ~2,800-plan scale solution.
-The target Fire Plan architecture is a signed, versioned authoritative department
-manifest plus immutable, individually encrypted Fire Plan PDF artifacts: each
-manifest generation lists every canonical Fire Plan with its immutable encrypted
-artifact/version/hash/size, unchanged PDFs reuse existing artifacts, and only
-changed/new PDFs produce new artifacts. Tablet sync fetches and verifies the
+Tablet sync fetches and verifies the
 latest signed generation, compares with the locally active generation, reuses
 identical local artifacts, downloads only missing/changed artifacts, verifies and
 decrypts each required new artifact, then atomically activates the new generation

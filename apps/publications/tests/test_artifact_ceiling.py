@@ -11,15 +11,15 @@ from apps.publications.builders import (
 from apps.publications.registry import get_dataset_definition
 
 
-def test_publication_artifact_ceiling_default_supports_fire_plan_envelope(settings):
+def test_publication_artifact_ceiling_default(settings):
     assert settings.PUBLICATION_ARTIFACT_MAX_BYTES == 600 * 1024 * 1024
 
 
-def test_build_artifact_accepts_observed_fire_plan_size(monkeypatch):
-    definition = get_dataset_definition("department_fire_plans")
+def test_non_document_artifact_accepts_large_payload_below_ceiling(monkeypatch):
+    definition = get_dataset_definition("department_hydrants")
     monkeypatch.setitem(
         ARTIFACT_BUILDERS,
-        "department_fire_plans",
+        "department_hydrants",
         lambda **kwargs: b"x" * (168 * 1024 * 1024),
     )
     artifact = build_artifact(
@@ -29,10 +29,10 @@ def test_build_artifact_accepts_observed_fire_plan_size(monkeypatch):
 
 
 def test_build_artifact_rejects_above_ceiling_and_logs(monkeypatch, caplog):
-    definition = get_dataset_definition("department_fire_plans")
+    definition = get_dataset_definition("department_hydrants")
     monkeypatch.setitem(
         ARTIFACT_BUILDERS,
-        "department_fire_plans",
+        "department_hydrants",
         lambda **kwargs: b"x" * 2048,
     )
     with override_settings(PUBLICATION_ARTIFACT_MAX_BYTES=1024):
@@ -45,10 +45,10 @@ def test_build_artifact_rejects_above_ceiling_and_logs(monkeypatch, caplog):
 
 
 def test_build_artifact_rejects_exactly_at_boundary_plus_one(monkeypatch):
-    definition = get_dataset_definition("department_fire_plans")
+    definition = get_dataset_definition("department_hydrants")
     monkeypatch.setitem(
         ARTIFACT_BUILDERS,
-        "department_fire_plans",
+        "department_hydrants",
         lambda **kwargs: b"x" * 1025,
     )
     with override_settings(PUBLICATION_ARTIFACT_MAX_BYTES=1024):

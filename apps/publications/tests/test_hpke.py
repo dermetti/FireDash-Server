@@ -144,3 +144,44 @@ def test_hpke_rejects_wrong_key_and_tampered_data(context):
                 recipient_private_key=changed_private_key,
                 context=context,
             )
+
+
+@pytest.mark.parametrize("station", [None, uuid.UUID("66666666-6666-6666-6666-666666666666")])
+def test_generic_document_hpke_exact_wire_info_and_seal_open(station):
+    from apps.publications.hpke import DocumentGenerationHPKEContext
+
+    context = DocumentGenerationHPKEContext(
+        publication_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        installation_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+        tablet_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        department_id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
+        station_id=station,
+        dataset_type_code="department_fire_plans",
+        version_number=42,
+        schema_version=2,
+    )
+    station_json = '"66666666-6666-6666-6666-666666666666"' if station else "null"
+    expected = (
+        '{"installation_id":"22222222-2222-2222-2222-222222222222",'
+        '"protocol":"firedash-document-generation-hpke-v2",'
+        '"publication_id":"11111111-1111-1111-1111-111111111111",'
+        '"schema_version":2,"scope":{"dataset_type_code":"department_fire_plans",'
+        '"department_id":"44444444-4444-4444-4444-444444444444",'
+        '"station_id":' + station_json + "},"
+        '"tablet_id":"33333333-3333-3333-3333-333333333333","version_number":42}'
+    )
+    assert context.info() == expected.encode("ascii")
+    assert DocumentGenerationHPKEContext.from_wire(context.wire()) == context
+    private = ec.generate_private_key(ec.SECP256R1())
+    enc, ciphertext = hpke_seal(
+        plaintext=b"k" * 32, recipient_public_key=private.public_key(), context=context
+    )
+    assert (
+        hpke_open(
+            encapsulated_key=enc,
+            ciphertext=ciphertext,
+            recipient_private_key=private,
+            context=context,
+        )
+        == b"k" * 32
+    )

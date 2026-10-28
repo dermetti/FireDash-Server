@@ -20,7 +20,7 @@ def _authorized_generation(*, publication, installation):
             raise ManifestError("Installation app version is no longer supported.")
     except AppVersionError as error:
         raise ManifestError("Installation app version is invalid.") from error
-    if publication.dataset_type_code not in {
+    if publication.schema_version != 2 or publication.dataset_type_code not in {
         "department_fire_plans",
         "department_klgv_plans",
         "department_files",

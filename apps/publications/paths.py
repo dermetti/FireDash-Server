@@ -32,7 +32,7 @@ def publication_artifact_relative_path(
 
 
 def document_artifact_relative_path(*, artifact_id: object) -> str:
-    """Return the identity-addressed path for an immutable Fire Plan PDF.
+    """Return the identity-addressed path for an immutable document PDF.
 
     This deliberately contains neither a publication version nor a source
     filename.  A document artifact remains addressable across future

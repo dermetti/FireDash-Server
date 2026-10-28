@@ -10,7 +10,7 @@ from uuid import UUID
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from apps.assignments.models import TabletVehicleAssignment
@@ -21,7 +21,6 @@ from apps.publications.models import (
     DatasetPublication,
     DocumentGenerationKeyGrant,
     DocumentGenerationManifest,
-    FirePlanGenerationManifest,
     SignedManifest,
 )
 from apps.publications.registry import DatasetRegistryError, get_dataset_definition
@@ -130,10 +129,12 @@ def invalidate_signed_manifests(*, reason: str) -> int:
 
 def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, object]:
     definition = get_dataset_definition(publication.dataset_type_code)
-    if (
-        FirePlanGenerationManifest.objects.filter(publication=publication).exists()
-        or DocumentGenerationManifest.objects.filter(publication=publication).exists()
-    ):
+    if _is_document_manifest_delivery(publication):
+        exists = getattr(publication, "_has_document_generation", None)
+        if exists is None:
+            exists = DocumentGenerationManifest.objects.filter(publication=publication).exists()
+        if publication.schema_version != 2 or not exists:
+            raise ManifestError("Document publication requires a complete generic generation.")
         return {
             "publication_id": str(publication.id),
             "type": publication.dataset_type_code,
@@ -143,11 +144,7 @@ def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, ob
             "required": definition.required,
             "minimum_app_version": definition.minimum_app_version,
             "artifact_format": "document-manifest-v2",
-            "manifest_url": (
-                f"/api/v1/tablet/fire-plan-generations/{publication.id}/manifest"
-                if not DocumentGenerationManifest.objects.filter(publication=publication).exists()
-                else f"/api/v1/tablet/document-generations/{publication.id}/manifest"
-            ),
+            "manifest_url": f"/api/v1/tablet/document-generations/{publication.id}/manifest",
         }
     nonce = publication.artifact_nonce
     wrapped_cek = publication.artifact_wrapped_cek
@@ -191,8 +188,8 @@ def _publication_scope_payload(publication: DatasetPublication) -> dict[str, obj
 
 def _is_document_manifest_delivery(publication: DatasetPublication) -> bool:
     return (
-        FirePlanGenerationManifest.objects.filter(publication=publication).exists()
-        or DocumentGenerationManifest.objects.filter(publication=publication).exists()
+        get_dataset_definition(publication.dataset_type_code).artifact_format
+        == "document-manifest-v2"
     )
 
 
@@ -262,6 +259,11 @@ def authorized_publications(*, installation: AppInstallation, now=None):
             artifact_status=DatasetPublication.ArtifactStatus.READY,
         )
         .filter(Q(station__isnull=True) | Q(station=vehicle.station))
+        .annotate(
+            _has_document_generation=Exists(
+                DocumentGenerationManifest.objects.filter(publication_id=OuterRef("pk"))
+            )
+        )
         .order_by("dataset_type_code")
     )
     return (
@@ -309,6 +311,11 @@ def manifest_publications(*, installation: AppInstallation, now=None):
             artifact_status=DatasetPublication.ArtifactStatus.READY,
         )
         .filter(Q(station__isnull=True) | Q(station=vehicle.station))
+        .annotate(
+            _has_document_generation=Exists(
+                DocumentGenerationManifest.objects.filter(publication_id=OuterRef("pk"))
+            )
+        )
         .order_by("dataset_type_code")
     )
     return (

@@ -35,10 +35,6 @@ class DatasetScopeState(models.Model):
         DEPARTMENT = "DEPARTMENT", "Department"
         STATION = "STATION", "Station"
 
-    class DeliveryFormat(models.TextChoices):
-        V1_ARTIFACT = "V1_ARTIFACT", "V1 artifact"
-        DOCUMENT_MANIFEST_V2 = "DOCUMENT_MANIFEST_V2", "Document manifest v2"
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     scope_type = models.CharField(
         max_length=16, choices=ScopeType.choices, default=ScopeType.DEPARTMENT
@@ -54,9 +50,6 @@ class DatasetScopeState(models.Model):
         related_name="dataset_scopes",
     )
     dataset_type_code = models.CharField(max_length=100)
-    delivery_format = models.CharField(
-        max_length=32, choices=DeliveryFormat.choices, default=DeliveryFormat.V1_ARTIFACT
-    )
     source_revision = models.PositiveBigIntegerField(default=0)
     # The current deterministic publishable canonical source. Empty means an
     # older scope has not yet been safely initialized by a locked service path.
@@ -305,7 +298,7 @@ class DatasetPublication(models.Model):
             "department_files",
             "station_files",
         }
-        if self.schema_version != definition.current_schema_version and not document_v2:
+        if self.schema_version != definition.current_schema_version:
             errors["schema_version"] = "Schema version is not supported for this dataset."
         if self.schema_version not in definition.supported_schema_versions:
             errors["schema_version"] = "Schema version is not supported for this dataset."
@@ -386,109 +379,7 @@ class LegacyArtifactScopeSignatureUpgrade(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
-class FirePlanDocumentArtifact(models.Model):
-    """Immutable, identity-addressed encrypted PDF for one canonical Fire Plan.
-
-    This is intentionally independent of ``DatasetPublication``.  Reuse is
-    scoped to its canonical source plan, never to equal bytes from another
-    plan or department.
-    """
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    fire_plan = models.ForeignKey(
-        "reference_data.FirePlan", on_delete=models.PROTECT, related_name="document_artifacts"
-    )
-    sanitized_pdf_sha256 = models.CharField(max_length=64)
-    artifact_path = models.CharField(max_length=512, unique=True)
-    ciphertext_size = models.PositiveBigIntegerField()
-    ciphertext_sha256 = models.CharField(max_length=64)
-    nonce = models.BinaryField()
-    wrapped_cek = models.BinaryField()
-    encryption_algorithm = models.CharField(max_length=32)
-    wrapping_algorithm = models.CharField(max_length=32)
-    kek_version = models.CharField(max_length=64)
-    signature = models.BinaryField()
-    signature_algorithm = models.CharField(max_length=32)
-    signing_key_version = models.CharField(max_length=64)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=("fire_plan", "sanitized_pdf_sha256"),
-                name="unique_fire_plan_document_artifact_content",
-            ),
-        ]
-        indexes = [
-            models.Index(fields=("fire_plan", "created_at"), name="doc_artifact_plan_created_idx")
-        ]
-
-    def clean(self) -> None:
-        if self.artifact_path != document_artifact_relative_path(artifact_id=self.id):
-            raise ValidationError(
-                {"artifact_path": "Artifact path must be a generated document path."}
-            )
-        metadata_complete = all(
-            (
-                len(self.sanitized_pdf_sha256) == 64,
-                self.ciphertext_size is not None,
-                len(self.ciphertext_sha256) == 64,
-                self.nonce and len(self.nonce) == 12,
-                self.wrapped_cek,
-                self.encryption_algorithm == "AES-256-GCM",
-                self.wrapping_algorithm == "AES-KW-RFC3394",
-                self.kek_version,
-                self.signature,
-                self.signature_algorithm == "Ed25519",
-                self.signing_key_version,
-            )
-        )
-        if not metadata_complete:
-            raise ValidationError("Document artifacts require complete cryptographic metadata.")
-
-
-class PublicationFirePlanArtifactReference(models.Model):
-    """Frozen future-generation membership of a Fire Plan document artifact."""
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    publication = models.ForeignKey(
-        DatasetPublication, on_delete=models.PROTECT, related_name="fire_plan_artifact_references"
-    )
-    fire_plan = models.ForeignKey(
-        "reference_data.FirePlan",
-        on_delete=models.PROTECT,
-        related_name="publication_artifact_references",
-    )
-    document_artifact = models.ForeignKey(
-        FirePlanDocumentArtifact,
-        on_delete=models.PROTECT,
-        related_name="publication_references",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=("publication", "fire_plan"),
-                name="unique_publication_fire_plan_artifact_reference",
-            )
-        ]
-
-    def clean(self) -> None:
-        errors = {}
-        if self.document_artifact_id and self.document_artifact.fire_plan_id != self.fire_plan_id:
-            errors["document_artifact"] = "Artifact must belong to the referenced Fire Plan."
-        if (
-            self.publication_id
-            and self.fire_plan_id
-            and self.publication.department_id != self.fire_plan.department_id
-        ):
-            errors["fire_plan"] = "Fire Plan must belong to the publication department."
-        if errors:
-            raise ValidationError(errors)
-
-
-class FirePlanDocumentArtifactCleanup(models.Model):
+class DocumentArtifactCleanup(models.Model):
     """Durable post-commit cleanup work for an unreachable document artifact."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -501,88 +392,6 @@ class FirePlanDocumentArtifactCleanup(models.Model):
             raise ValidationError(
                 {"artifact_path": "Cleanup path must be a generated document path."}
             )
-
-
-class FirePlanGenerationKey(models.Model):
-    """Worker-held random key for one dormant Fire Plan v2 generation."""
-
-    publication = models.OneToOneField(
-        DatasetPublication,
-        primary_key=True,
-        on_delete=models.PROTECT,
-        related_name="fire_plan_generation_key",
-    )
-    wrapped_key = models.BinaryField()
-    wrapping_algorithm = models.CharField(max_length=32)
-    kek_version = models.CharField(max_length=64)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def clean(self) -> None:
-        if (
-            self.wrapping_algorithm != "AES-KW-RFC3394"
-            or not self.kek_version
-            or not self.wrapped_key
-        ):
-            raise ValidationError("Generation keys require protected wrapping metadata.")
-
-
-class FirePlanGenerationKeyGrant(models.Model):
-    class Status(models.TextChoices):
-        PENDING = "PENDING", "Pending"
-        RUNNING = "RUNNING", "Running"
-        READY = "READY", "Ready"
-        FAILED = "FAILED", "Failed"
-        REVOKED = "REVOKED", "Revoked"
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    publication = models.ForeignKey(
-        DatasetPublication, on_delete=models.PROTECT, related_name="fire_plan_generation_key_grants"
-    )
-    app_installation = models.ForeignKey(
-        "tablets.AppInstallation",
-        on_delete=models.PROTECT,
-        related_name="fire_plan_generation_key_grants",
-    )
-    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
-    hpke_ciphersuite = models.CharField(max_length=128, blank=True)
-    hpke_encapsulated_key = models.BinaryField(null=True, blank=True)
-    hpke_wrapped_generation_key = models.BinaryField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
-    revoked_at = models.DateTimeField(null=True, blank=True)
-    error_message = models.CharField(max_length=512, blank=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=("publication", "app_installation"),
-                name="unique_fire_plan_generation_key_grant",
-            )
-        ]
-
-
-class FirePlanGenerationManifest(models.Model):
-    """One deterministic signed complete manifest for a v2 generation."""
-
-    publication = models.OneToOneField(
-        DatasetPublication,
-        primary_key=True,
-        on_delete=models.PROTECT,
-        related_name="fire_plan_generation_manifest",
-    )
-    payload = models.JSONField(default=dict)
-    signature = models.BinaryField()
-    signature_algorithm = models.CharField(max_length=32)
-    signing_key_version = models.CharField(max_length=64)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def clean(self) -> None:
-        if (
-            self.signature_algorithm != "Ed25519"
-            or not self.signing_key_version
-            or not self.signature
-        ):
-            raise ValidationError("Generation manifests require a signature.")
 
 
 # These records are deliberately not tied to a particular canonical-model

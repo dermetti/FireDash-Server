@@ -19,22 +19,20 @@ from apps.publications.paths import publication_artifact_relative_path
 
 
 @pytest.mark.django_db(transaction=True)
-def test_scope_migration_preserves_ready_artifacts_and_lazily_resigns_them(tmp_path):
+@pytest.mark.parametrize(
+    "disposable_migration_database",
+    ["0026_rename_publications_scope_s_631ca6_idx_pub_src_scope_rev_idx"],
+    indirect=True,
+)
+def test_scope_migration_preserves_ready_artifacts_and_lazily_resigns_them(
+    tmp_path, disposable_migration_database
+):
     """0027 must not touch READY metadata while the PostgreSQL guard is active."""
     assert connection.vendor == "postgresql"
     executor = MigrationExecutor(connection)
     latest_targets = executor.loader.graph.leaf_nodes()
-    before_targets = [
-        ("publications", "0026_rename_publications_scope_s_631ca6_idx_pub_src_scope_rev_idx")
-        if app == "publications"
-        else (app, migration)
-        for app, migration in latest_targets
-    ]
-    executor.migrate(before_targets)
     try:
-        # Other current app leaves depend on newer publication migrations.
-        # Use the state actually applied after rollback, rather than pulling
-        # those dependencies back into this historical model registry.
+        # Use the historical state actually applied in the disposable database.
         rolled_back = MigrationExecutor(connection)
         old_apps = rolled_back.loader.project_state(
             list(rolled_back.loader.applied_migrations)

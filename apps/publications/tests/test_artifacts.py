@@ -218,6 +218,10 @@ def test_artifacts_use_distinct_cek_and_nonce(tmp_path, monkeypatch):
 
 
 def test_cleanup_removes_stale_temp_directories(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "apps.publications.document_artifacts.cleanup_unreferenced_document_artifacts",
+        lambda: 0,
+    )
     stale = tmp_path / "final" / ".tmp" / "abandoned"
     stale.mkdir(parents=True)
     os.utime(stale, (time.time() - 120, time.time() - 120))

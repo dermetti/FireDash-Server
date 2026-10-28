@@ -11,7 +11,6 @@ import shutil
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
-from uuid import UUID
 
 from cryptography.hazmat.primitives import keywrap
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -116,96 +115,6 @@ def _signature_payload(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-
-
-def _document_artifact_signature_payload(
-    *,
-    artifact_id: object,
-    fire_plan_id: object,
-    sanitized_pdf_sha256: str,
-    wrapped_cek: bytes,
-    nonce: bytes,
-    ciphertext: bytes,
-) -> bytes:
-    """Signed document metadata with no publication-generation fields."""
-    return json.dumps(
-        {
-            "artifact_id": str(artifact_id),
-            "fire_plan_id": str(fire_plan_id),
-            "sanitized_pdf_sha256": sanitized_pdf_sha256,
-            "wrapped_cek": base64.b64encode(wrapped_cek).decode("ascii"),
-            "wrapping_algorithm": "AES-KW-RFC3394",
-            "encryption_algorithm": "AES-256-GCM",
-            "nonce": base64.b64encode(nonce).decode("ascii"),
-            "ciphertext_sha256": hashlib.sha256(ciphertext).hexdigest(),
-            "ciphertext_size": len(ciphertext),
-            "kek_version": settings.PUBLICATION_KEK_VERSION,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-
-def build_encrypted_document_artifact(
-    *, artifact_id: object, fire_plan_id: object, sanitized_pdf: bytes
-) -> dict[str, object]:
-    """Worker-only encryption and atomic promotion for a reusable PDF artifact."""
-    if len(sanitized_pdf) > settings.PUBLICATION_ARTIFACT_MAX_BYTES:
-        raise ArtifactError("Artifact exceeds the configured size limit.")
-    kek = _credential(settings.PUBLICATION_KEK_CREDENTIAL_PATH, "KEK")
-    if len(kek) != 32:
-        raise ArtifactError("Publication KEK must be exactly 32 bytes.")
-    signing_key = _credential(settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH, "signing")
-    if len(signing_key) != 32:
-        raise ArtifactError("Publication Ed25519 private key must be exactly 32 bytes.")
-    cek, nonce = secrets.token_bytes(32), secrets.token_bytes(12)
-    ciphertext = AESGCM(cek).encrypt(nonce, sanitized_pdf, None)
-    wrapped_cek = keywrap.aes_key_wrap(kek, cek)
-    sanitized_pdf_sha256 = hashlib.sha256(sanitized_pdf).hexdigest()
-    signature = Ed25519PrivateKey.from_private_bytes(signing_key).sign(
-        _document_artifact_signature_payload(
-            artifact_id=artifact_id,
-            fire_plan_id=fire_plan_id,
-            sanitized_pdf_sha256=sanitized_pdf_sha256,
-            wrapped_cek=wrapped_cek,
-            nonce=nonce,
-            ciphertext=ciphertext,
-        )
-    )
-    relative_path = document_artifact_relative_path(artifact_id=artifact_id)
-    final_path = settings.PUBLICATION_ARTIFACT_ROOT / relative_path
-    temp_dir = settings.PUBLICATION_ARTIFACT_TEMP_ROOT / str(artifact_id)
-    try:
-        temp_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temp_path = temp_dir / "artifact.bin"
-        with temp_path.open("xb") as artifact_file:
-            artifact_file.write(ciphertext)
-            artifact_file.flush()
-            os.fsync(artifact_file.fileno())
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-        _set_final_directory_permissions(final_path.parent)
-        _set_final_directory_permissions(final_path.parent.parent)
-        os.replace(temp_path, final_path)
-        _set_final_artifact_permissions(final_path)
-    except OSError as error:
-        logger.error("Document artifact promotion failed for %s: %s", artifact_id, error)
-        raise ArtifactError("Could not promote document artifact.") from error
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-    return {
-        "sanitized_pdf_sha256": sanitized_pdf_sha256,
-        "artifact_path": relative_path,
-        "ciphertext_size": len(ciphertext),
-        "ciphertext_sha256": hashlib.sha256(ciphertext).hexdigest(),
-        "nonce": nonce,
-        "wrapped_cek": wrapped_cek,
-        "encryption_algorithm": "AES-256-GCM",
-        "wrapping_algorithm": "AES-KW-RFC3394",
-        "kek_version": settings.PUBLICATION_KEK_VERSION,
-        "signature": signature,
-        "signature_algorithm": "Ed25519",
-        "signing_key_version": settings.PUBLICATION_SIGNING_KEY_VERSION,
-    }
 
 
 def build_encrypted_generic_document_artifact(
@@ -428,8 +337,6 @@ def cleanup_stale_artifacts() -> int:
     from apps.publications.document_artifacts import cleanup_unreferenced_document_artifacts
     from apps.publications.models import (
         DatasetPublication,
-        DocumentArtifact,
-        FirePlanDocumentArtifact,
     )
 
     for publication in DatasetPublication.objects.filter(
@@ -449,27 +356,5 @@ def cleanup_stale_artifacts() -> int:
         if publication.artifact_status != DatasetPublication.ArtifactStatus.READY:
             DatasetPublication.objects.filter(pk=publication.pk).update(artifact_path="")
         removed += 1
-    document_root = settings.PUBLICATION_ARTIFACT_ROOT / "documents"
-    if document_root.exists():
-        for path in document_root.glob("*/artifact.bin"):
-            if path.stat().st_mtime >= cutoff.timestamp():
-                continue
-            try:
-                artifact_id = UUID(path.parent.name)
-            except ValueError:
-                continue
-            if (
-                FirePlanDocumentArtifact.objects.filter(pk=artifact_id).exists()
-                or DocumentArtifact.objects.filter(pk=artifact_id).exists()
-            ):
-                continue
-            try:
-                remove_artifact_path(
-                    path.relative_to(settings.PUBLICATION_ARTIFACT_ROOT).as_posix()
-                )
-            except (ArtifactError, OSError) as error:
-                logger.warning("Orphan document artifact cleanup deferred for %s: %s", path, error)
-                continue
-            removed += 1
-        removed += cleanup_unreferenced_document_artifacts()
+    removed += cleanup_unreferenced_document_artifacts()
     return removed
