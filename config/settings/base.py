@@ -334,7 +334,7 @@ REPORT_TRANSFER_KEYRING_PATH = credential_path(
 REPORT_TRANSFER_ACTIVE_KEY = get_env("REPORT_TRANSFER_ACTIVE_KEY", default="1")
 REPORT_TRANSFER_ROOT = Path(get_env("REPORT_TRANSFER_ROOT", default="/var/spool/firedash-reports"))
 REPORT_TRANSFER_MAX_REQUEST_BYTES = get_typed_env(
-    "REPORT_TRANSFER_MAX_REQUEST_BYTES", int, default=24 * 1024 * 1024
+    "REPORT_TRANSFER_MAX_REQUEST_BYTES", int, default=96 * 1024 * 1024
 )
 REPORT_TRANSFER_MAX_JSON_BYTES = get_typed_env(
     "REPORT_TRANSFER_MAX_JSON_BYTES", int, default=1024 * 1024
@@ -342,12 +342,12 @@ REPORT_TRANSFER_MAX_JSON_BYTES = get_typed_env(
 REPORT_TRANSFER_MAX_JPEG_BYTES = get_typed_env(
     "REPORT_TRANSFER_MAX_JPEG_BYTES", int, default=4 * 1024 * 1024
 )
-REPORT_TRANSFER_MAX_ATTACHMENTS = get_typed_env("REPORT_TRANSFER_MAX_ATTACHMENTS", int, default=4)
+REPORT_TRANSFER_MAX_ATTACHMENTS = get_typed_env("REPORT_TRANSFER_MAX_ATTACHMENTS", int, default=12)
 REPORT_TRANSFER_MAX_IMAGE_PIXELS = get_typed_env(
     "REPORT_TRANSFER_MAX_IMAGE_PIXELS", int, default=16_000_000
 )
-# Provisional development value, pending privacy/product approval.
-REPORT_TRANSFER_RETENTION_HOURS = get_typed_env("REPORT_TRANSFER_RETENTION_HOURS", int, default=72)
+# Product ceiling: seven days from server acceptance; first explicit download may shorten it.
+REPORT_TRANSFER_RETENTION_HOURS = get_typed_env("REPORT_TRANSFER_RETENTION_HOURS", int, default=168)
 
 # Optional deployment-owned HTTPS egress proxy for outbound mail providers.
 # This is intentionally not a database/admin setting.

@@ -9,6 +9,10 @@ class ReportSubmission(models.Model):
     department = models.ForeignKey("organizations.Department", on_delete=models.PROTECT)
     station = models.ForeignKey("organizations.Station", on_delete=models.PROTECT)
     payload_digest = models.CharField(max_length=64)
+    # Blank/null identifies pre-ReportDocument development packages; no invented backfill.
+    document_digest = models.CharField(max_length=64, blank=True)
+    document_schema_version = models.PositiveSmallIntegerField(null=True)
+    first_download_at = models.DateTimeField(null=True)
     payload_key = models.CharField(max_length=64, blank=True)
     key_version = models.CharField(max_length=64)
     state = models.CharField(

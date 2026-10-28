@@ -135,6 +135,9 @@ def configuration():
         "max_jpeg_bytes": settings.REPORT_TRANSFER_MAX_JPEG_BYTES,
         "max_attachments": settings.REPORT_TRANSFER_MAX_ATTACHMENTS,
         "max_image_pixels": settings.REPORT_TRANSFER_MAX_IMAGE_PIXELS,
+        "document_schema_versions": [1],
+        "retention_max_hours": min(settings.REPORT_TRANSFER_RETENTION_HOURS, 168),
+        "retention_after_download_hours": 48,
     }
 
 
@@ -209,7 +212,8 @@ def decrypt_and_validate(envelope, header):
         settings.REPORT_TRANSFER_MAX_JSON_BYTES,
         {"data", "size", "sha256", "attachment_ids"},
     )
-    require(isinstance(parse_json(report), dict))
+    document = parse_json(report)
+    require(isinstance(document, dict))
     attachments = package["attachments"]
     require(
         isinstance(attachments, list)
@@ -234,6 +238,12 @@ def decrypt_and_validate(envelope, header):
         _jpeg(raw)
     require(len(set(identifier(v) for v in references)) == len(references))
     require(set(identifier(v) for v in references) == seen)
+    from apps.report_transfer.documents import document_digest
+
+    attachment_hashes = {item["id"]: item["sha256"] for item in attachments}
+    digest = document_digest(document, attachment_hashes)
+    require(document["report_id"] == header["report_id"])
+    return document, attachments, digest
 
 
 @sensitive_variables()

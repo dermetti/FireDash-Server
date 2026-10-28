@@ -104,9 +104,41 @@ def package(header, jpeg=True):
                 "media_type": "image/jpeg",
             }
         )
+    document = example_document(header["report_id"], [a["id"] for a in attachments])
     return {
-        "report": {**content(b"{}"), "attachment_ids": [a["id"] for a in attachments]},
+        "report": {
+            **content(json.dumps(document).encode()),
+            "attachment_ids": [a["id"] for a in attachments],
+        },
         "attachments": attachments,
+    }
+
+
+def example_document(report_id, attachment_ids=()):
+    return {
+        "report_id": report_id,
+        "schema_version": 1,
+        "report_type": "arbitrary.future-report",
+        "title": "Incident report",
+        "header": [
+            {"key": "reference", "label": "Reference", "value": {"type": "text", "value": "R-1"}}
+        ],
+        "sections": [
+            {
+                "key": "summary",
+                "title": "Summary",
+                "blocks": [
+                    {"key": "narrative", "kind": "text", "text": "Report narrative"},
+                ],
+            }
+        ],
+        "attachments": [
+            {"id": i, "title": "Evidence", "caption": "Scene photograph"} for i in attachment_ids
+        ],
+        "finalization": {
+            "author": {"id": "client-author-1", "display_name": "Test Author"},
+            "finalized_at": "2026-10-28T14:30:00+01:00",
+        },
     }
 
 
@@ -136,7 +168,9 @@ def test_accept_replay_status_and_ciphertext_only(context, report_key, jpeg, cap
     caplog.set_level(logging.DEBUG)
     installation, person, client, header = context
     body = package(header, jpeg)
-    body["report"].update(content(b'{"opaque":"report-marker-not-for-logs"}'))
+    document = json.loads(base64.urlsafe_b64decode(body["report"]["data"] + "=="))
+    document["sections"][0]["blocks"][0]["text"] = "report-marker-not-for-logs"
+    body["report"].update(content(json.dumps(document).encode()))
     envelope = encrypt(report_key, header, body)
     first = post(client, envelope)
     assert first.status_code == 201, first.content

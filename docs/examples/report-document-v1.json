@@ -1,0 +1,43 @@
+{
+  "report_id": "00000000-0000-4000-8000-000000000001",
+  "schema_version": 1,
+  "report_type": "custom.station-observation",
+  "title": "Example observation",
+  "header": [
+    {"key": "reference", "label": "Reference", "value": {"type": "text", "value": "DEMO-1"}}
+  ],
+  "sections": [
+    {
+      "key": "observations",
+      "title": "Observations",
+      "blocks": [
+        {"key": "narrative", "kind": "text", "text": "Synthetic demonstration content only."},
+        {
+          "key": "details", "kind": "fields",
+          "fields": [
+            {"key": "complete", "label": "Complete", "value": {"type": "boolean", "value": true}},
+            {"key": "count", "label": "Count", "value": {"type": "integer", "value": 2}}
+          ]
+        },
+        {
+          "key": "readings", "kind": "table",
+          "columns": [{"key": "name", "label": "Name"}, {"key": "reading", "label": "Reading"}],
+          "rows": [[{"type": "text", "value": "Example"}, {"type": "decimal", "value": "12.50"}]]
+        },
+        {
+          "key": "photo_refs", "kind": "attachment_refs",
+          "attachment_ids": ["00000000-0000-4000-8000-000000000002"]
+        }
+      ]
+    }
+  ],
+  "attachments": [
+    {"id": "00000000-0000-4000-8000-000000000002", "title": "Overview", "caption": "Example photo reference"},
+    {"id": "00000000-0000-4000-8000-000000000003", "title": "Signature", "caption": "Client-declared signature image"}
+  ],
+  "finalization": {
+    "author": {"id": "example-author", "display_name": "Example Person"},
+    "finalized_at": "2026-10-28T14:30:00+01:00",
+    "signature_attachment_id": "00000000-0000-4000-8000-000000000003"
+  }
+}

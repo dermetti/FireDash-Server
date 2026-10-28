@@ -1,7 +1,7 @@
 """Atomic acceptance and retryable expiry, separate from publications."""
 
 import hashlib
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -17,6 +17,7 @@ from apps.report_transfer.contract import (
     canonical,
     decrypt_and_validate,
     inspect_envelope,
+    require,
 )
 from apps.report_transfer.models import ReportSubmission
 from apps.tablets.models import AppInstallation
@@ -78,7 +79,7 @@ def submit(*, installation, envelope):
                 ):
                     raise TransferError("idempotency_conflict", 409)
                 return result(existing), False
-            decrypt_and_validate(envelope, header)
+            _, _, document_digest = decrypt_and_validate(envelope, header)
             storage.lock_spool()
             payload_key = storage.write_payload(raw)
             row = ReportSubmission.objects.create(
@@ -89,10 +90,12 @@ def submit(*, installation, envelope):
                 department_id=installation.tablet.department_id,
                 station_id=vehicle.station_id,
                 payload_digest=digest,
+                document_digest=document_digest,
+                document_schema_version=1,
                 payload_key=payload_key,
                 key_version=header["kid"],
                 expires_at=timezone.now()
-                + timedelta(hours=settings.REPORT_TRANSFER_RETENTION_HOURS),
+                + timedelta(hours=min(settings.REPORT_TRANSFER_RETENTION_HOURS, 168)),
             )
         return result(row), True
     except BaseException:
@@ -102,12 +105,12 @@ def submit(*, installation, envelope):
 
 
 def result(row):
-    state = "EXPIRED" if row.expires_at <= timezone.now() else row.state
+    state = "EXPIRED" if effective_expiry(row) <= timezone.now() else row.state
     return {
         "submission_id": str(row.submission_id),
         "report_id": str(row.report_id),
         "state": state,
-        "expires_at": row.expires_at.isoformat(),
+        "expires_at": effective_expiry(row).isoformat(),
     }
 
 
@@ -124,13 +127,47 @@ def status(*, installation, submission_id):
     return result(row)
 
 
+def effective_expiry(row):
+    deadline = min(row.expires_at, row.created_at + timedelta(days=7))
+    if row.first_download_at:
+        deadline = min(deadline, row.first_download_at + timedelta(hours=48))
+    return deadline
+
+
+def record_successful_download(*, submission_pk, completed_at=None):
+    """Trusted portal hook AFTER a completed explicit download, never a preview.
+
+    The caller must authorize the resource before serving it. This is intentionally
+    not an HTTP endpoint and does not grant access or manufacture delivery events.
+    """
+    with transaction.atomic():
+        row = ReportSubmission.objects.select_for_update().get(pk=submission_pk)
+        now = timezone.now()
+        if completed_at is None:
+            completed_at = now
+        require(isinstance(completed_at, datetime) and timezone.is_aware(completed_at))
+        require(row.created_at <= completed_at <= now)
+        if row.state != "READY" or effective_expiry(row) <= now:
+            raise TransferError("submission_expired", 410)
+        if row.first_download_at is None or completed_at < row.first_download_at:
+            row.first_download_at = completed_at
+        row.expires_at = effective_expiry(row)
+        row.save(update_fields=("first_download_at", "expires_at"))
+        return row.expires_at
+
+
 def cleanup(*, now=None):
     now = now or timezone.now()
     expired = failed = orphans = 0
     # One transaction per expired row: an unlink failure preserves the reference
     # for retry; a crash after unlink is safe because missing files are success.
     for pk in (
-        ReportSubmission.objects.filter(expires_at__lte=now, state="READY")
+        ReportSubmission.objects.filter(state="READY")
+        .filter(
+            Q(expires_at__lte=now)
+            | Q(created_at__lte=now - timedelta(days=7))
+            | Q(first_download_at__lte=now - timedelta(hours=48))
+        )
         .values_list("pk", flat=True)
         .iterator()
     ):
@@ -138,7 +175,7 @@ def cleanup(*, now=None):
             with transaction.atomic():
                 storage.lock_spool()
                 row = ReportSubmission.objects.select_for_update().get(pk=pk)
-                if row.state != "READY":
+                if row.state != "READY" or effective_expiry(row) > now:
                     continue
                 storage.remove_payload(row.payload_key)
                 row.payload_key = ""

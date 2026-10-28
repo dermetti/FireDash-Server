@@ -1,5 +1,10 @@
 # Report Transfer, Phase 3.1
 
+**Historical Phase 3.1 contract:** [Phase 3.2](report-transfer-phase3-2.md) now
+requires ReportDocument v1 inside the same encrypted transport and supersedes the
+provisional retention and attachment defaults below. Stored development packages
+retain exact replay/status compatibility; see the Phase 3.2 migration strategy.
+
 This local implementation covers RPT-001, RPT-010, RPT-020, RPT-030 and
 RPT-060–062 from `misc_md_files/v1.0 Architecture.md`. It accepts an entire
 encrypted package in one request. There is no email, portal, PDF export or

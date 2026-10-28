@@ -11,3 +11,4 @@ Pillow==12.3.0
 python-magic==0.4.27
 qrcode==8.2
 requests==2.33.0
+reportlab==4.5.1
