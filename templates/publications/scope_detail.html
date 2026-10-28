@@ -12,15 +12,15 @@
 
 <section class="mb-4">
   <h2 class="h5 mb-3">Version history</h2>
-  <table class="table table-hover align-middle">
-    <thead><tr><th>Version</th><th>Status</th><th>Created / published</th><th>Artifact</th><th class="text-end">Actions</th></tr></thead>
+  <div class="table-responsive"><table class="table table-hover align-middle">
+    <thead><tr><th>Version</th><th>Status</th><th>Created / published</th><th>Delivery availability</th><th class="text-end">Actions</th></tr></thead>
     <tbody>
       {% for publication in history_page %}
       <tr>
         <td class="fw-semibold">v{{ publication.version_number }}</td>
         <td><span class="badge text-bg-{{ publication.status|publication_status_badge }}">{{ publication.status|publication_status_label }}</span></td>
         <td>{% if publication.published_at %}{% if scope.department %}{{ publication.published_at|department_datetime:scope.department }}{% else %}{{ publication.published_at|date:"DATETIME_FORMAT" }}{% endif %}{% else %}{% if scope.department %}{{ publication.created_at|department_datetime:scope.department }}{% else %}{{ publication.created_at|date:"DATETIME_FORMAT" }}{% endif %}{% endif %}</td>
-        <td>{% if publication.status == "OBSOLETE" %}<span class="text-body-secondary">Unavailable</span>{% elif publication.artifact_ready %}Available{% else %}<span class="text-body-secondary">Not available</span>{% endif %}</td>
+        <td>{% if publication.status == "OBSOLETE" %}<span class="text-body-secondary">Unavailable</span>{% elif publication.delivery_available %}Available{% else %}<span class="text-body-secondary">Not available</span>{% endif %}</td>
         <td class="text-end">
           {% if publication.can_rollback or publication.can_delete_historical %}
           <div class="dropdown"><button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Actions</button><ul class="dropdown-menu dropdown-menu-end">
@@ -28,11 +28,12 @@
             {% if publication.can_delete_historical %}<li><button class="dropdown-item text-danger" type="button" hx-get="{% url 'publications-lifecycle-modal' publication.id 'delete' %}" hx-target="#publication-action-modal-container">Delete publication</button></li>{% endif %}
           </ul></div>
           {% else %}<span class="text-body-secondary">—</span>{% endif %}
+          {% if publication.rollback_blocked_reason %}<div class="small text-body-secondary mt-1">{{ publication.rollback_blocked_reason }}</div>{% endif %}
         </td>
       </tr>
       {% empty %}<tr><td colspan="5" class="text-center text-body-secondary py-4">No publication history.</td></tr>{% endfor %}
     </tbody>
-  </table>
+  </table></div>
   {% include "components/_pagination.html" with page=history_page %}
 </section>
 

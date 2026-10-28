@@ -273,7 +273,13 @@ def scope_operational_states_for_scopes(
                 "scope_id": scope.id,
                 "dataset_type_code": scope.dataset_type_code,
                 "dataset_name": definition.display_name,
-                "scope_label": scope.station.name if scope.station else "Department",
+                "scope_label": (
+                    "System"
+                    if scope.scope_type == "SYSTEM"
+                    else scope.station.name
+                    if scope.station
+                    else "Department"
+                ),
                 "station_short_code": scope.station.short_code if scope.station else "",
                 "scope_display_name": (
                     f"{definition.display_name} · {scope.station.short_code}"

@@ -37,6 +37,7 @@ from apps.publications.registry import (
     get_dataset_definition,
     validate_dataset_scope,
 )
+from apps.publications.restore import publication_restore_blocked_reason
 from apps.publications.wake import wake_publication_build_worker
 
 
@@ -259,7 +260,7 @@ def _newer_live_attempt_exists(*, scope: DatasetScopeState, version_number: int)
 def _eligible_predecessor(
     *, scope: DatasetScopeState, before_version: int
 ) -> DatasetPublication | None:
-    return (
+    candidates = (
         DatasetPublication.objects.select_for_update()
         .filter(
             scope_state=scope,
@@ -269,8 +270,11 @@ def _eligible_predecessor(
             artifact_ready=True,
         )
         .order_by("-version_number")
-        .first()
     )
+    for candidate in candidates:
+        if not publication_restore_blocked_reason(candidate, scope=scope, strict=True):
+            return candidate
+    return None
 
 
 @transaction.atomic
@@ -1168,6 +1172,17 @@ def publish_publication(*, actor, publication: DatasetPublication) -> DatasetPub
         dataset_type_code=publication.dataset_type_code,
     )
     publication = DatasetPublication.objects.select_for_update().get(pk=publication.pk)
+    if publication.status != DatasetPublication.Status.READY_FOR_REVIEW:
+        raise PublicationError("Only a review-ready publication can be published.")
+    if (
+        get_dataset_definition(publication.dataset_type_code).artifact_format
+        == "document-manifest-v2"
+    ):
+        reason = publication_restore_blocked_reason(
+            publication, scope=scope, strict=True, historical=False
+        )
+        if reason:
+            raise PublicationError(reason)
 
     if (
         publication.dataset_type_code in {"department_files", "station_files"}
@@ -1269,8 +1284,20 @@ def request_rebuild(
             )
             scope.full_clean()
             scope.save()
-        transaction.on_commit(
-            lambda: enqueue_publication_job(
+        if (
+            PublicationJob.objects.filter(
+                scope_state=scope, status__in=("PENDING", "RUNNING")
+            ).exists()
+            or DatasetPublication.objects.filter(
+                scope_state=scope, status__in=("STAGED", "BUILDING", "READY_FOR_REVIEW")
+            ).exists()
+        ):
+            raise PublicationError(
+                "Rebuild unavailable while another publication attempt is queued, "
+                "building or awaiting review."
+            )
+        try:
+            enqueue_publication_job(
                 department=department,
                 station=station,
                 dataset_type_code=dataset_type_code,
@@ -1278,7 +1305,12 @@ def request_rebuild(
                 trigger_type=PublicationJob.TriggerType.USER_REQUEST,
                 allow_clean_rebuild=True,
             )
-        )
+        except PublicationBuildError as error:
+            raise PublicationError(f"Rebuild source is unavailable: {error}") from error
+        if dataset_type_code == "department_files":
+            from apps.file_library.services import revoke_temporary_access
+
+            revoke_temporary_access(actor=actor, reason="department_mutation")
         transaction.on_commit(wake_publication_build_worker)
         record_event(
             action="publication.rebuild_requested",
@@ -1573,28 +1605,9 @@ def rollback_publication(*, actor, publication: DatasetPublication) -> DatasetPu
         dataset_type_code=publication.dataset_type_code,
     )
     publication = DatasetPublication.objects.select_for_update().get(pk=publication.pk)
-    if (
-        publication.scope_state_id != scope.id
-        or publication.status != DatasetPublication.Status.SUPERSEDED
-    ):
-        raise PublicationError("Only a superseded publication can be restored.")
-    if publication.artifact_status != DatasetPublication.ArtifactStatus.READY or (
-        not publication.artifact_path
-        and not (
-            publication.schema_version == 2
-            and publication.dataset_type_code
-            in {
-                "department_fire_plans",
-                "department_klgv_plans",
-                "department_files",
-                "station_files",
-            }
-        )
-    ):
-        raise PublicationError("Rollback target has no usable artifact.")
-    definition = get_dataset_definition(publication.dataset_type_code)
-    if publication.schema_version not in definition.supported_schema_versions:
-        raise PublicationError("Restore target has an unsupported dataset schema.")
+    reason = publication_restore_blocked_reason(publication, scope=scope, strict=True)
+    if reason:
+        raise PublicationError(reason)
     previous = scope.current_published_publication
     if previous is None:
         raise PublicationError("Dataset scope has no current publication.")

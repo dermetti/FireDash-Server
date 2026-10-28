@@ -716,3 +716,229 @@ def test_noop_hydrant_edit_does_not_mark_scope_or_stage_a_publication(publicatio
     scope.refresh_from_db()
     assert scope.source_revision == revision
     assert DatasetPublication.objects.filter(scope_state=scope).count() == attempts
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "code",
+    [
+        "dangerous_goods",
+        "department_files",
+        "department_fire_plans",
+        "department_hydrants",
+        "department_klgv_plans",
+        "department_phonebook",
+        "station_files",
+        "station_personnel",
+        "station_phonebook",
+        "test_system_dataset",
+    ],
+)
+def test_shared_detail_rebuild_for_registered_scopes(client, publication_ui_context, code):
+    admin, _, department, _, station = publication_ui_context
+    definition = get_dataset_definition(code)
+    system = definition.scope == "system"
+    if system:
+        SystemRole.objects.create(user=admin, created_by=admin)
+    scope = DatasetScopeState.objects.create(
+        scope_type=definition.scope.upper(),
+        department=None if system else department,
+        station=station if definition.scope == "station" else None,
+        dataset_type_code=code,
+    )
+    if code == "dangerous_goods":
+        import hashlib
+
+        from apps.publications.models import DatasetSourceRevision
+
+        source = b"{}"
+        DatasetSourceRevision.objects.create(
+            scope_state=scope,
+            source_revision=0,
+            sha256=hashlib.sha256(source).hexdigest(),
+            byte_size=len(source),
+            plaintext=source,
+            created_by=admin,
+        )
+    client.force_login(admin)
+    response = client.get(reverse("publications-scope-detail", args=(scope.id,)))
+    content = response.content.decode()
+    assert response.status_code == 200
+    assert "Publication actions" in content
+    from html.parser import HTMLParser
+
+    class PageStructure(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.ids = set()
+            self.in_form = False
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            if "id" in attributes:
+                assert attributes["id"] not in self.ids
+                self.ids.add(attributes["id"])
+            if tag == "form":
+                assert not self.in_form
+                self.in_form = True
+
+        def handle_endtag(self, tag):
+            if tag == "form":
+                self.in_form = False
+
+    PageStructure().feed(content)
+    assert "Rebuild publication" in content
+    assert 'name="confirm_rebuild" value="yes"' in content
+    assert reverse("publications-scope-rebuild", args=(scope.id,)) in content
+    assert 'name="csrfmiddlewaretoken"' in content
+    assert 'id="confirm-publication-rebuild"' in content
+    assert 'aria-labelledby="confirm-publication-rebuild-title"' in content
+    assert "Status &amp; context" in content
+    assert ("System" if system else "Station" if scope.station_id else "Department") in content
+    assert (
+        content.index("Status &amp; context")
+        < content.index("Publication actions")
+        < content.index("Version history")
+    )
+
+    session = client.session
+    session["recent_reauthentication_at"] = time.time()
+    session.save()
+    assert (
+        client.post(
+            reverse("publications-scope-rebuild", args=(scope.id,)), {"confirm_rebuild": "yes"}
+        ).status_code
+        == 302
+    )
+    job = PublicationJob.objects.get(scope_state=scope)
+    assert job.allow_clean_rebuild and job.requested_by == admin
+    assert not PublicationJob.objects.exclude(scope_state=scope).exists()
+
+
+@pytest.mark.django_db
+def test_current_rebuild_confirmation_and_duplicate_rejection(client, publication_ui_context):
+    admin, _, department, _, _ = publication_ui_context
+    scope, current = _current_scope(department=department)
+    client.force_login(admin)
+    url = reverse("publications-scope-rebuild", args=(scope.id,))
+    assert (
+        "Rebuild publication"
+        in client.get(reverse("publications-scope-detail", args=(scope.id,))).content.decode()
+    )
+    assert client.get(url).status_code == 405
+    assert client.post(url, {"confirm_rebuild": "yes"}).status_code == 302
+    assert not PublicationJob.objects.filter(scope_state=scope).exists()
+    session = client.session
+    session["recent_reauthentication_at"] = time.time()
+    session.save()
+    assert client.post(url).status_code == 400
+    assert client.post(url, {"confirm_rebuild": "no"}).status_code == 400
+    assert not PublicationJob.objects.filter(scope_state=scope).exists()
+    assert client.post(url, {"confirm_rebuild": "yes"}).status_code == 302
+    job = PublicationJob.objects.get(scope_state=scope)
+    assert job.allow_clean_rebuild and job.requested_by == admin
+    assert job.build_publication.version_number > current.version_number
+    assert client.post(url, {"confirm_rebuild": "yes"}).status_code == 302
+    assert PublicationJob.objects.filter(scope_state=scope).count() == 1
+    content = client.get(reverse("publications-scope-detail", args=(scope.id,))).content.decode()
+    assert 'disabled aria-describedby="rebuild-availability"' in content
+    assert 'id="confirm-publication-rebuild"' not in content
+    scope.refresh_from_db()
+    assert scope.current_published_publication == current
+    assert not PublicationJob.objects.exclude(scope_state=scope).exists()
+
+
+@pytest.mark.django_db
+def test_rebuild_csrf_and_wrong_department(client, publication_ui_context):
+    from django.test import Client
+
+    admin, outsider, department, _, _ = publication_ui_context
+    scope, _ = _current_scope(department=department)
+    url = reverse("publications-scope-rebuild", args=(scope.id,))
+    guarded = Client(enforce_csrf_checks=True)
+    guarded.force_login(admin)
+    assert guarded.post(url, {"confirm_rebuild": "yes"}).status_code == 403
+    client.force_login(outsider)
+    assert client.post(url, {"confirm_rebuild": "yes"}).status_code == 403
+    assert not PublicationJob.objects.filter(scope_state=scope).exists()
+
+
+@pytest.mark.django_db
+def test_rebuild_keeps_file_library_authority_boundaries(client, publication_ui_context):
+    from apps.authorization.models import StationAdminAssignment
+
+    admin, outsider, department, _, station = publication_ui_context
+    station_admin = User.objects.create_user(
+        "rebuild-station@example.test", "Station admin", "password"
+    )
+    StationAdminAssignment.objects.create(user=station_admin, station=station, created_by=admin)
+    other_station = Station.objects.create(department=department, name="Other", short_code="OTH")
+    own = DatasetScopeState.objects.create(
+        department=department,
+        station=station,
+        scope_type="STATION",
+        dataset_type_code="station_files",
+    )
+    wrong = DatasetScopeState.objects.create(
+        department=department,
+        station=other_station,
+        scope_type="STATION",
+        dataset_type_code="station_files",
+    )
+    department_scope = DatasetScopeState.objects.create(
+        department=department, dataset_type_code="department_files"
+    )
+    client.force_login(station_admin)
+    session = client.session
+    session["recent_reauthentication_at"] = time.time()
+    session.save()
+    for scope in (wrong, department_scope):
+        assert (
+            client.post(
+                reverse("publications-scope-rebuild", args=(scope.id,)), {"confirm_rebuild": "yes"}
+            ).status_code
+            == 403
+        )
+    assert (
+        client.post(
+            reverse("publications-scope-rebuild", args=(own.id,)), {"confirm_rebuild": "yes"}
+        ).status_code
+        == 302
+    )
+    SystemRole.objects.create(user=outsider, created_by=admin)
+    client.force_login(outsider)
+    assert (
+        client.post(
+            reverse("publications-scope-rebuild", args=(department_scope.id,)),
+            {"confirm_rebuild": "yes"},
+        ).status_code
+        == 403
+    )
+    assert PublicationJob.objects.filter(scope_state=own, allow_clean_rebuild=True).count() == 1
+    assert not PublicationJob.objects.exclude(scope_state=own).exists()
+
+
+@pytest.mark.django_db
+def test_rebuild_source_failure_is_controlled_and_preserves_current(
+    client, publication_ui_context, monkeypatch
+):
+    from apps.publications.builders import PublicationBuildError
+
+    admin, _, department, _, _ = publication_ui_context
+    scope, current = _current_scope(department=department)
+    client.force_login(admin)
+    session = client.session
+    session["recent_reauthentication_at"] = time.time()
+    session.save()
+
+    def unavailable(**kwargs):
+        raise PublicationBuildError("Accepted source missing")
+
+    monkeypatch.setattr(services, "_current_source_state", unavailable)
+    response = client.post(
+        reverse("publications-scope-rebuild", args=(scope.id,)), {"confirm_rebuild": "yes"}
+    )
+    assert response.status_code == 302
+    scope.refresh_from_db()
+    assert scope.current_published_publication_id == current.id
+    assert not PublicationJob.objects.filter(scope_state=scope).exists()

@@ -463,3 +463,50 @@ def test_concurrent_activation_committing_first_rejects_cancellation(lifecycle_s
     assert job.status == PublicationJob.Status.SUCCEEDED
     assert job.build_publication.status == DatasetPublication.Status.PUBLISHED
     assert scope.current_published_publication_id == job.build_publication_id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_rebuilds_allocate_one_immutable_attempt(lifecycle_scope):
+    admin, _, department, _, scope = lifecycle_scope
+    barrier = threading.Barrier(2)
+
+    def rebuild():
+        close_old_connections()
+        try:
+            actor = User.objects.get(pk=admin.id)
+            owner = Department.objects.get(pk=department.id)
+            barrier.wait(timeout=10)
+            try:
+                request_rebuild(
+                    actor=actor, department=owner, dataset_type_code=scope.dataset_type_code
+                )
+            except PublicationError:
+                return "blocked"
+            return "requested"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(rebuild) for _ in range(2)]
+        results = [future.result(timeout=15) for future in futures]
+    assert sorted(results) == ["blocked", "requested"]
+    assert PublicationJob.objects.filter(scope_state=scope, allow_clean_rebuild=True).count() == 1
+    assert DatasetPublication.objects.filter(scope_state=scope, status="STAGED").count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("running", [False, True])
+def test_rebuild_cannot_modify_an_existing_attempt(lifecycle_scope, running):
+    admin, _, department, _, scope = lifecycle_scope
+    request_rebuild(actor=admin, department=department, dataset_type_code=scope.dataset_type_code)
+    job = PublicationJob.objects.get(scope_state=scope)
+    if running:
+        job = claim_next_job()
+    original = (job.requested_by_id, job.build_publication_id, job.not_before, job.status)
+    with pytest.raises(PublicationError, match="Rebuild unavailable"):
+        request_rebuild(
+            actor=admin, department=department, dataset_type_code=scope.dataset_type_code
+        )
+    job.refresh_from_db()
+    assert (job.requested_by_id, job.build_publication_id, job.not_before, job.status) == original
+    assert PublicationJob.objects.filter(scope_state=scope).count() == 1

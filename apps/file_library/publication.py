@@ -114,13 +114,25 @@ class FileLibraryAdapter:
         snapshot = publication.source_snapshot
         if not isinstance(snapshot, dict) or not isinstance(snapshot.get("documents"), list):
             raise PublicationBuildError("Frozen file library is unavailable.")
+        entries = snapshot["documents"]
+        if (
+            not isinstance(snapshot.get("library"), dict)
+            or not isinstance(snapshot["library"].get("id"), str)
+            or not all(
+                isinstance(entry, dict)
+                and set(entry) == {"id", "name", "folder_id", "size_bytes", "sha256", "content_id"}
+                and isinstance(entry["id"], str)
+                and isinstance(entry["content_id"], str)
+                for entry in entries
+            )
+        ):
+            raise PublicationBuildError("Frozen file library metadata is invalid.")
         refs = {
             str(ref.document_id): ref.content
             for ref in PublicationContent.objects.filter(publication=publication).select_related(
                 "content"
             )
         }
-        entries = snapshot["documents"]
         if set(refs) != {e["id"] for e in entries} or len(refs) != len(entries):
             raise PublicationBuildError("Frozen library membership is incomplete.")
         result = []
@@ -185,9 +197,7 @@ def _publish_now(*, actor, library_id):
     if not readiness["can_publish"] and not readiness.get("publication_current"):
         from apps.file_library.services import LibraryError
 
-        raise LibraryError(
-            "Publication is unavailable. Check the current build status."
-        )
+        raise LibraryError("Publication is unavailable. Check the current build status.")
     kwargs = scope_kwargs(library)
     kwargs.pop("scope_type")
     job = enqueue_publication_job(

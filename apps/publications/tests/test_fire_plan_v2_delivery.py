@@ -860,3 +860,205 @@ def test_restore_valid_generic_generation_after_pdf_replacement(v2_delivery_cont
         HTTP_AUTHORIZATION=f"Bearer {credential}",
     )
     assert response.status_code == 200
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "code", ["department_fire_plans", "department_klgv_plans", "department_files", "station_files"]
+)
+@pytest.mark.parametrize("fault", ["missing", "legacy", "metadata", "references", "snapshot"])
+def test_incomplete_historical_generation_never_activates(v2_delivery_context, client, code, fault):
+    import time
+
+    from django.urls import reverse
+
+    from apps.publications.models import PublicationActivation
+    from apps.publications.services import (
+        PublicationError,
+        delete_publication,
+        rollback_publication,
+    )
+
+    user, department, scope, accepted, _, _, _ = v2_delivery_context
+    DepartmentMembership.objects.create(user=user, department=department, created_by=user)
+    if code != "department_fire_plans":
+        scope = DatasetScopeState.objects.create(
+            department=department,
+            dataset_type_code=code,
+            scope_type="STATION" if code == "station_files" else "DEPARTMENT",
+            station=Station.objects.get(department=department) if code == "station_files" else None,
+        )
+    # Historical broken rows can still say READY/SUPERSEDED. They must be
+    # rejected before any activation or database readiness trigger is reached.
+    snapshot = build_source_payload(
+        definition=get_dataset_definition(code), department=department, station=scope.station
+    )
+    old = DatasetPublication.objects.create(
+        department=department,
+        station=scope.station,
+        scope_type=scope.scope_type,
+        dataset_type_code=code,
+        scope_state=scope,
+        version_number=11,
+        schema_version=1 if fault == "legacy" else 2,
+        source_revision=1,
+        source_snapshot=(
+            {
+                **snapshot,
+                {"department_fire_plans": "fire_plans", "department_klgv_plans": "klgv_plans"}.get(
+                    code, "documents"
+                ): [{"id": str(uuid.uuid4())}],
+            }
+            if fault == "snapshot"
+            else snapshot
+        ),
+        status="SUPERSEDED",
+        artifact_ready=True,
+        artifact_status="READY",
+    )
+    if fault in {"metadata", "references"}:
+        # No immutable READY generation is edited: construct malformed historical
+        # input before finalizing it, as a pre-migration database could contain.
+        from apps.publications.models import DocumentGenerationKey, DocumentGenerationManifest
+
+        DocumentGenerationKey.objects.create(
+            publication=old,
+            wrapped_key=b"k" * 40,
+            wrapping_algorithm="AES-KW-RFC3394",
+            kek_version="test",
+        )
+        DocumentGenerationManifest.objects.create(
+            publication=old,
+            signature=b"s" * 64,
+            signature_algorithm="Ed25519",
+            signing_key_version="test",
+            payload={
+                "format": "document-generation-v2",
+                "dataset_type": code,
+                "publication_id": str(old.id),
+                "version": old.version_number,
+                "schema_version": 2,
+                "documents": [{"artifact_id": str(uuid.uuid4())}]
+                if fault == "references"
+                else "invalid",
+            },
+        )
+    # The authoritative pointer is a separate valid generation.
+    current = DatasetPublication.objects.create(
+        department=department,
+        station=scope.station,
+        scope_type=scope.scope_type,
+        dataset_type_code=code,
+        scope_state=scope,
+        version_number=14,
+        schema_version=2,
+        source_revision=1,
+        source_snapshot=snapshot,
+        status="BUILDING",
+    )
+    build_document_v2_generation(publication=current)
+    build_document_v2_manifest(publication=current)
+    current.status, current.artifact_status, current.artifact_ready = "PUBLISHED", "READY", True
+    current.save()
+    scope.current_published_publication = current
+    scope.save(update_fields=("current_published_publication",))
+    client.force_login(user)
+    session = client.session
+    session["recent_reauthentication_at"] = time.time()
+    session.save()
+    page = client.get(reverse("publications-scope-detail", args=(scope.id,)))
+    assert page.status_code == 200
+    assert not page.context["history_page"].object_list[1].can_rollback
+    assert (
+        "Incomplete document generation" in page.content.decode()
+        or "legacy document format" in page.content.decode()
+    )
+    assert (
+        reverse("publications-lifecycle-modal", args=(old.id, "rollback"))
+        not in page.content.decode()
+    )
+    assert "Danger zone" not in page.content.decode()
+    before = PublicationActivation.objects.count()
+    response = client.post(reverse("publications-lifecycle-modal", args=(old.id, "rollback")))
+    assert response.status_code == 200
+    with pytest.raises(PublicationError):
+        rollback_publication(actor=user, publication=old)
+    with pytest.raises(PublicationError, match="no safe predecessor"):
+        delete_publication(actor=user, publication=current)
+    scope.refresh_from_db()
+    old.refresh_from_db()
+    current.refresh_from_db()
+    assert scope.current_published_publication_id == current.id
+    assert old.status == "SUPERSEDED" and current.status == "PUBLISHED"
+    assert PublicationActivation.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "code", ["department_fire_plans", "department_klgv_plans", "department_files", "station_files"]
+)
+@pytest.mark.parametrize("operation", ["rollback", "delete"])
+def test_complete_empty_historical_generation_can_restore(v2_delivery_context, code, operation):
+    from apps.publications.services import rollback_publication
+
+    user, department, scope, _, _, _, _ = v2_delivery_context
+    DepartmentMembership.objects.create(user=user, department=department, created_by=user)
+    if code != "department_fire_plans":
+        scope = DatasetScopeState.objects.create(
+            department=department,
+            dataset_type_code=code,
+            scope_type="STATION" if code == "station_files" else "DEPARTMENT",
+            station=Station.objects.get(department=department) if code == "station_files" else None,
+        )
+    versions = []
+    for version in (1, 3):
+        publication = DatasetPublication.objects.create(
+            department=department,
+            station=scope.station,
+            scope_type=scope.scope_type,
+            dataset_type_code=code,
+            scope_state=scope,
+            version_number=version,
+            schema_version=2,
+            source_revision=1,
+            status="BUILDING",
+            source_snapshot=build_source_payload(
+                definition=get_dataset_definition(code),
+                department=department,
+                station=scope.station,
+            ),
+        )
+        build_document_v2_generation(publication=publication)
+        build_document_v2_manifest(publication=publication)
+        publication.status, publication.artifact_status, publication.artifact_ready = (
+            "SUPERSEDED" if version == 1 else "PUBLISHED",
+            "READY",
+            True,
+        )
+        publication.save()
+        versions.append(publication)
+    scope.current_published_publication = versions[1]
+    scope.save(update_fields=("current_published_publication",))
+    if operation == "delete":
+        from apps.publications.services import delete_publication
+
+        DatasetPublication.objects.create(
+            department=department,
+            station=scope.station,
+            scope_type=scope.scope_type,
+            dataset_type_code=code,
+            scope_state=scope,
+            version_number=2,
+            schema_version=2,
+            source_revision=1,
+            source_snapshot=versions[0].source_snapshot,
+            status="SUPERSEDED",
+            artifact_ready=True,
+            artifact_status="READY",
+        )
+        delete_publication(actor=user, publication=versions[1])
+    else:
+        rollback_publication(actor=user, publication=versions[0])
+    scope.refresh_from_db()
+    assert scope.current_published_publication_id == versions[0].id
+    assert versions[0].document_artifact_references.count() == 0

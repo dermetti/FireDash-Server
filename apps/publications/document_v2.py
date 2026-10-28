@@ -396,10 +396,19 @@ def process_next_generation_key_grant():
         return grant
 
 
-def validate_ready_document_generation(publication):
+def validate_ready_document_generation(publication, *, historical=False):
     """Validate persisted generic membership before model-level publication closeout."""
     adapter = document_dataset_adapter(dataset_type_code=publication.dataset_type_code)
-    entries = {str(e.canonical_document_id): e for e in adapter.frozen_documents(publication)}
+    # Historical delivery is bound to its immutable snapshot and encrypted
+    # references, not the mutable accepted PDF source used to build new versions.
+    from apps.publications.document_dataset_adapters import DocumentDatasetAdapter
+
+    frozen = (
+        adapter.frozen_documents(publication, resolve_accepted_source=False)
+        if historical and isinstance(adapter, DocumentDatasetAdapter)
+        else adapter.frozen_documents(publication)
+    )
+    entries = {str(e.canonical_document_id): e for e in frozen}
     manifest = DocumentGenerationManifest.objects.filter(publication=publication).first()
     key = DocumentGenerationKey.objects.filter(publication=publication).first()
     if (
@@ -450,6 +459,17 @@ def validate_ready_document_generation(publication):
         documents = [d for d in payload["documents"] if d.get("artifact_id") == str(artifact.id)]
         if (
             not entry
+            or not artifact.artifact_path
+            or artifact.ciphertext_size <= 0
+            or not re.fullmatch(r"[0-9a-f]{64}", artifact.ciphertext_sha256)
+            or len(bytes(artifact.nonce)) != 12
+            or len(bytes(artifact.wrapped_cek)) != 40
+            or artifact.encryption_algorithm != "AES-256-GCM"
+            or artifact.wrapping_algorithm != "AES-KW-RFC3394"
+            or not artifact.kek_version
+            or len(bytes(artifact.signature)) != 64
+            or artifact.signature_algorithm != "Ed25519"
+            or not artifact.signing_key_version
             or len(documents) != 1
             or artifact.dataset_type_code != publication.dataset_type_code
             or artifact.canonical_document_id != ref.canonical_document_id

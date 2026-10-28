@@ -28,7 +28,9 @@ class DocumentDatasetAdapter:
     manifest_metadata_key: str
     manifest_metadata_fields: tuple[str, ...]
 
-    def frozen_documents(self, publication) -> tuple[FrozenDocument, ...]:
+    def frozen_documents(
+        self, publication, *, resolve_accepted_source=True
+    ) -> tuple[FrozenDocument, ...]:
         if (
             publication.station_id
             or not publication.department_id
@@ -62,17 +64,21 @@ class DocumentDatasetAdapter:
         validated_identities = cast(list[tuple[str, str]], identities)
         is_fire_plan = self.dataset_type_code == "department_fire_plans"
         model = FirePlan if is_fire_plan else KlgvPlan
-        plans = {
-            str(plan.id): plan
-            for plan in model.objects.filter(
-                department_id=publication.department_id,
-                id__in=[document_id for document_id, _ in validated_identities],
-            )
-        }
-        if len(plans) != len(identities) or any(
-            plans[document_id].sha256 != digest for document_id, digest in validated_identities
-        ):
-            raise PublicationBuildError("Accepted document hash does not match frozen metadata.")
+        plans = {}
+        if resolve_accepted_source:
+            plans = {
+                str(plan.id): plan
+                for plan in model.objects.filter(
+                    department_id=publication.department_id,
+                    id__in=[document_id for document_id, _ in validated_identities],
+                )
+            }
+            if len(plans) != len(identities) or any(
+                plans[document_id].sha256 != digest for document_id, digest in validated_identities
+            ):
+                raise PublicationBuildError(
+                    "Accepted document hash does not match frozen metadata."
+                )
         metadata = {str(entry["id"]): entry for entry in entries}
         snapshot_fields = set(self.manifest_metadata_fields)
         if any(set(entry) != snapshot_fields for entry in metadata.values()):
@@ -99,13 +105,15 @@ class DocumentDatasetAdapter:
                     raise PublicationBuildError("Frozen document coordinates are incomplete.")
         return tuple(
             FrozenDocument(
-                canonical_document_id=plans[document_id].id,
+                canonical_document_id=UUID(document_id),
                 sanitized_pdf_sha256=digest,
                 metadata={
                     field: metadata[document_id][field] for field in self.manifest_metadata_fields
                 },
                 accepted_document_key=(
-                    plans[document_id].document_key if is_fire_plan else plans[document_id].path
+                    (plans[document_id].document_key if is_fire_plan else plans[document_id].path)
+                    if resolve_accepted_source
+                    else ""
                 ),
             )
             for document_id, digest in validated_identities

@@ -1,12 +1,26 @@
-{% if row.actions.delete_staged or row.actions.cancel_build or row.actions.build_now or row.actions.stage_update or row.actions.inspect_changes %}
-<section class="mb-4">
-  <h2 class="h5 mb-3">Actions</h2>
+<section class="card mb-4" aria-labelledby="publication-actions-heading">
+  <div class="card-body">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div><h2 id="publication-actions-heading" class="h5 mb-1">Publication actions</h2><p class="small text-body-secondary mb-0">Manage the publication for this dataset scope.</p></div>
   <div class="d-flex gap-2 flex-wrap">
     {% if row.actions.inspect_changes %}<button class="btn btn-outline-secondary" type="button" hx-get="{% url 'publications-inspect-changes' scope.id %}" hx-target="#publication-action-modal-container">Inspect changes</button>{% endif %}
     {% if row.actions.delete_staged %}<form method="post" action="{% url 'publications-scope-build-now' scope.id %}">{% csrf_token %}<button class="btn btn-primary"{% if not row.actions.build_now %} disabled aria-describedby="file-build-unavailable"{% endif %}>Build now</button></form><button class="btn btn-outline-danger" type="button" hx-get="{% url 'publications-lifecycle-modal' row.update_publication_id 'delete-staged' %}" hx-target="#publication-action-modal-container">Delete staged</button>{% endif %}
     {% if row.actions.cancel_build %}<button class="btn btn-outline-warning" type="button" hx-get="{% url 'publications-lifecycle-modal' row.update_publication_id 'cancel' %}" hx-target="#publication-action-modal-container">Cancel build</button>{% endif %}
     {% if row.actions.stage_update %}<form method="post" action="{% url 'publications-scope-stage-update' scope.id %}">{% csrf_token %}<button class="btn btn-primary">Stage update</button></form>{% endif %}
+    <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#confirm-publication-rebuild"{% if not row.actions.rebuild %} disabled aria-describedby="rebuild-availability"{% endif %}>Rebuild publication</button>
   </div>
+  </div>
+  {% if row.actions.rebuild %}<p class="small text-body-secondary mt-3 mb-0">Creates a new publication from the current source, even if no data has changed.</p>{% else %}<p id="rebuild-availability" class="small text-body-secondary mt-3 mb-0">{{ row.rebuild_unavailable_reason }}</p>{% endif %}
   {% if row.is_file_publication and row.actions.delete_staged and not row.actions.build_now %}<p id="file-build-unavailable" class="form-text">No eligible staged publication is available to build.</p>{% endif %}
+  </div>
 </section>
+
+{% if row.actions.rebuild %}
+<div class="modal fade" id="confirm-publication-rebuild" tabindex="-1" aria-labelledby="confirm-publication-rebuild-title" aria-hidden="true">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h2 class="modal-title fs-5" id="confirm-publication-rebuild-title">Rebuild {{ scope_title }}?</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body"><p>Build a new publication using the currently accepted source data, even if nothing has changed.</p><p class="text-body-secondary mb-0">This affects only this dataset scope. Existing published content remains authoritative until the new build succeeds.</p></div>
+    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><form method="post" action="{% url 'publications-scope-rebuild' scope.id %}" class="m-0">{% csrf_token %}<input type="hidden" name="confirm_rebuild" value="yes"><button type="submit" class="btn btn-primary">Confirm rebuild</button></form></div>
+  </div></div>
+</div>
 {% endif %}

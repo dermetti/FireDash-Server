@@ -90,9 +90,7 @@ def publish(actor, library):
 def test_scheduled_file_publication_detail_offers_build_now(client, scope, station_scope):
     actor = scope[1] if station_scope else scope[0]
     library = (
-        services.get_library(actor, station_id=scope[5].id)
-        if station_scope
-        else library_for(scope)
+        services.get_library(actor, station_id=scope[5].id) if station_scope else library_for(scope)
     )
     services.create_folder(actor=actor, library_id=library.id, name="Guides")
     job = PublicationJob.objects.get(**scope_kwargs(library), status="PENDING")
@@ -232,9 +230,14 @@ def test_publication_permissions_and_ui(scope, client, crypto):
     for actor, target in ((scope[0], station_library), (scope[1], library), (scope[2], library)):
         with pytest.raises(PermissionDenied):
             publish_now(actor=actor, library_id=target.id)
-    request_rebuild(
-        actor=scope[0], department=scope[3], station=scope[5], dataset_type_code="station_files"
-    )
+    from apps.publications.services import PublicationError
+
+    # Library initialization already queued this scope. An explicit rebuild
+    # must not rewrite that pending attempt, even for an authorized publisher.
+    with pytest.raises(PublicationError, match="Rebuild unavailable"):
+        request_rebuild(
+            actor=scope[0], department=scope[3], station=scope[5], dataset_type_code="station_files"
+        )
     with pytest.raises(PermissionDenied):
         request_rebuild(
             actor=scope[1],
