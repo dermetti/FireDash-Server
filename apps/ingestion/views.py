@@ -12,7 +12,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
-from apps.authorization.services import require_department_admin
+from apps.authorization.services import require_department_admin, require_system_admin
 from apps.ingestion.forms import (
     DangerousGoodsUploadForm,
     FirePlanCoordinateReviewForm,
@@ -46,10 +46,13 @@ def _department(request: HttpRequest, department_id) -> Department:
     return department
 
 
-def _dangerous_goods_context(*, department: Department) -> dict[str, Any]:
+def _dangerous_goods_context() -> dict[str, Any]:
     scope = (
         DatasetScopeState.objects.filter(
-            department=department, station__isnull=True, dataset_type_code="dangerous_goods"
+            scope_type="SYSTEM",
+            department__isnull=True,
+            station__isnull=True,
+            dataset_type_code="dangerous_goods",
         )
         .select_related("current_published_publication", "latest_built_publication")
         .first()
@@ -130,20 +133,20 @@ def _dangerous_goods_preview_details(document: dict[str, Any]) -> dict[str, Any]
 
 @login_required
 @require_http_methods(["GET"])
-def dangerous_goods(request: HttpRequest, department_id) -> HttpResponse:
-    department = _department(request, department_id)
+def dangerous_goods(request: HttpRequest) -> HttpResponse:
+    require_system_admin(request.user)
     return render(
         request,
         "ingestion/dangerous_goods.html",
-        {"department": department} | _dangerous_goods_context(department=department),
+        _dangerous_goods_context(),
     )
 
 
 @login_required
 @require_http_methods(["GET", "POST"])
-def dangerous_goods_modal(request: HttpRequest, department_id) -> HttpResponse:
-    department = _department(request, department_id)
-    context = {"department": department} | _dangerous_goods_context(department=department)
+def dangerous_goods_modal(request: HttpRequest) -> HttpResponse:
+    require_system_admin(request.user)
+    context = _dangerous_goods_context()
     if request.method == "GET":
         return render(
             request,
@@ -158,7 +161,7 @@ def dangerous_goods_modal(request: HttpRequest, department_id) -> HttpResponse:
     uploaded = form.cleaned_data["source"]
     payload = uploaded.read()
     batch = create_dangerous_goods_preview(
-        actor=request.user, department=department, filename=uploaded.name, payload=payload
+        actor=request.user, filename=uploaded.name, payload=payload
     )
     current = context["source"]
     return render(
@@ -179,13 +182,18 @@ def dangerous_goods_modal(request: HttpRequest, department_id) -> HttpResponse:
 
 @login_required
 @require_http_methods(["POST"])
-def dangerous_goods_apply(request: HttpRequest, department_id, batch_id) -> HttpResponse:
-    department = _department(request, department_id)
+def dangerous_goods_apply(request: HttpRequest, batch_id) -> HttpResponse:
+    require_system_admin(request.user)
     try:
         batch = apply_dangerous_goods_preview(actor=request.user, batch_id=batch_id)
     except ImportError as error:
-        batch = get_object_or_404(ImportBatch, pk=batch_id, department=department)
-        context = {"department": department} | _dangerous_goods_context(department=department)
+        batch = get_object_or_404(
+            ImportBatch,
+            pk=batch_id,
+            department__isnull=True,
+            domain=ImportBatch.Domain.DANGEROUS_GOODS,
+        )
+        context = _dangerous_goods_context()
         return render(
             request,
             "ingestion/_dangerous_goods_modal.html",
@@ -199,7 +207,7 @@ def dangerous_goods_apply(request: HttpRequest, department_id, batch_id) -> Http
             '{"dangerous-goods-modal-close": {}, "dangerous-goods-status-refresh": {}}'
         )
         return response
-    return redirect("ingestion-dangerous-goods", department_id=department.id)
+    return redirect("ingestion-dangerous-goods")
 
 
 def _dg_normalize(value: str) -> str:
@@ -264,9 +272,9 @@ def _dg_matches(document: dict[str, Any], query: str) -> list[dict[str, Any]]:
 
 @login_required
 @require_http_methods(["GET"])
-def dangerous_goods_inspect(request: HttpRequest, department_id) -> HttpResponse:
-    department = _department(request, department_id)
-    context = {"department": department} | _dangerous_goods_context(department=department)
+def dangerous_goods_inspect(request: HttpRequest) -> HttpResponse:
+    require_system_admin(request.user)
+    context = _dangerous_goods_context()
     query = request.GET.get("q", "").strip()
     context |= {
         "query": query,

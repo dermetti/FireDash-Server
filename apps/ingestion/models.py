@@ -40,7 +40,7 @@ class ImportBatch(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     domain = models.CharField(max_length=32, choices=Domain.choices)
     department = models.ForeignKey(
-        Department, on_delete=models.PROTECT, related_name="import_batches"
+        Department, null=True, blank=True, on_delete=models.PROTECT, related_name="import_batches"
     )
     station = models.ForeignKey(Station, null=True, blank=True, on_delete=models.PROTECT)
     import_format = models.CharField(max_length=16, choices=Format.choices)
@@ -67,3 +67,14 @@ class ImportBatch(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=("department", "status", "created_at"))]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        domain="dangerous_goods", department__isnull=True, station__isnull=True
+                    )
+                    | (~models.Q(domain="dangerous_goods") & models.Q(department__isnull=False))
+                ),
+                name="import_batch_domain_owner_shape",
+            )
+        ]

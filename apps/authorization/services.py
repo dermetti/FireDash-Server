@@ -211,6 +211,13 @@ def classify_system_admin_state(roles: list[Any]) -> str:
 
 def require_publication_scope(actor, *, department, station, dataset_type_code):
     """File-library capability does not confer general publication administration."""
+    from apps.publications.registry import get_dataset_definition
+
+    if get_dataset_definition(dataset_type_code).scope == "system":
+        if department is not None or station is not None:
+            raise PermissionDenied("Invalid system publication scope.")
+        require_system_admin(actor)
+        return
     if (
         dataset_type_code == "station_files"
         and not is_system_admin(actor)
@@ -233,8 +240,10 @@ def require_publication_scope(actor, *, department, station, dataset_type_code):
 
 
 def require_department_admin(actor, department: Department) -> None:
-    if department.status != Department.Status.ACTIVE or department.id not in active_department_ids(
-        actor
+    if (
+        department is None
+        or department.status != Department.Status.ACTIVE
+        or department.id not in active_department_ids(actor)
     ):
         raise PermissionDenied("Department administrator scope is required.")
 

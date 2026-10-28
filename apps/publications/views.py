@@ -15,7 +15,6 @@ from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from apps.accounts.reauth import require_recent_reauthentication
-from apps.authorization.scopes import active_department_ids
 from apps.authorization.services import (
     require_department_admin,
     require_publication_scope,
@@ -777,7 +776,6 @@ def publication_review(request: HttpRequest, publication_id) -> HttpResponse:
     publication = get_object_or_404(
         DatasetPublication.objects.select_related("department", "scope_state"),
         pk=publication_id,
-        department_id__in=active_department_ids(request.user),
     )
     require_publication_scope(
         request.user,

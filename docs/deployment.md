@@ -297,3 +297,25 @@ current source snapshots at claim time. Clean source is reconciled without forci
 rebuilds; explicit rebuild requests and scope authorization remain enforced. Normal
 source-library quotas remain configurable in System Settings. See
 [file-libraries.md](file-libraries.md#device-storage-is-managed-locally).
+
+### Combined Dangerous Goods deployment
+
+Deploy the SYSTEM ownership change together with Phase 2. Stop publication,
+manifest, and ingestion workers and prevent writes during the migration. Before
+running `ingestion.0005_system_dangerous_goods`, capture the legacy paths from
+`publications_datasetpublication.artifact_path` for `scope_type = 'DEPARTMENT'`
+and `dataset_type_code = 'dangerous_goods'`, and the `staging_key` values from
+`ingestion_importbatch` for `domain = 'dangerous_goods'`. Keep the inventory in
+a protected deployment location outside the repository. The paths are relative
+to `PUBLICATION_ARTIFACT_ROOT` and `INGESTION_STAGING_ROOT`, respectively.
+After the combined deployment has completed and the inventory has been checked
+against those roots, remove the listed legacy files using the deployment's
+normal artifact-cleanup process. The migration does not delete files.
+
+The migration removes legacy department Dangerous Goods database records and
+specifically attributable audit events. It temporarily suspends the audit and
+publication-activation immutability triggers only while holding their table
+locks in the migration transaction; the migration role must own those tables.
+The triggers are restored before commit. Do not grant the runtime role extra
+permissions. A verified backup and the captured inventory are needed before
+migration because the legacy data is not copied to SYSTEM.

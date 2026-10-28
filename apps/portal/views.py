@@ -1607,7 +1607,6 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
     from apps.authorization.services import vehicle_rescue_guides_capability
     from apps.file_library.models import Entry, Library
     from apps.personnel.models import Person
-    from apps.publications.models import DatasetScopeState
     from apps.publications.state import dataset_publication_summaries
     from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
 
@@ -1619,7 +1618,6 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
             "station_personnel",
             "department_fire_plans",
             "department_klgv_plans",
-            "dangerous_goods",
         },
     )
 
@@ -1645,16 +1643,6 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
             count=Entry.objects.filter(library=library, is_folder=False).count() if library else 0,
             usage_bytes=library.usage_bytes if library else 0,
             url=reverse("file-library-index"),
-        ),
-        module(
-            dataset_type_code="dangerous_goods",
-            count=DatasetScopeState.objects.filter(
-                department=department, dataset_type_code="dangerous_goods"
-            )
-            .values_list("source_revision", flat=True)
-            .first()
-            or 0,
-            url=reverse("ingestion-dangerous-goods", args=(department.id,)),
         ),
         module(
             dataset_type_code="department_phonebook",

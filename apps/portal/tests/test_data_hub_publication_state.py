@@ -304,14 +304,6 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
     assert response.status_code == 200
     expected = [
         (
-            "dangerous_goods",
-            "Dangerous Goods",
-            "warning",
-            "Source revision",
-            "Curated ADR dangerous-goods and ERI card reference data.",
-            "ingestion-dangerous-goods",
-        ),
-        (
             "department_phonebook",
             "Phonebook",
             "phone",
@@ -362,7 +354,7 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
     )
     content = response.content.decode()
     cards = HubCards(content).cards
-    assert len(cards) == 8  # File Management, six datasets, inherited configuration.
+    assert len(cards) == 7  # File Management, five datasets, inherited configuration.
     assert all(card["attrs"]["data-module-id"] != "system_outbound_email" for card in cards)
     assert all("Outbound Email" not in card["text"] for card in cards)
     assert cards[0]["attrs"]["href"] == reverse("file-library-index")
@@ -378,7 +370,7 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
     ]
     assert [tag for tag, _ in cards[0]["elements"] if tag in {"a", "button"}] == ["a"]
     for card, (module_id, title, icon, count_label, description, route) in zip(
-        cards[1:7], expected, strict=True
+        cards[1:-1], expected, strict=True
     ):
         assert card["attrs"]["data-module-id"] == module_id
         _assert_navigation_card(

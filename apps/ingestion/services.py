@@ -25,7 +25,7 @@ from django.utils import timezone
 from apps.assignments.models import PersonnelStationAssignment
 from apps.assignments.services import transfer_home
 from apps.audit.services import record_event
-from apps.authorization.services import require_department_admin
+from apps.authorization.services import require_department_admin, require_system_admin
 from apps.ingestion.dangerous_goods import DangerousGoodsValidationError, validate_dangerous_goods
 from apps.ingestion.models import ImportBatch
 from apps.ingestion.parsers import (
@@ -75,17 +75,22 @@ _INGESTION_BULK_BATCH_SIZE = 1_000
 logger = logging.getLogger(__name__)
 
 
-def _locked_dangerous_goods_scope(*, department) -> DatasetScopeState:
-    """Get the department source scope under the same lock used by publication."""
+def _locked_dangerous_goods_scope() -> DatasetScopeState:
+    """Get the system source scope under the same lock used by publication."""
     scope = (
         DatasetScopeState.objects.select_for_update()
-        .filter(department=department, station__isnull=True, dataset_type_code="dangerous_goods")
+        .filter(
+            scope_type="SYSTEM",
+            department__isnull=True,
+            station__isnull=True,
+            dataset_type_code="dangerous_goods",
+        )
         .first()
     )
     if scope is not None:
         return scope
     candidate = DatasetScopeState(
-        department=department, station=None, dataset_type_code="dangerous_goods"
+        scope_type="SYSTEM", department=None, station=None, dataset_type_code="dangerous_goods"
     )
     candidate.full_clean()
     try:
@@ -94,18 +99,19 @@ def _locked_dangerous_goods_scope(*, department) -> DatasetScopeState:
     except IntegrityError:
         pass
     return DatasetScopeState.objects.select_for_update().get(
-        department=department, station__isnull=True, dataset_type_code="dangerous_goods"
+        scope_type="SYSTEM",
+        department__isnull=True,
+        station__isnull=True,
+        dataset_type_code="dangerous_goods",
     )
 
 
-def create_dangerous_goods_preview(
-    *, actor, department, filename: str, payload: bytes
-) -> ImportBatch:
+def create_dangerous_goods_preview(*, actor, filename: str, payload: bytes) -> ImportBatch:
     """Validate and stage one curated file without changing the active source."""
-    require_department_admin(actor, department)
+    require_system_admin(actor)
     batch = ImportBatch(
         domain=ImportBatch.Domain.DANGEROUS_GOODS,
-        department=department,
+        department=None,
         import_format=ImportBatch.Format.JSON,
         import_mode=ImportBatch.Mode.AUTHORITATIVE_SNAPSHOT,
         original_filename=filename[:255],
@@ -124,7 +130,7 @@ def create_dangerous_goods_preview(
         batch.save()
         return batch
     with transaction.atomic():
-        scope = _locked_dangerous_goods_scope(department=department)
+        scope = _locked_dangerous_goods_scope()
         key, digest = stage_upload(batch_id=batch.id, payload=payload)
         batch.staging_key, batch.upload_sha256 = key, digest
         batch.baseline = {"source_revision": scope.source_revision}
@@ -136,7 +142,7 @@ def create_dangerous_goods_preview(
     record_event(
         action="ingestion.dangerous_goods_preview_created",
         actor_user=actor,
-        department=department,
+        department=None,
         target_type="import_batch",
         target_uuid=batch.id,
         metadata={"source_sha256": batch.upload_sha256, "byte_size": len(payload), **summary},
@@ -147,10 +153,16 @@ def create_dangerous_goods_preview(
 @transaction.atomic
 def apply_dangerous_goods_preview(*, actor, batch_id) -> ImportBatch:
     """Atomically install a still-current curated source, retaining exact bytes."""
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
-    require_department_admin(actor, batch.department)
+    require_system_admin(actor)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     if (
-        batch.domain != ImportBatch.Domain.DANGEROUS_GOODS
+        batch.department_id is not None
+        or batch.station_id is not None
+        or batch.domain != ImportBatch.Domain.DANGEROUS_GOODS
         or batch.status != ImportBatch.Status.PREVIEW_READY
     ):
         raise ImportError("Dangerous-goods import batch is not confirmable.")
@@ -166,7 +178,7 @@ def apply_dangerous_goods_preview(*, actor, batch_id) -> ImportBatch:
         _, summary = validate_dangerous_goods(payload)
     except DangerousGoodsValidationError as error:
         raise ImportError(str(error)) from error
-    scope = _locked_dangerous_goods_scope(department=batch.department)
+    scope = _locked_dangerous_goods_scope()
     if batch.baseline.get("source_revision") != scope.source_revision:
         raise ImportError("Dangerous-goods source changed; re-preview is required.")
     current = DatasetSourceRevision.objects.filter(
@@ -752,7 +764,11 @@ def phonebook_review_context(batch: ImportBatch) -> dict[str, Any]:
 
 @transaction.atomic
 def set_phonebook_reconciliation(*, actor, batch_id, row_index: int, action: str) -> ImportBatch:
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     require_department_admin(actor, batch.department)
     if (
         batch.status != ImportBatch.Status.PREVIEW_READY
@@ -1176,7 +1192,11 @@ def _preview_personnel(*, intent, department):
 @transaction.atomic
 def apply_preview(*, actor, batch_id) -> ImportBatch:
     """Apply exactly the staged, still-current preview once."""
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Import batch is not confirmable.")
@@ -1345,7 +1365,11 @@ def _fail_batch(batch, code):
 @transaction.atomic
 def cancel_preview(*, actor, batch_id) -> ImportBatch:
     """Cancel a preview once; canonical rows and publication state are untouched."""
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Only a ready preview can be cancelled.")
@@ -1904,7 +1928,11 @@ def set_review_decision(*, actor, batch_id, key: str, decision: str) -> ImportBa
     the exact staged preview; any canonical mutation after review re-triggers the
     stale-baseline check in ``apply_preview``.
     """
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Only a ready preview can be reviewed.")
@@ -1975,7 +2003,11 @@ def set_station_vehicle_resolution(
     The operation is intentionally not a canonical Station mutation.  It only
     makes the accepted Vehicle eligible for the later atomic Apply operation.
     """
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Only a ready preview can be reviewed.")
@@ -2041,7 +2073,11 @@ def set_personnel_home_station_resolution(
     *, actor, batch_id, key: str, station: Station
 ) -> ImportBatch:
     """Stage an explicit same-department resolution for an ambiguous home station."""
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Only a ready preview can be reviewed.")
@@ -2077,7 +2113,11 @@ def set_personnel_home_station_resolution(
 @transaction.atomic
 def approve_all_review_decisions(*, actor, batch_id) -> ImportBatch:
     """Approve every pending update; requires an explicit UI confirmation."""
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Only a ready preview can be reviewed.")
@@ -2195,7 +2235,11 @@ def set_review_coordinates(
     re-diffed, hash-bound preview.  This keeps manual data-quality completion
     inside the existing ImportBatch transaction/state machine.
     """
-    batch = ImportBatch.objects.select_for_update().select_related("department").get(pk=batch_id)
+    batch = (
+        ImportBatch.objects.select_for_update(of=("self",))
+        .select_related("department")
+        .get(pk=batch_id)
+    )
     require_department_admin(actor, batch.department)
     if batch.status != ImportBatch.Status.PREVIEW_READY:
         raise ImportError("Only a ready preview can be corrected.")

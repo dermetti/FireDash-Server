@@ -2,7 +2,7 @@
 {% load publications_extras department_presentation %}
 {% block title %}{{ scope_title }} — Publications{% endblock %}
 {% block content %}
-<p class="mb-1"><a href="{% url 'publications-list' scope.department_id %}">Back to Publications</a></p>
+<p class="mb-1">{% if scope.scope_type == "SYSTEM" %}<a href="{% url 'system-publications-list' %}">Back to System Publications</a>{% else %}<a href="{% url 'publications-list' scope.department_id %}">Back to Publications</a>{% endif %}</p>
 <h1 class="mb-1">{{ scope_title }}</h1>
 <p class="text-body-secondary">Publication history and current distributed state for this dataset scope.</p>
 
@@ -22,7 +22,7 @@
       <tr>
         <td class="fw-semibold">v{{ publication.version_number }}</td>
         <td><span class="badge text-bg-{{ publication.status|publication_status_badge }}">{{ publication.status|publication_status_label }}</span></td>
-        <td>{% if publication.published_at %}{{ publication.published_at|department_datetime:scope.department }}{% else %}{{ publication.created_at|department_datetime:scope.department }}{% endif %}</td>
+        <td>{% if publication.published_at %}{% if scope.department %}{{ publication.published_at|department_datetime:scope.department }}{% else %}{{ publication.published_at|date:"DATETIME_FORMAT" }}{% endif %}{% else %}{% if scope.department %}{{ publication.created_at|department_datetime:scope.department }}{% else %}{{ publication.created_at|date:"DATETIME_FORMAT" }}{% endif %}{% endif %}</td>
         <td>{% if publication.status == "OBSOLETE" %}<span class="text-body-secondary">Unavailable</span>{% elif publication.artifact_ready %}Available{% else %}<span class="text-body-secondary">Not available</span>{% endif %}</td>
         <td class="text-end">
           {% if publication.can_rollback or publication.can_delete_historical %}

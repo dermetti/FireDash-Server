@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import hmac
 import json
@@ -6,32 +5,16 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.conf import settings
-from django.test import Client, override_settings
 from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.assignments.models import TabletVehicleAssignment
-from apps.authorization.models import DepartmentMembership
 from apps.ingestion.dangerous_goods import validate_dangerous_goods
-from apps.ingestion.services import apply_dangerous_goods_preview, create_dangerous_goods_preview
 from apps.organizations.models import Department, Station, Vehicle
-from apps.publications.artifacts import _signature_payload
 from apps.publications.hpke import (
     HPKE_CIPHERSUITE,
-    HPKEContext,
-    hpke_open,
     serialize_p256_public_key,
-)
-from apps.publications.manifests import canonical_manifest_payload, request_manifest
-from apps.publications.models import DatasetPublication, PublicationJob, SignedManifest
-from apps.publications.services import process_next_job
-from apps.publications.worker_grants import (
-    process_next_dataset_key_grant,
-    process_next_signed_manifest,
 )
 from apps.tablets.models import AppInstallation, Tablet
 from apps.tablets.services import generate_credential
@@ -241,150 +224,16 @@ def test_compact_fixture_freezes_documented_schema_forms():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_tablet_receives_required_dangerous_goods_through_generic_encrypted_lifecycle(
-    settings, tmp_path, monkeypatch
-):
-    settings.INGESTION_STAGING_ROOT = tmp_path / "staging"
-    actor = User.objects.create_user("contract@example.test", "Contract", "password")
-    department = Department.objects.create(name="Contract", short_code="DGC", created_by=actor)
-    DepartmentMembership.objects.create(user=actor, department=department, created_by=actor)
-    payload = compact_payload()
-    preview = create_dangerous_goods_preview(
-        actor=actor, department=department, filename="dangerous_goods_v1.json", payload=payload
-    )
-    apply_dangerous_goods_preview(actor=actor, batch_id=preview.id)
-    job = PublicationJob.objects.get(department=department, dataset_type_code="dangerous_goods")
-    job.not_before = timezone.now()
-    job.save(update_fields=("not_before",))
+def test_system_dangerous_goods_is_not_exposed_to_tablets_in_phase_one(settings, tmp_path):
+    from apps.publications.registry import get_dataset_definition
 
-    kek_path, signing_path, ring_path = (
-        tmp_path / "kek",
-        tmp_path / "signing",
-        tmp_path / "ring.json",
-    )
-    kek_path.write_bytes(b"k" * 32)
-    signing_path.write_bytes(b"s" * 32)
-    signing_public = Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key().public_bytes_raw()
-    ring_path.write_text(
-        json.dumps({"keys": {"1": base64.b64encode(signing_public).decode("ascii")}}),
-        encoding="ascii",
-    )
-    monkeypatch.setattr("apps.publications.artifacts.grp", None)
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    with override_settings(
-        PUBLICATION_ARTIFACT_ROOT=tmp_path / "artifacts",
-        PUBLICATION_ARTIFACT_TEMP_ROOT=tmp_path / "temp",
-        PUBLICATION_KEK_CREDENTIAL_PATH=kek_path,
-        PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH=signing_path,
-        PUBLICATION_SIGNING_PUBLIC_KEY_RING_CREDENTIAL_PATH=ring_path,
-    ):
-        completed = process_next_job()
-        assert completed is not None and completed.status == PublicationJob.Status.SUCCEEDED
-        publication = DatasetPublication.objects.get(
-            department=department, dataset_type_code="dangerous_goods"
-        )
-        installation, credential = _installation(
-            department=department, actor=actor, private_key=private_key
-        )
-        assert request_manifest(installation=installation).unavailable
-        pending_manifest = process_next_signed_manifest()
-        assert pending_manifest is not None
-        assert pending_manifest.status == SignedManifest.Status.PENDING
-        ready_grant = process_next_dataset_key_grant()
-        assert ready_grant is not None
-        assert ready_grant.status == "READY"
-        ready_manifest = process_next_signed_manifest()
-        assert ready_manifest is not None
-        assert ready_manifest.status == SignedManifest.Status.READY
+    definition = get_dataset_definition("dangerous_goods")
+    assert definition.scope == "system"
+    assert definition.required is True
+    assert definition.system_exposure is False
+    from types import SimpleNamespace
 
-        client = Client()
-        manifest_response = client.get(
-            "/api/v1/tablet/manifest",
-            HTTP_AUTHORIZATION=_authorization(credential)["HTTP_AUTHORIZATION"],
-        )
-        assert manifest_response.status_code == 200
-        manifest = manifest_response.json()
-        unsigned = {key: value for key, value in manifest.items() if key != "signature"}
-        Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key().verify(
-            base64.b64decode(manifest["signature"]), canonical_manifest_payload(unsigned)
-        )
-        entry = next(item for item in manifest["datasets"] if item["type"] == "dangerous_goods")
-        assert manifest["configuration"]["department_id"] == str(department.id)
-        assert {
-            key: entry[key]
-            for key in ("type", "scope", "schema_version", "required", "artifact_format")
-        } == {
-            "type": "dangerous_goods",
-            "scope": {"type": "DEPARTMENT", "department_id": str(department.id)},
-            "schema_version": 1,
-            "required": True,
-            "artifact_format": "json",
-        }
-        assert entry["download_url"] == f"/api/v1/tablet/datasets/{publication.id}/download"
+    from apps.publications.manifests import _publication_is_exposed_to_installation
 
-        response = client.get(
-            entry["download_url"],
-            HTTP_ACCEPT="application/octet-stream",
-            HTTP_AUTHORIZATION=_authorization(credential)["HTTP_AUTHORIZATION"],
-        )
-        assert response.status_code == 200
-        assert (
-            response["X-Accel-Redirect"]
-            == f"/internal-protected-datasets/{publication.artifact_path}"
-        )
-        ciphertext = (tmp_path / "artifacts" / publication.artifact_path).read_bytes()
-        assert hashlib.sha256(ciphertext).hexdigest() == entry["ciphertext_sha256"]
-        assert publication.artifact_signature is not None
-        assert publication.artifact_wrapped_cek is not None
-        assert publication.artifact_nonce is not None
-        Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key().verify(
-            bytes(publication.artifact_signature),
-            _signature_payload(
-                publication=publication,
-                wrapped_cek=bytes(publication.artifact_wrapped_cek),
-                nonce=bytes(publication.artifact_nonce),
-                ciphertext=ciphertext,
-            ),
-        )
-        grant = entry["key_grant"]
-        context = HPKEContext(
-            publication_id=publication.id,
-            installation_id=installation.id,
-            tablet_id=installation.tablet_id,
-            department_id=department.id,
-            station_id=None,
-            dataset_type_code="dangerous_goods",
-            version_number=publication.version_number,
-            schema_version=1,
-            ciphertext_sha256=publication.artifact_sha256,
-        )
-        assert json.loads(context.info())["scope"] == {
-            "dataset_type_code": "dangerous_goods",
-            "department_id": str(department.id),
-            "station_id": None,
-        }
-        cek = hpke_open(
-            encapsulated_key=base64.b64decode(grant["encapsulated_key"]),
-            ciphertext=base64.b64decode(grant["wrapped_content_key"]),
-            recipient_private_key=private_key,
-            context=context,
-        )
-        assert AESGCM(cek).decrypt(bytes(publication.artifact_nonce), ciphertext, None) == payload
-
-        other_department = Department.objects.create(
-            name="Other", short_code="DGO", created_by=actor
-        )
-        other_installation, other_credential = _installation(
-            department=other_department,
-            actor=actor,
-            private_key=ec.generate_private_key(ec.SECP256R1()),
-        )
-        assert request_manifest(installation=other_installation).unavailable
-        other_manifest = process_next_signed_manifest()
-        assert other_manifest is not None
-        assert other_manifest.status == SignedManifest.Status.READY
-        denied = client.get(
-            entry["download_url"],
-            HTTP_AUTHORIZATION=_authorization(other_credential)["HTTP_AUTHORIZATION"],
-        )
-        assert denied.status_code == 404
+    publication = SimpleNamespace(scope_type="SYSTEM", dataset_type_code="dangerous_goods")
+    assert not _publication_is_exposed_to_installation(publication=publication, installation=None)

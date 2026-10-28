@@ -62,7 +62,7 @@ _DEFINITIONS = tuple(
     DatasetTypeDefinition(
         code="dangerous_goods",
         display_name="Dangerous goods",
-        scope="department",
+        scope="system",
         artifact_format="json",
         current_schema_version=1,
         encryption_required=True,

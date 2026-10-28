@@ -308,7 +308,7 @@ metadata by an explicit stable `module.id`; `_data_hub_card.html` owns the
 shared card markup and uses the local `_data_hub_icon.html` SVG partial.
 Do not select cards or key tests by mutable display titles.
 
-Department module IDs, in card order, are `file_management`, `dangerous_goods`,
+Department module IDs, in card order, are `file_management`,
 `department_phonebook`, `department_hydrants`, `station_personnel`,
 `department_fire_plans` and `department_klgv_plans`. File Management uses the shared `_data_hub_module.html` and `_data_hub_card.html`
 renderer, with Total size and Publication metrics. The System Data Hub

@@ -3,7 +3,7 @@
     <div class="modal-content">
       <div class="modal-header"><h2 class="modal-title fs-5">Inspect Data</h2><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
-        <input class="form-control mb-3" name="q" value="{{ query }}" placeholder="UN-Nummer, Bezeichnung oder Alias" hx-get="{% url 'ingestion-dangerous-goods-inspect' department.id %}" hx-trigger="input changed delay:300ms" hx-target="#dangerous-goods-modal-container" hx-swap="innerHTML">
+        <input class="form-control mb-3" name="q" value="{{ query }}" placeholder="UN-Nummer, Bezeichnung oder Alias" hx-get="{% url 'ingestion-dangerous-goods-inspect' %}" hx-trigger="input changed delay:300ms" hx-target="#dangerous-goods-modal-container" hx-swap="innerHTML">
         {% for good in results %}
           <article class="border rounded p-3 mb-3">
             <h3 class="h6">UN {{ good.un_number }} · {{ good.inspection_title }}</h3>

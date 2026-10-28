@@ -5,7 +5,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from apps.accounts.models import User
-from apps.authorization.models import DepartmentMembership
+from apps.authorization.models import DepartmentMembership, SystemRole
 from apps.ingestion.services import apply_dangerous_goods_preview, create_dangerous_goods_preview
 from apps.organizations.models import Department
 from apps.publications.models import DatasetScopeState, DatasetSourceRevision
@@ -132,6 +132,7 @@ def goods_ui(db, settings, tmp_path):
     admin = User.objects.create_user("goods-ui@example.test", "Goods Admin", "safe-password")
     department = Department.objects.create(name="Goods UI", short_code="GUI", created_by=admin)
     DepartmentMembership.objects.create(user=admin, department=department, created_by=admin)
+    SystemRole.objects.create(user=admin)
     outsider = User.objects.create_user("other-ui@example.test", "Other Admin", "safe-password")
     other = Department.objects.create(name="Other UI", short_code="OUI", created_by=outsider)
     DepartmentMembership.objects.create(user=outsider, department=other, created_by=outsider)
@@ -139,16 +140,16 @@ def goods_ui(db, settings, tmp_path):
 
 
 def page_url(department):
-    return reverse("ingestion-dangerous-goods", args=(department.id,))
+    return reverse("ingestion-dangerous-goods", args=())
 
 
 def modal_url(department):
-    return reverse("ingestion-dangerous-goods-modal", args=(department.id,))
+    return reverse("ingestion-dangerous-goods-modal", args=())
 
 
 def apply_source(*, actor, department, source):
     preview = create_dangerous_goods_preview(
-        actor=actor, department=department, filename="dangerous_goods_v1.json", payload=source
+        actor=actor, filename="dangerous_goods_v1.json", payload=source
     )
     return apply_dangerous_goods_preview(actor=actor, batch_id=preview.id)
 
@@ -202,15 +203,13 @@ def test_replace_preview_apply_noop_and_stale_are_safe(client, goods_ui):
 
     batch = preview.context["batch"]
     applied = client.post(
-        reverse("ingestion-dangerous-goods-apply", args=(department.id, batch.id)),
+        reverse("ingestion-dangerous-goods-apply", args=(batch.id,)),
         HTTP_HX_REQUEST="true",
     )
     assert applied.status_code == 200
     assert "dangerous-goods-modal-close" in applied["HX-Trigger"]
     assert "dangerous-goods-status-refresh" in applied["HX-Trigger"]
-    scope = DatasetScopeState.objects.get(
-        department=department, dataset_type_code="dangerous_goods"
-    )
+    scope = DatasetScopeState.objects.get(department=None, dataset_type_code="dangerous_goods")
     retained = DatasetSourceRevision.objects.get(scope_state=scope, source_revision=1)
     assert bytes(retained.plaintext) == original
 
@@ -225,13 +224,12 @@ def test_replace_preview_apply_noop_and_stale_are_safe(client, goods_ui):
 
     stale = create_dangerous_goods_preview(
         actor=admin,
-        department=department,
         filename="stale.json",
         payload=payload(first_name="Stale"),
     )
     apply_source(actor=admin, department=department, source=payload(first_name="Current"))
     rejected = client.post(
-        reverse("ingestion-dangerous-goods-apply", args=(department.id, stale.id)),
+        reverse("ingestion-dangerous-goods-apply", args=(stale.id,)),
         HTTP_HX_REQUEST="true",
     )
     assert rejected.status_code == 409
@@ -244,7 +242,7 @@ def test_inspection_searches_variants_aliases_and_renders_tablet_fields(client, 
     admin, department, _, _ = goods_ui
     apply_source(actor=admin, department=department, source=payload())
     client.force_login(admin)
-    inspect_url = reverse("ingestion-dangerous-goods-inspect", args=(department.id,))
+    inspect_url = reverse("ingestion-dangerous-goods-inspect", args=())
 
     un_response = client.get(inspect_url, {"q": "UN-1234"}, HTTP_HX_REQUEST="true")
     assert un_response.status_code == 200
@@ -272,8 +270,30 @@ def test_inspection_is_department_isolated(client, goods_ui):
     admin, department, outsider, other = goods_ui
     apply_source(actor=admin, department=department, source=payload())
     client.force_login(outsider)
-    url = reverse("ingestion-dangerous-goods-inspect", args=(department.id,))
+    url = reverse("ingestion-dangerous-goods-inspect", args=())
     assert client.get(url, {"q": "1234"}).status_code == 403
     client.force_login(admin)
-    other_url = reverse("ingestion-dangerous-goods-inspect", args=(other.id,))
-    assert client.get(other_url, {"q": "1234"}).status_code == 403
+    assert client.get(url, {"q": "1234"}).status_code == 200
+
+
+@pytest.mark.django_db(transaction=True)
+def test_system_publications_and_scope_detail_authorization(client, goods_ui):
+    admin, department, outsider, _ = goods_ui
+    client.force_login(admin)
+    response = client.get(reverse("system-publications-list"))
+    assert response.status_code == 200
+    assert reverse("ingestion-dangerous-goods") in response.content.decode()
+    apply_source(actor=admin, department=department, source=payload())
+    scope = DatasetScopeState.objects.get(dataset_type_code="dangerous_goods", scope_type="SYSTEM")
+    detail = reverse("publications-scope-detail", args=(scope.id,))
+    assert client.get(detail).status_code == 200
+    client.force_login(outsider)
+    assert client.get(reverse("system-publications-list")).status_code == 403
+    assert client.get(detail).status_code == 403
+    for route in (
+        "publications-scope-rebuild",
+        "publications-scope-stage-update",
+        "publications-scope-build-now",
+    ):
+        assert client.post(reverse(route, args=(scope.id,))).status_code == 403
+    assert client.get(reverse("ingestion-dangerous-goods-modal")).status_code == 403

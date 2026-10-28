@@ -538,11 +538,12 @@ def _artifact_phonebook(
 
 
 def _dangerous_goods_source_payload(*, department, station) -> dict[str, Any]:
-    if station is not None:
-        raise PublicationBuildError("Dangerous-goods source requires a department scope.")
+    if department is not None or station is not None:
+        raise PublicationBuildError("Dangerous-goods source requires a system scope.")
     source = (
         DatasetSourceRevision.objects.filter(
-            scope_state__department=department,
+            scope_state__scope_type="SYSTEM",
+            scope_state__department__isnull=True,
             scope_state__station__isnull=True,
             scope_state__dataset_type_code="dangerous_goods",
         )
@@ -558,7 +559,8 @@ def _dangerous_goods_source(
     *, department, source_revision: int, source_snapshot
 ) -> DatasetSourceRevision:
     source = DatasetSourceRevision.objects.filter(
-        scope_state__department=department,
+        scope_state__scope_type="SYSTEM",
+        scope_state__department__isnull=True,
         scope_state__station__isnull=True,
         scope_state__dataset_type_code="dangerous_goods",
         source_revision=source_revision,
@@ -572,10 +574,11 @@ def _dangerous_goods_source(
 
 
 def _build_dangerous_goods(*, department, station, source_revision: int) -> dict[str, Any]:
-    if station is not None:
-        raise PublicationBuildError("Dangerous-goods builder requires a department scope.")
+    if department is not None or station is not None:
+        raise PublicationBuildError("Dangerous-goods builder requires a system scope.")
     source = DatasetSourceRevision.objects.filter(
-        scope_state__department=department,
+        scope_state__scope_type="SYSTEM",
+        scope_state__department__isnull=True,
         scope_state__station__isnull=True,
         scope_state__dataset_type_code="dangerous_goods",
         source_revision=source_revision,
@@ -592,8 +595,8 @@ def _build_dangerous_goods(*, department, station, source_revision: int) -> dict
 def _artifact_dangerous_goods(
     *, department, station, source_revision: int, source_snapshot=None
 ) -> bytes:
-    if station is not None:
-        raise PublicationBuildError("Dangerous-goods artifact requires a department scope.")
+    if department is not None or station is not None:
+        raise PublicationBuildError("Dangerous-goods artifact requires a system scope.")
     return bytes(
         _dangerous_goods_source(
             department=department, source_revision=source_revision, source_snapshot=source_snapshot
