@@ -1,8 +1,15 @@
 from django.urls import path
 
+from apps.report_transfer.api import SubmissionStatusView, SubmissionView
 from apps.tablets import api
 
 urlpatterns = [
+    path("tablet/report-submissions", SubmissionView.as_view(), name="api-report-submissions"),
+    path(
+        "tablet/report-submissions/<uuid:submission_id>/status",
+        SubmissionStatusView.as_view(),
+        name="api-report-submission-status",
+    ),
     path("adoption/preview", api.AdoptionPreviewView.as_view(), name="api-adoption-preview"),
     path("adoption/complete", api.AdoptionCompleteView.as_view(), name="api-adoption-complete"),
     path("tablet/check-in", api.CheckInView.as_view(), name="api-tablet-check-in"),

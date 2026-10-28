@@ -175,6 +175,7 @@ def test_attachment_limit_keeps_configuration_and_signed_manifest_current(
             "station_id",
             "vehicle_id",
             "report_delivery_max_attachment_bytes",
+            "report_transfer",
         }
         unsigned = {key: value for key, value in payload.items() if key != "signature"}
         public_key.verify(

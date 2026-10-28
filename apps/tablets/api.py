@@ -256,6 +256,7 @@ class ConfigurationResponseSerializer(serializers.Serializer[dict[str, object]])
     station_id = serializers.UUIDField(allow_null=True)
     vehicle_id = serializers.UUIDField(allow_null=True)
     report_delivery_max_attachment_bytes = serializers.IntegerField(min_value=1)
+    report_transfer = serializers.JSONField()
 
 
 class ManifestPendingResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -601,7 +602,7 @@ class StatusView(InstallationAPIView):
         )
 
 
-def _configuration(installation: AppInstallation) -> dict[str, str | int | None]:
+def _configuration(installation: AppInstallation) -> dict[str, object]:
     installation, vehicle = control_plane_context(installation=installation, now=timezone.now())
     return tablet_configuration(installation=installation, vehicle=vehicle)
 

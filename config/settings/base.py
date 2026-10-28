@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     "apps.portal",
     "apps.health",
     "apps.outbound_mail",
+    "apps.report_transfer",
     "apps.file_library",
 ]
 
@@ -325,6 +326,28 @@ APPLICATION_SECRET_KEK_CREDENTIAL_PATH = credential_path(
     credential_name="application-secret-kek-ring",
 )
 APPLICATION_SECRET_KEK_VERSION = get_env("APPLICATION_SECRET_KEK_VERSION", default="1")
+
+# Dedicated report credentials and non-backed-up ciphertext spool. No fallback key.
+REPORT_TRANSFER_KEYRING_PATH = credential_path(
+    override_name="REPORT_TRANSFER_KEYRING_PATH", credential_name="report-transfer-keyring"
+)
+REPORT_TRANSFER_ACTIVE_KEY = get_env("REPORT_TRANSFER_ACTIVE_KEY", default="1")
+REPORT_TRANSFER_ROOT = Path(get_env("REPORT_TRANSFER_ROOT", default="/var/spool/firedash-reports"))
+REPORT_TRANSFER_MAX_REQUEST_BYTES = get_typed_env(
+    "REPORT_TRANSFER_MAX_REQUEST_BYTES", int, default=24 * 1024 * 1024
+)
+REPORT_TRANSFER_MAX_JSON_BYTES = get_typed_env(
+    "REPORT_TRANSFER_MAX_JSON_BYTES", int, default=1024 * 1024
+)
+REPORT_TRANSFER_MAX_JPEG_BYTES = get_typed_env(
+    "REPORT_TRANSFER_MAX_JPEG_BYTES", int, default=4 * 1024 * 1024
+)
+REPORT_TRANSFER_MAX_ATTACHMENTS = get_typed_env("REPORT_TRANSFER_MAX_ATTACHMENTS", int, default=4)
+REPORT_TRANSFER_MAX_IMAGE_PIXELS = get_typed_env(
+    "REPORT_TRANSFER_MAX_IMAGE_PIXELS", int, default=16_000_000
+)
+# Provisional development value, pending privacy/product approval.
+REPORT_TRANSFER_RETENTION_HOURS = get_typed_env("REPORT_TRANSFER_RETENTION_HOURS", int, default=72)
 
 # Optional deployment-owned HTTPS egress proxy for outbound mail providers.
 # This is intentionally not a database/admin setting.
