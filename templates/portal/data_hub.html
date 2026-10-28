@@ -10,7 +10,7 @@
 {% if inherited_system_configurations %}
 <section class="mt-5" aria-labelledby="system-configuration-heading">
   <h2 id="system-configuration-heading" class="h4">System-provided configuration</h2>
-  <p class="text-body-secondary">These settings are administered globally and inherited read-only. They are not publications.</p>
+  <p class="text-body-secondary">These configurations and publication statuses are managed globally and shown read-only.</p>
   <div class="row row-cols-1 row-cols-md-2 g-3">
     {% for configuration in inherited_system_configurations %}
       {% if configuration.id == "system_vehicle_rescue_guides" %}
@@ -28,6 +28,26 @@
               <dt class="col-7">Delivery</dt><dd class="col-5 text-end">{% if configuration.mode == "web" %}Web{% endif %}</dd>
               <dt class="col-7">Ownership</dt><dd class="col-5 text-end text-body-secondary">System managed</dd>
               <dt class="col-7">Web application</dt><dd class="col-5 text-end text-break"><a href="{{ configuration.web_url }}" rel="noopener noreferrer" target="_blank">{{ configuration.web_url }}</a></dd>
+            </dl>
+          </div>
+        </article>
+      </div>
+      {% elif configuration.id == "dangerous_goods" %}
+      <div class="col">
+        <article class="card h-100 shadow-sm" data-module-id="dangerous_goods">
+          <div class="card-body d-flex flex-column">
+            <div class="d-flex align-items-center gap-3 mb-3">
+              <span class="firedash-module-icon text-primary" aria-hidden="true">{% include "components/_data_hub_icon.html" with icon="warning" %}</span>
+              <h3 class="h5 mb-0">Dangerous Goods</h3>
+            </div>
+            <p class="text-body-secondary">Centrally managed ADR and ERI card reference data.</p>
+            <dl class="row small mb-0">
+              <dt class="col-7">Status</dt><dd class="col-5 text-end">{% if configuration.publication_version %}<span class="badge text-bg-success">Published</span>{% else %}<span class="badge text-bg-secondary">Not published</span>{% endif %}</dd>
+              <dt class="col-7">Publication</dt><dd class="col-5 text-end text-body-secondary">{% if configuration.publication_version %}v{{ configuration.publication_version }}{% else %}?{% endif %}</dd>
+              <dt class="col-7">Ownership</dt><dd class="col-5 text-end text-body-secondary">System managed</dd>
+              {% if configuration.publication_version and configuration.publication_state != "Current" %}
+              <dt class="col-7">Update</dt><dd class="col-5 text-end text-body-secondary">{{ configuration.publication_state }}</dd>
+              {% endif %}
             </dl>
           </div>
         </article>

@@ -6,7 +6,13 @@
             <h2 class="h5 mb-0">{{ name }}</h2>
           </div>
           <p class="text-body-secondary">{{ description }}</p>
-          {% if system_module %}
+          {% if system_module and module.id == "dangerous_goods" %}
+          <dl class="row small mb-0">
+            <dt class="col-7">Source revision</dt><dd class="col-5 text-end">{{ module.count }}</dd>
+            <dt class="col-7">Publication</dt>
+            <dd class="col-5 text-end text-body-secondary">{% if module.publication_version %}v{{ module.publication_version }} &middot; {{ module.publication_state }}{% else %}Not published{% endif %}</dd>
+          </dl>
+          {% elif system_module %}
           <dl class="row small mb-0">
             <dt class="col-7">Status</dt><dd class="col-5 text-end"><span class="badge text-bg-{{ status_css }}">{{ status }}</span></dd>
             <dt class="col-7">Provider</dt><dd class="col-5 text-end">{% if module.provider == "euro_rescue" %}Euro RESCUE{% else %}{{ module.provider }}{% endif %}</dd>

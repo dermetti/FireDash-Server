@@ -46,6 +46,7 @@ def _publication(*, department, scope, version, status):
     values = {
         "id": publication_id,
         "department": department,
+        "scope_type": scope.scope_type,
         "dataset_type_code": scope.dataset_type_code,
         "scope_state": scope,
         "version_number": version,
@@ -59,7 +60,8 @@ def _publication(*, department, scope, version, status):
                 "artifact_ready": True,
                 "artifact_status": DatasetPublication.ArtifactStatus.READY,
                 "artifact_path": publication_artifact_relative_path(
-                    department_id=department.id, publication_id=publication_id
+                    department_id=department.id if department else None,
+                    publication_id=publication_id, scope_type=scope.scope_type
                 ),
                 "artifact_size": 1,
                 "artifact_sha256": "a" * 64,
@@ -354,7 +356,7 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
     )
     content = response.content.decode()
     cards = HubCards(content).cards
-    assert len(cards) == 7  # File Management, five datasets, inherited configuration.
+    assert len(cards) == 8  # File Management, five datasets, two inherited cards.
     assert all(card["attrs"]["data-module-id"] != "system_outbound_email" for card in cards)
     assert all("Outbound Email" not in card["text"] for card in cards)
     assert cards[0]["attrs"]["href"] == reverse("file-library-index")
@@ -370,7 +372,7 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
     ]
     assert [tag for tag, _ in cards[0]["elements"] if tag in {"a", "button"}] == ["a"]
     for card, (module_id, title, icon, count_label, description, route) in zip(
-        cards[1:-1], expected, strict=True
+        cards[1:6], expected, strict=True
     ):
         assert card["attrs"]["data-module-id"] == module_id
         _assert_navigation_card(
@@ -384,7 +386,7 @@ def test_data_hub_cards_preserve_navigation_and_distinct_icons(data_hub_scope, c
     assert "row-cols-1 row-cols-md-2 g-3" in content
     assert 'aria-label="Distributed data modules"' in content
 
-    inherited = cards[-1]
+    inherited = cards[-2]
     assert inherited["tag"] == "article"
     assert inherited["attrs"]["data-module-id"] == "system_vehicle_rescue_guides"
     assert '<h3 class="h5 mb-0">Vehicle Rescue Guides</h3>' in inherited["html"]
@@ -418,13 +420,19 @@ def test_system_hub_preserves_rescue_configuration_without_email_card(data_hub_s
     response = client.get(reverse("portal-system-data-hub"))
     assert response.status_code == 200
     assert [module["id"] for module in response.context["modules"]] == [
+        "dangerous_goods",
         "system_vehicle_rescue_guides",
     ]
     assert all(
         not {"name", "description", "icon", "count_label"} & module.keys()
         for module in response.context["modules"]
     )
-    (rescue,) = HubCards(response.content.decode()).cards
+    goods, rescue = HubCards(response.content.decode()).cards
+    _assert_navigation_card(goods, title="Dangerous Goods", icon="warning",
+                            url=reverse("ingestion-dangerous-goods"), system=True)
+    assert goods["attrs"]["data-module-id"] == "dangerous_goods"
+    assert "Source revision" in goods["text"] and "Not published" in goods["text"]
+    assert '<dd class="col-5 text-end">0</dd>' in goods["html"]
     assert rescue["attrs"]["data-module-id"] == "system_vehicle_rescue_guides"
     _assert_navigation_card(
         rescue,
@@ -443,7 +451,7 @@ def test_system_hub_preserves_rescue_configuration_without_email_card(data_hub_s
     assert 'aria-label="System data modules"' in response.content.decode()
     # Departments inherit the same effective URL, preserving safe external navigation.
     department_page = client.get(reverse("portal-data-hub", args=(department.id,)))
-    inherited = HubCards(department_page.content.decode()).cards[-1]
+    inherited = HubCards(department_page.content.decode()).cards[-2]
     assert 'href="https://example.test/rescue?locale=de"' in inherited["html"]
     assert 'target="_blank"' in inherited["html"]
     assert 'rel="noopener noreferrer"' in inherited["html"]
@@ -481,3 +489,60 @@ def test_data_hub_counts_and_access_remain_department_scoped(data_hub_scope, cli
     client.logout()
     assert client.get(reverse("portal-data-hub", args=(department.id,))).status_code == 302
     assert client.get(reverse("portal-system-data-hub")).status_code == 302
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("published", [False, True])
+def test_system_goods_state_and_read_only_department_card(data_hub_scope, client, published):
+    admin, department = data_hub_scope
+    SystemRole.objects.create(user=admin)
+    scope, _ = DatasetScopeState.objects.update_or_create(
+        scope_type="SYSTEM", department=None, station=None, dataset_type_code="dangerous_goods",
+        defaults={"source_revision": 23},
+    )
+    if published:
+        _activate(department=None, scope=scope, version=17)
+    candidate = _publication(
+        department=None, scope=scope, version=18, status=DatasetPublication.Status.BUILDING
+    )
+    PublicationJob.objects.create(
+        scope_type="SYSTEM", department=None, dataset_type_code="dangerous_goods",
+        scope_state=scope, source_revision=23, status=PublicationJob.Status.PENDING,
+        trigger_type=PublicationJob.TriggerType.DATA_CHANGE, requested_by=admin,
+        not_before=timezone.now() + timedelta(minutes=1), build_publication=candidate,
+    )
+    response = client.get(reverse("portal-system-data-hub"))
+    goods = HubCards(response.content.decode()).cards[0]
+    assert '<dd class="col-5 text-end">23</dd>' in goods["html"]
+    assert ("v17" in goods["text"]) == published
+    assert ("Update scheduled" in goods["text"]) == published
+    assert ("Not published" in goods["text"]) != published
+    assert "v18" not in goods["text"]
+
+    response = client.get(reverse("portal-data-hub", args=(department.id,)))
+    cards = HubCards(response.content.decode()).cards
+    goods = cards[-1]
+    assert goods["tag"] == "article" and goods["attrs"]["data-module-id"] == "dangerous_goods"
+    assert not [tag for tag, _ in goods["elements"] if tag in {"a", "button", "form"}]
+    icon = render_to_string("components/_data_hub_icon.html", {"icon": "warning"}).strip()
+    assert icon in goods["html"]
+    assert "System managed" in goods["text"]
+    assert ("v17" in goods["text"]) == published
+    assert ("Update scheduled" in goods["text"]) == published
+    assert ("Not published" in goods["text"]) != published
+    assert "v18" not in goods["text"]
+    assert reverse("ingestion-dangerous-goods") not in goods["html"]
+
+
+@pytest.mark.django_db
+def test_system_goods_current_publication_has_no_pending_update(data_hub_scope, client):
+    admin, department = data_hub_scope
+    SystemRole.objects.create(user=admin)
+    scope = DatasetScopeState.objects.get(scope_type="SYSTEM", dataset_type_code="dangerous_goods")
+    _activate(department=None, scope=scope, version=7)
+    goods = HubCards(client.get(reverse("portal-system-data-hub")).content.decode()).cards[0]
+    assert "v7" in goods["text"] and "Current" in goods["text"]
+    response = client.get(reverse("portal-data-hub", args=(department.id,)))
+    goods = HubCards(response.content.decode()).cards[-1]
+    assert "Published" in goods["text"] and "v7" in goods["text"]
+    assert "Update" not in goods["text"]

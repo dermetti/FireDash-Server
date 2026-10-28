@@ -5,22 +5,22 @@ from apps.ingestion import views
 
 urlpatterns = [
     path(
-        "system/publications/dangerous-goods/",
+        "system/data/dangerous-goods/",
         views.dangerous_goods,
         name="ingestion-dangerous-goods",
     ),
     path(
-        "system/publications/dangerous-goods/edit/",
+        "system/data/dangerous-goods/edit/",
         views.dangerous_goods_modal,
         name="ingestion-dangerous-goods-modal",
     ),
     path(
-        "system/publications/dangerous-goods/inspect/",
+        "system/data/dangerous-goods/inspect/",
         views.dangerous_goods_inspect,
         name="ingestion-dangerous-goods-inspect",
     ),
     path(
-        "system/publications/dangerous-goods/imports/<uuid:batch_id>/apply/",
+        "system/data/dangerous-goods/imports/<uuid:batch_id>/apply/",
         views.dangerous_goods_apply,
         name="ingestion-dangerous-goods-apply",
     ),

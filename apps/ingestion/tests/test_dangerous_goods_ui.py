@@ -282,7 +282,8 @@ def test_system_publications_and_scope_detail_authorization(client, goods_ui):
     client.force_login(admin)
     response = client.get(reverse("system-publications-list"))
     assert response.status_code == 200
-    assert reverse("ingestion-dangerous-goods") in response.content.decode()
+    assert reverse("ingestion-dangerous-goods") not in response.content.decode()
+    assert "Manage Dangerous Goods source" not in response.content.decode()
     apply_source(actor=admin, department=department, source=payload())
     scope = DatasetScopeState.objects.get(dataset_type_code="dangerous_goods", scope_type="SYSTEM")
     detail = reverse("publications-scope-detail", args=(scope.id,))
@@ -297,3 +298,31 @@ def test_system_publications_and_scope_detail_authorization(client, goods_ui):
     ):
         assert client.post(reverse(route, args=(scope.id,))).status_code == 403
     assert client.get(reverse("ingestion-dangerous-goods-modal")).status_code == 403
+
+
+@pytest.mark.django_db
+def test_goods_routes_and_department_admin_denied(client, goods_ui):
+    import uuid
+
+    from django.urls import Resolver404, resolve
+
+    admin, _department, outsider, _ = goods_ui
+    batch_id = uuid.uuid4()
+    assert reverse("ingestion-dangerous-goods") == "/system/data/dangerous-goods/"
+    for suffix in ("", "edit/", "inspect/", f"imports/{batch_id}/apply/"):
+        with pytest.raises(Resolver404):
+            resolve(f"/system/publications/dangerous-goods/{suffix}")
+    client.force_login(admin)
+    response = client.get(reverse("ingestion-dangerous-goods"))
+    assert response.status_code == 200
+    assert "Back to System Data Hub" in response.content.decode()
+    client.force_login(outsider)
+    assert client.get(reverse("portal-system-data-hub")).status_code == 403
+    for route in (
+        "ingestion-dangerous-goods", "ingestion-dangerous-goods-modal",
+        "ingestion-dangerous-goods-inspect",
+    ):
+        assert client.get(reverse(route)).status_code == 403
+    assert client.post(reverse("ingestion-dangerous-goods-modal")).status_code == 403
+    response = client.post(reverse("ingestion-dangerous-goods-apply", args=(batch_id,)))
+    assert response.status_code == 403

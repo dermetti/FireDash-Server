@@ -569,6 +569,25 @@ def system_settings(request: HttpRequest) -> HttpResponse:
     return render(request, "portal/system_settings.html")
 
 
+def _system_dangerous_goods_state():
+    """Read the canonical SYSTEM source and its currently distributed publication."""
+    from apps.publications.models import DatasetScopeState
+    from apps.publications.state import scope_operational_states_for_scopes
+
+    scope = DatasetScopeState.objects.filter(
+        scope_type="SYSTEM", department__isnull=True, station__isnull=True,
+        dataset_type_code="dangerous_goods",
+    ).first()
+    values = {"count": 0, "publication_version": None, "publication_state": None}
+    if scope is not None:
+        values["count"] = scope.source_revision
+        state = scope_operational_states_for_scopes([scope])[0]
+        if state["distributed_version"] is not None:
+            values["publication_version"] = state["distributed_version"]
+            values["publication_state"] = state["current_update_label"] or state["state_label"]
+    return values
+
+
 @login_required
 @require_http_methods(["GET"])
 def system_data_hub(request: HttpRequest) -> HttpResponse:
@@ -579,6 +598,11 @@ def system_data_hub(request: HttpRequest) -> HttpResponse:
 
     capability = vehicle_rescue_guides_capability()
     modules = (
+        {
+            "id": "dangerous_goods",
+            "url": reverse("ingestion-dangerous-goods"),
+            **_system_dangerous_goods_state(),
+        },
         {
             "id": "system_vehicle_rescue_guides",
             "url": reverse("portal-system-vehicle-rescue-guides"),
@@ -1674,6 +1698,7 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
             url=reverse("reference-data-klgv-plans", args=(department.id,)),
         ),
     )
+    goods_state = _system_dangerous_goods_state()
     return render(
         request,
         "portal/data_hub.html",
@@ -1684,6 +1709,11 @@ def data_hub(request: HttpRequest, department_id) -> HttpResponse:
                 {
                     "id": "system_vehicle_rescue_guides",
                     **vehicle_rescue_guides_capability(),
+                },
+                {
+                    "id": "dangerous_goods",
+                    "publication_version": goods_state["publication_version"],
+                    "publication_state": goods_state["publication_state"],
                 },
             ),
         },
