@@ -2,7 +2,13 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from config.settings.env import EnvironmentConfigurationError, get_env, get_list, get_typed_env
+from config.settings.env import (
+    EnvironmentConfigurationError,
+    get_bool,
+    get_env,
+    get_list,
+    get_typed_env,
+)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -258,6 +264,9 @@ PUBLICATION_ARTIFACT_MAX_BYTES = get_typed_env(
 )
 PUBLICATION_ARTIFACT_STALE_SECONDS = get_typed_env(
     "PUBLICATION_ARTIFACT_STALE_SECONDS", int, default=3600
+)
+PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED = get_bool(
+    "PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED", default=False
 )
 PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS = get_typed_env(
     "PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS", int, default=2

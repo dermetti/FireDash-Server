@@ -296,3 +296,88 @@ def publication_restore_blocked_reason(publication, *, scope, strict=False, hist
         ):
             return "Incomplete document generation"
     return ""
+
+
+def iter_predecessor_assessments(*, scope):
+    """Read-only, strict restore assessments, newest first, with bounded payloads.
+
+    No keys are unwrapped and no storage is read. Lifecycle callers must hold
+    the scope lock when using the result to authorize a mutation.
+    """
+    definition = get_dataset_definition(scope.dataset_type_code)
+    document = definition.artifact_format == "document-manifest-v2"
+    cursor = None
+    while True:
+        queryset = DatasetPublication.objects.filter(scope_state=scope, status="SUPERSEDED")
+        if cursor is not None:
+            queryset = queryset.filter(version_number__lt=cursor)
+        batch = list(
+            queryset.only(*RESTORE_PRESENTATION_FIELDS).order_by("-version_number")[
+                :DOCUMENT_CANDIDATE_BATCH_SIZE
+            ]
+        )
+        if not batch:
+            return
+        reasons = {p.id: publication_restore_metadata_blocked_reason(p, scope=scope) for p in batch}
+        if document:
+            from apps.file_library.models import PublicationContent
+
+            ids = [p.id for p in batch if not reasons[p.id]]
+            loaded = {
+                p.id: p
+                for p in DatasetPublication.objects.filter(
+                    pk__in=ids,
+                    document_generation_manifest__isnull=False,
+                    document_generation_key__isnull=False,
+                )
+                .only(
+                    *RESTORE_PRESENTATION_FIELDS,
+                    "source_snapshot",
+                    "document_generation_manifest",
+                    "document_generation_key",
+                )
+                .select_related("document_generation_manifest", "document_generation_key")
+                .prefetch_related(
+                    Prefetch(
+                        "document_artifact_references",
+                        queryset=PublicationDocumentArtifactReference.objects.select_related(
+                            "document_artifact"
+                        ),
+                    ),
+                    Prefetch(
+                        "publicationcontent_set",
+                        queryset=PublicationContent.objects.select_related("content"),
+                    ),
+                )
+            }
+            for loaded_publication in loaded.values():
+                loaded_publication._restore_validation_batch = True
+            for publication in batch:
+                if not reasons[publication.id]:
+                    reasons[publication.id] = (
+                        publication_restore_blocked_reason(
+                            loaded[publication.id], scope=scope, strict=True
+                        )
+                        if publication.id in loaded
+                        else "Incomplete document generation"
+                    )
+        for publication in batch:
+            yield publication, reasons[publication.id]
+        cursor = batch[-1].version_number
+        if len(batch) < DOCUMENT_CANDIDATE_BATCH_SIZE:
+            return
+
+
+def select_restorable_predecessors(*, scope, limit):
+    """Return up to limit strictly restorable predecessors without mutation."""
+    if limit < 0:
+        raise ValueError("Predecessor limit must not be negative.")
+    selected = []
+    if limit == 0:
+        return selected
+    for publication, reason in iter_predecessor_assessments(scope=scope):
+        if not reason:
+            selected.append(publication)
+            if len(selected) == limit:
+                break
+    return selected

@@ -8,6 +8,7 @@ from apps.publications.artifacts import (
     ArtifactError,
     remove_artifact_path,
 )
+from apps.publications.cleanup_results import CleanupResult
 from apps.publications.models import (
     DocumentArtifact,
     DocumentArtifactCleanup,
@@ -27,28 +28,28 @@ def _remove_queued_ciphertext(cleanup):
         or DocumentArtifact.objects.filter(artifact_path=cleanup.artifact_path).exists()
     ):
         raise ArtifactError("Cleanup cannot remove a stored document artifact.")
-    remove_artifact_path(cleanup.artifact_path)
+    return remove_artifact_path(cleanup.artifact_path)
 
 
-def _schedule_document_artifact_removal(*, artifact_id, artifact_path: str) -> None:
+def _schedule_document_artifact_removal(*, artifact_id, artifact_path: str, result=None) -> None:
     """Persist and attempt physical removal only after the DB transition commits."""
     cleanup, _ = DocumentArtifactCleanup.objects.get_or_create(
         artifact_id=artifact_id,
         defaults={"artifact_path": artifact_path},
     )
 
+    if result is not None:
+        result.cleanup_deferred += 1
+
     def remove_after_commit() -> None:
-        try:
-            _remove_queued_ciphertext(cleanup)
-        except (ArtifactError, OSError) as error:
-            logger.warning("Document artifact cleanup deferred for %s: %s", artifact_id, error)
-            return
-        DocumentArtifactCleanup.objects.filter(pk=cleanup.pk).delete()
+        if result is not None:
+            result.cleanup_deferred -= 1
+        _process_cleanup_record(cleanup.pk, result if result is not None else CleanupResult())
 
     transaction.on_commit(remove_after_commit)
 
 
-def release_terminal_document_artifact_references(*, publication) -> int:
+def release_terminal_document_artifact_references(*, publication, cleanup_result=None) -> int:
     """Release one terminal generation and queue only its now-unreachable PDFs.
 
     Callers must already hold the established scope/job/publication lifecycle
@@ -84,26 +85,51 @@ def release_terminal_document_artifact_references(*, publication) -> int:
             continue
         artifact_id, artifact_path = artifact.id, artifact.artifact_path
         artifact.delete()
-        _schedule_document_artifact_removal(artifact_id=artifact_id, artifact_path=artifact_path)
+        _schedule_document_artifact_removal(
+            artifact_id=artifact_id, artifact_path=artifact_path, result=cleanup_result
+        )
         queued += 1
     return queued
 
 
-def cleanup_unreferenced_document_artifacts(*, batch_size: int = 500) -> int:
-    """Retry durable removals and collect orphaned Stage A artifact records."""
-    if batch_size < 1:
-        raise ValueError("Document artifact cleanup batch size must be positive.")
-    removed = 0
-    for cleanup in DocumentArtifactCleanup.objects.order_by("created_at")[:batch_size]:
+def _process_cleanup_record(cleanup_id, result):
+    """Serialize callbacks and retry workers on the durable queue row."""
+    with transaction.atomic():
+        cleanup = (
+            DocumentArtifactCleanup.objects.select_for_update(skip_locked=True)
+            .filter(pk=cleanup_id)
+            .first()
+        )
+        if cleanup is None:
+            if DocumentArtifactCleanup.objects.filter(pk=cleanup_id).exists():
+                result.cleanup_deferred += 1
+            return
         try:
-            _remove_queued_ciphertext(cleanup)
+            outcome = _remove_queued_ciphertext(cleanup)
         except (ArtifactError, OSError) as error:
+            result.cleanup_failed += 1
+            result.cleanup_deferred += 1
             logger.warning(
                 "Document artifact cleanup deferred for %s: %s", cleanup.artifact_id, error
             )
-            continue
-        DocumentArtifactCleanup.objects.filter(pk=cleanup.pk).delete()
-        removed += 1
+            return
+        cleanup.delete()
+        result.document_cleanup_records_processed += 1
+        result.record_file(outcome)
+
+
+def cleanup_unreferenced_document_artifacts(*, batch_size: int = 500) -> CleanupResult:
+    """Retry durable removals and collect orphaned Stage A artifact records."""
+    if batch_size < 1:
+        raise ValueError("Document artifact cleanup batch size must be positive.")
+    result = CleanupResult()
+    cleanup_ids = list(
+        DocumentArtifactCleanup.objects.order_by("created_at").values_list("pk", flat=True)[
+            :batch_size
+        ]
+    )
+    for cleanup_id in cleanup_ids:
+        _process_cleanup_record(cleanup_id, result)
 
     generic_ids = list(
         DocumentArtifact.objects.filter(publication_references__isnull=True)
@@ -124,6 +150,8 @@ def cleanup_unreferenced_document_artifacts(*, batch_size: int = 500) -> int:
                 continue
             path = generic_artifact.artifact_path
             generic_artifact.delete()
-            _schedule_document_artifact_removal(artifact_id=artifact_id, artifact_path=path)
-            removed += 1
-    return removed
+            _schedule_document_artifact_removal(
+                artifact_id=artifact_id, artifact_path=path, result=result
+            )
+            result.document_orphan_records_removed += 1
+    return result

@@ -409,8 +409,20 @@ def validate_ready_document_generation(publication, *, historical=False):
         else adapter.frozen_documents(publication)
     )
     entries = {str(e.canonical_document_id): e for e in frozen}
-    manifest = DocumentGenerationManifest.objects.filter(publication=publication).first()
-    key = DocumentGenerationKey.objects.filter(publication=publication).first()
+    # Only the strict read-only batch assessor opts into its fresh full projection.
+    # Ordinary activation/build callers continue to query persisted state.
+    batched = getattr(publication, "_restore_validation_batch", False)
+    cache = publication._state.fields_cache if batched else {}
+    manifest = (
+        cache["document_generation_manifest"]
+        if "document_generation_manifest" in cache
+        else DocumentGenerationManifest.objects.filter(publication=publication).first()
+    )
+    key = (
+        cache["document_generation_key"]
+        if "document_generation_key" in cache
+        else DocumentGenerationKey.objects.filter(publication=publication).first()
+    )
     if (
         not manifest
         or not key
@@ -443,9 +455,12 @@ def validate_ready_document_generation(publication, *, historical=False):
     ):
         raise DocumentV2Error("Document generation manifest is invalid.")
     refs = list(
-        PublicationDocumentArtifactReference.objects.filter(publication=publication).select_related(
-            "document_artifact"
-        )
+        publication.document_artifact_references.all()
+        if batched
+        and "document_artifact_references" in getattr(publication, "_prefetched_objects_cache", {})
+        else PublicationDocumentArtifactReference.objects.filter(
+            publication=publication
+        ).select_related("document_artifact")
     )
     if (
         len(refs) != len(entries)

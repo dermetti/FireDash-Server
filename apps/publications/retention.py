@@ -22,6 +22,7 @@ from apps.audit.services import record_event
 from apps.publications.document_artifacts import release_terminal_document_artifact_references
 from apps.publications.manifests import revoke_publication_dataset_key_grants
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
+from apps.publications.restore import select_restorable_predecessors
 from apps.publications.services import _schedule_artifact_removal
 
 
@@ -33,7 +34,7 @@ class RetentionResult(TypedDict):
 
 
 def _retained_predecessor_ids() -> Iterable[object]:
-    """Return the two newest usable rollback predecessors in every scope.
+    """Return READY-ranked predecessors under the unchanged default policy.
 
     The database calculates the per-scope rank, so candidate discovery does
     not materialize publication history in Python.
@@ -59,13 +60,39 @@ def _retained_predecessor_ids() -> Iterable[object]:
 
 def _candidate_ids(*, limit: int, now: datetime) -> list[UUID]:
     """Fetch at most ``limit`` lightweight, potentially retainable rows."""
-    protected_ids = _retained_predecessor_ids()
-    superseded_ids = list(
-        DatasetPublication.objects.filter(status=DatasetPublication.Status.SUPERSEDED)
-        .exclude(pk__in=protected_ids)
-        .order_by("created_at", "pk")
-        .values_list("pk", flat=True)[:limit]
-    )
+    if settings.PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED:
+        superseded_ids = []
+        scopes = (
+            DatasetScopeState.objects.filter(
+                pk__in=DatasetPublication.objects.filter(status="SUPERSEDED").values(
+                    "scope_state_id"
+                )
+            )
+            .only("id", "scope_type", "department_id", "station_id", "dataset_type_code")
+            .order_by("pk")
+        )
+        for scope in scopes.iterator(chunk_size=100):
+            protected = [
+                p.id
+                for p in select_restorable_predecessors(
+                    scope=scope, limit=settings.PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS
+                )
+            ]
+            superseded_ids.extend(
+                DatasetPublication.objects.filter(scope_state=scope, status="SUPERSEDED")
+                .exclude(pk__in=protected)
+                .order_by("created_at", "pk")
+                .values_list("pk", flat=True)[: limit - len(superseded_ids)]
+            )
+            if len(superseded_ids) == limit:
+                break
+    else:
+        superseded_ids = list(
+            DatasetPublication.objects.filter(status=DatasetPublication.Status.SUPERSEDED)
+            .exclude(pk__in=_retained_predecessor_ids())
+            .order_by("created_at", "pk")
+            .values_list("pk", flat=True)[:limit]
+        )
     remaining = limit - len(superseded_ids)
     if remaining <= 0:
         return superseded_ids
@@ -100,6 +127,13 @@ def _terminal_timestamp(*, publication: DatasetPublication, job: PublicationJob 
 
 
 def _is_retained_predecessor(*, scope: DatasetScopeState, publication: DatasetPublication) -> bool:
+    if settings.PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED:
+        return publication.pk in {
+            p.pk
+            for p in select_restorable_predecessors(
+                scope=scope, limit=settings.PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS
+            )
+        }
     retained = list(
         DatasetPublication.objects.filter(
             scope_state=scope,
@@ -126,7 +160,9 @@ def _live_job(*, scope: DatasetScopeState) -> PublicationJob | None:
 
 
 @transaction.atomic
-def _process_candidate(*, publication_id: UUID, now: datetime, dry_run: bool) -> str:
+def _process_candidate(
+    *, publication_id: UUID, now: datetime, dry_run: bool, cleanup_result=None
+) -> str:
     """Recheck and mutate one candidate under the established lock order."""
     preview = DatasetPublication.objects.filter(pk=publication_id).values("scope_state_id").first()
     if preview is None:
@@ -167,11 +203,13 @@ def _process_candidate(*, publication_id: UUID, now: datetime, dry_run: bool) ->
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
         publication.save(update_fields=("status", "source_snapshot"))
-        release_terminal_document_artifact_references(publication=publication)
+        release_terminal_document_artifact_references(
+            publication=publication, cleanup_result=cleanup_result
+        )
         if scope.latest_built_publication_id == publication.id:
             scope.latest_built_publication = scope.current_published_publication
             scope.save(update_fields=("latest_built_publication", "updated_at"))
-        _schedule_artifact_removal(artifact_path)
+        _schedule_artifact_removal(artifact_path, cleanup_result=cleanup_result)
         record_event(
             action="publication.retention_obsoleted",
             department=publication.department,
@@ -199,7 +237,9 @@ def _process_candidate(*, publication_id: UUID, now: datetime, dry_run: bool) ->
         return "snapshot_purged"
     publication.source_snapshot = None
     publication.save(update_fields=("source_snapshot",))
-    release_terminal_document_artifact_references(publication=publication)
+    release_terminal_document_artifact_references(
+        publication=publication, cleanup_result=cleanup_result
+    )
     record_event(
         action="publication.retention_snapshot_purged",
         department=publication.department,
@@ -215,7 +255,11 @@ def _process_candidate(*, publication_id: UUID, now: datetime, dry_run: bool) ->
 
 
 def run_publication_retention(
-    *, batch_size: int | None = None, now: datetime | None = None, dry_run: bool = False
+    *,
+    batch_size: int | None = None,
+    now: datetime | None = None,
+    dry_run: bool = False,
+    cleanup_result=None,
 ) -> RetentionResult:
     """Apply one bounded, idempotent retention pass.
 
@@ -236,7 +280,9 @@ def run_publication_retention(
     }
     for publication_id in _candidate_ids(limit=limit, now=now):
         result["considered"] += 1
-        outcome = _process_candidate(publication_id=publication_id, now=now, dry_run=dry_run)
+        outcome = _process_candidate(
+            publication_id=publication_id, now=now, dry_run=dry_run, cleanup_result=cleanup_result
+        )
         if outcome == "obsoleted":
             result["obsoleted"] += 1
         elif outcome == "snapshot_purged":

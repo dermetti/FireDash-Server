@@ -436,7 +436,7 @@ def test_generic_retention_preserves_shared_artifacts_and_retries_durable_cleanu
         assert DocumentArtifactCleanup.objects.filter(artifact_id=artifact.id).exists()
     assert path.exists() and not DocumentArtifact.objects.exists()
     monkeypatch.setattr(document_artifacts, "remove_artifact_path", physical_remove)
-    assert document_artifacts.cleanup_unreferenced_document_artifacts() == 1
+    assert document_artifacts.cleanup_unreferenced_document_artifacts().files_deleted == 1
     assert not path.exists() and not DocumentArtifactCleanup.objects.exists()
 
 
@@ -453,7 +453,7 @@ def test_cleanup_rejects_unrelated_paths_and_preserves_historical_ciphertext(v2_
     unrelated = root / "unrelated.txt"
     unrelated.write_bytes(b"keep")
     DocumentArtifactCleanup.objects.create(artifact_id=uuid.uuid4(), artifact_path="unrelated.txt")
-    assert cleanup_unreferenced_document_artifacts() == 0
+    assert cleanup_unreferenced_document_artifacts().files_deleted == 0
     assert unrelated.read_bytes() == b"keep"
     historical = root / "documents" / str(uuid.uuid4()) / "artifact.bin"
     historical.parent.mkdir(parents=True)
@@ -486,7 +486,7 @@ def test_reuse_rejects_noncanonical_path_and_queue_preserves_live_ciphertext(v2_
     DocumentArtifactCleanup.objects.create(
         artifact_id=artifact.id, artifact_path=artifact.artifact_path
     )
-    assert cleanup_unreferenced_document_artifacts() == 0
+    assert cleanup_unreferenced_document_artifacts().files_deleted == 0
     assert (settings.PUBLICATION_ARTIFACT_ROOT / artifact.artifact_path).exists()
     assert publication.document_artifact_references.get().document_artifact_id == artifact.id
 

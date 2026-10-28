@@ -218,21 +218,31 @@ def test_artifacts_use_distinct_cek_and_nonce(tmp_path, monkeypatch):
 
 
 def test_cleanup_removes_stale_temp_directories(tmp_path, monkeypatch):
+    from apps.publications.cleanup_results import CleanupResult
+
     monkeypatch.setattr(
         "apps.publications.document_artifacts.cleanup_unreferenced_document_artifacts",
-        lambda: 0,
+        CleanupResult,
     )
     stale = tmp_path / "final" / ".tmp" / "abandoned"
     stale.mkdir(parents=True)
     os.utime(stale, (time.time() - 120, time.time() - 120))
     from apps.publications.models import DatasetPublication
 
-    monkeypatch.setattr(DatasetPublication, "objects", SimpleNamespace(filter=lambda **_: []))
+    monkeypatch.setattr(
+        DatasetPublication,
+        "objects",
+        SimpleNamespace(
+            filter=lambda **_: SimpleNamespace(
+                only=lambda *args: SimpleNamespace(iterator=lambda **kwargs: [])
+            )
+        ),
+    )
     with override_settings(
         PUBLICATION_ARTIFACT_TEMP_ROOT=tmp_path / "final" / ".tmp",
         PUBLICATION_ARTIFACT_STALE_SECONDS=60,
     ):
-        assert cleanup_stale_artifacts() == 1
+        assert cleanup_stale_artifacts().temporary_entries_removed == 1
     assert not stale.exists()
     assert (tmp_path / "final" / ".tmp").exists()
 

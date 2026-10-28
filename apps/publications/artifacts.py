@@ -301,50 +301,79 @@ def upgrade_legacy_scope_signature(*, publication) -> bool:
     return True
 
 
-def remove_artifact(publication) -> None:
-    remove_artifact_path(publication.artifact_path)
+def remove_artifact(publication) -> str:
+    return remove_artifact_path(publication.artifact_path)
 
 
-def remove_artifact_path(relative_path: object) -> None:
+def remove_artifact_path(relative_path: object) -> str:
     if isinstance(relative_path, str) and relative_path:
         root = settings.PUBLICATION_ARTIFACT_ROOT.resolve()
-        path = (root / relative_path).resolve()
+        unresolved = root / relative_path
+        path = unresolved.resolve()
         try:
             path.relative_to(root)
         except ValueError as error:
             raise ArtifactError("Artifact path must remain below the artifact root.") from error
-        path.unlink(missing_ok=True)
+        # Never follow a stored symlink to another artifact, even inside root.
+        if any(part.is_symlink() for part in (unresolved, *unresolved.parents) if part != root):
+            raise ArtifactError("Artifact cleanup must not traverse symlinks.")
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return "missing"
         # Best-effort housekeeping: remove the now-empty publication directory.
         # rmdir only succeeds when empty, so this never deletes sibling artifacts.
         try:
-            path.parent.rmdir()
+            if path.parent != root:
+                path.parent.rmdir()
         except OSError:
             pass
+        return "deleted"
+    raise ArtifactError("Artifact path must be a nonempty string.")
 
 
-def cleanup_stale_artifacts() -> int:
+def cleanup_stale_artifacts():
     """Remove abandoned temp dirs and files belonging to failed/obsolete builds."""
     cutoff = timezone.now() - timedelta(seconds=settings.PUBLICATION_ARTIFACT_STALE_SECONDS)
-    removed = 0
+    from apps.publications.cleanup_results import CleanupResult
+
+    result = CleanupResult()
     for path in (
         settings.PUBLICATION_ARTIFACT_TEMP_ROOT.glob("*")
         if settings.PUBLICATION_ARTIFACT_TEMP_ROOT.exists()
         else ()
     ):
-        if path.is_dir() and path.stat().st_mtime < cutoff.timestamp():
-            shutil.rmtree(path, ignore_errors=True)
-            removed += 1
+        try:
+            if (
+                not path.is_symlink()
+                and path.is_dir()
+                and path.stat().st_mtime < cutoff.timestamp()
+            ):
+                shutil.rmtree(path)
+                result.temporary_entries_removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            result.cleanup_failed += 1
+            result.cleanup_deferred += 1
+            logger.warning("Temporary artifact cleanup deferred for %s: %s", path, error)
     from apps.publications.document_artifacts import cleanup_unreferenced_document_artifacts
     from apps.publications.models import (
         DatasetPublication,
     )
 
-    for publication in DatasetPublication.objects.filter(
-        status__in=("FAILED", "OBSOLETE", "REJECTED", "CANCELLED"), artifact_path__gt=""
+    for publication in (
+        DatasetPublication.objects.filter(
+            status__in=("FAILED", "OBSOLETE", "REJECTED", "CANCELLED"), artifact_path__gt=""
+        )
+        .only("id", "artifact_path", "artifact_status")
+        .iterator(chunk_size=100)
     ):
         try:
-            remove_artifact(publication)
+            result.record_file(remove_artifact(publication))
         except (ArtifactError, OSError) as error:
+            result.cleanup_failed += 1
+            result.cleanup_deferred += 1
             logger.warning(
                 "Publication artifact cleanup deferred for %s: %s", publication.id, error
             )
@@ -355,6 +384,5 @@ def cleanup_stale_artifacts() -> int:
         # temporary records retain the legacy path-clearing behavior.
         if publication.artifact_status != DatasetPublication.ArtifactStatus.READY:
             DatasetPublication.objects.filter(pk=publication.pk).update(artifact_path="")
-        removed += 1
-    removed += cleanup_unreferenced_document_artifacts()
-    return removed
+    result.merge(cleanup_unreferenced_document_artifacts())
+    return result

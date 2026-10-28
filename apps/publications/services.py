@@ -48,18 +48,27 @@ class PublicationError(ValueError):
 logger = logging.getLogger(__name__)
 
 
-def _schedule_artifact_removal(relative_path: str) -> None:
+def _schedule_artifact_removal(relative_path: str, *, cleanup_result=None) -> None:
     """Remove retired ciphertext only after its lifecycle transaction commits."""
     if not relative_path:
         return
 
+    if cleanup_result is not None:
+        cleanup_result.cleanup_deferred += 1
+
     def remove_after_commit() -> None:
         try:
-            remove_artifact_path(relative_path)
+            outcome = remove_artifact_path(relative_path)
         except (ArtifactError, OSError) as error:
+            if cleanup_result is not None:
+                cleanup_result.cleanup_failed += 1
             # The database transition remains authoritative. Existing orphan
             # artifact maintenance can safely retry a failed filesystem cleanup.
             logger.warning("Publication artifact cleanup deferred for %s: %s", relative_path, error)
+            return
+        if cleanup_result is not None:
+            cleanup_result.cleanup_deferred -= 1
+            cleanup_result.record_file(outcome)
 
     transaction.on_commit(remove_after_commit)
 

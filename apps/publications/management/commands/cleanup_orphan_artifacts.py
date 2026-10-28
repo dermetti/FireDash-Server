@@ -15,8 +15,9 @@ retried by the existing daily publication-maintenance service.
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from apps.publications.artifacts import cleanup_stale_artifacts
-from apps.publications.models import DatasetPublication
+from apps.publications.artifacts import ArtifactError, cleanup_stale_artifacts, remove_artifact_path
+from apps.publications.cleanup_results import CleanupResult
+from apps.publications.models import DatasetPublication, DocumentArtifactCleanup
 from apps.publications.retention import run_publication_retention
 
 
@@ -34,8 +35,12 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         root = settings.PUBLICATION_ARTIFACT_ROOT
         dry_run = options["dry_run"]
-        retention = run_publication_retention(batch_size=options["batch_size"], dry_run=dry_run)
-        terminal_removed = 0 if dry_run else cleanup_stale_artifacts()
+        cleanup = None if dry_run else CleanupResult()
+        retention = run_publication_retention(
+            batch_size=options["batch_size"], dry_run=dry_run, cleanup_result=cleanup
+        )
+        if cleanup is not None:
+            cleanup.merge(cleanup_stale_artifacts())
         referenced = set(
             DatasetPublication.objects.exclude(artifact_path="").values_list(
                 "artifact_path", flat=True
@@ -49,16 +54,30 @@ class Command(BaseCommand):
                 if path.name in referenced:
                     self.stderr.write(f"Keeping referenced top-level file {path} (unexpected).")
                     continue
-                removed += 1
                 if dry_run:
+                    removed += 1
                     self.stdout.write(f"Would remove orphan {path}")
                     continue
-                path.unlink(missing_ok=True)
-                self.stdout.write(f"Removed orphan {path}")
+                try:
+                    outcome = remove_artifact_path(path.name)
+                except (ArtifactError, OSError) as error:
+                    cleanup.cleanup_failed += 1
+                    cleanup.cleanup_deferred += 1
+                    self.stderr.write(f"Orphan cleanup deferred for {path.name}: {error}")
+                    continue
+                cleanup.record_file(outcome)
+                if outcome == "deleted":
+                    removed += 1
+                    self.stdout.write(f"Removed orphan {path}")
         verb = "Would remove" if dry_run else "Removed"
         self.stdout.write(f"{verb} {removed} orphan artifact(s).")
-        if not dry_run:
-            self.stdout.write(f"Removed {terminal_removed} terminal publication artifact(s).")
+        if cleanup is not None:
+            self.stdout.write("Artifact cleanup (publication and document files):")
+            for name, value in vars(cleanup).items():
+                self.stdout.write(f"  {name}: {value}")
+            self.stdout.write(
+                f"  document_cleanup_pending_records: {DocumentArtifactCleanup.objects.count()}"
+            )
         self.stdout.write(
             "Publication retention: "
             f"{retention['obsoleted']} obsoleted, "

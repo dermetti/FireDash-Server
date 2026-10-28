@@ -129,8 +129,12 @@ class FileLibraryAdapter:
             raise PublicationBuildError("Frozen file library metadata is invalid.")
         refs = {
             str(ref.document_id): ref.content
-            for ref in PublicationContent.objects.filter(publication=publication).select_related(
-                "content"
+            for ref in (
+                publication.publicationcontent_set.all()
+                if "publicationcontent_set" in getattr(publication, "_prefetched_objects_cache", {})
+                else PublicationContent.objects.filter(publication=publication).select_related(
+                    "content"
+                )
             )
         }
         if set(refs) != {e["id"] for e in entries} or len(refs) != len(entries):

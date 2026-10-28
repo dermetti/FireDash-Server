@@ -277,7 +277,7 @@ def test_artifact_cleanup_failure_remains_retryable(retention_scope, tmp_path, m
         retention.run_publication_retention()
         assert artifact.exists()
         monkeypatch.undo()
-        assert cleanup_stale_artifacts() == 1
+        assert cleanup_stale_artifacts().files_deleted == 1
     assert not artifact.exists()
 
 
