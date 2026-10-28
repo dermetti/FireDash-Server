@@ -23,7 +23,7 @@ from apps.publications.models import (
     FirePlanGenerationManifest,
     SignedManifest,
 )
-from apps.publications.registry import get_dataset_definition
+from apps.publications.registry import DatasetRegistryError, get_dataset_definition
 from apps.publications.signing_keys import (
     SigningKeyConfigurationError,
     active_publication_signing_key,
@@ -334,10 +334,29 @@ def manifest_publications(*, installation: AppInstallation, now=None):
 
 def _publication_is_exposed_to_installation(*, publication, installation) -> bool:
     """Keep publication ownership and tenant delivery decisions independent."""
-    definition = get_dataset_definition(publication.dataset_type_code)
+    try:
+        definition = get_dataset_definition(publication.dataset_type_code)
+    except DatasetRegistryError:
+        return False
+    if publication.scope_type != definition.scope.upper():
+        return False
     if publication.scope_type == "SYSTEM":
-        return definition.system_exposure
-    return bool(publication.department_id == installation.tablet.department_id)
+        return bool(
+            definition.system_exposure
+            and publication.department_id is None
+            and publication.station_id is None
+        )
+    if publication.scope_type == "DEPARTMENT":
+        return bool(
+            publication.station_id is None
+            and publication.department_id == installation.tablet.department_id
+        )
+    if publication.scope_type == "STATION":
+        return bool(
+            publication.station_id is not None
+            and publication.department_id == installation.tablet.department_id
+        )
+    return False
 
 
 @transaction.atomic

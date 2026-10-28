@@ -526,11 +526,25 @@ as one logical Phonebook. They must not assume either dataset includes the other
 
 ### Dangerous goods (`dangerous_goods`, `artifact_format: json`)
 
-`dangerous_goods` is a required, department-scoped schema-1 dataset. Its manifest
-entry uses `scope:{type:"DEPARTMENT",department_id:"<owning UUID>"}`, `schema_version:1`, `required:true`, and
-`artifact_format:"json"`; the HPKE scope binding has the owning `department_id`
-and `station_id:null`. It uses the normal encrypted artifact and generic download
-URL shown above—there is no dangerous-goods-specific Tablet endpoint.
+`dangerous_goods` is a required SYSTEM-owned schema-1 dataset, shared by all
+otherwise authorized operational tablets. The signed descriptor has the normal
+JSON encryption, artifact signature, download URL and installation-bound grant
+fields shown above. Its identifying fields are:
+
+```json
+{"publication_id":"66666666-6666-6666-6666-666666666666","type":"dangerous_goods","scope":{"type":"SYSTEM"},"version":7,"schema_version":1,"required":true,"minimum_app_version":null,"artifact_format":"json"}
+```
+
+For the same publication and example installation, construct the exact HPKE
+`info` object below from the signed descriptor and authenticated configuration.
+The hash is the descriptor's ciphertext hash; both owner IDs are JSON null:
+
+```json
+{"ciphertext_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","installation_id":"11111111-1111-1111-1111-111111111111","protocol":"firedash-hpke-v1","publication_id":"66666666-6666-6666-6666-666666666666","schema_version":1,"scope":{"dataset_type_code":"dangerous_goods","department_id":null,"station_id":null},"tablet_id":"22222222-2222-2222-2222-222222222222","version_number":7}
+```
+
+Use the normal encrypted artifact and generic download URL shown above; there is
+no dangerous-goods-specific tablet endpoint.
 
 The decrypted plaintext is the exact UTF-8 JSON byte sequence validated and
 retained from the curated source file. It is not reserialized, normalized, or
@@ -715,7 +729,9 @@ bytes are ASCII, sorted-key, compact JSON:
 The field set is exact: `ciphertext_sha256`, `installation_id`, `protocol`,
 `publication_id`, `schema_version`, `scope`, `tablet_id`, and
 `version_number`. `scope` always has `dataset_type_code`, `department_id`, and
-`station_id` (the latter is JSON `null` for department scope). Use
+`station_id`. For SYSTEM scope both IDs are JSON `null`; for DEPARTMENT scope
+only `station_id` is null; for STATION scope both are UUID strings. These are
+the publication's owners, not the receiving tablet's department. Use
 `json.dumps(info, sort_keys=True, separators=(',', ':')).encode('ascii')` in
 equivalent Swift canonicalization. The resulting CEK is exactly 32 bytes; any
 wrong point, Base64, suite, `info`, or authentication failure is fatal for that

@@ -284,6 +284,50 @@ def test_download_requires_authorized_publication(pub_fixture):
     assert any(p.id == publication.id for p in pubs)
 
 
+def test_mismatched_registered_scope_is_never_exposed(pub_fixture):
+    from types import SimpleNamespace
+
+    from apps.publications.manifests import _publication_is_exposed_to_installation
+
+    _, department, installation, _, _, _, _ = pub_fixture
+    for code, scope, owner, station in (
+        ("dangerous_goods", "DEPARTMENT", department.id, None),
+        ("department_hydrants", "SYSTEM", None, None),
+        ("station_phonebook", "DEPARTMENT", department.id, None),
+        ("department_hydrants", "STATION", department.id, uuid.uuid4()),
+    ):
+        publication = SimpleNamespace(
+            dataset_type_code=code, scope_type=scope, department_id=owner, station_id=station
+        )
+        assert not _publication_is_exposed_to_installation(
+            publication=publication, installation=installation
+        )
+
+
+def test_legacy_department_goods_is_excluded_from_discovery_and_grants(pub_fixture):
+    from apps.publications.manifests import ManifestError
+
+    _, department, installation, publication, _, _, _ = pub_fixture
+    scope = DatasetScopeState.objects.create(
+        department=department, dataset_type_code="dangerous_goods"
+    )
+    legacy = DatasetPublication.objects.create(
+        department=department,
+        dataset_type_code="dangerous_goods",
+        scope_state=scope,
+        version_number=1,
+        schema_version=1,
+        source_revision=1,
+        status="PUBLISHED",
+        artifact_status="READY",
+    )
+    assert legacy not in authorized_publications(installation=installation)[2]
+    assert legacy not in manifest_publications(installation=installation)[2]
+    assert publication in authorized_publications(installation=installation)[2]
+    with pytest.raises(ManifestError):
+        request_dataset_key_grant(publication=legacy, installation=installation)
+
+
 def test_download_denied_when_no_vehicle_assignment(pub_fixture):
     user, _, installation, publication, _, _, _ = pub_fixture
     vehicle = TabletVehicleAssignment.objects.get(tablet=installation.tablet).vehicle

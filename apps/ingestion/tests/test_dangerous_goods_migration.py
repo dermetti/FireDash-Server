@@ -93,6 +93,27 @@ def test_system_goods_migration_removes_only_legacy_data():
             payload={"datasets": [{"type": "department_hydrants"}]},
             signature=b"sig",
         )
+        obsolete_manifest = Manifest.objects.create(
+            app_installation_id=installation.id,
+            state_hash="c" * 64,
+            status="OBSOLETE",
+            payload={
+                "datasets": [
+                    {
+                        "type": "dangerous_goods",
+                        "scope": {"type": "DEPARTMENT", "department_id": str(department.id)},
+                    }
+                ]
+            },
+            signature=b"sig",
+        )
+        preserved_manifest = Manifest.objects.create(
+            app_installation_id=installation.id,
+            state_hash="d" * 64,
+            status="OBSOLETE",
+            payload={"datasets": [{"type": "dangerous_goods", "scope": {"type": "SYSTEM"}}]},
+            signature=b"system signature",
+        )
         Batch = get("ingestion", "ImportBatch")
         common = dict(
             department_id=department.id,
@@ -133,6 +154,11 @@ def test_system_goods_migration_removes_only_legacy_data():
         manifest = SignedManifest.objects.get(pk=manifest.pk)
         assert manifest.status == "OBSOLETE" and manifest.signature is None
         assert SignedManifest.objects.get(pk=other_manifest.pk).status == "READY"
+        obsolete_manifest.refresh_from_db()
+        assert obsolete_manifest.payload == {} and obsolete_manifest.signature is None
+        preserved_manifest.refresh_from_db()
+        assert preserved_manifest.payload["datasets"][0]["scope"] == {"type": "SYSTEM"}
+        assert bytes(preserved_manifest.signature) == b"system signature"
         assert not ImportBatch.objects.filter(pk=batch.pk).exists()
         assert ImportBatch.objects.filter(pk=other_batch.pk).exists()
         assert not AuditEvent.objects.filter(pk=event.pk).exists()

@@ -43,6 +43,22 @@ def test_context_encoding_and_fixed_suite_are_frozen(contract, context):
     assert context.info() == contract["canonical_info"].encode("ascii")
 
 
+def test_department_and_system_context_serialization(context, contract):
+    department = HPKEContext(**{**context.__dict__, "station_id": None})
+    expected = contract["canonical_info"].replace(
+        f'"station_id":"{context.station_id}"', '"station_id":null'
+    )
+    assert department.info() == expected.encode("ascii")
+    system = HPKEContext(
+        **{**department.__dict__, "department_id": None, "dataset_type_code": "dangerous_goods"}
+    )
+    assert json.loads(system.info())["scope"] == {
+        "dataset_type_code": "dangerous_goods",
+        "department_id": None,
+        "station_id": None,
+    }
+
+
 def test_p256_key_encoding_and_fingerprint_are_canonical():
     private_key = ec.derive_private_key(7, ec.SECP256R1())
     encoded = serialize_p256_public_key(private_key.public_key())

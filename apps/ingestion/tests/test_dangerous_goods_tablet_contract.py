@@ -224,16 +224,193 @@ def test_compact_fixture_freezes_documented_schema_forms():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_system_dangerous_goods_is_not_exposed_to_tablets_in_phase_one(settings, tmp_path):
-    from apps.publications.registry import get_dataset_definition
+def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypatch):
+    import base64
 
-    definition = get_dataset_definition("dangerous_goods")
-    assert definition.scope == "system"
-    assert definition.required is True
-    assert definition.system_exposure is False
-    from types import SimpleNamespace
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from django.test import Client
 
-    from apps.publications.manifests import _publication_is_exposed_to_installation
+    from apps.authorization.models import ApiVersionCompatibilityPolicy, SystemRole
+    from apps.ingestion.services import (
+        apply_dangerous_goods_preview,
+        create_dangerous_goods_preview,
+    )
+    from apps.publications.artifacts import _signature_payload
+    from apps.publications.hpke import HPKEContext, HPKEError, hpke_open
+    from apps.publications.manifests import (
+        ManifestError,
+        canonical_manifest_payload,
+        request_dataset_key_grant,
+    )
+    from apps.publications.models import (
+        DatasetKeyGrant,
+        DatasetPublication,
+        DatasetSourceRevision,
+        DepartmentFeature,
+        PublicationJob,
+    )
+    from apps.publications.services import process_next_job
+    from apps.publications.worker_grants import (
+        process_next_dataset_key_grant,
+        process_next_signed_manifest,
+    )
 
-    publication = SimpleNamespace(scope_type="SYSTEM", dataset_type_code="dangerous_goods")
-    assert not _publication_is_exposed_to_installation(publication=publication, installation=None)
+    settings.INGESTION_STAGING_ROOT = tmp_path / "staging"
+    settings.PUBLICATION_ARTIFACT_ROOT = tmp_path / "artifacts"
+    settings.PUBLICATION_ARTIFACT_TEMP_ROOT = tmp_path / "temp"
+    settings.PUBLICATION_KEK_CREDENTIAL_PATH = tmp_path / "kek"
+    settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = tmp_path / "signing"
+    settings.PUBLICATION_KEK_CREDENTIAL_PATH.write_bytes(b"k" * 32)
+    settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH.write_bytes(b"s" * 32)
+    monkeypatch.setattr("apps.publications.artifacts.grp", None)
+    actor = User.objects.create_user("contract@example.test", "Contract", "password")
+    SystemRole.objects.create(user=actor)
+    payload = compact_payload()
+    preview = create_dangerous_goods_preview(actor=actor, filename="goods.json", payload=payload)
+    apply_dangerous_goods_preview(actor=actor, batch_id=preview.id)
+    source = DatasetSourceRevision.objects.get(scope_state__dataset_type_code="dangerous_goods")
+    assert bytes(source.plaintext) == payload
+    assert source.sha256 == hashlib.sha256(payload).hexdigest()
+    job = PublicationJob.objects.get(dataset_type_code="dangerous_goods")
+    job.not_before = timezone.now()
+    job.save(update_fields=("not_before",))
+    job = process_next_job()
+    assert job.status == PublicationJob.Status.SUCCEEDED, job.error_message
+    publication = DatasetPublication.objects.get(dataset_type_code="dangerous_goods")
+    ciphertext = (settings.PUBLICATION_ARTIFACT_ROOT / publication.artifact_path).read_bytes()
+    public_key = Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key()
+    public_key.verify(
+        bytes(publication.artifact_signature),
+        _signature_payload(
+            publication=publication,
+            wrapped_cek=bytes(publication.artifact_wrapped_cek),
+            nonce=bytes(publication.artifact_nonce),
+            ciphertext=ciphertext,
+        ),
+    )
+    clients = []
+    for code in ("ONE", "TWO"):
+        department = Department.objects.create(name=code, short_code=code, created_by=actor)
+        private = ec.generate_private_key(ec.SECP256R1())
+        installation, credential = _installation(
+            department=department, actor=actor, private_key=private
+        )
+        client = Client()
+        assert (
+            client.get("/api/v1/tablet/manifest", **_authorization(credential)).status_code == 202
+        )
+        grant = process_next_dataset_key_grant()
+        assert grant.status == "READY", grant.error_message
+        manifest = process_next_signed_manifest()
+        assert manifest.status == "READY", manifest.error_message
+        response = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+        assert response.status_code == 200
+        body = response.json()
+        public_key.verify(
+            base64.b64decode(body["signature"]),
+            canonical_manifest_payload({k: v for k, v in body.items() if k != "signature"}),
+        )
+        entries = [entry for entry in body["datasets"] if entry["type"] == "dangerous_goods"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["scope"] == {"type": "SYSTEM"}
+        assert entry["publication_id"] == str(publication.id)
+        assert entry["schema_version"] == 1 and entry["required"] is True
+        assert entry["ciphertext_sha256"] == hashlib.sha256(ciphertext).hexdigest()
+        context = HPKEContext(
+            publication_id=publication.id,
+            installation_id=installation.id,
+            tablet_id=installation.tablet_id,
+            department_id=None,
+            station_id=None,
+            dataset_type_code="dangerous_goods",
+            version_number=publication.version_number,
+            schema_version=1,
+            ciphertext_sha256=entry["ciphertext_sha256"],
+        )
+        assert json.loads(context.info())["scope"] == {
+            "dataset_type_code": "dangerous_goods",
+            "department_id": None,
+            "station_id": None,
+        }
+        grant_wire = entry["key_grant"]
+        cek = hpke_open(
+            encapsulated_key=base64.b64decode(grant_wire["encapsulated_key"]),
+            ciphertext=base64.b64decode(grant_wire["wrapped_content_key"]),
+            recipient_private_key=private,
+            context=context,
+        )
+        response = client.get(entry["download_url"], **_authorization(credential))
+        assert response.status_code == 200
+        assert (
+            response["X-Accel-Redirect"]
+            == f"/internal-protected-datasets/{publication.artifact_path}"
+        )
+        assert (
+            AESGCM(cek).decrypt(
+                base64.b64decode(entry["content_encryption_nonce"]), ciphertext, None
+            )
+            == payload
+        )
+        clients.append((private, context, grant_wire, installation, credential, client))
+    assert clients[0][2] != clients[1][2]
+    with pytest.raises(HPKEError):
+        hpke_open(
+            encapsulated_key=base64.b64decode(clients[0][2]["encapsulated_key"]),
+            ciphertext=base64.b64decode(clients[0][2]["wrapped_content_key"]),
+            recipient_private_key=clients[1][0],
+            context=clients[1][1],
+        )
+
+    _, _, _, installation, credential, client = clients[0]
+    url = f"/api/v1/tablet/datasets/{publication.id}/download"
+    feature = DepartmentFeature.objects.create(
+        department=installation.tablet.department, feature_code="publications", enabled=False
+    )
+    with pytest.raises(ManifestError):
+        request_dataset_key_grant(publication=publication, installation=installation)
+    assert client.get(url, **_authorization(credential)).status_code in (403, 404)
+    grant = DatasetKeyGrant.objects.get(publication=publication, app_installation=installation)
+    grant.status = "PENDING"
+    grant.save(update_fields=("status",))
+    denied = process_next_dataset_key_grant()
+    assert denied.status == "REVOKED"
+    feature.delete()
+
+    assignment = TabletVehicleAssignment.objects.get(tablet=installation.tablet)
+    assignment.ended_at = timezone.now()
+    assignment.save(update_fields=("ended_at",))
+    with pytest.raises(ManifestError):
+        request_dataset_key_grant(publication=publication, installation=installation)
+    assert client.get(url, **_authorization(credential)).status_code in (403, 404)
+    assignment.ended_at = None
+    assignment.save(update_fields=("ended_at",))
+
+    installation.authorization_valid_until = timezone.now() - timedelta(seconds=1)
+    installation.save(update_fields=("authorization_valid_until",))
+    with pytest.raises(ManifestError):
+        request_dataset_key_grant(publication=publication, installation=installation)
+    assert client.get(url, **_authorization(credential)).status_code in (401, 403)
+    installation.authorization_valid_until = timezone.now() + timedelta(days=1)
+    installation.save(update_fields=("authorization_valid_until",))
+    installation.status = AppInstallation.Status.REVOKED
+    installation.save(update_fields=("status",))
+    with pytest.raises(ManifestError):
+        request_dataset_key_grant(publication=publication, installation=installation)
+    assert client.get(url, **_authorization(credential)).status_code in (401, 403)
+    installation.status = AppInstallation.Status.ACTIVE
+    installation.save(update_fields=("status",))
+    installation.tablet.status = Tablet.Status.INACTIVE
+    installation.tablet.save(update_fields=("status",))
+    with pytest.raises(ManifestError):
+        request_dataset_key_grant(publication=publication, installation=installation)
+    assert client.get(url, **_authorization(credential)).status_code in (403, 404)
+    installation.tablet.status = Tablet.Status.ACTIVE
+    installation.tablet.save(update_fields=("status",))
+    ApiVersionCompatibilityPolicy.objects.create(
+        api_major=1, minimum_app_version="2.0.0", updated_by=actor
+    )
+    assert client.get("/api/v1/tablet/manifest", **_authorization(credential)).status_code == 426
+    assert client.get(url, **_authorization(credential)).status_code == 426

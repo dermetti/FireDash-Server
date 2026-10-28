@@ -1,7 +1,6 @@
 """Publication-worker-only CEK grant and manifest signing operations."""
 
 import base64
-from typing import cast
 from uuid import UUID
 
 from cryptography.hazmat.primitives import keywrap
@@ -106,7 +105,7 @@ def build_claimed_dataset_key_grant(*, grant_id) -> DatasetKeyGrant:
             publication_id=publication.id,
             installation_id=installation.id,
             tablet_id=installation.tablet_id,
-            department_id=cast(UUID, publication.department_id),
+            department_id=publication.department_id,
             station_id=publication.station_id,
             dataset_type_code=publication.dataset_type_code,
             version_number=publication.version_number,

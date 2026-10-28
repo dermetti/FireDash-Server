@@ -68,6 +68,7 @@ _DEFINITIONS = tuple(
         encryption_required=True,
         minimum_app_version=None,
         builder_service="dangerous_goods",
+        system_exposure=True,
         validator_service="summary",
         summary_schema=MappingProxyType(
             {

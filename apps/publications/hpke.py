@@ -32,7 +32,7 @@ class HPKEContext:
     publication_id: uuid.UUID
     installation_id: uuid.UUID
     tablet_id: uuid.UUID
-    department_id: uuid.UUID
+    department_id: uuid.UUID | None
     station_id: uuid.UUID | None
     dataset_type_code: str
     version_number: int
@@ -55,7 +55,9 @@ class HPKEContext:
                 "schema_version": self.schema_version,
                 "scope": {
                     "dataset_type_code": self.dataset_type_code,
-                    "department_id": str(self.department_id),
+                    "department_id": str(self.department_id)
+                    if self.department_id is not None
+                    else None,
                     "station_id": str(self.station_id) if self.station_id else None,
                 },
                 "tablet_id": str(self.tablet_id),
