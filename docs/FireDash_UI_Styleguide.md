@@ -1,3 +1,5 @@
+> Historical guide: tablet capacity review controls described below are retired. See [current file-library documentation](file-libraries.md#device-storage-is-managed-locally).
+
 # FireDash UI Styleguide
 
 **Purpose:** A practical design and implementation guide for future FireDash Server UI additions, especially new Data Hub modules and administration pages.

@@ -2,7 +2,7 @@ from uuid import UUID
 
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.file_library.publication_capacity import FILE_DATASETS
+from apps.file_library.locking import FILE_DATASETS
 from apps.file_library.publication_reconciliation import reconcile_file_scope
 from apps.organizations.models import Department
 from apps.publications.models import DatasetScopeState

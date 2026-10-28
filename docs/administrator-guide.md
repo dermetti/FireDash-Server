@@ -266,3 +266,27 @@ It uses the supported locale and IANA timezone choices for Department pages;
 Station Administrators inherit the policy of their Department. It does not
 change stored timestamps, audit timestamps, signatures, API timestamps, lease
 calculation, or any other protocol/security meaning: those remain UTC.
+
+
+## Tablet storage telemetry disabled
+
+Tablet storage telemetry is currently disabled. The iPad app manages device
+storage locally, checks available space before downloading and activating updates,
+and preserves previously verified data when an update cannot fit. Offline lease
+and authorization requirements still apply. The server receives no automatic
+device-capacity measurements or derived insufficient-storage reports. No diagnostic
+report API is provided by this change. Future MDM-based inventory or capacity
+monitoring is a separate project.
+
+Source-library quotas, department/station quota policies, PDF size restrictions,
+source usage accounting, and server filesystem safeguards still apply.
+
+Capacity review pages and approval controls have been removed. Historical database
+fields/tables and audit records are retained without active reads or writes; no
+cleanup migration or live data edit is required. Deploy the application and restart
+all publication workers together to avoid old workers continuing capacity checks.
+Previously capacity-blocked PENDING jobs proceed on their existing schedule using
+current source snapshots at claim time. Clean source is reconciled without forcing
+rebuilds; explicit rebuild requests and scope authorization remain enforced. Normal
+source-library quotas remain configurable in System Settings. See
+[file-libraries.md](file-libraries.md#device-storage-is-managed-locally).

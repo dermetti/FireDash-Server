@@ -633,3 +633,14 @@ def test_decimal_backfill_waits_for_quota_writer_before_reading_audit(scope):
     assert policy.station_files_bytes == 2_000_000_000
     assert audit_read.is_set()
     assert AuditEvent.objects.filter(action="file_library.quota_changed").count() == 2
+
+
+def test_native_deployment_check_fails_closed_on_windows(monkeypatch):
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    from apps.file_library.management.commands import verify_library_pdf_sanitizer
+
+    monkeypatch.setattr(verify_library_pdf_sanitizer.sys, "platform", "win32")
+    with pytest.raises(CommandError, match="deployed Linux"):
+        call_command("verify_library_pdf_sanitizer")

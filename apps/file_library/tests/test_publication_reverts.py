@@ -1,5 +1,5 @@
 # ruff: noqa: F811
-"""Logical reverts retain immutable attempts and never grant capacity implicitly."""
+"""Logical reverts and rebuilds retain immutable publication attempts."""
 
 import hashlib
 import importlib
@@ -21,17 +21,16 @@ from apps.audit.models import AuditEvent
 from apps.file_library import services
 from apps.file_library.models import CapacityReview, Content
 from apps.file_library.publication import publication_state, scope_kwargs
-from apps.file_library.publication_capacity import reassess_department
 from apps.file_library.publication_reconciliation import reconcile_file_scope
-from apps.file_library.tests.test_capacity import approve, serialized_operations, tablet_for
+from apps.file_library.tests.helpers import serialized_operations, tablet_for
 from apps.file_library.tests.test_libraries import (  # noqa: F401
     library_for,
     pdf,
     pdf_pipeline,
     scope,
 )
+from apps.file_library.tests.test_management_ux import review_for
 from apps.file_library.tests.test_publication import crypto, installation_for, publish  # noqa: F401
-from apps.file_library.tests.test_publication_capacity import current_review
 from apps.publications.builders import source_fingerprint_for_payload
 from apps.publications.manifests import canonical_manifest_payload, manifest_publications
 from apps.publications.models import (
@@ -78,14 +77,11 @@ def assert_clean(library, active):
     assert state.dirty_since is None
     assert state.current_source_fingerprint == active.source_fingerprint
     assert not PublicationJob.objects.filter(scope_state=state, status="PENDING").exists()
-    assert not CapacityReview.objects.filter(
-        library=library, superseded_at=None, consumed_at=None, publication_snapshot__isnull=False
-    ).exists()
     assert scope_operational_states_for_scopes([state])[0]["state"] == "CURRENT"
     with CaptureQueriesContext(connection) as queries:
         status = publication_state(library)
     assert status["label"] == "Current" and not status["unpublished"]
-    assert status["capacity_review"] is None and not status["can_publish"]
+    assert "capacity_review" not in status and not status["can_publish"]
     assert not any(
         query["sql"].lstrip().split()[0] in {"INSERT", "UPDATE", "DELETE"} for query in queries
     )
@@ -93,34 +89,27 @@ def assert_clean(library, active):
 
 @pytest.mark.parametrize("station", [False, True])
 @pytest.mark.parametrize("decision", ["pending", "rejected", "approved", "superseded"])
-def test_upload_delete_cancels_attempt_and_retires_unbound_review(
+def test_upload_delete_cancels_attempt_and_preserves_historical_review(
     scope, pdf_pipeline, crypto, station, decision
 ):
     actor = scope[1] if station else scope[0]
     library = services.get_library(actor, station_id=scope[5].id) if station else library_for(scope)
     active = publish(actor, library)
-    _, installation = tablet_for(scope)
-    AppInstallation.objects.filter(pk=installation.pk).update(
-        storage_observed_at=None, free_storage_bytes=None, total_storage_bytes=None
-    )
     doc = services.upload_pdf(actor=actor, library_id=library.id, upload=pdf())
-    review = current_review(library)
-    assert review.publication_id is None
+    review = review_for(actor, library)
+    if decision in {"approved", "rejected"}:
+        review.decision, review.decided_by, review.decided_at = decision, scope[0], timezone.now()
+    elif decision == "superseded":
+        review.superseded_at = timezone.now()
+    review.save()
+    historical = CapacityReview.objects.filter(pk=review.pk).values().get()
     staged = DatasetPublication.objects.get(scope_state=active.scope_state, status="STAGED")
     frozen = deepcopy(staged.source_snapshot)
-    if decision in {"approved", "rejected"}:
-        approve(scope[0], review, approve=decision == "approved")
-    elif decision == "superseded":
-        CapacityReview.objects.filter(pk=review.pk).update(superseded_at=timezone.now())
     services.delete_entry(actor=actor, library_id=library.id, entry_id=doc.id)
     assert_clean(library, active)
-    review.refresh_from_db()
     staged.refresh_from_db()
-    assert review.superseded_at and review.consumed_at is None
-    assert review.decision == (decision if decision != "superseded" else "pending")
+    assert historical == CapacityReview.objects.filter(pk=review.pk).values().get()
     assert staged.status == "CANCELLED" and staged.source_snapshot == frozen
-    with pytest.raises(services.LibraryError, match="no longer pending"):
-        approve(scope[0], review, approve=False)
     before = DatasetPublication.objects.count()
     stage_publication_update(actor=scope[0], **kwargs(library))
     assert DatasetPublication.objects.count() == before
@@ -145,13 +134,10 @@ def test_production_legacy_upload_delete_reject_delete_staged_then_stage(
         )
         doc = services.upload_pdf(**common, upload=pdf())
         services.delete_entry(**common, entry_id=doc.id)
-        review = current_review(library)
-        assert len(review.publication_snapshot["documents"]) == 1
-        approve(scope[0], review, approve=False)
-        staged = DatasetPublication.objects.get(scope_state=active.scope_state, status="STAGED")
-        old.setattr(
-            "apps.file_library.publication_capacity.retire_attempt_review", lambda *a, **k: None
+        review = review_for(
+            scope[0], library, decision="rejected", decided_by=scope[0], decided_at=timezone.now()
         )
+        staged = DatasetPublication.objects.get(scope_state=active.scope_state, status="STAGED")
         delete_staged_publication(actor=scope[0], publication=staged)
         # Already affected installations may also have retried staging v4.
         if repair == "command":
@@ -163,7 +149,7 @@ def test_production_legacy_upload_delete_reject_delete_staged_then_stage(
     # Even before repair, status must not mint an approval for unchanged source.
     with CaptureQueriesContext(connection) as queries:
         status = publication_state(library)
-    assert status["publication_current"] and status["capacity_review"] is None
+    assert status["publication_current"] and "capacity_review" not in status
     assert not any(q["sql"].lstrip().startswith(("UPDATE ", "DELETE ", "INSERT ")) for q in queries)
     before = DatasetPublication.objects.count()
     if repair == "stage":
@@ -179,7 +165,7 @@ def test_production_legacy_upload_delete_reject_delete_staged_then_stage(
     assert_clean(library, active)
     assert library.source_revision > active.source_revision
     review.refresh_from_db()
-    assert review.decision == "rejected" and review.superseded_at and not review.consumed_at
+    assert review.decision == "rejected" and not review.superseded_at and not review.consumed_at
     client.force_login(scope[0])
     response = client.get(reverse("publications-list", args=(scope[3].id,)), {"state": "current"})
     assert active.scope_state_id in {row["scope_id"] for row in response.context["scope_rows"]}
@@ -268,9 +254,7 @@ def test_superseded_equality_still_publishes_new_version_and_reuses_artifact(
     assert job.build_publication_id == attempt_id
     assert job.build_publication.source_fingerprint == first.source_fingerprint
     assert job.build_publication.source_fingerprint != second.source_fingerprint
-    assert not publication_state(library)["can_publish"]
-    review = current_review(library)
-    approve(scope[0], review)
+    assert publication_state(library)["can_publish"]
     third = publish(scope[0], library)
     assert third.id == attempt_id and third.version_number == version
     assert third.status == "PUBLISHED" and third.supersedes_id == second.id
@@ -278,7 +262,7 @@ def test_superseded_equality_still_publishes_new_version_and_reuses_artifact(
 
 
 @pytest.mark.parametrize("legacy", [False, True])
-def test_real_content_change_still_requires_unknown_capacity_approval(
+def test_real_content_change_publishes_without_storage(
     scope, pdf_pipeline, crypto, monkeypatch, legacy
 ):
     library = library_for(scope)
@@ -293,17 +277,13 @@ def test_real_content_change_still_requires_unknown_capacity_approval(
         storage_observed_at=None, free_storage_bytes=None, total_storage_bytes=None
     )
     services.upload_pdf(actor=scope[0], library_id=library.id, upload=pdf())
-    review = current_review(library)
-    assert review.projection["tablets"][0]["state"] == "unknown"
     PublicationJob.objects.filter(status="PENDING").update(not_before=timezone.now())
-    assert claim_next_job() is None
-    approve(scope[0], review)
     job = claim_next_job()
     assert job is not None
     result = build_claimed_job(job_id=job.id)
     assert result.status == "SUCCEEDED"
-    review.refresh_from_db()
-    assert review.consumed_at and review.publication_id != active.id
+    assert result.build_publication_id != active.id
+    assert not CapacityReview.objects.filter(library=library).exists()
 
 
 def test_reconcile_dry_run_repeatability_and_scope_isolation(
@@ -320,7 +300,7 @@ def test_reconcile_dry_run_repeatability_and_scope_isolation(
     services.upload_pdf(actor=scope[1], library_id=station_library.id, upload=pdf())
     other_library = services.get_library(scope[2], department_id=scope[4].id)
     services.upload_pdf(actor=scope[2], library_id=other_library.id, upload=pdf())
-    station_review = current_review(station_library)
+    station_review = review_for(scope[1], station_library)
     count = DatasetPublication.objects.count()
     output = StringIO()
     with CaptureQueriesContext(connection) as queries:
@@ -378,7 +358,7 @@ def test_running_build_and_revert_do_not_queue_redundant_successor(scope, pdf_pi
 
 
 @pytest.mark.parametrize("station", [False, True])
-def test_explicit_clean_rebuild_is_not_cancelled_or_exempted_from_capacity(scope, crypto, station):
+def test_explicit_clean_rebuild_survives_reconciliation_and_worker_recovery(scope, crypto, station):
     actor = scope[1] if station else scope[0]
     library = services.get_library(actor, station_id=scope[5].id) if station else library_for(scope)
     active = publish(actor, library)
@@ -392,9 +372,7 @@ def test_explicit_clean_rebuild_is_not_cancelled_or_exempted_from_capacity(scope
     assert job is not None and job.allow_clean_rebuild
     reconcile_file_scope(scope_id=active.scope_state_id, department_id=scope[3].id, apply=True)
     job.refresh_from_db()
-    assert job.status == "PENDING" and current_review(library).superseded_at is None
-    assert claim_next_job() is None
-    approve(scope[0], current_review(library))
+    assert job.status == "PENDING"
     claimed = claim_next_job()
     assert claimed is not None and claimed.build_publication_id is not None
     failed_attempt = claimed.build_publication_id
@@ -402,20 +380,13 @@ def test_explicit_clean_rebuild_is_not_cancelled_or_exempted_from_capacity(scope
         heartbeat_at=timezone.now() - timedelta(hours=1)
     )
     assert recover_stale_jobs(timeout=timedelta(minutes=5)) == 1
-    reassess_department(scope[3].id)
-    fresh = current_review(library)
     reconcile_file_scope(scope_id=active.scope_state_id, department_id=scope[3].id, apply=True)
-    fresh.refresh_from_db()
-    assert fresh.superseded_at is None
-    approve(scope[0], fresh)
     retry = claim_next_job()
     assert retry is not None and retry.build_publication_id != failed_attempt
     assert retry.allow_clean_rebuild
     assert build_claimed_job(job_id=retry.id).status == "SUCCEEDED"
     active.refresh_from_db()
     assert active.status == "SUPERSEDED"
-    fresh.refresh_from_db()
-    assert fresh.publication_id == retry.build_publication_id and fresh.consumed_at
     assert retry.build_publication is not None
     assert_clean(library, retry.build_publication)
 
@@ -577,79 +548,50 @@ def test_explicit_clean_rebuild_publishes_discoverable_document_generation(
     assert enqueue_publication_job(**kwargs(library), trigger_type="BULK_REQUEST") is None
 
 
-@pytest.mark.parametrize("change", ["telemetry", "source"])
-def test_explicit_rebuild_requeues_unsafe_attempt_with_force_intent(scope, crypto, change):
+def test_explicit_rebuild_requeues_changed_source_with_force_intent(scope, crypto):
     library = library_for(scope)
     active = publish(scope[0], library)
-    _, installation = tablet_for(scope)
-    if change == "telemetry":
-        AppInstallation.objects.filter(pk=installation.pk).update(
-            storage_observed_at=None, free_storage_bytes=None, total_storage_bytes=None
-        )
     job = enqueue_publication_job(
         **kwargs(library),
         requested_by=scope[0],
         trigger_type="USER_REQUEST",
         allow_clean_rebuild=True,
     )
-    approved = None
-    if change == "telemetry":
-        assert claim_next_job() is None
-        approved = current_review(library)
-        approve(scope[0], approved)
     claimed = claim_next_job()
-    assert job is not None and claimed is not None
-    assert claimed.build_publication is not None
+    assert job is not None and claimed is not None and claimed.build_publication is not None
     frozen = deepcopy(claimed.build_publication.source_snapshot)
     assert enqueue_publication_job(**kwargs(library), allow_clean_rebuild=True) is None
-    if change == "source":
-        services.create_folder(actor=scope[0], library_id=library.id, name="Later")
-    if change == "telemetry":
-        AppInstallation.objects.filter(pk=installation.pk).update(
-            storage_observed_at=timezone.now(), free_storage_bytes=1, total_storage_bytes=1000
-        )
-    else:
-        AppInstallation.objects.filter(pk=installation.pk).update(
-            storage_observed_at=None, free_storage_bytes=None, total_storage_bytes=None
-        )
+    services.create_folder(actor=scope[0], library_id=library.id, name="Later")
     claimed.build_publication.refresh_from_db()
     assert claimed.build_publication.source_snapshot == frozen
     assert build_claimed_job(job_id=job.id).status == "OBSOLETE"
     assert not claimed.build_publication.document_artifact_references.exists()
-    if approved:
-        approved.refresh_from_db()
-        assert approved.superseded_at and approved.consumed_at is None
     replacement = PublicationJob.objects.get(scope_state=active.scope_state, status="PENDING")
     assert replacement.allow_clean_rebuild and replacement.requested_by_id == scope[0].id
     assert replacement.build_publication_id != claimed.build_publication_id
     active.refresh_from_db()
     assert active.status == "PUBLISHED"
-    assert claim_next_job() is None
-    review = current_review(library)
-    assert review.decision == "pending" and not review.consumed_at
-    approve(scope[0], review)
+    PublicationJob.objects.filter(pk=replacement.pk).update(not_before=timezone.now())
     retry = claim_next_job()
     assert retry is not None
     assert build_claimed_job(job_id=retry.id).status == "SUCCEEDED"
-    review.refresh_from_db()
-    assert review.consumed_at and review.publication_id == retry.build_publication_id
 
 
-def test_explicit_clean_rebuild_does_not_bypass_rejection(scope, crypto):
+def test_explicit_clean_rebuild_ignores_historical_rejection(scope, crypto):
     library = library_for(scope)
     active = publish(scope[0], library)
-    tablet_for(scope, free=1, total=1000)
+    review = review_for(
+        scope[0], library, decision="rejected", decided_by=scope[0], decided_at=timezone.now()
+    )
+    historical = CapacityReview.objects.filter(pk=review.pk).values().get()
     job = enqueue_publication_job(**kwargs(library), allow_clean_rebuild=True)
     assert job is not None
-    review = current_review(library)
-    approve(scope[0], review, approve=False)
-    assert claim_next_job() is None
-    job.refresh_from_db()
-    review.refresh_from_db()
+    PublicationJob.objects.filter(pk=job.pk).update(not_before=timezone.now())
+    assert claim_next_job() is not None
+    assert build_claimed_job(job_id=job.id).status == "SUCCEEDED"
     active.refresh_from_db()
-    assert job.status == "PENDING" and job.allow_clean_rebuild
-    assert review.decision == "rejected" and not review.consumed_at
-    assert active.status == "PUBLISHED"
+    assert active.status == "SUPERSEDED"
+    assert historical == CapacityReview.objects.filter(pk=review.pk).values().get()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -709,39 +651,29 @@ def test_identical_changed_payload_coalesces_one_attempt_with_latest_storage_id(
     )
 
 
-def test_clean_revert_preserves_consumed_approval_and_future_review(scope, pdf_pipeline, crypto):
+def test_clean_revert_preserves_historical_reviews(scope, pdf_pipeline, crypto):
     library = library_for(scope)
-    _, installation = tablet_for(scope)
-    AppInstallation.objects.filter(pk=installation.pk).update(
-        storage_observed_at=None, free_storage_bytes=None, total_storage_bytes=None
-    )
     common = dict(actor=scope[0], library_id=library.id)
     services.upload_pdf(**common, upload=pdf("baseline.pdf"))
-    consumed = current_review(library)
-    approve(scope[0], consumed)
     active = publish(scope[0], library)
-    consumed.refresh_from_db()
-    original_consumption = consumed.consumed_at
-    assert original_consumption is not None
+    consumed = review_for(
+        scope[0],
+        library,
+        decision="approved",
+        decided_by=scope[0],
+        decided_at=timezone.now(),
+        consumed_at=timezone.now(),
+        publication=active,
+    )
     extra = services.upload_pdf(**common, upload=pdf("extra.pdf"))
-    pending = current_review(library)
+    pending = review_for(scope[0], library)
     future_snapshot = deepcopy(pending.publication_snapshot)
     future_snapshot["source_revision"] += 100
-    future = CapacityReview.objects.create(
-        library=library,
-        requested_by=scope[0],
-        operation=pending.operation,
-        projection=pending.projection,
-        fingerprint=pending.fingerprint,
-        publication_snapshot=future_snapshot,
-    )
+    future = review_for(scope[0], library, publication_snapshot=future_snapshot)
+    ids = [consumed.id, pending.id, future.id]
+    before = list(CapacityReview.objects.filter(pk__in=ids).order_by("id").values())
     services.delete_entry(**common, entry_id=extra.id)
-    for review in (consumed, pending, future):
-        review.refresh_from_db()
-    assert consumed.consumed_at == original_consumption and consumed.superseded_at is None
-    assert consumed.publication_id == active.id and consumed.decision == "approved"
-    assert pending.superseded_at is not None
-    assert future.superseded_at is None and future.decision == "pending"
+    assert before == list(CapacityReview.objects.filter(pk__in=ids).order_by("id").values())
     assert publication_state(library)["publication_current"]
 
 
@@ -761,3 +693,33 @@ def test_force_flag_migration_preserves_legacy_explicit_intent(scope, debounced)
     migration.preserve_explicit_requests(apps, None)
     job.refresh_from_db()
     assert job.allow_clean_rebuild is not debounced
+
+
+@pytest.mark.parametrize("station", [False, True])
+def test_previously_blocked_job_freezes_latest_source_without_review(
+    scope, pdf_pipeline, crypto, station
+):
+    actor = scope[1] if station else scope[0]
+    library = services.get_library(actor, station_id=scope[5].id) if station else library_for(scope)
+    active = publish(actor, library)
+    tablet_for(scope, free=1, total=1000)
+    services.upload_pdf(actor=actor, library_id=library.id, upload=pdf())
+    job = PublicationJob.objects.get(scope_state=active.scope_state, status="PENDING")
+    review = review_for(
+        actor, library, decision="rejected", decided_by=scope[0], decided_at=timezone.now()
+    )
+    historical = CapacityReview.objects.filter(pk=review.pk).values().get()
+    staged_id = job.build_publication_id
+    services.create_folder(actor=actor, library_id=library.id, name="Newest")
+    PublicationJob.objects.filter(pk=job.pk).update(not_before=timezone.now())
+    claimed = claim_next_job()
+    assert claimed is not None and claimed.id == job.id
+    assert claimed.build_publication_id == staged_id
+    assert any(
+        folder["name"] == "Newest"
+        for folder in claimed.build_publication.source_snapshot["folders"]
+    )
+    assert build_claimed_job(job_id=claimed.id).status == "SUCCEEDED"
+    assert CapacityReview.objects.filter(pk=review.pk).values().get() == historical
+    with pytest.raises(PermissionDenied):
+        request_rebuild(actor=scope[2], **kwargs(library))

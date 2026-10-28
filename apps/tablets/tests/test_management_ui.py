@@ -347,7 +347,7 @@ def test_ordinary_pages_never_expose_device_secrets(client, tablet_ui_scope):
 
 
 @pytest.mark.django_db
-def test_storage_warning_threshold_and_stale_list_behavior(client, tablet_ui_scope):
+def test_historical_storage_never_adds_list_badges(client, tablet_ui_scope):
     scope = tablet_ui_scope
     below = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Below")
     equal = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Equal")
@@ -375,14 +375,14 @@ def test_storage_warning_threshold_and_stale_list_behavior(client, tablet_ui_sco
     below_row = next(row for row in rows if ">Below</a>" in row)
     equal_row = next(row for row in rows if ">Equal</a>" in row)
     stale_row = next(row for row in rows if ">Stale</a>" in row)
-    assert "Low Storage" in below_row
+    assert "Low Storage" not in below_row
     assert "Low Storage" not in equal_row
     assert "Low Storage" not in stale_row
-    assert html.count("Low Storage") == 1
+    assert html.count("Low Storage") == 0
 
 
 @pytest.mark.django_db
-def test_storage_detail_exact_missing_and_stale_presentation(client, tablet_ui_scope):
+def test_historical_storage_never_appears_in_details(client, tablet_ui_scope):
     scope = tablet_ui_scope
     tablet = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE)
     installation = _adopted_installation(tablet)
@@ -395,36 +395,24 @@ def test_storage_detail_exact_missing_and_stale_presentation(client, tablet_ui_s
     client.force_login(scope.admin)
     url = reverse("tablet-detail", args=(scope.department.id, tablet.id))
 
-    current = client.get(url).content.decode()
-    assert "199 bytes free" in current
-    assert "1000 bytes total" in current
-    assert "19.9% free" in current
-    assert "Low Storage" in current
-    assert "Current reported capacity" not in current
-
-    AppInstallation.objects.filter(pk=installation.pk).update(
-        authorization_valid_until=timezone.now() - timedelta(seconds=1)
-    )
-    expired = client.get(url).content.decode()
-    assert "Last known storage only" in expired
-    assert "Low Storage" not in expired
-
-    AppInstallation.objects.filter(pk=installation.pk).update(status=AppInstallation.Status.STALE)
-    stale = client.get(url).content.decode()
-    assert "Last known storage only" in stale
-    assert "has not confirmed current capacity" in stale
-
-    AppInstallation.objects.filter(pk=installation.pk).update(
-        free_storage_bytes=None,
-        total_storage_bytes=None,
-        storage_observed_at=None,
-    )
-    missing = client.get(url).content.decode()
-    assert "No storage telemetry reported" in missing
+    for status in (AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE):
+        AppInstallation.objects.filter(pk=installation.pk).update(status=status)
+        html = client.get(url).content.decode()
+        for text in (
+            "Reported storage",
+            "199 bytes free",
+            "1000 bytes total",
+            "19.9% free",
+            "Low Storage",
+            "Last known storage only",
+            "No storage telemetry reported",
+        ):
+            assert text not in html
+        assert "Authorization" in html
 
 
 @pytest.mark.django_db
-def test_tablet_list_storage_prefetch_remains_bounded(client, tablet_ui_scope):
+def test_tablet_list_installation_prefetch_remains_bounded(client, tablet_ui_scope):
     scope = tablet_ui_scope
     client.force_login(scope.admin)
     one = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="One")

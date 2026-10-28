@@ -160,7 +160,7 @@ class Entry(models.Model):
 
 
 class StorageImpact(models.Model):
-    """Source-side capacity reservations, never delivery receipts."""
+    """Inactive historical source reservations; retained without new writes."""
 
     library = models.ForeignKey(Library, on_delete=models.PROTECT)
     document_id = models.UUIDField()
@@ -170,6 +170,8 @@ class StorageImpact(models.Model):
 
 
 class CapacityReview(models.Model):
+    """Inactive historical reviews; no longer consulted or changed by services."""
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     library = models.ForeignKey(Library, on_delete=models.PROTECT)
     requested_by = models.ForeignKey(

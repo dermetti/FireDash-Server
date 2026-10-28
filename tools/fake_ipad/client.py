@@ -319,10 +319,7 @@ class FakeIPadClient:
                 CHECK_IN_PATH,
                 bearer=self.state.credential,
                 headers=self.telemetry_headers(telemetry),
-                json_body={
-                    "free_storage_bytes": 1024 * 1024 * 1024,
-                    "total_storage_bytes": 2 * 1024 * 1024 * 1024,
-                },
+                json_body={},
             ),
             200,
             label="check-in",

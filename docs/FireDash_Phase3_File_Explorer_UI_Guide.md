@@ -1,3 +1,8 @@
+> Historical implementation guide: capacity review requirements and examples in
+> this guide are superseded by the current [file-library contract](file-libraries.md#device-storage-is-managed-locally).
+> Tablet capacity telemetry, gates, review routes, warnings and approval controls
+> are disabled; source-library quotas remain active.
+
 # FireDash Phase 3 — File Management & File Explorer UI implementation guide
 
 **Status:** Implemented shared File Explorer for Department and Station Administrators; retained as the implementation and acceptance guide.<br>

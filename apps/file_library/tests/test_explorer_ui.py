@@ -22,15 +22,14 @@ from apps.audit.models import AuditEvent
 from apps.authorization.models import DepartmentMembership, StationAdminAssignment, SystemRole
 from apps.file_library import services
 from apps.file_library.models import CapacityReview, Entry, Library
-from apps.file_library.tests.test_capacity import tablet_for
+from apps.file_library.tests.helpers import tablet_for
 from apps.file_library.tests.test_libraries import (  # noqa: F401
     library_for,
     pdf,
     pdf_pipeline,
     scope,
 )
-from apps.file_library.tests.test_management_ux import reauth, review_for
-from apps.publications.models import DatasetScopeState, PublicationJob
+from apps.file_library.tests.test_management_ux import reauth
 
 pytestmark = pytest.mark.django_db
 
@@ -181,7 +180,7 @@ def test_search_sort_pagination_and_breadcrumbs_are_shared(client, scope, role):
 
 
 @pytest.mark.parametrize("role", ["department", "station"])
-def test_action_errors_preserve_values_move_browser_and_capacity_warnings(
+def test_action_errors_preserve_values_and_move_browser(
     client, scope, role, pdf_pipeline
 ):
     actor, library = normal(scope, role)
@@ -224,12 +223,7 @@ def test_action_errors_preserve_values_move_browser_and_capacity_warnings(
     tablet_for(scope, free=100, total=1000)
     accepted = client.post(url(library, "upload"), {"pdfs": [pdf("capacity.pdf")]})
     assert accepted.status_code == 302
-    review = CapacityReview.objects.get(
-        requested_by=actor,
-        library=library,
-        superseded_at=None,
-    )
-    assert review.publication_snapshot is not None and review.decision == "pending"
+    assert not CapacityReview.objects.filter(library=library).exists()
     assert library.entries.filter(name="capacity.pdf").exists()
 
 
@@ -349,75 +343,6 @@ def test_all_direct_routes_reauthorize_and_never_reveal_foreign_entries(
     assert client.get(url(library)).status_code == 302
 
 
-def test_publication_relocation_and_requester_review_visibility(client, scope):
-    admin, station_admin, _, department, _, station, _ = scope
-    library = library_for(scope)
-    station_library = services.get_library(station_admin, station_id=station.id)
-    pending = review_for(station_admin, station_library)
-    approved = review_for(
-        station_admin,
-        station_library,
-        decision="approved",
-        decided_by=admin,
-        decided_at=timezone.now(),
-    )
-    private = review_for(admin, station_library, publication_snapshot=None)
-    expired = review_for(
-        station_admin, station_library, expires_at=timezone.now() - timedelta(seconds=1)
-    )
-    client.force_login(admin)
-    assert (
-        client.post(reverse("file-library", args=(library.id,)), {"action": "publish"}).status_code
-        == 403
-    )
-    page = client.get(reverse("file-library", args=(library.id,)))
-    assert reverse("file-library-capacity-review", args=(pending.id,)) in page.content.decode()
-    scope_state = DatasetScopeState.objects.get(
-        department=department, dataset_type_code="department_files"
-    )
-    detail = client.get(reverse("publications-scope-detail", args=(scope_state.id,)))
-    assert detail.status_code == 200
-    assert (
-        reverse("publications-department-files-publish", args=(department.id,))
-        not in detail.content.decode()
-    )
-    assert "Publish Now" not in detail.content.decode()
-    assert "Build now" in detail.content.decode()
-    client.force_login(station_admin)
-    page = client.get(reverse("file-library", args=(station_library.id,)))
-    html = page.content.decode()
-    for review in (pending, approved):
-        assert reverse("file-library-capacity-review", args=(review.id,)) in html
-    for review in (private, expired):
-        assert reverse("file-library-capacity-review", args=(review.id,)) not in html
-    assert "Your capacity reviews" in html and "Publish Now" in html
-    # Status rendering checks readiness without retiring durable reviews.
-    pending.refresh_from_db()
-    approved.refresh_from_db()
-    assert pending.superseded_at is None and approved.superseded_at is None
-    from apps.file_library.publication_capacity import reassess_department
-
-    # Explicit reassessment owns retirement of these synthetic stale snapshots.
-    reassess_department(department.id)
-    pending.refresh_from_db()
-    approved.refresh_from_db()
-    assert pending.superseded_at and approved.superseded_at
-    html = client.get(reverse("file-library", args=(station_library.id,))).content.decode()
-    assert "Superseded" in html
-    assert (
-        client.post(
-            reverse("file-library-capacity-review", args=(pending.id,)),
-            {"action": "approve", "confirm": "yes"},
-        ).status_code
-        == 403
-    )
-    assert (
-        client.post(
-            reverse("file-library", args=(station_library.id,)), {"action": "publish"}
-        ).status_code
-        == 302
-    )
-    assert PublicationJob.objects.filter(station=station, requested_by=station_admin).exists()
 
 
 def test_station_dialog_bounded_search_fallback_reauth_and_stale_choice(client, scope):

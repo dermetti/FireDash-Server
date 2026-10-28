@@ -58,7 +58,7 @@ there is no unsandboxed production fallback. Downloads/previews require live sco
 authorization and verify size and SHA-256 before serving with private/no-store
 headers. Client filenames never become storage paths.
 
-Quota policy changes acquire the same department capacity lock used by uploads but do not
+Quota policy changes acquire the same department source lock used by uploads but do not
 increment the source revision, queue publication work, or alter current usage.
 A quota may be reduced below current usage. In that state, uploads and
 replacements that increase usage are rejected; deletion, metadata changes, and
@@ -142,106 +142,43 @@ write permissions, not by broadening the publication worker's read-only accepted
 storage access. Retained plaintext and encrypted artifacts remain outside the
 current-source quota, so physical disk capacity still needs ordinary monitoring.
 
-## Projected capacity and administrative overrides
+## Device storage is managed locally
 
-Valid sanitized PDFs are accepted into the canonical library immediately, subject
-only to authorization, PDF validation, integrity and server quotas. They are
-visible, previewable and downloadable before publication. Upload success is not
-publication or delivery. Tablet storage approval never bypasses a server quota.
+Tablet storage telemetry is currently disabled. The iPad app manages device
+storage locally, checks available space before downloading and activating updates,
+and preserves previously verified data when an update cannot fit. Offline lease
+and authorization requirements still apply. The server receives no automatic
+device-capacity measurements or derived insufficient-storage reports. No diagnostic
+report API is provided by this change. Future MDM-based inventory or capacity
+monitoring is a separate project.
 
-Capacity gates the actual frozen `department_files` or `station_files` candidate,
-not an upload or replacement operation. The candidate's document set replaces
-its own live-source set in the estimate, so new content is not counted twice.
+Source-library quotas, department/station quota policies, PDF size restrictions,
+source usage accounting, and server filesystem safeguards still apply.
 
-Affected tablets are ACTIVE physical assets with current operational vehicle and
-station assignments: all department tablets for `department_files`, and only the
-current station for `station_files`. Inactive/lost/retired assets and unrelated
-departments/stations are excluded. Missing current installations are capacity
-unknown. An eligible current installation must be ACTIVE, have an unexpired lease,
-and have a complete, nonfuture, valid measurement no older than
-`TABLET_STORAGE_TELEMETRY_MAX_AGE_SECONDS` (default 86400). Missing, invalid,
-outdated, replaced, or expired measurements never imply sufficient capacity.
-An assignment beginning after the observation also means capacity unknown until
-a fresh check-in: the earlier reading cannot establish the new scope's baseline.
+Valid sanitized PDFs enter the canonical source library subject to authorization,
+validation, integrity and source quotas. Authorized `department_files` and
+`station_files` publications use the normal publication lifecycle without storage
+projections, a 20% threshold, unknown-capacity warnings or department capacity
+approval. Queueing, claiming, building, promotion and finalization do not consult
+device capacity. Tablet check-ins and lifecycle changes do not reassess publications.
 
-The estimate uses the latest successful retained publication at or before the
-measurement as an **expected published baseline**, not a cache receipt. It reserves
-the unique ciphertext identities needed for the resulting department and current
-station sources, successful generations published after the measurement, and
-committed source-content changes since the measurement. `StorageImpact` is this
-source-side reservation history; it is not a per-tablet delivery or measurement
-series. Reservations survive source deletion and failed/superseded builds until a
-newer measurement accounts for them. Duplicate logical-document/hash identities
-are counted once. Existing generic artifact identities and actual ciphertext
-sizes are reused; unbuilt content reserves sanitized size plus the 16-byte GCM
-tag. Identical PDFs in different documents or scopes count separately. Replacement
-and deletion never assume that old ciphertext has already been reclaimed. A
-pruned successful snapshot needed since the measurement makes capacity unknown.
+Source mutations and quota updates retain their department advisory lock before
+scope/library locks. Frozen snapshots, source revisions and fingerprints, logical
+clean-source reconciliation, explicit rebuild intent, job coalescing, encryption,
+signatures, key grants, retention and artifact-reference protection remain in force.
 
-Projected free bytes = reported free bytes minus the estimated unique additional
-ciphertext bytes; negative projections are preserved. A warning means projected
-free bytes are **strictly below 20%** of total; exactly 20% is allowed. Estimates
-exclude manifest/key metadata, decrypted working copies, other applications and
-future disk activity. The published baseline may differ from an offline device's
-actual cache. These are conservative estimates of incremental encrypted content,
-never a guarantee of installability or confirmed delivery. The iPad must still
-handle insufficient local capacity and failed staging without partial activation.
+Historical `AppInstallation` storage fields, `StorageImpact` rows and `CapacityReview`
+rows remain in the database, with their constraints and audit history. Active
+services neither write nor consult them. No schema/data cleanup migration is needed.
+The telemetry freshness setting and review routes/UI have been removed.
 
-Source mutations in either scope serialize on a department advisory lock before
-the established publication-scope/library locks. Capacity evaluation locks current
-installation rows, so check-in/replacement cannot overwrite a reviewed measurement
-mid-commit. Queries are batched, and estimating never builds a publication. Quota
-updates use the department advisory lock followed by the quota-policy row lock;
-publication workers retain the
-existing frozen-snapshot, supersession and reference-protection lifecycle.
-
-Unknown capacity requires department approval (warning); measured projected free
-storage below 20% requires approval with a stronger danger warning. Mixed
-populations show the stronger warning and retain all unknown diagnostics. No
-eligible tablets is clear, not unknown.
-
-`CapacityReview` retains the exact snapshot/revision, dataset and tenant scope,
-projection fingerprint, tablet/assignment/installation identities, measurements,
-decision actor and timestamps. Pending reviews have no upload retry deadline.
-Department administrators must confirm and recently reauthenticate. Station
-administrators can inspect their library's review but cannot decide. Temporary
-station access confers no approval or publication rights. Approval accepts the
-recorded publication risk, not a guarantee of installation or delivery; no
-second upload is required.
-
-Queueing/coalescing assesses the candidate; claiming rechecks and binds approval
-to that generation; finalization rechecks before activation and consumes approval
-atomically. An unapproved or stale BUILDING attempt (including one predating the
-deployment) becomes obsolete and queues a fresh candidate. Current and retained
-successful generations remain available. Failed encryption is still an ordinary
-build failure; a capacity-blocked candidate stays pending, not failed. Edits
-remain available and supersede reviews when their assessment context changes.
-Repeated unchanged assessments reuse the same review without duplicate audit.
-Failed or cancelled attempts supersede their unconsumed reviews. A recovered or
-new attempt receives a fresh assessment and cannot inherit that authorization;
-the accepted source PDF remains available throughout.
-
-The department capacity lock precedes publication scope, library, review and
-installation locks. Existing vehicle/tablet/assignment ordering is preserved.
-Telemetry, installation, eligibility and source mutations schedule a committed
-reassessment of pending candidates; a newly clear candidate or approved risk
-wakes the existing worker. No build/encryption runs during a check-in. The worker
-also rechecks clock-based expiry and recovers a missed refresh after restart.
-Approval never transfers to another generation or source revision.
-
-Migration `file_library.0010` adds nullable publication snapshot, generation and
-supersession fields, permits automatic requesters and nonexpiring publication
-reviews. Existing unconsumed upload reviews are marked superseded without
-changing their decisions or immutable audit rows. They never authorize a
-publication. Historically blocked uploads have no accepted source bytes to migrate;
-those PDFs can be uploaded normally. Previously accepted PDFs need no second upload.
-No content, quota usage, source revisions or jobs are rewritten.
-Quiesce file writers and publication workers for the upgrade. Apply migration
-`0010` before starting updated workers; an old worker process cannot enforce the
-new gate. Existing queued and recoverable building attempts are reassessed by the
-updated claim/finalization paths. Rollback requires quiescing writers
-and workers and a compatible database restore: switching code alone would restore
-the obsolete upload gate and cannot preserve this approval contract.
+Previously capacity-blocked PENDING jobs remain in the existing queue and become
+claimable when their normal `not_before` schedule is due. Restart the publication
+workers with the new code. Claiming reads current source under the source/scope
+locks and freezes that source into the existing staged attempt. A source already
+matching the active generation is reconciled without an unnecessary build; explicit
+rebuild intent is retained. No deployment migration automatically queues unrelated
+or unauthorized datasets. Normal retry/recovery and failure handling still apply.
 
 ## Deployment validation
 
@@ -261,15 +198,10 @@ the isolated broker, configured UID/GID boundaries and accepted-storage modes:
    and verify signed metadata, ciphertext hash and decrypted sanitized PDF hash.
 4. Replace/delete source content, exercise retained-history cleanup, and run
    reconciliation with a deliberate aged orphan and an in-progress upload.
-5. With unknown and measured below-20% storage, verify the source remains readable
-   while publication waits. Approve as a recently reauthenticated department
-   administrator and verify the queued candidate publishes without another upload.
-   Refresh telemetry to safe values and verify a pending review clears automatically.
-
-Stage 4 stores the latest device-reported storage measurement at authenticated
-check-in and displays it in Tablet Management. An expired lease or stale
-installation, or a measurement older than 24 hours by default, marks the
-preserved values as last known capacity. Stage 5 adds the estimates described above.
+5. Check in with `{}` and no body; verify lease renewal, STALE recovery and
+   unchanged app-version compatibility handling. Verify authorized department and
+   station publications proceed without device measurements, and that source quota
+   limits still reject storage-increasing writes when over quota.
 
 No iPad browser is implemented. The future tablet client must
 support these required types before activating a complete manifest containing
@@ -325,7 +257,7 @@ checks remain deployment prerequisites until verified on that host.
 
 ### Final server-to-iPad handoff inventory
 
-The subsequent iPad PRD must cover mandatory integer storage check-ins and current
+The subsequent iPad PRD must cover storage-free check-ins and current
 installation identity; explicit department/station scopes and both required schema-2
 file datasets; configured root names and the display-only department ` (global)`
 suffix; complete/generation Ed25519 verification, exact HPKE info, AES-KW and GCM;
@@ -333,7 +265,7 @@ individual ciphertext caching, hashes and immutable document identities; folder
 integrity, authoritative empty generations and atomic complete-manifest activation;
 lease/offline monotonic time, stale recovery, revocation/replacement/reassignment
 and purge; and local capacity/staging failures without receipts or false delivery
-claims. Server capacity overrides are portal-only and confer no tablet privileges.
+claims. Device capacity never grants tablet privileges.
 
 ### Fake-tablet contract regression disposition
 
@@ -422,11 +354,10 @@ normal publication queue, and redirects to department Publications (HTMX receive
 
 `file-library` is one shared, compact parent page for department and station
 administrators. It displays scope, storage usage and an Open File Explorer link.
-The department parent includes paginated department-wide pending capacity
-approvals and temporary station-access selection. Normal station administrators
-see their library publication-capacity requests and a compact station publication panel.
+The department parent includes temporary station-access selection. Normal station
+administrators see a compact station publication panel.
 Department and station file-publication administration and history live in
-Publications. File scope details use the capacity-gated Build now action; they
+Publications. File scope details use the normal Build now action; they
 do not render the compatibility Publish Now endpoint as an additional control.
 
 `file-library-explorer` (`/files/<library UUID>/explorer/`) uses the same template,
@@ -444,7 +375,7 @@ Temporary station grants use these same pages in restricted mode, with scope,
 expiry and release shown prominently. They allow browsing, search, preview,
 download and one confirmed deletion. Successful deletion consumes the grant and
 redirects to `/files/`; failed deletion preserves it. Upload, folder creation,
-rename, move, replace, publication and capacity override remain denied by services.
+rename, move, replace, publication remain denied by services.
 No department membership implies normal station management authority.
 
 Station selection opens one reusable dialog with a server-filtered, keyboard-
@@ -458,27 +389,13 @@ station survives the reauthentication return; activation still requires a fresh,
 explicit POST confirmation. Existing station sidebar and Station Data Hub routes
 continue to enter the shared parent.
 
-### Capacity review placement and manual publication controls
-
-Department File Management is the single department-wide queue for pending file
-capacity approvals, including station libraries. Rows identify the owning library,
-source revision, strongest risk, affected/unknown/below-20% counts and review
-status. Detailed assessments and decisions return to the relevant paginated queue
-row. System Settings retains quotas and other configuration, without a parallel
-capacity approval table.
+### Manual publication controls
 
 Department Publications includes department and station file scopes. Department
 administrators may administer station publication lifecycles without gaining
 station File Explorer authoring privileges. Scope filters, counts and pagination
-remain department-scoped. File rows lead to the scope detail for a fresh capacity
-assessment rather than computing projections for every row in a list.
-
-File-publication details expose **Build now** in Actions for an eligible staged
-candidate, without a second Publish Now section. Capacity status links back to
-File Management; the complete tablet assessment stays in its review workflow.
-Station administrators retain Publish Now on their own File Management page,
-but cannot use it while capacity approval is outstanding or a build is running.
-Approved assessments are checked again against the actual candidate and device
-context. Both manual services reject blocked requests independently of disabled
-HTML controls; uploads and other source operations remain available. Existing
-successful generations remain distributable while newer candidates await approval.
+remain department-scoped. File rows lead to publication details, where **Build now**
+is available for an eligible staged candidate. Station administrators retain
+**Publish Now** on their own File Management page; running builds still disable
+that control. Services enforce authorization and lifecycle checks independently
+of HTML controls. No capacity review pages, queues, warnings or decisions remain.

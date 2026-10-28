@@ -197,7 +197,7 @@ def test_inactive_tablet_syncs_signed_empty_manifest_and_reactivates_same_instal
     # Inactive check-in is a contact/control operation, not an operational renewal.
     check_in = client.post(
         "/api/v1/tablet/check-in",
-        _storage(),
+        {},
         content_type="application/json",
         **_authorization(credential),
     )
@@ -490,7 +490,7 @@ def test_check_in_does_not_renew_an_active_installation_with_more_than_48_hours_
     previous_expiry = installation.authorization_valid_until
     response = client.post(
         "/api/v1/tablet/check-in",
-        _storage(),
+        {},
         content_type="application/json",
         **_authorization(credential),
     )
@@ -502,9 +502,8 @@ def test_check_in_does_not_renew_an_active_installation_with_more_than_48_hours_
     assert verify_credential(installation=installation, credential=credential)
 
 
-def test_check_in_persists_valid_storage_telemetry_on_current_installation(api_context):
+def test_check_in_ignores_legacy_storage_telemetry(api_context):
     client, installation, credential, _ = api_context
-    before = timezone.now()
     response = client.post(
         "/api/v1/tablet/check-in",
         _storage(free=199, total=1000),
@@ -514,10 +513,9 @@ def test_check_in_persists_valid_storage_telemetry_on_current_installation(api_c
 
     installation.refresh_from_db()
     assert response.status_code == 200
-    assert installation.free_storage_bytes == 199
-    assert installation.total_storage_bytes == 1000
-    assert before <= installation.storage_observed_at <= timezone.now()
-    assert installation.storage_is_low is True
+    assert installation.free_storage_bytes is None
+    assert installation.total_storage_bytes is None
+    assert installation.storage_observed_at is None
 
 
 @pytest.mark.parametrize(
@@ -537,7 +535,7 @@ def test_check_in_persists_valid_storage_telemetry_on_current_installation(api_c
         _storage(free=2**63, total=2**63),
     ],
 )
-def test_invalid_check_in_storage_does_not_persist_or_renew(api_context, payload):
+def test_legacy_storage_fields_are_ignored_and_check_in_renews(api_context, payload):
     client, installation, credential, _ = api_context
     previous_expiry = timezone.now() + timedelta(hours=1)
     previous_check_in = timezone.now() - timedelta(days=1)
@@ -557,12 +555,12 @@ def test_invalid_check_in_storage_does_not_persist_or_renew(api_context, payload
     )
 
     installation.refresh_from_db()
-    assert response.status_code == 400
+    assert response.status_code == 200
     assert installation.free_storage_bytes == 50
     assert installation.total_storage_bytes == 100
     assert installation.storage_observed_at == previous_check_in
-    assert installation.authorization_valid_until == previous_expiry
-    assert installation.last_successful_check_in_at == previous_check_in
+    assert installation.authorization_valid_until > previous_expiry
+    assert installation.last_successful_check_in_at > previous_check_in
 
 
 @pytest.mark.parametrize(
@@ -630,7 +628,7 @@ def test_check_in_reports_upgrade_before_lease_renewal_but_accepts_new_version_t
 
     blocked = client.post(
         "/api/v1/tablet/check-in",
-        _storage(),
+        {},
         content_type="application/json",
         **_authorization(credential),
     )
@@ -642,7 +640,7 @@ def test_check_in_reports_upgrade_before_lease_renewal_but_accepts_new_version_t
 
     upgraded = client.post(
         "/api/v1/tablet/check-in",
-        _storage(),
+        {},
         content_type="application/json",
         HTTP_X_FIREDASH_APP_VERSION="1.0.1",
         HTTP_X_FIREDASH_APP_BUILD="57",
@@ -660,7 +658,7 @@ def test_version_only_header_preserves_matching_build_and_clears_changed_build(a
     installation.save(update_fields=("app_build",))
     same = client.post(
         "/api/v1/tablet/check-in",
-        _storage(),
+        {},
         content_type="application/json",
         HTTP_X_FIREDASH_APP_VERSION="1.0.0",
         **_authorization(credential),
@@ -670,7 +668,7 @@ def test_version_only_header_preserves_matching_build_and_clears_changed_build(a
     assert installation.app_build == 7
     changed = client.post(
         "/api/v1/tablet/check-in",
-        _storage(),
+        {},
         content_type="application/json",
         HTTP_X_FIREDASH_APP_VERSION="1.0.1",
         **_authorization(credential),
@@ -808,7 +806,7 @@ def test_deactivated_tablet_keeps_identity_but_loses_operational_endpoint_access
     assert (
         client.post(
             "/api/v1/tablet/check-in",
-            _storage(),
+            {},
             content_type="application/json",
             **_authorization(credential),
         ).status_code
@@ -891,7 +889,7 @@ def test_installation_state_access_matrix(api_context, installation_status, path
 
     if path.endswith("check-in"):
         response = client.post(
-            path, _storage(), content_type="application/json", **_authorization(credential)
+            path, {}, content_type="application/json", **_authorization(credential)
         )
     elif path.endswith("refresh"):
         response = client.post(path, **_authorization(credential))
@@ -923,7 +921,7 @@ def test_terminal_installations_only_retain_narrow_status_access(api_context, in
     assert (
         client.post(
             "/api/v1/tablet/check-in",
-            _storage(),
+            {},
             content_type="application/json",
             **_authorization(credential),
         ).status_code
@@ -950,23 +948,6 @@ def test_openapi_schema_is_available():
 
     assert response.status_code == 200
     assert "openapi: 3.1.0" in response.content.decode()
-
-
-def test_check_in_openapi_requires_storage_telemetry():
-    schema = yaml.safe_load(Client().get("/api/v1/schema/").content)
-    operation = schema["paths"]["/api/v1/tablet/check-in"]["post"]
-    request_schema = schema["components"]["schemas"]["CheckInRequest"]
-
-    assert operation["security"] == [{"InstallationBearer": []}]
-    assert set(operation["requestBody"]["content"]) == {"application/json"}
-    assert "400" in operation["responses"]
-    assert request_schema["required"] == ["free_storage_bytes", "total_storage_bytes"]
-    assert request_schema["properties"]["free_storage_bytes"]["minimum"] == 0
-    assert request_schema["properties"]["total_storage_bytes"]["minimum"] == 1
-    assert operation["requestBody"]["required"] is True
-    for name in ("free_storage_bytes", "total_storage_bytes"):
-        assert request_schema["properties"][name]["type"] == "integer"
-        assert request_schema["properties"][name]["maximum"] == 2**63 - 1
 
 
 def test_document_generation_openapi_matches_json_binary_and_pending_contracts():
@@ -1144,3 +1125,26 @@ def test_download_content_negotiation_accepts_octet_stream():
 
     assert media_type == "application/octet-stream"
     assert accepted_renderer.media_type == "application/octet-stream"
+
+
+def test_check_in_openapi_accepts_optional_empty_object():
+    schema = yaml.safe_load(Client().get("/api/v1/schema/").content)
+    operation = schema["paths"]["/api/v1/tablet/check-in"]["post"]
+    assert operation["security"] == [{"InstallationBearer": []}]
+    assert not operation["requestBody"].get("required", False)
+    body = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert body == {"type": "object", "properties": {}}
+    assert "400" in operation["responses"]
+
+
+def test_bodyless_check_in_renews_without_storage(api_context):
+    client, installation, credential, _ = api_context
+    previous = timezone.now() + timedelta(hours=1)
+    AppInstallation.objects.filter(pk=installation.pk).update(authorization_valid_until=previous)
+    response = client.generic("POST", "/api/v1/tablet/check-in", b"", **_authorization(credential))
+    assert response.status_code == 200
+    installation.refresh_from_db()
+    assert installation.authorization_valid_until > previous
+    assert installation.free_storage_bytes is None
+    assert installation.total_storage_bytes is None
+    assert installation.storage_observed_at is None

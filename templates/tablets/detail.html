@@ -81,18 +81,6 @@
             <dd class="col-sm-7">{{ current_installation.authorization_valid_until|department_datetime:department }}</dd>
             <dt class="col-sm-5">App version</dt>
             <dd class="col-sm-7">{{ current_installation.app_version }}</dd>
-            <dt class="col-sm-5">Reported storage</dt>
-            <dd class="col-sm-7">
-              {% if current_installation.storage_observed_at %}
-                <div>{{ current_installation.free_storage_bytes }} bytes free ({{ current_installation.free_storage_bytes|filesizeformat }})</div>
-                <div>{{ current_installation.total_storage_bytes }} bytes total ({{ current_installation.total_storage_bytes|filesizeformat }})</div>
-                <div>{{ storage_percentage|floatformat:1 }}% free</div>
-                <div class="text-body-secondary small">Observed {{ current_installation.storage_observed_at|department_datetime:department }}</div>
-                {% if current_installation.storage_is_stale %}<div class="alert alert-warning py-2 mt-2 mb-0">Last known storage only. This stale installation has not confirmed current capacity.</div>{% elif current_installation.storage_is_low %}<div class="alert alert-danger py-2 mt-2 mb-0">Low Storage: reported free capacity is below 20%.</div>{% else %}<div class="text-success small mt-1">Current reported capacity</div>{% endif %}
-              {% else %}
-                <span class="text-body-secondary">No storage telemetry reported.</span>
-              {% endif %}
-            </dd>
           </dl>
           <div class="d-flex gap-2 flex-wrap">
             <a class="btn btn-outline-primary btn-sm" href="{% url 'tablet-replace' department.id tablet.id %}?next={{ detail_url|urlencode }}"

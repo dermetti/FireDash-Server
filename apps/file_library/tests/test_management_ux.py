@@ -1,12 +1,10 @@
 # ruff: noqa: F811
 import uuid
-from datetime import timedelta
 
 import pytest
 from django.core.exceptions import PermissionDenied
-from django.db import connection, transaction
+from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
-from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 
@@ -15,9 +13,8 @@ from apps.audit.models import AuditEvent
 from apps.audit.services import record_event
 from apps.authorization.models import DepartmentMembership, SystemRole
 from apps.authorization.services import permanently_remove_administrator
-from apps.file_library import capacity, services
+from apps.file_library import services
 from apps.file_library.models import CapacityReview, DepartmentQuotaPolicy, Library
-from apps.file_library.tests.test_capacity import operation, projection, tablet_for
 from apps.file_library.tests.test_libraries import (  # noqa: F401
     library_for,
     pdf,
@@ -27,9 +24,7 @@ from apps.file_library.tests.test_libraries import (  # noqa: F401
 from apps.file_library.tests.test_publication import crypto, publish  # noqa: F401
 from apps.organizations.models import Station
 from apps.portal.forms import FileLibraryQuotaForm
-from apps.portal.overview import attention_for_request, department_attention
 from apps.portal.tests.test_data_hub_publication_state import HubCards
-from apps.portal.views import _nav_context
 from apps.publications.models import DatasetPublication, DatasetScopeState
 
 pytestmark = pytest.mark.django_db
@@ -42,19 +37,13 @@ def reauth(client):
 
 
 def review_for(actor, library, **changes):
-    from apps.file_library.publication import scope_kwargs, source_payload
-    from apps.file_library.publication_capacity import candidate_operation
+    from apps.file_library.publication import snapshot_for_library
 
-    with transaction.atomic():
-        snapshot = source_payload(
-            department=capacity.department_for(library), station=library.station
-        )
-    scope_state = DatasetScopeState.objects.get(**scope_kwargs(library))
     values = dict(
         library=library,
         requested_by=actor,
-        operation=candidate_operation(scope_state, snapshot),
-        publication_snapshot=snapshot,
+        operation={"kind": "publication", "name": library.name},
+        publication_snapshot=snapshot_for_library(library),
         projection={"tablets": []},
         fingerprint="a" * 64,
         expires_at=None,
@@ -299,124 +288,10 @@ def test_station_selector_requires_department_admin_and_stale_station_is_rejecte
         services.activate_temporary_access(actor=admin, station=station)
 
 
-def test_department_pending_reviews_counts_pagination_and_station_isolation(client, scope):
-    admin, station_admin, other, department, outside, station, second = scope
-    library = library_for(scope)
-    station_library = services.get_library(station_admin, station_id=station.id)
-    second_library = Library.objects.create(station=second)
-    foreign_library = services.get_library(other, department_id=outside.id)
-    first = review_for(admin, library)
-    station_review = review_for(station_admin, station_library)
-    review_for(admin, second_library)
-    for _ in range(25):
-        review_for(admin, library)
-    review_for(admin, library, expires_at=timezone.now() - timedelta(seconds=1))
-    review_for(other, foreign_library)
-    for decision in ("approved", "rejected"):
-        review_for(admin, library, decision=decision, decided_by=admin, decided_at=timezone.now())
-    review_for(
-        admin,
-        library,
-        decision="approved",
-        decided_by=admin,
-        decided_at=timezone.now(),
-        consumed_at=timezone.now(),
-    )
-    items = department_attention(department)
-    requests = [item for item in items if "file capacity" in item.text]
-    assert len(requests) == 1 and requests[0].count == 28
-    assert requests[0].url == reverse("file-library", args=(library.id,))
-    request = RequestFactory().get(reverse("dashboard"))
-    request.user = admin
-    context = _nav_context(request)
-    assert attention_for_request(request, department=department) is context["nav_attention"]
-    assert context["nav_attention_total"] == sum(item.count for item in items)
-    client.force_login(admin)
-    response = client.get(reverse("file-library", args=(library.id,)))
-    assert response.context["pending_review_page"].paginator.count == 28
-    assert len(response.context["pending_review_page"]) == 25
-    content = response.content.decode()
-    assert "Capacity reviews requiring approval" in content
-    assert "Publish Now" not in content
-    assert reverse("file-library-capacity-review", args=(station_review.id,)) in content
-    page2 = client.get(reverse("file-library", args=(library.id,)), {"review_page": 2})
-    assert len(page2.context["pending_review_page"]) == 3
-    client.force_login(station_admin)
-    station_page = client.get(reverse("file-library", args=(station_library.id,)))
-    assert station_page.context["pending_review_page"] is None
-    assert "Capacity reviews requiring approval" not in station_page.content.decode()
-    assert client.get(reverse("file-library-capacity-review", args=(first.id,))).status_code == 403
 
 
-@pytest.mark.parametrize("department_library_exists", [True, False])
-def test_single_station_review_attention_is_read_only_and_opens_file_management(
-    scope, department_library_exists
-):
-    from django.test.utils import CaptureQueriesContext
-
-    admin, station_admin, _, department, _, station, _ = scope
-    library = library_for(scope) if department_library_exists else None
-    station_library = services.get_library(station_admin, station_id=station.id)
-    review = review_for(station_admin, station_library)
-    with CaptureQueriesContext(connection) as queries:
-        attention = [
-            item for item in department_attention(department) if "file capacity" in item.text
-        ]
-    assert len(attention) == 1 and attention[0].count == 1
-    assert attention[0].url == (
-        reverse("file-library", args=(library.id,)) if library else reverse("file-library-index")
-    )
-    assert str(review.id) not in attention[0].url
-    assert all(q["sql"].lstrip().upper().startswith("SELECT") for q in queries)
 
 
-def test_capacity_summary_lowest_bytes_distinct_percentage_unknown_and_scope(client, scope):
-    library = library_for(scope)
-    small, _ = tablet_for(scope, free=300, total=500)
-    large, _ = tablet_for(scope, free=1000, total=10000)
-    unknown, installation = tablet_for(scope)
-    installation.storage_observed_at = timezone.now() - timedelta(days=2)
-    installation.save(update_fields=("storage_observed_at",))
-    unrelated, _ = tablet_for(
-        scope,
-        station=Station.objects.create(department=scope[4], name="Outside", short_code="OUT"),
-        free=1,
-        total=100,
-    )
-    result = projection(library, operation())
-    original_fingerprint = capacity.fingerprint(result)
-    summary = capacity.presentation_summary(result)
-    assert summary["lowest_free"]["tablet_id"] == str(small.id)
-    assert summary["lowest_free"]["projected_free_bytes"] == 184
-    assert summary["lowest_free"]["threshold_breached"] is False
-    assert summary["worst_percentage"]["tablet_id"] == str(large.id)
-    assert summary["worst_percentage"]["threshold_breached"] is True
-    assert summary["different_worst_percentage"] is True and summary["unknown_count"] == 1
-    assert str(unrelated.id) not in {row["tablet_id"] for row in summary["tablets"]}
-    assert capacity.fingerprint(result) == original_fingerprint
-    review = review_for(scope[0], library, projection=result, fingerprint=original_fingerprint)
-    client.force_login(scope[0])
-    content = client.get(
-        reverse("file-library-capacity-review", args=(review.id,))
-    ).content.decode()
-    assert "Lowest projected remaining free storage" in content and small.display_name in content
-    assert "Lowest remaining percentage" in content and large.display_name in content
-    assert "Capacity unknown" in content and unknown.display_name in content
-    assert "36.80%" in content and "8.84%" in content
-    assert len(summary["tablets"]) == 3
-    listing = client.get(reverse("file-library", args=(library.id,))).content.decode()
-    table = listing.split('<table class="table table-hover align-middle">', 1)[1].split(
-        "</table>", 1
-    )[0]
-    assert table.count('<th scope="col"') == 4
-    assert "Publication</th>" in table and "Capacity assessment</th>" in table
-    assert '<strong class="text-danger">Insufficient capacity</strong>' in table
-    assert "3 affected tablets &middot; 1 below 20% &middot; 1 unknown" in table
-    assert f"Source revision {review.operation['source_revision']}" in table
-    assert f"Requested by {scope[0].display_name}" in table
-    assert f'id="capacity-review-{review.id}"' in table
-    assert reverse("file-library-capacity-review", args=(review.id,)) in table
-    assert "Awaiting approval" not in table
 
 
 @pytest.mark.parametrize("authority", ["department", "station"])

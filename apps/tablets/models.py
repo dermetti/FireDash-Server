@@ -1,10 +1,8 @@
 import uuid
-from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
-from django.utils import timezone
 
 from apps.organizations.models import Department
 from apps.tablets.versions import validate_app_version
@@ -87,6 +85,7 @@ class AppInstallation(models.Model):
         related_name="adopted_app_installations",
     )
     last_successful_check_in_at = models.DateTimeField(null=True, blank=True)
+    # Historical measurements only; automatic device storage telemetry is disabled.
     free_storage_bytes = models.PositiveBigIntegerField(null=True, blank=True)
     total_storage_bytes = models.PositiveBigIntegerField(null=True, blank=True)
     storage_observed_at = models.DateTimeField(null=True, blank=True)
@@ -127,26 +126,7 @@ class AppInstallation(models.Model):
             ),
         ]
 
-    @property
-    def storage_is_stale(self) -> bool:
-        now = timezone.now()
-        return (
-            self.status != self.Status.ACTIVE
-            or self.authorization_valid_until <= now
-            or self.storage_observed_at is None
-            or self.storage_observed_at > now
-            or self.storage_observed_at
-            < now - timedelta(seconds=max(1, settings.TABLET_STORAGE_TELEMETRY_MAX_AGE_SECONDS))
-        )
 
-    @property
-    def storage_is_low(self) -> bool:
-        return bool(
-            not self.storage_is_stale
-            and self.free_storage_bytes is not None
-            and self.total_storage_bytes
-            and self.free_storage_bytes * 5 < self.total_storage_bytes
-        )
 
 
 class AdoptionInvitation(models.Model):

@@ -244,23 +244,8 @@ class CheckInResponseSerializer(serializers.Serializer[dict[str, object]]):
     authorization_valid_until = serializers.DateTimeField()
 
 
-class StorageByteCountField(serializers.IntegerField):
-    def to_internal_value(self, data):
-        if type(data) is not int:
-            self.fail("invalid")
-        return super().to_internal_value(data)
-
-
-class CheckInRequestSerializer(serializers.Serializer[dict[str, int]]):
-    free_storage_bytes = StorageByteCountField(min_value=0, max_value=2**63 - 1)
-    total_storage_bytes = StorageByteCountField(min_value=1, max_value=2**63 - 1)
-
-    def validate(self, attrs):
-        if attrs["free_storage_bytes"] > attrs["total_storage_bytes"]:
-            raise serializers.ValidationError(
-                {"free_storage_bytes": "Free storage cannot exceed total storage."}
-            )
-        return attrs
+class CheckInRequestSerializer(serializers.Serializer[dict[str, object]]):
+    """Optional empty JSON object; legacy extra fields are ignored, never stored."""
 
 
 class StatusResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -508,12 +493,10 @@ class ReportDeliveryView(InstallationAPIView):
 
 @extend_schema(
     description=(
-        "Both free_storage_bytes and total_storage_bytes are required JSON integers, "
-        "not strings, booleans or floats. Free must not exceed total. The current "
-        "installation owns the measurement; the server supplies its observation timestamp. "
-        "Incomplete or invalid measurements return 400 without renewing the lease."
+        "Accepts an empty JSON object or no request body. Tablet storage telemetry "
+        "is disabled. App version and build headers remain supported."
     ),
-    request=CheckInRequestSerializer,
+    request={"application/json": {"type": "object", "properties": {}}},
     responses={
         200: CheckInResponseSerializer,
         (400, "application/problem+json"): ProblemResponseSerializer,
@@ -539,8 +522,6 @@ class CheckInView(InstallationAPIView):
                 app_build=app_build,
                 build_supplied=build_supplied,
                 minimum_app_version=minimum,
-                free_storage_bytes=serializer.validated_data["free_storage_bytes"],
-                total_storage_bytes=serializer.validated_data["total_storage_bytes"],
             )
         except (TabletError, PermissionDenied) as error:
             raise _problem_from_service(error) from error

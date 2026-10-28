@@ -352,12 +352,6 @@ def _scope_row_context(scope: DatasetScopeState) -> dict[str, Any]:
         rows[0]["actions"]["build_now"] = bool(
             rows[0]["actions"]["build_now"] and state and state["can_build"]
         )
-        if state and state.get("capacity_review"):
-            from apps.file_library.capacity import review_management_url
-
-            context["capacity_management_url"] = review_management_url(
-                scope.department, state["capacity_review"] if state else None
-            )
     return context
 
 

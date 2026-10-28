@@ -392,10 +392,7 @@ def test_check_in_sends_bearer_credential(tmp_path: Path):
     check_in_calls = [c for c in api.calls if c["path"] == "/api/v1/tablet/check-in"]
     assert check_in_calls[0]["bearer"] == "the-bearer-credential"
     body = check_in_calls[0]["json_body"]
-    assert type(body["free_storage_bytes"]) is int
-    assert type(body["total_storage_bytes"]) is int
-    assert 0 <= body["free_storage_bytes"] <= body["total_storage_bytes"]
-    assert body["total_storage_bytes"] > 0
+    assert body == {}
     assert state.authorization_valid_until == "2026-08-16T00:00:00+00:00"
 
 

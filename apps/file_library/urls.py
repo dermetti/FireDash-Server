@@ -11,11 +11,6 @@ urlpatterns = [
         name="file-library-station-access-select",
     ),
     path(
-        "files/capacity-reviews/<uuid:review_id>/",
-        views.capacity_review,
-        name="file-library-capacity-review",
-    ),
-    path(
         "files/station-access/<uuid:station_id>/activate/",
         views.activate_station_access,
         name="file-library-station-access-activate",

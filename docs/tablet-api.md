@@ -150,7 +150,7 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 | --- | --- | --- | --- | --- | --- |
 | `POST /api/v1/adoption/preview` | None | preview JSON | 201 challenge | 400, 403 | Valid unused adoption invitation; operational tablet |
 | `POST /api/v1/adoption/complete` | None | completion JSON | 201 credential | 400, 403 | Matching unexpired challenge/invitation |
-| `POST /api/v1/tablet/check-in` | Bearer | Required JSON storage telemetry; optional version/build headers | 200 lease JSON | 400, 403, 426 | ACTIVE operational; eligible current STALE recovers automatically; INACTIVE records control-plane contact without operational renewal |
+| `POST /api/v1/tablet/check-in` | Bearer | Optional empty JSON object or no body; optional version/build headers | 200 lease JSON | 400, 403, 426 | ACTIVE operational; eligible current STALE recovers automatically; INACTIVE records control-plane contact without operational renewal |
 | `POST /api/v1/tablet/refresh` | Bearer | No body; optional version/build headers | 200 lease JSON | 403, 426 | ACTIVE, unexpired, operational |
 | `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
 | `POST /api/v1/tablet/report-delivery` | Bearer | `multipart/form-data`: UUID `delivery_request_id`, UUID `recipient_personnel_id`, binary `pdf` | 200 `{state,code}` | 400, 403, 426 | Current authenticated installation; recipient authorization and delivery readiness are evaluated server-side |
@@ -352,29 +352,31 @@ revocation, and tablet removal also block recovery.
 
 Department lease policy is server-owned: default seven days, minimum three.
 
-`POST /api/v1/tablet/check-in` requires this JSON body:
+`POST /api/v1/tablet/check-in` accepts no request body or an empty JSON object:
 
 ```json
-{"free_storage_bytes":4294967296,"total_storage_bytes":68719476736}
+{}
 ```
 
-Use `Content-Type: application/json`. Both fields must be JSON integers;
-booleans, floating-point values, numeric strings, and null are invalid.
-`free_storage_bytes` is nonnegative,
-`total_storage_bytes` is greater than zero, both are at most `9223372036854775807` (`2^63 - 1`), and free must not exceed total. A valid authenticated check-in
-stores the complete measurement and a server-generated observation timestamp on
-the current installation. Re-provisioned installations begin without telemetry;
-measurements are never inherited from a replaced installation. Invalid or
-incomplete telemetry returns 400 and does not update storage, contact time, app
-telemetry, installation status, or authorization lease.
+If a JSON body is supplied, use `Content-Type: application/json`. No request
+properties are required. Legacy storage properties and other extra object
+properties are ignored and never stored or evaluated. Malformed JSON and non-object
+JSON remain invalid; nonempty non-JSON bodies are unsupported. Existing Bearer
+authorization and optional app version/build headers remain unchanged. A bodyless
+request needs no Content-Type. `POST /api/v1/tablet/refresh` is unchanged and independent.
 
-Client rollout is coordinated: old empty-body check-ins are incompatible and
-return 400; non-JSON request bodies are unsupported. There is no pre-beta legacy
-fallback. Update the client to send both integer byte counts before relying on
-lease renewal through check-in. Measurements belong only to the current installation.
+Tablet storage telemetry is currently disabled. The iPad app manages device
+storage locally, checks available space before downloading and activating updates,
+and preserves previously verified data when an update cannot fit. Offline lease
+and authorization requirements still apply. The server receives no automatic
+device-capacity measurements or derived insufficient-storage reports. No diagnostic
+report API is provided by this change. Future MDM-based inventory or capacity
+monitoring is a separate project.
 
-The measurement is device-reported and is not independently verified by the
-server. Check-in always records activity after request validation. With more
+Source-library quotas, department/station quota policies, PDF size restrictions,
+source usage accounting, and server filesystem safeguards still apply.
+
+Check-in records activity after request validation. With more
 than 48 hours remaining it leaves `authorization_valid_until` unchanged. With
 48 hours or less it sets the deadline to `server_time + department lease`. A
 current STALE installation with a valid durable credential automatically becomes
@@ -1096,52 +1098,23 @@ The iPad client must display the mandatory ` (global)` suffix for
 The station root displays its configured name without that suffix. The root
 identity is `library.id`; no synthetic folder UUID is inserted into `folders`.
 
-### File-library capacity warnings (server administration only)
+### Device storage and file-library quotas
 
-Valid PDFs enter the server library immediately after normal PDF validation,
-sanitization, authorization, integrity and server-quota checks. Tablet capacity
-gates the **frozen publication candidate**, not upload or replacement. Upload
-success is not publication or delivery, and approval never bypasses server quotas.
-No original-PDF reupload is necessary after approval.
+Tablet storage telemetry is currently disabled. The iPad app manages device
+storage locally, checks available space before downloading and activating updates,
+and preserves previously verified data when an update cannot fit. Offline lease
+and authorization requirements still apply. The server receives no automatic
+device-capacity measurements or derived insufficient-storage reports. No diagnostic
+report API is provided by this change. Future MDM-based inventory or capacity
+monitoring is a separate project.
 
-Both unknown capacity and projected remaining free storage **strictly below 20%**
-of total require Department Administrator approval. Exactly 20% is not a breach.
-Unknown capacity has warning severity; known insufficient capacity has a stronger
-danger warning because publication may fail on affected devices. Mixed populations
-retain the stronger warning while also reporting unknown tablets. An eligible
-population with no tablets is clear, not unknown.
+Source-library quotas, department/station quota policies, PDF size restrictions,
+source usage accounting, and server filesystem safeguards still apply.
 
-The assessment binds department/station scope, dataset, source revision, frozen
-content and relevant tablet/assignment/installation/telemetry context. Approval
-accepts that candidate's recorded risk; it is never a reusable exemption.
-Source or material device-context changes require reassessment, and fresh safe
-telemetry can clear a pending review without approval. Existing successful
-generations remain available while approval is pending, within current tablet
-authorization. Pending reviews have no upload-specific retry deadline.
-
-Department Administrator **File Management** administers the department's reviews,
-including station-file publications; System Settings does not. Station
-administrators can inspect their own review status but cannot approve. See
-[file-libraries.md](file-libraries.md#projected-capacity-and-administrative-overrides)
-for the conservative publication estimate and review lifecycle.
-
-Affected tablets must be ACTIVE physical assets with current operational vehicle
-and station assignments: department-wide for `department_files`, current station
-only for `station_files`. A usable measurement belongs to the current ACTIVE
-installation with an unexpired lease. Missing, invalid, future, expired, or
-older-than-86400-second measurements are unknown (the default 24-hour freshness
-limit is configurable through `TABLET_STORAGE_TELEMETRY_MAX_AGE_SECONDS`). An
-assignment beginning after the observation requires a fresh check-in. Replaced
-installation values never carry forward. Estimates use the expected published
-baseline and outstanding source reservations, without assuming that replacement
-or deletion has reclaimed device storage. They are not delivery receipts.
-
-Capacity approval is server administration only. There is **no** tablet approval
-flag, override token or capacity-review endpoint. Approval changes neither the
-reported measurement, required datasets, key grants, lease, signatures nor tablet
-authorization. No capacity predictions are added to check-in responses, complete
-manifests or generation schemas. There is no per-distribution acknowledgment or
-server proof of cached contents.
+Authorized department and station publications follow the normal lifecycle without
+capacity projections, thresholds, approval, or telemetry rechecks. Historical
+capacity reviews and measurements remain inert. Upload success still does not
+confirm publication or delivery.
 
 The iPad must handle actual disk exhaustion during download/decryption/staging,
 retain a verified active generation on failure, and avoid partial activation.

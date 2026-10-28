@@ -16,7 +16,7 @@ from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
-from apps.file_library.capacity import lock_department_capacity
+from apps.file_library.locking import lock_department_sources
 from apps.organizations.models import Department
 from apps.publications.hpke import (
     HPKE_CIPHERSUITE,
@@ -198,32 +198,6 @@ def update_app_telemetry(
     return True
 
 
-def update_storage_telemetry(
-    *,
-    installation: AppInstallation,
-    free_storage_bytes: int | None,
-    total_storage_bytes: int | None,
-    now: datetime,
-) -> bool:
-    """Apply one complete device-reported capacity measurement."""
-    if free_storage_bytes is None and total_storage_bytes is None:
-        return False
-    if (
-        isinstance(free_storage_bytes, bool)
-        or isinstance(total_storage_bytes, bool)
-        or not isinstance(free_storage_bytes, int)
-        or not isinstance(total_storage_bytes, int)
-        or free_storage_bytes < 0
-        or total_storage_bytes <= 0
-        or free_storage_bytes > total_storage_bytes
-        or free_storage_bytes > 2**63 - 1
-        or total_storage_bytes > 2**63 - 1
-    ):
-        raise TabletError("Storage telemetry is invalid.", code="invalid_request")
-    installation.free_storage_bytes = free_storage_bytes
-    installation.total_storage_bytes = total_storage_bytes
-    installation.storage_observed_at = now
-    return True
 
 
 def lease_target(*, department, now: datetime) -> datetime:
@@ -602,7 +576,7 @@ def _record_failed_attempt(*, request_id: UUID) -> None:
 
 @transaction.atomic
 def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation, str]:
-    lock_department_capacity(
+    lock_department_sources(
         AdoptionRequest.objects.values_list("invitation__tablet__department_id", flat=True).get(
             pk=request_id
         )
@@ -792,10 +766,8 @@ def check_in(
     app_build: int | None = None,
     build_supplied: bool = False,
     minimum_app_version=None,
-    free_storage_bytes: int | None = None,
-    total_storage_bytes: int | None = None,
 ) -> AppInstallation:
-    lock_department_capacity(
+    lock_department_sources(
         AppInstallation.objects.values_list("tablet__department_id", flat=True).get(
             pk=installation.pk
         )
@@ -806,12 +778,6 @@ def check_in(
         .get(pk=installation.pk)
     )
     now = timezone.now()
-    storage_updated = update_storage_telemetry(
-        installation=installation,
-        free_storage_bytes=free_storage_bytes,
-        total_storage_bytes=total_storage_bytes,
-        now=now,
-    )
     if not verify_credential(installation=installation, credential=credential):
         raise PermissionDenied("Installation credential is invalid.")
     if installation.status not in (AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE):
@@ -832,10 +798,6 @@ def check_in(
         inactive_fields = ["last_successful_check_in_at"]
         if telemetry_updated:
             inactive_fields.extend(("app_version", "app_build", "app_version_seen_at"))
-        if storage_updated:
-            inactive_fields.extend(
-                ("free_storage_bytes", "total_storage_bytes", "storage_observed_at")
-            )
         installation.save(update_fields=inactive_fields)
         if (
             minimum_app_version is not None
@@ -862,10 +824,6 @@ def check_in(
         compatibility_fields: list[str] = []
         if telemetry_updated:
             compatibility_fields.extend(("app_version", "app_build", "app_version_seen_at"))
-        if storage_updated:
-            compatibility_fields.extend(
-                ("free_storage_bytes", "total_storage_bytes", "storage_observed_at")
-            )
         if compatibility_fields:
             installation.save(update_fields=compatibility_fields)
         installation.compatibility_blocked = True
@@ -881,8 +839,6 @@ def check_in(
         fields = ["last_successful_check_in_at"]
     if telemetry_updated:
         fields.extend(("app_version", "app_build", "app_version_seen_at"))
-    if storage_updated:
-        fields.extend(("free_storage_bytes", "total_storage_bytes", "storage_observed_at"))
     installation.save(update_fields=fields)
     return installation
 
@@ -898,7 +854,7 @@ def refresh_installation_lease(
     minimum_app_version=None,
 ) -> AppInstallation:
     """Explicitly top up one eligible installation without creating delivery work."""
-    lock_department_capacity(
+    lock_department_sources(
         AppInstallation.objects.values_list("tablet__department_id", flat=True).get(
             pk=installation.pk
         )
@@ -983,7 +939,7 @@ def mark_stale_installations(*, now=None) -> int:
         .values_list("tablet__department_id", flat=True)
         .distinct()
     ):
-        lock_department_capacity(department_id)
+        lock_department_sources(department_id)
     installations = list(
         AppInstallation.objects.select_for_update()
         .select_related("tablet__department")
@@ -1029,7 +985,7 @@ def _revoke_tablet_installations(*, tablet: Tablet, reason: str, now) -> None:
 @transaction.atomic
 def activate_tablet(*, actor, tablet: Tablet) -> Tablet:
     """INACTIVE → ACTIVE: commission a known asset back into operational service."""
-    lock_department_capacity(
+    lock_department_sources(
         Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
     )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
@@ -1069,7 +1025,7 @@ def activate_tablet(*, actor, tablet: Tablet) -> Tablet:
 @transaction.atomic
 def deactivate_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
     """ACTIVE → INACTIVE: withdraw operational access without revoking identity."""
-    lock_department_capacity(
+    lock_department_sources(
         Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
     )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
@@ -1109,7 +1065,7 @@ def deactivate_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
 @transaction.atomic
 def mark_tablet_lost(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
     """ACTIVE/INACTIVE → LOST: hardware unaccounted for; revoke installation access."""
-    lock_department_capacity(
+    lock_department_sources(
         Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
     )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
@@ -1136,7 +1092,7 @@ def mark_tablet_lost(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
 @transaction.atomic
 def recover_tablet(*, actor, tablet: Tablet) -> Tablet:
     """LOST → INACTIVE: a found tablet returns to stock/inspection, never directly ACTIVE."""
-    lock_department_capacity(
+    lock_department_sources(
         Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
     )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
@@ -1161,7 +1117,7 @@ def recover_tablet(*, actor, tablet: Tablet) -> Tablet:
 @transaction.atomic
 def retire_tablet(*, actor, tablet: Tablet, reason: str = "") -> Tablet:
     """ACTIVE/INACTIVE → RETIRED: permanent withdrawal; revoke installation access."""
-    lock_department_capacity(
+    lock_department_sources(
         Tablet.objects.values_list("department_id", flat=True).get(pk=tablet.pk)
     )
     tablet = Tablet.objects.select_for_update().select_related("department").get(pk=tablet.pk)
@@ -1190,7 +1146,7 @@ def revoke_installation(
     *, actor, installation: AppInstallation, reason: str = ""
 ) -> AppInstallation:
     """Revoke one current installation's authorization without changing the Tablet asset."""
-    lock_department_capacity(
+    lock_department_sources(
         AppInstallation.objects.values_list("tablet__department_id", flat=True).get(
             pk=installation.pk
         )

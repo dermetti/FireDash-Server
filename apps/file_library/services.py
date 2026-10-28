@@ -42,10 +42,10 @@ def _library_mutation(function):
         active_temporary_access(kwargs["actor"])
         try:
             with transaction.atomic():
-                from apps.file_library.capacity import lock_capacity
+                from apps.file_library.locking import lock_library_department
 
                 library = Library.objects.get(pk=kwargs["library_id"])
-                lock_capacity(library)
+                lock_library_department(library)
                 require_library_access(
                     kwargs["actor"],
                     library,
@@ -143,9 +143,9 @@ def activate_temporary_access(*, actor, station):
     station = Station.objects.select_related("department").get(pk=station.pk)
     if station.department_id not in active_department_ids(actor) or not station.active:
         raise PermissionDenied
-    from apps.file_library.capacity import lock_department_capacity
+    from apps.file_library.locking import lock_department_sources
 
-    lock_department_capacity(station.department_id)
+    lock_department_sources(station.department_id)
     # Serialize activation/switching for one user. The partial unique constraint is
     # the final defense against concurrent requests.
     get_user_model().objects.select_for_update().get(pk=actor.pk)
@@ -248,14 +248,14 @@ def require_library_access(actor, library, *, permission):
 @transaction.atomic
 def get_library(actor, *, department_id=None, station_id=None):
     require_scope(actor, department_id=department_id, station_id=station_id)
-    from apps.file_library.capacity import lock_department_capacity
+    from apps.file_library.locking import lock_department_sources
 
     owner_id = department_id or Station.objects.values_list("department_id", flat=True).get(
         pk=station_id
     )
-    # Creation can also initialize the shared quota policy. Acquire capacity
+    # Creation can also initialize the shared quota policy. Acquire the department source lock
     # before those writes, as initialization subsequently assesses publication.
-    lock_department_capacity(owner_id, reassess=False)
+    lock_department_sources(owner_id)
     scope = {"department_id": department_id} if department_id else {"station_id": station_id}
     library, _ = Library.objects.get_or_create(**scope)
     from apps.file_library.publication import initialize_library
@@ -496,10 +496,10 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
         if size > settings.FILE_LIBRARY_MAX_FILE_BYTES:
             raise LibraryError("Sanitized PDF exceeds the file size limit.")
         with transaction.atomic():
-            from apps.file_library.capacity import lock_capacity
+            from apps.file_library.locking import lock_library_department
             from apps.file_library.reconciliation import lock_storage
 
-            lock_capacity(library)
+            lock_library_department(library)
             library = locked_library(actor, library_id)
             lock_storage(library_id)
             entry = scoped_entry(library, replace_id) if replace_id else None
@@ -511,7 +511,6 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
             usage = library.usage_bytes - old_size + size
             if usage > library.quota_bytes and usage > library.usage_bytes:
                 raise LibraryError("Library storage quota exceeded.")
-            storage_increases = entry is None or entry.content.sha256 != digest
             # Set the intended path before promotion so partial promotion failures are cleaned.
             destination = settings.REFERENCE_DATA_ACCEPTED_ROOT / key
             if destination.exists():
@@ -532,12 +531,6 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
                     name=name,
                     content=content,
                     modified_by=actor,
-                )
-            if storage_increases:
-                from apps.file_library.models import StorageImpact
-
-                StorageImpact.objects.create(
-                    library=library, document_id=document_id, sha256=digest, size_bytes=size
                 )
             library.usage_bytes = usage
             changed(
@@ -573,13 +566,13 @@ def set_department_quotas(
 ):
     """Two shared policies; serialize with source mutations before any row locks."""
     from apps.authorization.services import require_department_admin
-    from apps.file_library.capacity import lock_department_capacity
+    from apps.file_library.locking import lock_department_sources
 
     require_department_admin(actor, department)
     for value in (department_files_bytes, station_files_bytes):
         if value is not None:
             _validate_quota(value)
-    lock_department_capacity(department.id)
+    lock_department_sources(department.id)
     policy, _ = DepartmentQuotaPolicy.objects.get_or_create(department=department)
     policy = DepartmentQuotaPolicy.objects.select_for_update().get(pk=policy.pk)
     changed = False

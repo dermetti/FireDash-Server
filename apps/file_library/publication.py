@@ -22,9 +22,9 @@ def scope_kwargs(library):
 
 
 def lock_scope(library):
-    from apps.file_library.capacity import department_for, lock_department_capacity
+    from apps.file_library.locking import department_for, lock_department_sources
 
-    lock_department_capacity(department_for(library).id, reassess=False)
+    lock_department_sources(department_for(library).id)
     scope, _ = DatasetScopeState.objects.get_or_create(
         **scope_kwargs(library), defaults={"source_revision": library.source_revision}
     )
@@ -33,9 +33,9 @@ def lock_scope(library):
 
 @transaction.atomic
 def source_payload(*, department, station):
-    from apps.file_library.capacity import lock_department_capacity
+    from apps.file_library.locking import lock_department_sources
 
-    lock_department_capacity(department.id, reassess=False)
+    lock_department_sources(department.id)
     library, _ = Library.objects.get_or_create(
         **({"station": station} if station else {"department": department})
     )
@@ -186,7 +186,7 @@ def _publish_now(*, actor, library_id):
         from apps.file_library.services import LibraryError
 
         raise LibraryError(
-            "Publication is unavailable. Review the current capacity and build status."
+            "Publication is unavailable. Check the current build status."
         )
     kwargs = scope_kwargs(library)
     kwargs.pop("scope_type")
@@ -211,22 +211,17 @@ def _publish_now(*, actor, library_id):
 
 @transaction.atomic
 def candidate_readiness(library):
-    """Assess the current source under the worker's capacity/scope boundary.
-
-    Reuse the durable assessment; never treat a stored approval as readiness
-    without checking its current source, population and telemetry fingerprint.
-    """
-    from apps.file_library.capacity import department_for, lock_department_capacity
-    from apps.file_library.publication_capacity import assess
+    """Read publication readiness under the source and scope locks."""
+    from apps.file_library.locking import department_for, lock_department_sources
     from apps.publications.builders import source_fingerprint_for_payload
     from apps.publications.models import PublicationJob
     from apps.publications.services import _scope_is_dirty
 
-    lock_department_capacity(department_for(library).id, reassess=False)
+    lock_department_sources(department_for(library).id)
     scope = DatasetScopeState.objects.select_for_update().filter(**scope_kwargs(library)).first()
     library = Library.objects.select_for_update().get(pk=library.pk)
     if scope is None:
-        return {"capacity_ready": False, "can_publish": False, "can_build": False}
+        return {"can_publish": False, "can_build": False}
     snapshot = snapshot_for_library(library)
     job = (
         PublicationJob.objects.filter(scope_state=scope, status__in=("PENDING", "RUNNING"))
@@ -238,26 +233,15 @@ def candidate_readiness(library):
         scope=scope, fingerprint=source_fingerprint_for_payload(snapshot)
     ):
         return {
-            "capacity_ready": True,
             "can_publish": False,
             "can_build": False,
             "publication_current": True,
         }
-    admitted, review = assess(
-        scope=scope,
-        snapshot=snapshot,
-        publication=job.build_publication if job else None,
-        bind=False,
-        persist=False,
-    )
     building = PublicationJob.objects.filter(scope_state=scope, status="RUNNING").exists()
     return {
-        "capacity_ready": admitted,
-        "assessed_review": review,
-        "can_publish": admitted and not building,
+        "can_publish": not building,
         "can_build": bool(
-            admitted
-            and job
+            job
             and job.status == "PENDING"
             and job.build_publication
             and job.build_publication.status == "STAGED"
@@ -283,13 +267,8 @@ def publication_state(library):
         and (not is_current or job.status == "RUNNING")
     ):
         label = {"PENDING": "Queued", "RUNNING": "Building", "FAILED": "Failed"}[job.status]
-    from apps.file_library.capacity import presentation_summary
-
-    review = readiness.get("assessed_review")
     return {
         **readiness,
-        "capacity_review": review,
-        "capacity_summary": presentation_summary(review.projection) if review else None,
         "label": label,
         "current": current,
         "job": job,

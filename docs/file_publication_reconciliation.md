@@ -3,7 +3,7 @@
 File publication comparisons now exclude the source revision counter and internal
 storage content IDs. Stable library/folder/document identities, names, hierarchy,
 sanitized PDF SHA-256 and sizes remain significant. Frozen source snapshots still
-retain every field used by pinning, approval and worker validation.
+retain every field used by pinning and worker validation.
 
 Only a match with the **active** publication is redundant. A match with a
 superseded generation still requires a new version and tablet update; eligible
@@ -11,10 +11,9 @@ document artifacts can be reused by the existing document builder.
 
 An authorized explicit **Rebuild** persists `allow_clean_rebuild=True` and publishes
 a new generation even when it matches the active source. Build Now and ordinary
-bulk requests do not acquire this intent. Capacity admission is still mandatory
-at claim and finalization; an invalidated assessment cannot authorize activation.
-Timeout recovery retains intent on the job, and replacements for stale source or
-changed capacity retain it on the new attempt, requiring fresh approval when needed.
+bulk requests do not acquire this intent. Device capacity does not affect claim
+or finalization.
+Timeout recovery retains intent on the job, and replacements for changed source retain it on the new attempt. Device capacity is not evaluated.
 Successful activation supersedes the old generation normally; eligible document
 artifacts may be reused without reusing the generation's delivery identity.
 This finalization correction needs no additional migration. Restart publication
@@ -50,7 +49,7 @@ an ambiguous older explicit request since the previous job's terminal timestamp
 protection. Review the correction audit events and any protected legacy
 jobs when reconciling. No review decision is approved or consumed by migration.
 Running builds finish or recover normally before pending clean-source work can
-be reconciled. Reconciliation never bypasses capacity approval for force requests.
+be reconciled. Explicit rebuild intent remains independent of device capacity.
 
 No fingerprint backfill of immutable publications is required. Comparisons derive
 a logical fingerprint from the retained active snapshot. When it matches, the
@@ -75,19 +74,12 @@ python manage.py reconcile_file_publications --department <department-uuid>
 The default is a read-only dry run, including no audit writes. Review each reported
 scope before using `--apply`. The command includes department and station file
 scopes only within that department. Each apply transaction rechecks the source
-under capacity → scope → library locks. It clears dirty state and cancels redundant
+under department source → scope → library locks. It clears dirty state and cancels redundant
 pending jobs/STAGED attempts while retaining their version IDs and snapshots.
-Unconsumed publication reviews for obsolete source candidates, including unbound
-pending/rejected/approved reviews, are superseded with audit events. Decisions are
-never changed to approved, consumed approvals/history are preserved, newer and
-unrelated candidates are untouched, and source revisions are not reset.
+Historical capacity reviews and audit records remain unchanged. Source revisions are not reset.
 
 Running builds are reported as deferred. Let them finish or recover through the
 normal worker, then rerun the command. Live edits remain serialized by the same
-capacity and source locks; rerunning is safe and makes no changes to an already
-reconciled scope. Changed scopes are preserved, with their existing capacity
-policy (including unknown telemetry, historical reservations and the 20% floor).
-
-Status rendering checks readiness without creating, superseding, binding or
-consuming reviews. Source/telemetry mutations, explicit lifecycle operations,
-worker admission and the reconciliation command own durable review changes.
+department source and scope locks; rerunning is safe and makes no changes to an already
+reconciled scope. Changed scopes remain queued under the normal publication policy.
+Historical capacity reviews and measurements are inert.

@@ -287,9 +287,6 @@ def installation_for(scope, settings):
         hpke_key_verified_at=timezone.now(),
         adopted_at=timezone.now(),
         authorization_valid_until=timezone.now() + timedelta(days=1),
-        free_storage_bytes=1024 * 1024 * 1024,
-        total_storage_bytes=2 * 1024 * 1024 * 1024,
-        storage_observed_at=timezone.now(),
     )
     return install, private, credential, vehicle
 

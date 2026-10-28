@@ -3,9 +3,9 @@
 from django.db import transaction
 from django.db.models import Q
 
+from apps.file_library.locking import FILE_DATASETS
 from apps.file_library.models import Library
 from apps.file_library.publication import snapshot_for_library
-from apps.file_library.publication_capacity import FILE_DATASETS
 from apps.publications.builders import source_fingerprint_for_payload
 from apps.publications.models import DatasetScopeState, PublicationJob
 from apps.publications.services import _locked_scope, _reconcile_clean_source, _scope_is_dirty
