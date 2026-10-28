@@ -636,6 +636,16 @@ def test_complete_manifest_contract_fixture_uses_the_live_client_verifier(tmp_pa
         url="https://test.example/api/v1/tablet/manifest",
     )
     assert client.verify_manifest_etag(response, manifest) == fixture["expected_manifest_etag"]
+    configuration = manifest["configuration"]
+    assert configuration["report_delivery_max_attachment_bytes"] == 20971520
+    client.validate_manifest_structure(manifest, configuration)
+    missing_limit = {
+        k: v for k, v in configuration.items() if k != "report_delivery_max_attachment_bytes"
+    }
+    changed_limit = dict(configuration, report_delivery_max_attachment_bytes=20971521)
+    for mismatch in (missing_limit, changed_limit):
+        with pytest.raises(ClientError, match="Manifest configuration differs"):
+            client.validate_manifest_structure(manifest, mismatch)
 
 
 def _signed_manifest_with_klgv_optional_dataset(*, required: bool):

@@ -29,6 +29,7 @@ from apps.publications.signing_keys import (
     active_publication_signing_key,
     publication_signing_public_key_for_version,
 )
+from apps.tablets.configuration import tablet_configuration
 from apps.tablets.models import AppInstallation
 
 
@@ -101,13 +102,7 @@ def manifest_state_hash(
         "tablet_asset_state": installation.tablet.status,
         "signing_key_version": settings.PUBLICATION_SIGNING_KEY_VERSION,
         "authorization_valid_until": installation.authorization_valid_until.isoformat(),
-        "configuration": {
-            "installation_id": str(installation.id),
-            "tablet_id": str(installation.tablet_id),
-            "department_id": str(installation.tablet.department_id),
-            "station_id": str(vehicle.station_id) if vehicle is not None else None,
-            "vehicle_id": str(vehicle.id) if vehicle is not None else None,
-        },
+        "configuration": tablet_configuration(installation=installation, vehicle=vehicle),
         "datasets": [_publication_manifest_entry(publication) for publication in publications],
         "capabilities": capabilities
         if capabilities is not None

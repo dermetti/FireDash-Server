@@ -32,6 +32,7 @@ from apps.publications.hpke import HPKE_CIPHERSUITE, serialize_p256_public_key
 from apps.publications.manifests import (
     ManifestError,
     canonical_manifest_payload,
+    manifest_response_etag,
     request_dataset_key_grant,
     request_manifest,
 )
@@ -133,6 +134,76 @@ def _authorization(credential):
 
 def _storage(free=800_000_000, total=1_000_000_000):
     return {"free_storage_bytes": free, "total_storage_bytes": total}
+
+
+@pytest.mark.parametrize("scope", ["assigned", "unassigned", "inactive"])
+def test_attachment_limit_keeps_configuration_and_signed_manifest_current(
+    api_context, tmp_path, settings, scope
+):
+    client, installation, credential, _ = api_context
+    if scope == "unassigned":
+        TabletVehicleAssignment.objects.filter(tablet=installation.tablet).update(
+            ended_at=timezone.now()
+        )
+    elif scope == "inactive":
+        Tablet.objects.filter(pk=installation.tablet_id).update(status=Tablet.Status.INACTIVE)
+    signing_path = tmp_path / "signing"
+    signing_path.write_bytes(b"s" * 32)
+    settings.PUBLICATION_SIGNING_KEY_CREDENTIAL_PATH = signing_path
+    public_key = Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key()
+    headers = _authorization(credential)
+    previous = None
+    previous_manifest = None
+
+    for limit in (20 * 1024 * 1024, 7 * 1024 * 1024):
+        settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES = limit
+        configuration = client.get("/api/v1/tablet/configuration", **headers)
+        assert configuration.status_code == 200
+        assert configuration.json()["report_delivery_max_attachment_bytes"] == limit
+        conditional = {"HTTP_IF_NONE_MATCH": previous["ETag"]} if previous else {}
+        assert client.get("/api/v1/tablet/manifest", **headers, **conditional).status_code == 202
+        built = process_next_signed_manifest()
+        assert built is not None and built.status == SignedManifest.Status.READY
+        response = client.get("/api/v1/tablet/manifest", **headers, **conditional)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["configuration"] == configuration.json()
+        assert set(payload["configuration"]) == {
+            "installation_id",
+            "tablet_id",
+            "department_id",
+            "station_id",
+            "vehicle_id",
+            "report_delivery_max_attachment_bytes",
+        }
+        unsigned = {key: value for key, value in payload.items() if key != "signature"}
+        public_key.verify(
+            base64.b64decode(payload["signature"]), canonical_manifest_payload(unsigned)
+        )
+        assert response["ETag"] == manifest_response_etag(payload)
+        assert (
+            client.get(
+                "/api/v1/tablet/manifest", HTTP_IF_NONE_MATCH=response["ETag"], **headers
+            ).status_code
+            == 304
+        )
+        if previous is not None:
+            assert response["ETag"] != previous["ETag"]
+            assert built.pk != previous_manifest.pk
+            assert built.state_hash != previous_manifest.state_hash
+            assert payload["datasets"] == previous.json()["datasets"]
+        previous, previous_manifest = response, built
+
+
+def test_attachment_limit_change_obsoletes_queued_manifest(api_context, settings):
+    _, installation, _, _ = api_context
+    pending = request_manifest(installation=installation)
+    settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES += 1
+    obsolete = process_next_signed_manifest()
+    assert obsolete is not None and obsolete.pk == pending.request_id
+    assert obsolete.status == SignedManifest.Status.OBSOLETE
+    replacement = request_manifest(installation=installation)
+    assert replacement.unavailable and replacement.request_id != pending.request_id
 
 
 def test_configuration_and_manifest_use_bearer_installation_scope(api_context, tmp_path):

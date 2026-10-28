@@ -62,6 +62,7 @@ from apps.publications.models import (
     PublicationFirePlanArtifactReference,
 )
 from apps.tablets.activity import record_tablet_api_activity
+from apps.tablets.configuration import tablet_configuration
 from apps.tablets.models import AppInstallation
 from apps.tablets.services import (
     TabletError,
@@ -608,15 +609,8 @@ class StatusView(InstallationAPIView):
 
 
 def _configuration(installation: AppInstallation) -> dict[str, str | int | None]:
-    _, vehicle = control_plane_context(installation=installation, now=timezone.now())
-    return {
-        "installation_id": str(installation.id),
-        "tablet_id": str(installation.tablet_id),
-        "department_id": str(installation.tablet.department_id),
-        "station_id": str(vehicle.station_id) if vehicle is not None else None,
-        "vehicle_id": str(vehicle.id) if vehicle is not None else None,
-        "report_delivery_max_attachment_bytes": settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES,
-    }
+    installation, vehicle = control_plane_context(installation=installation, now=timezone.now())
+    return tablet_configuration(installation=installation, vehicle=vehicle)
 
 
 @extend_schema(

@@ -29,6 +29,7 @@ from apps.publications.signing_keys import (
     SigningKeyConfigurationError,
     active_publication_signing_key,
 )
+from apps.tablets.configuration import tablet_configuration
 
 
 class KeyGrantError(ValueError):
@@ -221,13 +222,7 @@ def _manifest_payload(
         "signing_key_version": settings.PUBLICATION_SIGNING_KEY_VERSION,
         "generated_at": now.isoformat(),
         "authorization_valid_until": installation.authorization_valid_until.isoformat(),
-        "configuration": {
-            "installation_id": str(installation.id),
-            "tablet_id": str(installation.tablet_id),
-            "department_id": str(installation.tablet.department_id),
-            "station_id": str(vehicle.station_id) if vehicle is not None else None,
-            "vehicle_id": str(vehicle.id) if vehicle is not None else None,
-        },
+        "configuration": tablet_configuration(installation=installation, vehicle=vehicle),
         "datasets": datasets,
         "capabilities": capabilities,
     }

@@ -308,6 +308,12 @@ def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypa
         response = client.get("/api/v1/tablet/manifest", **_authorization(credential))
         assert response.status_code == 200
         body = response.json()
+        configuration = client.get("/api/v1/tablet/configuration", **_authorization(credential))
+        assert configuration.status_code == 200
+        assert body["configuration"] == configuration.json()
+        assert body["configuration"]["report_delivery_max_attachment_bytes"] == (
+            settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES
+        )
         public_key.verify(
             base64.b64decode(body["signature"]),
             canonical_manifest_payload({k: v for k, v in body.items() if k != "signature"}),
