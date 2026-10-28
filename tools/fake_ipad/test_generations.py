@@ -661,6 +661,9 @@ def test_adoption_runs_complete_nine_dataset_verification(nine, monkeypatch):
     )
     nine.client.adopt("synthetic-token")
     assert len(nine.state.state["last_dataset_validation"]) == 9
+    assert "DOWNLOAD SUMMARY" in nine.stream.getvalue()
+    assert "Fire Plans" in nine.stream.getvalue()
+    assert "ciphertext SHA-256" not in nine.stream.getvalue()
 
 
 @pytest.mark.parametrize("kind", ["department_phonebook", "station_phonebook"])

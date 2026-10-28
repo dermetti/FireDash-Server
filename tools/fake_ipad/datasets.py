@@ -132,8 +132,7 @@ def validate_hydrants(plaintext: bytes, dataset: dict[str, Any], out: Output) ->
         out.line(f"    diameter range:  {min(diameters)}–{max(diameters)} mm")
     if sample:
         out.line("    sample:")
-        for line in sample:
-            out.line(f"      {line}")
+        out.line(f"      {len(sample)} sample locations validated (contents withheld)")
 
     return {
         "source_revision": doc["source_revision"],

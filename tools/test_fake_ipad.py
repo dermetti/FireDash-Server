@@ -1312,7 +1312,7 @@ def test_verify_reports_validated_system_dangerous_goods(tmp_path, monkeypatch):
     result = client.verify()
     assert result["datasets"]["dangerous_goods"]["record_count"] == 1
     assert client.state.state["last_dataset_validation"] == result["datasets"]
-    assert "DATASET dangerous_goods" in stream.getvalue()
+    assert "Dangerous Goods" in stream.getvalue()
     assert "VERIFY RESULT: PASS" in stream.getvalue()
 
 

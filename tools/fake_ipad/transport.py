@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import error, parse, request
 
-from tools.fake_ipad.errors import fail
+from tools.fake_ipad.errors import ClientError, fail
 from tools.fake_ipad.output import Output, pretty, redact, text_indent
 
 
@@ -111,8 +111,9 @@ class ApiClient:
             )
         self.timeout = timeout
         self.verbose = verbose
+        self.out.verbose = self.out.verbose or verbose
         if insecure:
-            self.out.line(
+            self.out.summary(
                 "WARNING: TLS certificate verification is DISABLED (--insecure). "
                 "This is for lab-only testing."
             )
@@ -172,10 +173,10 @@ class ApiClient:
             body = json.dumps(json_body, separators=(",", ":")).encode("utf-8")
             request_headers["Content-Type"] = "application/json"
 
-        self.out.line(f"\n→ {method} {url}")
+        self.out.detail(f"\n→ {method} {url}")
         if self.verbose and json_body is not None:
-            self.out.line("  request JSON:")
-            self.out.line(text_indent(pretty(json_body), "    "))
+            self.out.detail("  request JSON:")
+            self.out.detail(text_indent(pretty(json_body), "    "))
 
         req = request.Request(url, data=body, method=method, headers=request_headers)
 
@@ -200,27 +201,33 @@ class ApiClient:
         except TimeoutError as exc:
             fail(f"{method} {url}: timeout: {exc}")
 
-        self.out.line(f"← HTTP {response.status}")
+        self.out.detail(f"← HTTP {response.status}")
         request_id = response.headers.get("x-request-id")
         if request_id:
-            self.out.line(f"  X-Request-ID: {request_id}")
+            self.out.detail(f"  X-Request-ID: {request_id}")
         if self.verbose and response.body:
             content_type = response.headers.get("content-type", "")
             if "json" in content_type:
                 try:
-                    self.out.line("  response JSON:")
-                    self.out.line(text_indent(pretty(response.json()), "    "))
+                    self.out.detail("  response JSON:")
+                    self.out.detail(text_indent(pretty(response.json()), "    "))
                 except Exception:
                     # Verbose output only; never fatal.
                     pass  # nosec B110
             else:
-                self.out.line(f"  response body: {len(response.body)} bytes")
+                self.out.detail(f"  response body: {len(response.body)} bytes")
 
         return response
 
     def expect(self, response: HttpResponse, *ok: int, label: str) -> HttpResponse:
         if response.status not in ok:
-            fail(f"{label}: {problem_text(response)}")
+            exc = ClientError(f"{label}: {problem_text(response)}")
+            exc.context = {
+                "http_status": response.status,
+                "request_id": response.headers.get("x-request-id")
+                or parse_problem(response).request_id,
+            }
+            raise exc
         return response
 
 

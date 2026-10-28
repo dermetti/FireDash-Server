@@ -13,6 +13,10 @@ class ClientError(RuntimeError):
     never carries secret material in its message.
     """
 
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.context: dict = {}
+
 
 def fail(message: str) -> NoReturn:
     raise ClientError(message)

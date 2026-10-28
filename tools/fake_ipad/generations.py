@@ -227,11 +227,13 @@ def validate_generation(payload: dict, dataset: dict) -> list[dict]:
 
 def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
     """Authenticate, decrypt and validate every PDF; never persist partial results."""
+    client.verification_stage("generation_manifest")
     scope = client.scope_for_dataset(dataset, config)
     if dataset["manifest_url"] != f"{endpoint(dataset)}/manifest":
         fail("generation: manifest_url mismatch")
     for attempt in range(12):
         response = client.api.call("GET", dataset["manifest_url"], bearer=client.state.credential)
+        client.verification_stage("generation_manifest", response)
         if response.status != 202:
             break
         retry = response.headers.get("retry-after", "")
@@ -241,6 +243,7 @@ def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
             fail("generation remained pending after maximum attempts")
         client.out.line(f"  generation pending; Retry-After: {retry}s")
         time.sleep(int(retry))
+    client.verification_stage("generation_manifest", response)
     client.api.expect(response, 200, label="generation manifest")
     wire = response.json()
     if not RESPONSE_FIELDS <= wire.keys():
@@ -250,6 +253,7 @@ def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
     version = require_string(wire["signing_key_version"], label="generation.signing_key_version")
     if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", version):
         fail("generation: invalid signing-key version")
+    client.verification_stage("generation_signature")
     key = client.get_signing_key(version, key_cache)
     payload = {k: v for k, v in wire.items() if k not in RESPONSE_FIELDS}
     try:
@@ -258,6 +262,7 @@ def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
         )
     except InvalidSignature:
         fail("generation: Ed25519 signature verification FAILED")
+    client.verification_stage("generation_structure")
     documents = validate_generation(payload, dataset)
     grant = exact(
         wire["generation_key_grant"],
@@ -270,6 +275,7 @@ def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
         },
         "generation_key_grant",
     )
+    client.verification_stage("generation_hpke")
     info = {
         "protocol": "firedash-fire-plan-generation-hpke-v2"
         if dataset["type"] == "department_fire_plans"
@@ -293,7 +299,19 @@ def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
     if len(generation_key) != 32:
         fail("generation: HPKE must open a 32-byte key")
     total = 0
-    for document in documents:
+    client.verification_context.update(documents_total=len(documents), documents_verified=0)
+    for index, document in enumerate(documents):
+        metadata = next(
+            (document[k] for k in ("file", "fire_plan", "klgv_plan") if k in document), {}
+        )
+        client.verification_context.update(
+            artifact=document["artifact_id"],
+            document=metadata.get("id"),
+            documents_verified=index,
+        )
+        client.verification_context.pop("http_status", None)
+        client.verification_context.pop("request_id", None)
+        client.verification_stage("aes_kw")
         try:
             cek = aes_key_unwrap(
                 generation_key,
@@ -312,12 +330,19 @@ def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
             },
             require_ranges=False,
         )
+        client.verification_stage("aes_gcm")
         plaintext = aes_gcm_decrypt(cek, binary(document["nonce"], 12, "nonce"), ciphertext)
+        client.verification_stage("plaintext_sha256")
         if sha256_hex(plaintext) != document["sanitized_pdf_sha256"]:
             fail("generation: plaintext SHA-256 mismatch")
+        client.verification_stage("plaintext_size")
         if "file" in document and len(plaintext) != document["file"]["size_bytes"]:
             fail("generation: file.size_bytes mismatch")
         total += len(plaintext)
+        client.verification_context["documents_verified"] = index + 1
+        client.out.detail(
+            f"  artifact {document['artifact_id']}: AES-KW, AES-GCM, PDF hash/size PASS"
+        )
     client.out.line(
         "  signed generation, HPKE, AES-KW, AES-GCM and PDF hashes: "
         f"PASS ({len(documents)} documents)"

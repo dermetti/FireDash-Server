@@ -362,7 +362,7 @@ def _require_client(client: FakeIPadClient | None) -> FakeIPadClient:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    out = Output(json_mode=args.json)
+    out = Output(json_mode=args.json, verbose=getattr(args, "verbose", False))
 
     try:
         if args.command == "reset":
@@ -451,11 +451,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     except KeyboardInterrupt:
-        out.line("\nInterrupted.")
+        out.summary("\nInterrupted.")
         return 130
     except ClientError as exc:
-        out.banner("RESULT: FAIL")
-        out.line(str(exc))
+        out.error(exc)
+        out.summary("\nVERIFY RESULT: FAIL" if args.command == "verify" else "\nRESULT: FAIL")
         out.emit({"ok": False, "error": str(exc)})
         return 1
 

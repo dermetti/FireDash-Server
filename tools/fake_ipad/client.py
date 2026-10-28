@@ -34,7 +34,7 @@ from tools.fake_ipad.crypto import (
     strict_b64,
 )
 from tools.fake_ipad.errors import ClientError, fail
-from tools.fake_ipad.output import Output
+from tools.fake_ipad.output import Output, verification_statistics
 from tools.fake_ipad.state import DeviceState, secure_write_json
 from tools.fake_ipad.transport import ApiClient, HttpResponse, problem_text
 from tools.fake_ipad.validation import (
@@ -78,6 +78,10 @@ class FakeIPadClient:
             else state.app_build
         )
         self.verbose = verbose
+        self.out.verbose = self.out.verbose or verbose
+        self.verification_context: dict[str, Any] = {}
+        self.installation_status: str | None = None
+        self.last_verification_statistics: dict[str, Any] = {}
         self.save_plaintext = save_plaintext
 
     # --- shared protocol helpers ------------------------------------------
@@ -228,6 +232,7 @@ class FakeIPadClient:
     def adopt(
         self, token: str, *, verify: bool = True, simulate_lost_completion_response: bool = False
     ) -> dict[str, Any]:
+        self.out.compact = True
         self.out.banner("FIREDASH FAKE IPAD — ADOPTION")
         if self.state.is_adopted:
             fail(f"{self.state.state_dir} is already adopted. Run 'reset' before a new adoption.")
@@ -279,8 +284,8 @@ class FakeIPadClient:
             self.full_active_verification(use_previous_etag=False, compare_previous=False)
 
         self.out.banner("ADOPTION RESULT: PASS")
-        self.out.line(f"Fake-iPad state saved under: {self.state.state_dir}")
-        self.out.line("Do not commit this directory; it contains a test credential/private key.")
+        self.out.summary(f"Fake-iPad state saved under: {self.state.state_dir}")
+        self.out.summary("Do not commit this directory; it contains a test credential/private key.")
 
         return {
             "installation_id": installation_id,
@@ -339,6 +344,7 @@ class FakeIPadClient:
 
     def refresh(self, *, telemetry: str = "configured") -> dict[str, Any]:
         """One explicit user refresh: renew, configuration, then conditional manifest sync."""
+        self.out.compact = True
         self.out.banner("FIREDASH FAKE IPAD â€” REFRESH")
         response = self._expect(
             self.api.call(
@@ -937,21 +943,21 @@ class FakeIPadClient:
         return cek
 
     def download_ciphertext(self, dataset: dict[str, Any], *, require_ranges: bool = True) -> bytes:
-        response = self.api.expect(
-            self.api.call(
-                "GET",
-                dataset["download_url"],
-                bearer=self.state.credential,
-                headers={"Accept": "application/octet-stream"},
-            ),
-            200,
-            label=f"{dataset['type']} download",
+        self.verification_stage("download")
+        response = self.api.call(
+            "GET",
+            dataset["download_url"],
+            bearer=self.state.credential,
+            headers={"Accept": "application/octet-stream"},
         )
+        self.verification_stage("download", response)
+        self.api.expect(response, 200, label=f"{dataset['type']} download")
 
         content_type = response.headers.get("content-type", "")
         if not content_type.startswith("application/octet-stream"):
             fail(f"{dataset['type']}: expected application/octet-stream, got {content_type!r}")
 
+        self.verification_stage("ciphertext_etag")
         expected_etag = f'"{dataset["ciphertext_sha256"]}"'
         actual_etag = response.headers.get("etag")
         if actual_etag != expected_etag:
@@ -964,12 +970,14 @@ class FakeIPadClient:
         if require_ranges and accept_ranges != "bytes":
             fail(f"{dataset['type']}: expected Accept-Ranges: bytes, got {accept_ranges!r}")
 
+        self.verification_stage("ciphertext_size")
         ciphertext = response.body
         if len(ciphertext) != dataset["encrypted_size"]:
             fail(
                 f"{dataset['type']}: encrypted size mismatch "
                 f"(expected {dataset['encrypted_size']}, got {len(ciphertext)})"
             )
+        self.verification_stage("ciphertext_sha256")
         actual_hash = sha256_hex(ciphertext)
         if actual_hash != dataset["ciphertext_sha256"]:
             fail(
@@ -983,12 +991,14 @@ class FakeIPadClient:
         if require_ranges:
             self.out.line("  Accept-Ranges header:        PASS")
 
+        self.verification_stage("conditional_get")
         conditional = self.api.call(
             "GET",
             dataset["download_url"],
             bearer=self.state.credential,
             headers={"Accept": "application/octet-stream", "If-None-Match": expected_etag},
         )
+        self.verification_stage("conditional_get", conditional)
         if conditional.status != 304:
             fail(
                 f"{dataset['type']}: conditional download expected HTTP 304, "
@@ -998,6 +1008,7 @@ class FakeIPadClient:
             fail(f"{dataset['type']}: HTTP 304 unexpectedly had a response body")
         self.out.line("  artifact If-None-Match 304:  PASS")
 
+        self.verification_stage("download_complete", response)
         return ciphertext
 
     def verify_dataset(
@@ -1018,9 +1029,12 @@ class FakeIPadClient:
             self.out.line("\n  DATASET RESULT: PASS")
             return result
 
+        self.verification_stage("artifact_signature")
         self.verify_artifact_signature(dataset, config, key_cache)
+        self.verification_stage("hpke")
         cek = self.unwrap_cek(dataset, config, crypto)
         ciphertext = self.download_ciphertext(dataset)
+        self.verification_stage("aes_gcm")
         plaintext = aes_gcm_decrypt(
             cek,
             strict_b64(
@@ -1032,6 +1046,7 @@ class FakeIPadClient:
         self.out.line("  AES-256-GCM authentication:  PASS")
         self.out.line(f"  plaintext bytes:             {len(plaintext)}")
 
+        self.verification_stage("plaintext_validation")
         summary = datasets.validate_plaintext(
             plaintext,
             dataset,
@@ -1053,13 +1068,23 @@ class FakeIPadClient:
         if response.status != 200:
             fail(f"Manifest expected HTTP 200, got {problem_text(response)}")
 
-        manifest = response.json()
-        key_cache: dict[str, ed25519.Ed25519PublicKey] = {}
-
-        self.verify_manifest_signature(manifest, key_cache)
-        self.validate_manifest_structure(manifest, config)
-        supported_dataset_types = self.select_compatible_datasets(manifest)
-        etag = self.verify_manifest_etag(response, manifest)
+        self.out.compact = True
+        self.last_verification_statistics = {}
+        try:
+            manifest = response.json()
+            key_cache: dict[str, ed25519.Ed25519PublicKey] = {}
+            self.verify_manifest_signature(manifest, key_cache)
+            self.validate_manifest_structure(manifest, config)
+            supported_dataset_types = self.select_compatible_datasets(manifest)
+            etag = self.verify_manifest_etag(response, manifest)
+        except ClientError as exc:
+            exc.context = {
+                "stage": "main_manifest",
+                "http_status": response.status,
+                "request_id": response.headers.get("x-request-id"),
+                **exc.context,
+            }
+            raise
 
         crypto = self.state.load_private_key()
         dataset_results: dict[str, Any] = {}
@@ -1073,11 +1098,24 @@ class FakeIPadClient:
                 and not dataset["required"]
             ):
                 continue
-            dataset_results[dataset["type"]] = self.verify_dataset(
-                dataset, config, crypto, key_cache
-            )
+            self.verification_context = {
+                "dataset": dataset["type"],
+                "scope": dataset["scope"]["type"],
+                "publication": dataset["publication_id"],
+                "stage": "dataset_validation",
+            }
+            try:
+                dataset_results[dataset["type"]] = self.verify_dataset(
+                    dataset, config, crypto, key_cache
+                )
+            except ClientError as exc:
+                exc.context = {**self.verification_context, **exc.context}
+                raise
+            finally:
+                self.verification_context = {}
 
         conditional = self.fetch_manifest(if_none_match=etag, max_attempts=1)
+        self.verification_stage("conditional_get", conditional)
         if conditional.status != 304:
             fail(f"Manifest If-None-Match expected HTTP 304, got {conditional.status}")
         if conditional.body:
@@ -1101,6 +1139,10 @@ class FakeIPadClient:
             self.state.state["last_manifest_summary"] = self.manifest_summary(manifest)
             self.state.save()
 
+        self.last_verification_statistics = verification_statistics(manifest, dataset_results)
+        self.out.verification(
+            manifest, dataset_results, installation_status=self.installation_status
+        )
         return manifest, etag, dataset_results
 
     def full_active_verification(
@@ -1118,7 +1160,10 @@ class FakeIPadClient:
         expect_unchanged = expect_unchanged or []
         expect_version_increase = expect_version_increase or []
 
+        self.out.compact = True
+        self.last_verification_statistics = {}
         status = self.get_status()
+        self.installation_status = status["status"]
         if status["status"] != "active":
             fail(f"Full verification requires ACTIVE installation, got {status['status']!r}")
         if status["purge_provisioned_data"]:
@@ -1145,6 +1190,7 @@ class FakeIPadClient:
                     "Expected a dataset update, but the backend returned HTTP 304 "
                     "for the previous manifest ETag"
                 )
+            self.report_cached_verification()
             self.out.banner("CURRENT BACKEND STATE: UNCHANGED / PASS")
             return {"changed": False}
 
@@ -1297,8 +1343,23 @@ class FakeIPadClient:
         except (OSError, ValueError, ClientError, KeyError, TypeError):
             return None
 
+    def report_cached_verification(self) -> None:
+        manifest = json.loads(self.state.manifest_path.read_text("utf-8"))
+        results = self.state.state["last_dataset_validation"]
+        self.last_verification_statistics = verification_statistics(manifest, results, cached=True)
+        self.out.verification(
+            manifest, results, cached=True, installation_status=self.installation_status
+        )
+
+    def verification_stage(self, stage: str, response: HttpResponse | None = None) -> None:
+        self.verification_context["stage"] = stage
+        if response is not None:
+            self.verification_context["http_status"] = response.status
+            self.verification_context["request_id"] = response.headers.get("x-request-id")
+
     def verify(self) -> dict[str, Any]:
-        self.out.banner("FIREDASH FAKE IPAD — CURRENT BACKEND VERIFICATION")
+        self.out.compact = True
+        self.out.banner("FIREDASH FAKE IPAD \u2014 VERIFY")
         result = self.full_active_verification(use_previous_etag=False, compare_previous=False)
         self.out.banner("VERIFY RESULT: PASS")
         return result
@@ -1310,6 +1371,7 @@ class FakeIPadClient:
         expect_unchanged: list[str],
         expect_version_increase: list[str],
     ) -> dict[str, Any]:
+        self.out.compact = True
         self.out.banner("FIREDASH FAKE IPAD — UPDATE CHECK")
         if not self.state.state.get("last_manifest_summary"):
             fail("No verified manifest is stored. Run 'adopt' or 'verify' first.")
@@ -1326,6 +1388,7 @@ class FakeIPadClient:
     def manifest(
         self, *, if_none_match: str | None = None, download: bool = False
     ) -> dict[str, Any]:
+        self.out.compact = True
         self.out.banner("FIREDASH FAKE IPAD — MANIFEST")
         config = self.get_configuration()
         if download and if_none_match != self.verified_snapshot_etag(config):
@@ -1335,6 +1398,10 @@ class FakeIPadClient:
             if download and (not if_none_match or response.body):
                 fail("Manifest HTTP 304 without a complete verified snapshot")
             self.out.line("\n[MANIFEST] ETag unchanged: server reports no authorized change.")
+            if download:
+                self.report_cached_verification()
+            else:
+                self.out.summary("Manifest: UNCHANGED (HTTP 304)")
             return {"changed": False}
         if download:
             manifest, etag, _ = self.verify_manifest_and_datasets(response, config)
@@ -1350,6 +1417,7 @@ class FakeIPadClient:
         return {"changed": True, "etag": etag, "generation": manifest["manifest_generation"]}
 
     def download(self, *, dataset_types: list[str] | None = None) -> dict[str, Any]:
+        self.out.compact = True
         self.out.banner("FIREDASH FAKE IPAD — DATASET DOWNLOAD")
         config = self.get_configuration()
         previous_etag = self.verified_snapshot_etag(config)
@@ -1360,6 +1428,7 @@ class FakeIPadClient:
             self.out.line(
                 "\n[DATASET DOWNLOAD] Manifest ETag unchanged; using previously verified cache."
             )
+            self.report_cached_verification()
             return {"changed": False}
         _, _, results = self.verify_manifest_and_datasets(
             response, config, dataset_types=dataset_types
