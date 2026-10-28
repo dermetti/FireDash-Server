@@ -2,7 +2,8 @@
 
 These are pure format validators: they receive decrypted plaintext plus the
 verified manifest entry and assert the documented on-disk formats (GeoJSON
-hydrants, ZIP fire plans, JSON personnel and dangerous goods). No HTTP and no key material here.
+hydrants, historical ZIP fire plans, JSON personnel, phonebooks and dangerous goods).
+Document-v2 snapshots are handled in ``generations``. No HTTP or key material here.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ _EXTENSIONS = {
     "department_fire_plans": "zip",
     "station_personnel": "json",
     "dangerous_goods": "json",
+    "department_phonebook": "json",
+    "station_phonebook": "json",
 }
 
 # This is intentionally the capability table of the current fake/iOS-equivalent
@@ -33,10 +36,15 @@ _EXTENSIONS = {
 # skipped only after their signed manifest entry has been authenticated.
 SUPPORTED_DATASETS = MappingProxyType(
     {
-        "department_hydrants": ("geojson", frozenset({1})),
-        "department_fire_plans": ("zip", frozenset({1})),
-        "station_personnel": ("json", frozenset({1})),
-        "dangerous_goods": ("json", frozenset({1})),
+        "department_hydrants": frozenset({("geojson", 1)}),
+        "department_fire_plans": frozenset({("zip", 1), ("document-manifest-v2", 2)}),
+        "station_personnel": frozenset({("json", 1)}),
+        "dangerous_goods": frozenset({("json", 1)}),
+        "department_phonebook": frozenset({("json", 1)}),
+        "station_phonebook": frozenset({("json", 1)}),
+        "department_files": frozenset({("document-manifest-v2", 2)}),
+        "station_files": frozenset({("document-manifest-v2", 2)}),
+        "department_klgv_plans": frozenset({("document-manifest-v2", 2)}),
     }
 )
 
@@ -586,8 +594,42 @@ def validate_plaintext(
             fail("station_personnel artifact_format must be json")
         return validate_personnel(plaintext, dataset, config, out)
 
+    if dataset_type in {"department_phonebook", "station_phonebook"}:
+        return validate_phonebook(plaintext, out)
+
     out.line(
         f"\n  [UNKNOWN DATASET {dataset_type}] "
         f"{len(plaintext)} plaintext bytes; generic crypto checks passed"
     )
     return {"plaintext_bytes": len(plaintext), "sha256": sha256_hex(plaintext)}
+
+
+def validate_phonebook(plaintext: bytes, out: Output) -> dict[str, Any]:
+    from tools.fake_ipad.generations import exact, identity, integer
+
+    try:
+        doc = json.loads(plaintext.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail("phonebook: invalid UTF-8 JSON")
+    exact(doc, {"entries", "source_revision"}, "phonebook")
+    integer(doc["source_revision"], "phonebook.source_revision")
+    if not isinstance(doc["entries"], list):
+        fail("phonebook.entries: expected array")
+    seen = set()
+    for entry in doc["entries"]:
+        exact(
+            entry,
+            {"id", "first_name", "last_name", "organization_unit", "function", "phone_number"},
+            "phonebook entry",
+        )
+        entry_id = identity(entry["id"], "phonebook.id")
+        if entry_id in seen:
+            fail("phonebook: duplicate entry identity")
+        seen.add(entry_id)
+        for field in ("first_name", "last_name", "organization_unit", "function"):
+            if entry[field] is not None and not isinstance(entry[field], str):
+                fail(f"phonebook.{field}: expected string or null")
+        if not isinstance(entry["phone_number"], str) or not entry["phone_number"].strip():
+            fail("phonebook.phone_number: expected nonempty string")
+    out.line(f"  phonebook entries: PASS ({len(seen)})")
+    return {"entries": len(seen), "source_revision": doc["source_revision"]}

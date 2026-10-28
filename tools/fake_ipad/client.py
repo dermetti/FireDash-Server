@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import copy
 import hmac
+import json
 import re
 import time
 from typing import Any
@@ -19,7 +20,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from tools.fake_ipad import datasets
+from tools.fake_ipad import datasets, generations
 from tools.fake_ipad.crypto import (
     ADOPTION_PROTOCOL,
     GRANT_PROTOCOL,
@@ -32,7 +33,7 @@ from tools.fake_ipad.crypto import (
     sha256_hex,
     strict_b64,
 )
-from tools.fake_ipad.errors import fail
+from tools.fake_ipad.errors import ClientError, fail
 from tools.fake_ipad.output import Output
 from tools.fake_ipad.state import DeviceState, secure_write_json
 from tools.fake_ipad.transport import ApiClient, HttpResponse, problem_text
@@ -683,9 +684,9 @@ class FakeIPadClient:
             self.scope_for_dataset(dataset, config)
             if dataset_type == "dangerous_goods" and dataset["required"] is not True:
                 fail("dangerous_goods: descriptor must declare required=true")
-            if not isinstance(dataset["version"], int) or dataset["version"] <= 0:
+            if type(dataset["version"]) is not int or dataset["version"] <= 0:
                 fail(f"{dataset_type}: version must be positive integer")
-            if not isinstance(dataset["schema_version"], int) or dataset["schema_version"] <= 0:
+            if type(dataset["schema_version"]) is not int or dataset["schema_version"] <= 0:
                 fail(f"{dataset_type}: schema_version must be positive integer")
             if not isinstance(dataset["required"], bool):
                 fail(f"{dataset_type}: required must be boolean")
@@ -791,12 +792,11 @@ class FakeIPadClient:
         supported = datasets.SUPPORTED_DATASETS.get(dataset_type)
         if supported is None:
             return "dataset type is not implemented by this client"
-        artifact_format, schema_versions = supported
-        if dataset["artifact_format"] != artifact_format:
+        if not any(fmt == dataset["artifact_format"] for fmt, _ in supported):
             return "artifact format is not implemented by this client"
         if (
             type(dataset["schema_version"]) is not int
-            or dataset["schema_version"] not in schema_versions
+            or (dataset["artifact_format"], dataset["schema_version"]) not in supported
         ):
             return "schema version is not implemented by this client"
         minimum = dataset["minimum_app_version"]
@@ -836,6 +836,19 @@ class FakeIPadClient:
         if dataset["type"] == "dangerous_goods" and scope != {"type": "SYSTEM"}:
             fail("dangerous_goods: scope must be exactly SYSTEM with no owner IDs")
         scope_type = scope.get("type")
+        expected_scope = {
+            "dangerous_goods": "SYSTEM",
+            "department_hydrants": "DEPARTMENT",
+            "department_fire_plans": "DEPARTMENT",
+            "department_klgv_plans": "DEPARTMENT",
+            "department_files": "DEPARTMENT",
+            "department_phonebook": "DEPARTMENT",
+            "station_files": "STATION",
+            "station_phonebook": "STATION",
+            "station_personnel": "STATION",
+        }.get(dataset["type"])
+        if expected_scope is not None and scope_type != expected_scope:
+            fail(f"{dataset['type']}: incorrect dataset scope type")
         if scope_type == "SYSTEM":
             expected = {"type": "SYSTEM"}
         elif scope_type == "DEPARTMENT":
@@ -923,7 +936,7 @@ class FakeIPadClient:
         self.out.line("  HPKE CEK unwrap:             PASS (32 bytes)")
         return cek
 
-    def download_ciphertext(self, dataset: dict[str, Any]) -> bytes:
+    def download_ciphertext(self, dataset: dict[str, Any], *, require_ranges: bool = True) -> bytes:
         response = self.api.expect(
             self.api.call(
                 "GET",
@@ -948,7 +961,7 @@ class FakeIPadClient:
             )
 
         accept_ranges = response.headers.get("accept-ranges")
-        if accept_ranges != "bytes":
+        if require_ranges and accept_ranges != "bytes":
             fail(f"{dataset['type']}: expected Accept-Ranges: bytes, got {accept_ranges!r}")
 
         ciphertext = response.body
@@ -967,7 +980,8 @@ class FakeIPadClient:
         self.out.line(f"  protected download:          PASS ({len(ciphertext)} bytes)")
         self.out.line("  ciphertext SHA-256:          PASS")
         self.out.line("  ciphertext ETag:             PASS")
-        self.out.line("  Accept-Ranges header:        PASS")
+        if require_ranges:
+            self.out.line("  Accept-Ranges header:        PASS")
 
         conditional = self.api.call(
             "GET",
@@ -998,6 +1012,11 @@ class FakeIPadClient:
             f"DATASET {dataset['type']} — v{dataset['version']} — {dataset['publication_id']}"
         )
         self.out.line("-" * 72)
+
+        if dataset["artifact_format"] == "document-manifest-v2":
+            result = generations.verify_generation(self, dataset, config, crypto, key_cache)
+            self.out.line("\n  DATASET RESULT: PASS")
+            return result
 
         self.verify_artifact_signature(dataset, config, key_cache)
         cek = self.unwrap_cek(dataset, config, crypto)
@@ -1048,7 +1067,11 @@ class FakeIPadClient:
         for dataset in manifest["datasets"]:
             if dataset["type"] not in supported_dataset_types:
                 continue
-            if dataset_types is not None and dataset["type"] not in dataset_types:
+            if (
+                dataset_types is not None
+                and dataset["type"] not in dataset_types
+                and not dataset["required"]
+            ):
                 continue
             dataset_results[dataset["type"]] = self.verify_dataset(
                 dataset, config, crypto, key_cache
@@ -1062,7 +1085,21 @@ class FakeIPadClient:
         self.out.line("\n[MANIFEST CONDITIONAL GET]")
         self.out.line("  If-None-Match → 304: PASS")
 
-        secure_write_json(self.state.manifest_path, manifest)
+        # A partial selection never establishes a fully verified complete manifest.
+        if set(dataset_results) == supported_dataset_types:
+            secure_write_json(self.state.manifest_path, manifest)
+            self.state.state["verified_snapshot"] = {
+                "protocol_version": 2,
+                "etag": etag,
+                "configuration": config,
+                "datasets": sorted(dataset_results),
+                "manifest_sha256": sha256_hex(canonical_json_bytes(manifest)),
+                "validation_sha256": sha256_hex(canonical_json_bytes(dataset_results)),
+            }
+            self.state.state["last_dataset_validation"] = dataset_results
+            self.state.state["last_manifest_etag"] = etag
+            self.state.state["last_manifest_summary"] = self.manifest_summary(manifest)
+            self.state.save()
 
         return manifest, etag, dataset_results
 
@@ -1092,11 +1129,13 @@ class FakeIPadClient:
         config = self.get_configuration()
 
         previous_summary = self.state.state.get("last_manifest_summary", {})
-        previous_etag = self.state.state.get("last_manifest_etag") if use_previous_etag else None
+        previous_etag = self.verified_snapshot_etag(config) if use_previous_etag else None
 
         response = self.fetch_manifest(if_none_match=previous_etag)
 
         if response.status == 304:
+            if not previous_etag or response.body:
+                fail("Manifest HTTP 304 without a complete verified snapshot")
             self.out.line("\n[SERVER PUBLICATION CHANGE REPORT]")
             self.out.line(
                 "  Manifest ETag unchanged: server reports no authorized publication change."
@@ -1126,11 +1165,6 @@ class FakeIPadClient:
             )
         elif expect_changed or expect_unchanged or expect_version_increase:
             fail("No previous verified manifest summary exists; cannot assert update expectations")
-
-        self.state.state["last_manifest_etag"] = etag
-        self.state.state["last_manifest_summary"] = current_summary
-        self.state.state["last_dataset_validation"] = dataset_results
-        self.state.save()
 
         return {
             "changed": True,
@@ -1236,6 +1270,33 @@ class FakeIPadClient:
 
     # --- high-level commands ----------------------------------------------
 
+    def verified_snapshot_etag(self, config: dict[str, Any]) -> str | None:
+        """Only a complete snapshot verified by this protocol version permits 304 reuse."""
+        snapshot = self.state.state.get("verified_snapshot")
+        if not isinstance(snapshot, dict) or snapshot.get("protocol_version") != 2:
+            return None
+        if snapshot.get("configuration") != config or not self.state.manifest_path.exists():
+            return None
+        try:
+            manifest = json.loads(self.state.manifest_path.read_text("utf-8"))
+            if snapshot.get("manifest_sha256") != sha256_hex(canonical_json_bytes(manifest)):
+                return None
+            self.verify_manifest_signature(manifest, {})
+            self.validate_manifest_structure(manifest, config)
+            supported = self.select_compatible_datasets(manifest)
+            if snapshot.get("datasets") != sorted(supported):
+                return None
+            results = self.state.state.get("last_dataset_validation", {})
+            if not isinstance(results, dict) or set(results) != supported:
+                return None
+            if snapshot.get("validation_sha256") != sha256_hex(canonical_json_bytes(results)):
+                return None
+            etag_payload = {k: v for k, v in manifest.items() if k != "generated_at"}
+            expected = f'"{sha256_hex(canonical_json_bytes(etag_payload))}"'
+            return expected if snapshot.get("etag") == expected else None
+        except (OSError, ValueError, ClientError, KeyError, TypeError):
+            return None
+
     def verify(self) -> dict[str, Any]:
         self.out.banner("FIREDASH FAKE IPAD — CURRENT BACKEND VERIFICATION")
         result = self.full_active_verification(use_previous_etag=False, compare_previous=False)
@@ -1267,8 +1328,12 @@ class FakeIPadClient:
     ) -> dict[str, Any]:
         self.out.banner("FIREDASH FAKE IPAD — MANIFEST")
         config = self.get_configuration()
+        if download and if_none_match != self.verified_snapshot_etag(config):
+            if_none_match = None
         response = self.fetch_manifest(if_none_match=if_none_match)
         if response.status == 304:
+            if download and (not if_none_match or response.body):
+                fail("Manifest HTTP 304 without a complete verified snapshot")
             self.out.line("\n[MANIFEST] ETag unchanged: server reports no authorized change.")
             return {"changed": False}
         if download:
@@ -1287,16 +1352,17 @@ class FakeIPadClient:
     def download(self, *, dataset_types: list[str] | None = None) -> dict[str, Any]:
         self.out.banner("FIREDASH FAKE IPAD — DATASET DOWNLOAD")
         config = self.get_configuration()
-        response = self.fetch_manifest(if_none_match=self.state.state.get("last_manifest_etag"))
+        previous_etag = self.verified_snapshot_etag(config)
+        response = self.fetch_manifest(if_none_match=previous_etag)
         if response.status == 304:
+            if not previous_etag or response.body:
+                fail("Manifest HTTP 304 without a complete verified snapshot")
             self.out.line(
                 "\n[DATASET DOWNLOAD] Manifest ETag unchanged; using previously verified cache."
             )
             return {"changed": False}
-        _, etag, results = self.verify_manifest_and_datasets(
+        _, _, results = self.verify_manifest_and_datasets(
             response, config, dataset_types=dataset_types
         )
-        self.state.state["last_manifest_etag"] = etag
-        self.state.save()
         self.out.banner("DATASET DOWNLOAD RESULT: PASS")
         return {"changed": True, "datasets": list(results)}

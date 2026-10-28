@@ -648,7 +648,7 @@ def test_complete_manifest_contract_fixture_uses_the_live_client_verifier(tmp_pa
             client.validate_manifest_structure(manifest, mismatch)
 
 
-def _signed_manifest_with_klgv_optional_dataset(*, required: bool):
+def _signed_manifest_with_unknown_optional_dataset(*, required: bool):
     fixture_path = (
         Path(__file__).resolve().parent.parent
         / "apps"
@@ -661,7 +661,7 @@ def _signed_manifest_with_klgv_optional_dataset(*, required: bool):
     publication_id = str(uuid.uuid4())
     dataset = {
         "publication_id": publication_id,
-        "type": "department_klgv_plans",
+        "type": "future_department_documents",
         "scope": {
             "type": "DEPARTMENT",
             "department_id": manifest["configuration"]["department_id"],
@@ -684,7 +684,7 @@ def _signed_manifest_with_klgv_optional_dataset(*, required: bool):
 def test_verified_manifest_ignores_unknown_optional_dataset_and_syncs_known_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    manifest, public_key = _signed_manifest_with_klgv_optional_dataset(required=False)
+    manifest, public_key = _signed_manifest_with_unknown_optional_dataset(required=False)
     state = DeviceState(tmp_path / "state")
     state.ensure_identity(server_url="https://test.example", app_version="1.0.0")
     state.store_installation(
@@ -723,13 +723,13 @@ def test_verified_manifest_ignores_unknown_optional_dataset_and_syncs_known_requ
     )
     _, _, result = client.verify_manifest_and_datasets(response, manifest["configuration"])
 
-    assert "department_klgv_plans" not in verified
+    assert "future_department_documents" not in verified
     assert verified == [manifest["datasets"][0]["type"]]
     assert set(result) == set(verified)
 
 
 def test_verified_manifest_rejects_unknown_required_dataset_before_activation(tmp_path: Path):
-    manifest, public_key = _signed_manifest_with_klgv_optional_dataset(required=True)
+    manifest, public_key = _signed_manifest_with_unknown_optional_dataset(required=True)
     state = DeviceState(tmp_path / "state")
     state.ensure_identity(server_url="https://test.example", app_version="1.0.0")
     state.store_installation(

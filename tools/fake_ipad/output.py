@@ -12,6 +12,7 @@ _SECRET_KEYS = {
     "challenge_response",
     "encrypted_challenge",
     "wrapped_content_key",
+    "wrapped_generation_key",
     "hpke_private_key",
     "private_key",
 }
