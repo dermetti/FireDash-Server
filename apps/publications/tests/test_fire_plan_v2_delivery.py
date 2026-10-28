@@ -1062,3 +1062,102 @@ def test_complete_empty_historical_generation_can_restore(v2_delivery_context, c
     scope.refresh_from_db()
     assert scope.current_published_publication_id == versions[0].id
     assert versions[0].document_artifact_references.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("fault", ["duplicate", "missing", "nonstring"])
+def test_manifest_artifact_index_rejects_invalid_membership(v2_delivery_context, fault):
+    from copy import deepcopy
+
+    from apps.publications.document_v2 import DocumentV2Error, validate_ready_document_generation
+    from apps.publications.models import DocumentGenerationManifest
+    from apps.publications.restore import publication_restore_blocked_reason, restore_candidates
+
+    user, department, scope, accepted, _, _, _ = v2_delivery_context
+    for name in ("A", "B"):
+        _plan(user, department, accepted, name, b"PDF " + name.encode())
+    publication = _generation(department, scope, 1)
+    build_document_v2_generation(publication=publication)
+    manifest = build_document_v2_manifest(publication=publication)
+    payload = deepcopy(manifest.payload)
+    if fault == "duplicate":
+        payload["documents"][1]["artifact_id"] = payload["documents"][0]["artifact_id"]
+    elif fault == "missing":
+        payload["documents"][1]["artifact_id"] = str(uuid.uuid4())
+    else:
+        payload["documents"][1]["artifact_id"] = []
+    manifest.delete()  # Only replace a BUILDING fixture, never a signed ready generation.
+    DocumentGenerationManifest.objects.create(
+        publication=publication,
+        payload=payload,
+        signature=b"s" * 64,
+        signature_algorithm="Ed25519",
+        signing_key_version="test",
+    )
+    with pytest.raises(DocumentV2Error):
+        validate_ready_document_generation(publication, historical=True)
+    candidate = restore_candidates(DatasetPublication.objects.filter(pk=publication.pk)).get()
+    candidate.status, candidate.artifact_status, candidate.artifact_ready = (
+        "SUPERSEDED",
+        "READY",
+        True,
+    )
+    assert (
+        publication_restore_blocked_reason(candidate, scope=scope)
+        == "Incomplete document generation"
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("document_count", [2, 12])
+def test_document_membership_index_reads_each_artifact_identity_once(
+    v2_delivery_context, monkeypatch, document_count
+):
+    from types import SimpleNamespace
+
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    from apps.publications.document_v2 import validate_ready_document_generation
+    from apps.publications.models import DocumentGenerationManifest
+    from apps.publications.restore import publication_restore_blocked_reason, restore_candidates
+
+    user, department, scope, accepted, _, _, _ = v2_delivery_context
+    for number in range(document_count):
+        _plan(user, department, accepted, str(number), f"PDF {number}".encode())
+    publication = _generation(department, scope, 1)
+    build_document_v2_generation(publication=publication)
+    manifest = build_document_v2_manifest(publication=publication)
+
+    class CountedDocument(dict):
+        identity_reads = 0
+
+        def get(self, key, default=None):
+            if key == "artifact_id":
+                type(self).identity_reads += 1
+            return super().get(key, default)
+
+    manifest.payload["documents"] = [CountedDocument(d) for d in manifest.payload["documents"]]
+    # Keep real frozen adapter/key/reference validation; instrument only the
+    # decoded manifest returned from storage, without rewriting it.
+    with CaptureQueriesContext(connection) as queries:
+        candidate = restore_candidates(DatasetPublication.objects.filter(pk=publication.pk)).get()
+    assert len(queries) == 2
+    monkeypatch.setattr(
+        DocumentGenerationManifest.objects,
+        "filter",
+        lambda **kwargs: SimpleNamespace(first=lambda: manifest),
+    )
+    validate_ready_document_generation(publication, historical=True)
+    assert CountedDocument.identity_reads == document_count
+    CountedDocument.identity_reads = 0
+    candidate.document_generation_manifest = manifest
+    candidate.status, candidate.artifact_status, candidate.artifact_ready = (
+        "SUPERSEDED",
+        "READY",
+        True,
+    )
+    with CaptureQueriesContext(connection) as queries:
+        assert publication_restore_blocked_reason(candidate, scope=scope) == ""
+    assert len(queries) == 0
+    assert CountedDocument.identity_reads == document_count

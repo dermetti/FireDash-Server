@@ -113,6 +113,7 @@ def publication_scope_queryset(department, *, include_station: bool = True):
     """
     fields = [
         "id",
+        "scope_type",
         "dataset_type_code",
         "source_revision",
         "current_source_fingerprint",

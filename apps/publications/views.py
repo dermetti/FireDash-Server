@@ -25,7 +25,13 @@ from apps.publications.builders import build_source_payload
 from apps.publications.diffs import source_diff
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.registry import get_dataset_definition
-from apps.publications.restore import publication_restore_blocked_reason, restore_candidates
+from apps.publications.restore import (
+    RESTORE_PRESENTATION_FIELDS,
+    publication_restore_blocked_reason,
+    publication_restore_metadata_blocked_reason,
+    restore_candidates,
+    scopes_with_eligible_predecessor,
+)
 from apps.publications.services import (
     PublicationError,
     build_staged_publication,
@@ -103,7 +109,7 @@ def _row_actions(row: dict[str, Any]) -> dict[str, bool]:
 
 def _decorate_scope_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     scope_ids = [row["scope_id"] for row in rows]
-    predecessor_versions: dict[object, list[int]] = {}
+    eligible_scope_ids = scopes_with_eligible_predecessor(scope_ids)
     busy_scopes = set(
         PublicationJob.objects.filter(
             scope_state_id__in=scope_ids, status__in=("PENDING", "RUNNING")
@@ -114,30 +120,12 @@ def _decorate_scope_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             scope_state_id__in=scope_ids, status__in=("STAGED", "BUILDING", "READY_FOR_REVIEW")
         ).values_list("scope_state_id", flat=True)
     )
-    if scope_ids:
-        for publication in restore_candidates(
-            DatasetPublication.objects.filter(
-                scope_state_id__in=scope_ids,
-                status=DatasetPublication.Status.SUPERSEDED,
-            ).select_related("scope_state")
-        ):
-            if not publication_restore_blocked_reason(publication, scope=publication.scope_state):
-                predecessor_versions.setdefault(publication.scope_state_id, []).append(
-                    publication.version_number
-                )
     for row in rows:
         row["is_file_publication"] = row["dataset_type_code"] in {
             "department_files",
             "station_files",
         }
-        current_version = row["distributed_version"]
-        row["has_eligible_predecessor"] = bool(
-            current_version is not None
-            and any(
-                version_number < current_version
-                for version_number in predecessor_versions.get(row["scope_id"], [])
-            )
-        )
+        row["has_eligible_predecessor"] = row["scope_id"] in eligible_scope_ids
         row["actions"] = _row_actions(row)
         row["actions"]["rebuild"] = row["actions"]["rebuild"] and row["scope_id"] not in busy_scopes
         row["rebuild_unavailable_reason"] = (
@@ -382,10 +370,12 @@ def _scope_title(scope: DatasetScopeState) -> str:
     )
 
 
-def _scope_history_context(scope: DatasetScopeState, page_number) -> dict[str, Any]:
+def _scope_history_context(
+    scope: DatasetScopeState, page_number, *, has_eligible_predecessor=None
+) -> dict[str, Any]:
     publications = (
-        restore_candidates(DatasetPublication.objects.filter(scope_state=scope))
-        .select_related("created_by", "published_by")
+        DatasetPublication.objects.filter(scope_state=scope)
+        .only(*RESTORE_PRESENTATION_FIELDS)
         .order_by("-version_number")
     )
     page = Paginator(publications, HISTORY_PAGE_SIZE).get_page(page_number)
@@ -394,18 +384,45 @@ def _scope_history_context(scope: DatasetScopeState, page_number) -> dict[str, A
         scope_state=scope,
         status__in=(DatasetPublication.Status.STAGED, DatasetPublication.Status.BUILDING),
     ).exists()
-    predecessors = restore_candidates(
-        DatasetPublication.objects.filter(
-            scope_state=scope, status=DatasetPublication.Status.SUPERSEDED
-        )
+    if has_eligible_predecessor is None:
+        has_eligible_predecessor = scope.id in scopes_with_eligible_predecessor([scope.id])
+    document = (
+        get_dataset_definition(scope.dataset_type_code).artifact_format == "document-manifest-v2"
     )
-    eligible_versions = [
-        p.version_number
-        for p in predecessors
-        if not publication_restore_blocked_reason(p, scope=scope)
+    visible = list(page.object_list)
+    document_ids = [
+        p.id
+        for p in visible
+        if document
+        and p.status not in ("OBSOLETE", "FAILED", "CANCELLED", "REJECTED")
+        and not publication_restore_metadata_blocked_reason(p, scope=scope, historical=False)
     ]
+    details = (
+        {
+            p.id: p
+            for p in restore_candidates(
+                DatasetPublication.objects.filter(
+                    pk__in=document_ids,
+                    document_generation_manifest__isnull=False,
+                    document_generation_key__isnull=False,
+                )
+            )
+        }
+        if document_ids
+        else {}
+    )
     for publication in page.object_list:
-        reason = publication_restore_blocked_reason(publication, scope=scope, historical=False)
+        reason = publication_restore_metadata_blocked_reason(
+            publication, scope=scope, historical=False
+        )
+        if document and not reason:
+            reason = (
+                publication_restore_blocked_reason(
+                    details[publication.id], scope=scope, historical=False
+                )
+                if publication.id in details
+                else "Incomplete document generation"
+            )
         publication.delivery_available = not reason and publication.status != "OBSOLETE"
         publication.rollback_blocked_reason = (
             reason if publication.status == DatasetPublication.Status.SUPERSEDED else ""
@@ -416,9 +433,7 @@ def _scope_history_context(scope: DatasetScopeState, page_number) -> dict[str, A
             and not has_live_attempt
         )
         publication.can_delete = publication.status == DatasetPublication.Status.SUPERSEDED or (
-            publication.id == current_id
-            and any(v < publication.version_number for v in eligible_versions)
-            and not has_live_attempt
+            publication.id == current_id and has_eligible_predecessor and not has_live_attempt
         )
         publication.can_delete_active = publication.id == current_id and publication.can_delete
         publication.can_delete_historical = (
@@ -544,7 +559,14 @@ def publication_scope_status(request: HttpRequest, scope_id) -> HttpResponse:
 @require_http_methods(["GET"])
 def publication_scope_detail(request: HttpRequest, scope_id) -> HttpResponse:
     scope = _scope_or_403(request, scope_id)
-    context = _scope_row_context(scope) | _scope_history_context(scope, request.GET.get("page"))
+    context = _scope_row_context(scope)
+    context.update(
+        _scope_history_context(
+            scope,
+            request.GET.get("page"),
+            has_eligible_predecessor=context["row"]["has_eligible_predecessor"],
+        )
+    )
     context.update({"scope": scope, "scope_title": _scope_title(scope)})
     return render(request, "publications/scope_detail.html", context)
 

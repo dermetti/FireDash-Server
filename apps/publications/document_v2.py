@@ -453,10 +453,18 @@ def validate_ready_document_generation(publication, *, historical=False):
         or not all(isinstance(document, dict) for document in payload["documents"])
     ):
         raise DocumentV2Error("Document v2 generation membership is incomplete.")
+    documents_by_artifact_id = {}
+    for document in payload["documents"]:
+        identity = document.get("artifact_id")
+        if not isinstance(identity, str) or identity in documents_by_artifact_id:
+            raise DocumentV2Error("Invalid or duplicate document artifact identity.")
+        documents_by_artifact_id[identity] = document
+    if set(documents_by_artifact_id) != {str(ref.document_artifact_id) for ref in refs}:
+        raise DocumentV2Error("Document v2 generation membership is incomplete.")
     for ref in refs:
         artifact = ref.document_artifact
         entry = entries.get(str(ref.canonical_document_id))
-        documents = [d for d in payload["documents"] if d.get("artifact_id") == str(artifact.id)]
+        document = documents_by_artifact_id[str(artifact.id)]
         if (
             not entry
             or not artifact.artifact_path
@@ -470,25 +478,24 @@ def validate_ready_document_generation(publication, *, historical=False):
             or len(bytes(artifact.signature)) != 64
             or artifact.signature_algorithm != "Ed25519"
             or not artifact.signing_key_version
-            or len(documents) != 1
             or artifact.dataset_type_code != publication.dataset_type_code
             or artifact.canonical_document_id != ref.canonical_document_id
             or artifact.sanitized_pdf_sha256 != entry.sanitized_pdf_sha256
-            or documents[0].get(adapter.manifest_metadata_key) != entry.metadata
-            or documents[0].get("ciphertext_sha256") != artifact.ciphertext_sha256
-            or type(documents[0].get("ciphertext_size")) is not int
-            or documents[0].get("ciphertext_size") != artifact.ciphertext_size
-            or documents[0].get("sanitized_pdf_sha256") != artifact.sanitized_pdf_sha256
-            or documents[0].get("nonce") != base64.b64encode(bytes(artifact.nonce)).decode("ascii")
-            or documents[0].get("download_path")
+            or document.get(adapter.manifest_metadata_key) != entry.metadata
+            or document.get("ciphertext_sha256") != artifact.ciphertext_sha256
+            or type(document.get("ciphertext_size")) is not int
+            or document.get("ciphertext_size") != artifact.ciphertext_size
+            or document.get("sanitized_pdf_sha256") != artifact.sanitized_pdf_sha256
+            or document.get("nonce") != base64.b64encode(bytes(artifact.nonce)).decode("ascii")
+            or document.get("download_path")
             != (
                 f"/api/v1/tablet/document-generations/{publication.id}/artifacts/{artifact.id}/download"
             )
-            or documents[0].get("generation_key_wrapping_algorithm") != "AES-KW-RFC3394"
-            or not isinstance(documents[0].get("generation_wrapped_cek"), str)
-            or not re.fullmatch(r"[A-Za-z0-9+/]{54}==", documents[0]["generation_wrapped_cek"])
+            or document.get("generation_key_wrapping_algorithm") != "AES-KW-RFC3394"
+            or not isinstance(document.get("generation_wrapped_cek"), str)
+            or not re.fullmatch(r"[A-Za-z0-9+/]{54}==", document["generation_wrapped_cek"])
             or any(
-                documents[0].get(field) != getattr(artifact, field)
+                document.get(field) != getattr(artifact, field)
                 for field in (
                     "encryption_algorithm",
                     "wrapping_algorithm",
@@ -497,7 +504,7 @@ def validate_ready_document_generation(publication, *, historical=False):
                     "signing_key_version",
                 )
             )
-            or documents[0].get("signature")
+            or document.get("signature")
             != base64.b64encode(bytes(artifact.signature)).decode("ascii")
         ):
             raise DocumentV2Error("Artifact does not match frozen document content.")
