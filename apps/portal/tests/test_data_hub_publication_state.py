@@ -428,7 +428,7 @@ def test_system_hub_preserves_rescue_configuration_without_email_card(data_hub_s
         for module in response.context["modules"]
     )
     goods, rescue = HubCards(response.content.decode()).cards
-    _assert_navigation_card(goods, title="Dangerous Goods", icon="warning",
+    _assert_navigation_card(goods, title="Dangerous Goods", icon="flask",
                             url=reverse("ingestion-dangerous-goods"), system=True)
     assert goods["attrs"]["data-module-id"] == "dangerous_goods"
     assert "Source revision" in goods["text"] and "Not published" in goods["text"]
@@ -524,8 +524,10 @@ def test_system_goods_state_and_read_only_department_card(data_hub_scope, client
     goods = cards[-1]
     assert goods["tag"] == "article" and goods["attrs"]["data-module-id"] == "dangerous_goods"
     assert not [tag for tag, _ in goods["elements"] if tag in {"a", "button", "form"}]
-    icon = render_to_string("components/_data_hub_icon.html", {"icon": "warning"}).strip()
+    icon = render_to_string("components/_data_hub_icon.html", {"icon": "flask"}).strip()
     assert icon in goods["html"]
+    assert "?" not in goods["text"]
+    assert ("&mdash;" in response.content.decode()) == (not published)
     assert "System managed" in goods["text"]
     assert ("v17" in goods["text"]) == published
     assert ("Update scheduled" in goods["text"]) == published
