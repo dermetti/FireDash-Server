@@ -702,10 +702,18 @@ class FakeIPadClient:
                 fail(f"{dataset_type}: minimum_app_version must be string or null")
             if not isinstance(dataset["artifact_format"], str) or not dataset["artifact_format"]:
                 fail(f"{dataset_type}: artifact_format must be a non-empty string")
+            if dataset_type in {
+                "department_fire_plans",
+                "department_klgv_plans",
+                "department_files",
+                "station_files",
+            } and (dataset["artifact_format"], dataset["schema_version"]) != (
+                "document-manifest-v2",
+                2,
+            ):
+                fail(f"{dataset_type}: requires document-manifest-v2 schema 2")
             if dataset["artifact_format"] == "document-manifest-v2":
                 expected = f"/api/v1/tablet/document-generations/{publication_id}/manifest"
-                if dataset_type == "department_fire_plans":
-                    expected = f"/api/v1/tablet/fire-plan-generations/{publication_id}/manifest"
                 if dataset.get("manifest_url") != expected:
                     fail(f"{dataset_type}: manifest_url mismatch")
                 continue

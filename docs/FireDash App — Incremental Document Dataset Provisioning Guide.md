@@ -8,8 +8,9 @@ All four datasets use schema 2, the same cryptographic protocol and generic endp
 - `department_files` and `station_files`: `file` metadata and complete library/folder snapshots.
 
 The server has one delivery implementation. There is no ZIP fallback, separate Fire Plan
-protocol, redirect, or cutover control. Client implementation and Fake-iPad consolidation
-belong to Phase 3; this document does not authorize any installation reset or adoption.
+protocol, redirect, or cutover control. The Fake-iPad verifier now uses this common protocol for all four datasets.
+See [owner-controlled release acceptance](phase3-document-acceptance.md); this document
+does not authorize any installation reset or adoption.
 
 Use one reusable document synchronization engine, with dataset adapters only for metadata
 validation and presentation. Discover generations from the signed complete tablet manifest's

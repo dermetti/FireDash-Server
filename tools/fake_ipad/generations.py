@@ -87,31 +87,26 @@ def binary(value: Any, size: int, label: str) -> bytes:
 
 
 def endpoint(dataset: dict) -> str:
-    family = (
-        "fire-plan-generations"
-        if dataset["type"] == "department_fire_plans"
-        else "document-generations"
-    )
-    return f"/api/v1/tablet/{family}/{dataset['publication_id']}"
+    return f"/api/v1/tablet/document-generations/{dataset['publication_id']}"
 
 
 def validate_generation(payload: dict, dataset: dict) -> list[dict]:
     """Validate the entire signed snapshot before fetching any document."""
     fire = dataset["type"] == "department_fire_plans"
     library = dataset["type"] in {"department_files", "station_files"}
-    fields = {"format", "publication_id", "version", "schema_version", "documents"}
-    if not fire:
-        fields.add("dataset_type")
+    fields = {"format", "publication_id", "version", "schema_version", "documents", "dataset_type"}
     if library:
         fields.update({"library", "folders", "source_revision"})
     exact(payload, fields, "generation")
-    if payload["format"] != ("fire-plan-generation-v2" if fire else "document-generation-v2"):
+    if payload["format"] != "document-generation-v2":
         fail("generation: format mismatch")
     for key in ("publication_id", "version", "schema_version"):
         if payload[key] != dataset[key] or type(payload[key]) is not type(dataset[key]):
             fail(f"generation: {key} mismatch")
-    if not fire and payload["dataset_type"] != dataset["type"]:
+    if payload["dataset_type"] != dataset["type"]:
         fail("generation: dataset_type mismatch")
+    integer(payload["version"], "generation.version", 1)
+    integer(payload["schema_version"], "generation.schema_version", 2)
     if payload["schema_version"] != 2:
         fail("generation: schema must be 2")
     folders = {}
@@ -163,7 +158,7 @@ def validate_generation(payload: dict, dataset: dict) -> list[dict]:
             {"id", "name", "folder_id", "size_bytes", "sha256"} if library else PLAN_FIELDS
         )
         if fire:
-            meta_fields = meta_fields | {"fsd_location", "bmz_location", "rwa_info", "path"}
+            meta_fields = meta_fields | {"fsd_location", "bmz_location", "rwa_info"}
         meta = exact(document[metadata_key], meta_fields, metadata_key)
         doc_id = identity(meta["id"], f"{metadata_key}.id")
         if doc_id in identities:
@@ -184,7 +179,6 @@ def validate_generation(payload: dict, dataset: dict) -> list[dict]:
                 "page_count",
                 "longitude",
                 "latitude",
-                "path",
             }:
                 if meta[field] is not None and not isinstance(meta[field], str):
                     fail(f"{metadata_key}.{field}: expected string or null")
@@ -197,8 +191,6 @@ def validate_generation(payload: dict, dataset: dict) -> list[dict]:
                 or not (-180 <= lon <= 180 and -90 <= lat <= 90)
             ):
                 fail("plan: invalid coordinates")
-            if fire and meta["path"] != f"plans/{doc_id}.pdf":
-                fail("fire_plan: invalid legacy metadata path")
         for field in ("sanitized_pdf_sha256", "ciphertext_sha256"):
             digest(document[field])
         digest(meta["sha256"])
@@ -277,9 +269,7 @@ def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
     )
     client.verification_stage("generation_hpke")
     info = {
-        "protocol": "firedash-fire-plan-generation-hpke-v2"
-        if dataset["type"] == "department_fire_plans"
-        else "firedash-document-generation-hpke-v2",
+        "protocol": "firedash-document-generation-hpke-v2",
         "publication_id": dataset["publication_id"],
         "installation_id": config["installation_id"],
         "tablet_id": config["tablet_id"],

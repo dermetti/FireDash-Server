@@ -19,7 +19,7 @@ from tools.fake_ipad.generations import RESPONSE_FIELDS, endpoint
 from tools.fake_ipad.output import Output
 from tools.fake_ipad.state import DeviceState
 from tools.fake_ipad.transport import HttpResponse
-from tools.test_fake_ipad import _dangerous_goods_document, _fire_plan_archive, _fire_plan_entry
+from tools.test_fake_ipad import _dangerous_goods_document
 
 
 def uid():
@@ -172,14 +172,13 @@ class Delivery:
         library = kind in {"department_files", "station_files"}
         generation_key = os.urandom(32)
         wire = {
-            "format": "fire-plan-generation-v2" if fire else "document-generation-v2",
+            "format": "document-generation-v2",
             "publication_id": descriptor["publication_id"],
             "version": 1,
             "schema_version": 2,
             "documents": [],
         }
-        if not fire:
-            wire["dataset_type"] = kind
+        wire["dataset_type"] = kind
         if library:
             wire.update(
                 library={"id": uid(), "name": "Bibliothek ü", "scope": descriptor["scope"].copy()},
@@ -234,7 +233,6 @@ class Delivery:
                         fsd_location=None,
                         bmz_location=None,
                         rwa_info=None,
-                        path=f"plans/{doc_id}.pdf",
                     )
                 document["fire_plan" if fire else "klgv_plan"] = meta
             wire["documents"].append(document)
@@ -242,9 +240,7 @@ class Delivery:
         info, encrypted = self.hpke(
             generation_key,
             descriptor,
-            "firedash-fire-plan-generation-hpke-v2"
-            if fire
-            else "firedash-document-generation-hpke-v2",
+            "firedash-document-generation-hpke-v2",
         )
         wire.update(
             signature_algorithm="Ed25519",
@@ -427,8 +423,9 @@ def test_empty_and_nonempty_file_libraries(delivery, count, with_folder, kind):
         ),
     ],
 )
-def test_generation_rejects_wrong_complete_hpke_binding(delivery, field, value):
-    _, wire = delivery.add_v2("department_files")
+@pytest.mark.parametrize("kind", ["department_fire_plans", "department_files"])
+def test_generation_rejects_wrong_complete_hpke_binding(delivery, field, value, kind):
+    _, wire = delivery.add_v2(kind)
     wire["generation_key_grant"]["info"][field] = value
     delivery.seal_main()
     with pytest.raises(ClientError, match="HPKE binding"):
@@ -450,28 +447,33 @@ def test_grant_open_uses_actual_hpke_context(delivery, kind):
 
 
 @pytest.mark.parametrize(
-    "fault",
+    "kind,fault",
     [
-        "signature",
-        "key-version",
-        "publication",
-        "version",
-        "schema",
-        "dataset-type",
-        "scope",
-        "nonce",
-        "algorithm",
-        "wrapped-cek",
-        "gcm",
-        "plaintext-hash",
-        "plaintext-size",
-        "ciphertext",
-        "ciphertext-size",
-        "download-origin",
+        (kind, fault)
+        for kind in ("department_fire_plans", "department_files")
+        for fault in (
+            "signature",
+            "key-version",
+            "publication",
+            "version",
+            "schema",
+            "dataset-type",
+            "scope",
+            "nonce",
+            "algorithm",
+            "wrapped-cek",
+            "gcm",
+            "plaintext-hash",
+            "plaintext-size",
+            "ciphertext",
+            "ciphertext-size",
+            "download-origin",
+        )
+        if kind == "department_files" or fault != "plaintext-size"
     ],
 )
-def test_v2_crypto_and_binding_fail_closed(delivery, fault):
-    descriptor, wire = delivery.add_v2("department_files")
+def test_v2_crypto_and_binding_fail_closed(delivery, fault, kind):
+    descriptor, wire = delivery.add_v2(kind)
     document = wire["documents"][0]
     if fault == "signature":
         wire["signature"] = b64(os.urandom(64))
@@ -488,7 +490,7 @@ def test_v2_crypto_and_binding_fail_closed(delivery, fault):
             uid() if fault == "publication" else "station_files" if fault == "dataset-type" else 3
         )
     elif fault == "scope":
-        wire["library"]["scope"] = {"type": "SYSTEM"}
+        wire["generation_key_grant"]["info"]["scope"] = {"type": "SYSTEM"}
     elif fault == "nonce":
         document["nonce"] = b64(b"short")
     elif fault == "algorithm":
@@ -498,7 +500,9 @@ def test_v2_crypto_and_binding_fail_closed(delivery, fault):
     elif fault == "gcm":
         document["nonce"] = b64(os.urandom(12))
     elif fault == "plaintext-hash":
-        document["file"]["sha256"] = document["sanitized_pdf_sha256"] = "0" * 64
+        document["fire_plan" if kind == "department_fire_plans" else "file"]["sha256"] = document[
+            "sanitized_pdf_sha256"
+        ] = "0" * 64
     elif fault == "plaintext-size":
         document["file"]["size_bytes"] += 1
     elif fault == "ciphertext":
@@ -634,10 +638,13 @@ def test_304_requires_complete_current_verified_snapshot(nine, damage):
     assert nine.client.verified_snapshot_etag(nine.config) == nine.etag
 
 
-def test_historical_fire_plan_zip_remains_supported(delivery):
-    delivery.add_v1("department_fire_plans", _fire_plan_archive([_fire_plan_entry()]), "zip")
+def test_fire_plan_zip_is_rejected_even_if_optional(delivery):
+    descriptor = delivery.add_v1("department_fire_plans", b"obsolete ZIP", "zip")
+    descriptor["required"] = False
     delivery.seal_main()
-    assert delivery.client.verify()["datasets"]["department_fire_plans"]["fire_plans"] == 1
+    with pytest.raises(ClientError, match="requires document-manifest-v2 schema 2"):
+        delivery.client.verify()
+    assert "verified_snapshot" not in delivery.state.state
 
 
 def test_adoption_runs_complete_nine_dataset_verification(nine, monkeypatch):
@@ -922,3 +929,194 @@ def test_generation_loads_its_own_exact_signing_key_version(delivery, monkeypatc
         delivery.state.cached_signing_key("generation-2")
         == generation_signer.public_key().public_bytes_raw()
     )
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_canonical_fire_plan_generation_metadata_and_empty(delivery, count):
+    descriptor, wire = delivery.add_v2("department_fire_plans", count=count)
+    assert descriptor["manifest_url"] == (
+        f"/api/v1/tablet/document-generations/{descriptor['publication_id']}/manifest"
+    )
+    assert wire["format"] == "document-generation-v2"
+    assert wire["dataset_type"] == descriptor["type"]
+    for document in wire["documents"]:
+        assert set(document["fire_plan"]) == {
+            "id",
+            "external_identifier",
+            "object_name",
+            "address",
+            "postal_code",
+            "city",
+            "fsd_location",
+            "bmz_location",
+            "rwa_info",
+            "longitude",
+            "latitude",
+            "sha256",
+            "page_count",
+        }
+        document["fire_plan"].update(
+            fsd_location="FSD", bmz_location="BMZ", rwa_info="RWA", longitude=8.1, latitude=50.2
+        )
+        assert document["download_path"] == (
+            f"/api/v1/tablet/document-generations/{descriptor['publication_id']}"
+            f"/artifacts/{document['artifact_id']}/download"
+        )
+    delivery.seal_generation(wire)
+    delivery.seal_main()
+    assert delivery.client.verify()["datasets"][descriptor["type"]]["documents"] == count
+    assert not (delivery.state.state_dir / "last-plaintext").exists()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "endpoint",
+        "artifact-endpoint",
+        "format",
+        "missing-type",
+        "wrong-type",
+        "path",
+        "missing-document-id",
+        "duplicate-document",
+        "duplicate-artifact",
+        "boolean-version",
+        "boolean-size",
+        "boolean-longitude",
+        "boolean-page-count",
+        "missing-fsd",
+    ],
+)
+def test_fire_plan_obsolete_or_malformed_generation_never_commits(delivery, fault):
+    descriptor, wire = delivery.add_v2("department_fire_plans", count=2)
+    document = wire["documents"][0]
+    meta = document["fire_plan"]
+    if fault == "endpoint":
+        descriptor["manifest_url"] = descriptor["manifest_url"].replace(
+            "document-generations", "fire-plan-generations"
+        )
+    elif fault == "artifact-endpoint":
+        document["download_path"] = document["download_path"].replace(
+            "document-generations", "fire-plan-generations"
+        )
+    elif fault == "format":
+        wire["format"] = "fire-plan-generation-v2"
+    elif fault == "missing-type":
+        wire.pop("dataset_type")
+    elif fault == "wrong-type":
+        wire["dataset_type"] = "department_klgv_plans"
+    elif fault == "path":
+        meta["path"] = f"plans/{meta['id']}.pdf"
+    elif fault == "missing-document-id":
+        meta.pop("id")
+    elif fault == "duplicate-document":
+        wire["documents"][1]["fire_plan"]["id"] = meta["id"]
+    elif fault == "duplicate-artifact":
+        wire["documents"][1]["artifact_id"] = document["artifact_id"]
+    elif fault == "boolean-version":
+        wire["version"] = True
+    elif fault == "boolean-size":
+        document["ciphertext_size"] = True
+    elif fault == "boolean-longitude":
+        meta.update(longitude=True, latitude=50)
+    elif fault == "boolean-page-count":
+        meta["page_count"] = True
+    else:
+        meta.pop("fsd_location")
+    delivery.seal_generation(wire)
+    delivery.seal_main()
+    with pytest.raises(ClientError):
+        delivery.client.verify()
+    assert "verified_snapshot" not in delivery.state.state
+    assert not delivery.state.manifest_path.exists()
+    assert not any("/artifacts/" in path for _, path, _ in delivery.calls)
+
+
+@pytest.mark.parametrize("where", ["generation", "ciphertext"])
+def test_unconditional_304_cannot_supply_document_content(delivery, where):
+    descriptor, wire = delivery.add_v2("department_fire_plans")
+    delivery.seal_main()
+    path = (
+        descriptor["manifest_url"]
+        if where == "generation"
+        else wire["documents"][0]["download_path"]
+    )
+    delivery.failures[path] = 304
+    with pytest.raises(ClientError, match="304"):
+        delivery.client.verify()
+    assert "verified_snapshot" not in delivery.state.state
+    assert not delivery.state.manifest_path.exists()
+
+
+@pytest.mark.parametrize("diameter,valid", [(0, True), (-1, False), (True, False), (1.5, False)])
+def test_hydrant_zero_diameter_remains_valid(delivery, diameter, valid):
+    delivery.add_v1(
+        "department_hydrants",
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "schema_version": 1,
+                "source_revision": 1,
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [8, 50]},
+                        "properties": {
+                            "external_identifier": "A",
+                            "hydrant_type": "underground",
+                            "diameter_mm": diameter,
+                            "status": "active",
+                        },
+                    }
+                ],
+            }
+        ).encode(),
+        "geojson",
+    )
+    delivery.seal_main()
+    if valid:
+        assert delivery.client.verify()["datasets"]["department_hydrants"]["features"] == 1
+    else:
+        with pytest.raises(ClientError, match="diameter"):
+            delivery.client.verify()
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "department_fire_plans",
+        "department_klgv_plans",
+        "department_files",
+        "station_files",
+    ],
+)
+def test_document_hpke_uses_exact_canonical_authenticated_info(delivery, monkeypatch, kind):
+    descriptor, _ = delivery.add_v2(kind)
+    expected = {
+        "protocol": "firedash-document-generation-hpke-v2",
+        "publication_id": descriptor["publication_id"],
+        "installation_id": delivery.config["installation_id"],
+        "tablet_id": delivery.config["tablet_id"],
+        "scope": {
+            "dataset_type_code": kind,
+            "department_id": delivery.config["department_id"],
+            "station_id": delivery.config["station_id"] if kind == "station_files" else None,
+        },
+        "version_number": 1,
+        "schema_version": 2,
+    }
+    original = delivery.crypto.hpke_open
+    calls = []
+
+    def checked_open(encrypted, *, info):
+        calls.append(info)
+        assert len(encrypted) == 65 + 48
+        assert info == json.dumps(expected, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return original(encrypted, info=info)
+
+    monkeypatch.setattr(delivery.crypto, "hpke_open", checked_open)
+    # DeviceState reloads the same persisted identity for verification.
+    monkeypatch.setattr(delivery.state, "load_private_key", lambda: delivery.crypto)
+    delivery.seal_main()
+    delivery.client.verify()
+    assert len(calls) == 1
