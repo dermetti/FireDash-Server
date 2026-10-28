@@ -1,10 +1,8 @@
 """Lifecycle regression tests for automatically-dirtied publication datasets."""
 
 import hashlib
-import io
 import json
 import uuid
-import zipfile
 from datetime import timedelta
 
 import pytest
@@ -16,7 +14,7 @@ from apps.assignments.services import create_temporary_assignment, end_temporary
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
 from apps.personnel.services import create_person, offboard_person, set_retention_policy
-from apps.publications.builders import build_artifact
+from apps.publications.builders import build_artifact, build_source_payload
 from apps.publications.models import DatasetScopeState, PublicationJob
 from apps.publications.registry import get_dataset_definition
 from apps.reference_data.models import FirePlan, Hydrant
@@ -213,19 +211,13 @@ def test_inactive_fire_plan_excluded_from_rebuilt_artifact(lifecycle_context, tm
 
     definition = get_dataset_definition("department_fire_plans")
     with override_settings(REFERENCE_DATA_ACCEPTED_ROOT=accepted_root):
-        active_artifact = build_artifact(
-            definition=definition, department=department, station=None, source_revision=1
-        )
-    with zipfile.ZipFile(io.BytesIO(active_artifact)) as archive:
-        manifest = json.loads(archive.read("manifest.json"))
+        manifest = build_source_payload(definition=definition, department=department, station=None)
     assert [entry["id"] for entry in manifest["fire_plans"]] == [str(plan.id)]
 
     set_fire_plan_active(actor=admin, fire_plan=plan, active=False)
 
     with override_settings(REFERENCE_DATA_ACCEPTED_ROOT=accepted_root):
-        rebuilt = build_artifact(
-            definition=definition, department=department, station=None, source_revision=2
+        rebuilt_manifest = build_source_payload(
+            definition=definition, department=department, station=None
         )
-    with zipfile.ZipFile(io.BytesIO(rebuilt)) as archive:
-        rebuilt_manifest = json.loads(archive.read("manifest.json"))
     assert rebuilt_manifest["fire_plans"] == []

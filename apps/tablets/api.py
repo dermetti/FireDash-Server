@@ -35,6 +35,7 @@ from rest_framework.views import APIView
 from apps.authorization.services import minimum_supported_app_version
 from apps.outbound_mail.report_delivery import ReportDeliveryCode
 from apps.outbound_mail.report_delivery_requests import submit_tablet_report_delivery
+from apps.publications.document_authorization import _authorized_generation
 from apps.publications.document_v2 import (
     generation_hpke_context as document_generation_hpke_context,
 )
@@ -42,7 +43,6 @@ from apps.publications.document_v2 import (
     request_generation_key_grant,
 )
 from apps.publications.fire_plan_v2_delivery import (
-    _authorized_generation,
     generation_hpke_context,
     request_fire_plan_v2_generation_key_grant,
 )
@@ -939,6 +939,11 @@ class DocumentGenerationManifestView(InstallationAPIView):
             raise exceptions.NotFound("Document generation is not available.") from error
         except ManifestError as error:
             raise _problem_from_service(error) from error
+        if grant.status in (
+            DocumentGenerationKeyGrant.Status.FAILED,
+            DocumentGenerationKeyGrant.Status.REVOKED,
+        ):
+            raise exceptions.PermissionDenied("Document generation key is not available.")
         if grant.status != DocumentGenerationKeyGrant.Status.READY:
             return Response(status=status.HTTP_202_ACCEPTED, headers={"Retry-After": "5"})
         payload = dict(manifest.payload)

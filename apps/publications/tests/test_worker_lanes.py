@@ -18,10 +18,6 @@ from apps.publications.work_cycle import (
 @pytest.fixture(autouse=True)
 def isolated_document_work():
     with (
-        patch(
-            "apps.publications.work_cycle.process_next_fire_plan_v2_generation_key_grant",
-            return_value=None,
-        ),
         patch("apps.publications.work_cycle.process_next_generation_key_grant", return_value=None),
         patch("apps.file_library.publication.initialize_missing_libraries") as initialize,
     ):

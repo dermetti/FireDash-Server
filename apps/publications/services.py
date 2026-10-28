@@ -3,7 +3,7 @@ from datetime import datetime, time, timedelta
 from typing import Any
 
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import DatabaseError, IntegrityError, transaction
 from django.db.models import Max, OuterRef, Q, Subquery
 from django.utils import timezone
 
@@ -143,12 +143,7 @@ def _allocate_staged_publication(
         )["maximum"]
         or 0
     ) + 1
-    schema_version = (
-        2
-        if scope.dataset_type_code == "department_fire_plans"
-        and scope.delivery_format == DatasetScopeState.DeliveryFormat.DOCUMENT_MANIFEST_V2
-        else definition.current_schema_version
-    )
+    schema_version = definition.current_schema_version
     return DatasetPublication.objects.create(
         scope_type=job.scope_type,
         department=job.department,
@@ -752,8 +747,8 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             "department_files",
             "station_files",
         }
-        if is_document_v2 and publication.dataset_type_code != "department_fire_plans":
-            # KLGV starts on v2: a legacy ZIP has no lifecycle or protocol purpose.
+        if is_document_v2:
+            # Document generations have no publication-level companion artifact.
             artifact = {}
         else:
             artifact = build_encrypted_artifact(
@@ -767,35 +762,24 @@ def build_claimed_job(*, job_id) -> PublicationJob:
                 ),
             )
         if is_document_v2:
-            from apps.publications.fire_plan_v2 import build_fire_plan_v2_generation
-            from apps.publications.fire_plan_v2_delivery import build_fire_plan_v2_manifest
+            from cryptography.hazmat.primitives.keywrap import InvalidUnwrap
 
-            if publication.dataset_type_code == "department_fire_plans":
-                build_fire_plan_v2_generation(publication=publication)
-                build_fire_plan_v2_manifest(publication=publication)
-            else:
-                from cryptography.hazmat.primitives.keywrap import InvalidUnwrap
+            from apps.publications.document_v2 import (
+                DocumentV2Error,
+                build_document_v2_generation,
+                build_document_v2_manifest,
+            )
+            from apps.publications.worker_grants import KeyGrantError
 
-                from apps.publications.document_v2 import (
-                    DocumentV2Error,
-                    build_document_v2_generation,
-                    build_document_v2_manifest,
-                )
-                from apps.publications.worker_grants import KeyGrantError
-
-                with transaction.atomic():
-                    publication = DatasetPublication.objects.select_for_update().get(
-                        pk=publication.pk
-                    )
-                    if publication.status != DatasetPublication.Status.BUILDING:
-                        return PublicationJob.objects.get(pk=job.id)
-                    try:
-                        build_document_v2_generation(publication=publication)
-                        build_document_v2_manifest(publication=publication)
-                    except (DocumentV2Error, KeyGrantError, InvalidUnwrap) as error:
-                        raise PublicationBuildError(
-                            "Document encryption or signing failed."
-                        ) from error
+            with transaction.atomic():
+                publication = DatasetPublication.objects.select_for_update().get(pk=publication.pk)
+                if publication.status != DatasetPublication.Status.BUILDING:
+                    return PublicationJob.objects.get(pk=job.id)
+                try:
+                    build_document_v2_generation(publication=publication)
+                    build_document_v2_manifest(publication=publication)
+                except (DocumentV2Error, KeyGrantError, InvalidUnwrap) as error:
+                    raise PublicationBuildError("Document encryption or signing failed.") from error
             if not _build_is_still_running(job_id=job.id):
                 terminal_publication = DatasetPublication.objects.get(pk=publication.id)
                 if terminal_publication.status in (
@@ -824,7 +808,7 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             error_message="Publication metadata is invalid.",
             error_category="validation",
         )
-    except IntegrityError as error:
+    except DatabaseError as error:
         # Only the publication closeout triggers (SQLSTATE P0001: the canonical
         # artifact-path and artifact-metadata guards) are known, per-publication
         # integrity failures. Those become FAILED with artifact compensation so
@@ -841,7 +825,7 @@ def build_claimed_job(*, job_id) -> PublicationJob:
         )
 
 
-def _is_publication_guard_error(error: IntegrityError) -> bool:
+def _is_publication_guard_error(error: DatabaseError) -> bool:
     """Return True for the publication closeout trigger guards (SQLSTATE P0001)."""
     cause = error.__cause__
     return getattr(cause, "sqlstate", None) == "P0001"
@@ -949,7 +933,6 @@ def finalize_publication_job(
         publication.dataset_type_code in {"department_files", "station_files"}
         and scope.source_revision != publication.source_revision
     ):
-
         _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
@@ -992,7 +975,6 @@ def finalize_publication_job(
         and not delivery_transition
         and not job.allow_clean_rebuild
     ):
-
         _schedule_artifact_removal(str(artifact.get("artifact_path", "")))
         publication.status = DatasetPublication.Status.OBSOLETE
         publication.source_snapshot = None
@@ -1127,7 +1109,6 @@ def fail_publication_job(
         if publication is not None:
             _schedule_artifact_removal(publication.artifact_path)
             if publication.status == DatasetPublication.Status.BUILDING:
-
                 publication.status = DatasetPublication.Status.FAILED
                 publication.artifact_status = DatasetPublication.ArtifactStatus.FAILED
                 publication.build_error = job.error_message
@@ -1187,7 +1168,6 @@ def recover_stale_jobs(*, timeout: timedelta, max_attempts: int = 3) -> int:
                 .first()
             )
             if publication is not None and publication.status == DatasetPublication.Status.BUILDING:
-
                 publication.status = DatasetPublication.Status.FAILED
                 publication.build_error = "Worker heartbeat timed out."
                 publication.save(update_fields=("status", "build_error"))

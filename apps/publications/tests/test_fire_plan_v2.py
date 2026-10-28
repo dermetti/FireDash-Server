@@ -8,12 +8,12 @@ from apps.accounts.models import User
 from apps.organizations.models import Department
 from apps.publications import artifacts
 from apps.publications.builders import PublicationBuildError, build_source_payload
-from apps.publications.fire_plan_v2 import build_fire_plan_v2_generation
+from apps.publications.document_v2 import build_document_v2_generation
 from apps.publications.models import (
     DatasetPublication,
     DatasetScopeState,
-    FirePlanDocumentArtifact,
-    PublicationFirePlanArtifactReference,
+    DocumentArtifact,
+    PublicationDocumentArtifactReference,
 )
 from apps.publications.registry import get_dataset_definition
 from apps.reference_data.models import FirePlan
@@ -74,7 +74,7 @@ def _building_publication(*, department, scope, version):
         dataset_type_code="department_fire_plans",
         scope_state=scope,
         version_number=version,
-        schema_version=1,
+        schema_version=2,
         source_revision=version,
         source_snapshot=snapshot,
         status=DatasetPublication.Status.BUILDING,
@@ -99,22 +99,27 @@ def test_v2_generation_is_complete_and_reuses_unchanged_artifacts(v2_context):
         pdf=b"PDF B",
     )
     generation_one = _building_publication(department=department, scope=scope, version=1)
-    references_one = build_fire_plan_v2_generation(publication=generation_one)
+    references_one = build_document_v2_generation(publication=generation_one)
 
-    assert {reference.fire_plan_id for reference in references_one} == {first.id, second.id}
+    assert {reference.canonical_document_id for reference in references_one} == {
+        first.id,
+        second.id,
+    }
     assert (
-        PublicationFirePlanArtifactReference.objects.filter(publication=generation_one).count() == 2
+        PublicationDocumentArtifactReference.objects.filter(publication=generation_one).count() == 2
     )
     artifact_ids = {
-        reference.fire_plan_id: reference.document_artifact_id for reference in references_one
+        reference.canonical_document_id: reference.document_artifact_id
+        for reference in references_one
     }
 
     generation_two = _building_publication(department=department, scope=scope, version=2)
-    references_two = build_fire_plan_v2_generation(publication=generation_two)
+    references_two = build_document_v2_generation(publication=generation_two)
     assert {
-        reference.fire_plan_id: reference.document_artifact_id for reference in references_two
+        reference.canonical_document_id: reference.document_artifact_id
+        for reference in references_two
     } == artifact_ids
-    assert FirePlanDocumentArtifact.objects.count() == 2
+    assert DocumentArtifact.objects.count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -134,37 +139,39 @@ def test_v2_metadata_change_reuses_and_pdf_change_creates_one_artifact(v2_contex
         identifier="B",
         pdf=b"PDF B",
     )
-    original = build_fire_plan_v2_generation(
+    original = build_document_v2_generation(
         publication=_building_publication(department=department, scope=scope, version=1)
     )
     original_ids = {
-        reference.fire_plan_id: reference.document_artifact_id for reference in original
+        reference.canonical_document_id: reference.document_artifact_id for reference in original
     }
 
     first.object_name = "Renamed only"
     first.save(update_fields=("object_name",))
-    metadata_generation = build_fire_plan_v2_generation(
+    metadata_generation = build_document_v2_generation(
         publication=_building_publication(department=department, scope=scope, version=2)
     )
     assert {
-        reference.fire_plan_id: reference.document_artifact_id for reference in metadata_generation
+        reference.canonical_document_id: reference.document_artifact_id
+        for reference in metadata_generation
     } == original_ids
-    assert FirePlanDocumentArtifact.objects.count() == 2
+    assert DocumentArtifact.objects.count() == 2
 
     changed_pdf = b"PDF A changed"
     first.sha256 = hashlib.sha256(changed_pdf).hexdigest()
     first.file_size = len(changed_pdf)
     first.save(update_fields=("sha256", "file_size"))
     (accepted_root / first.document_key).write_bytes(changed_pdf)
-    changed_generation = build_fire_plan_v2_generation(
+    changed_generation = build_document_v2_generation(
         publication=_building_publication(department=department, scope=scope, version=3)
     )
     changed_ids = {
-        reference.fire_plan_id: reference.document_artifact_id for reference in changed_generation
+        reference.canonical_document_id: reference.document_artifact_id
+        for reference in changed_generation
     }
     assert changed_ids[first.id] != original_ids[first.id]
     assert changed_ids[second.id] == original_ids[second.id]
-    assert FirePlanDocumentArtifact.objects.count() == 3
+    assert DocumentArtifact.objects.count() == 3
 
 
 @pytest.mark.django_db(transaction=True)
@@ -185,7 +192,7 @@ def test_v2_generation_membership_is_exactly_the_frozen_snapshot(v2_context):
         pdf=b"PDF B",
     )
     generation_one = _building_publication(department=department, scope=scope, version=1)
-    build_fire_plan_v2_generation(publication=generation_one)
+    build_document_v2_generation(publication=generation_one)
 
     third = _plan(
         admin=admin,
@@ -197,12 +204,12 @@ def test_v2_generation_membership_is_exactly_the_frozen_snapshot(v2_context):
     second.active = False
     second.save(update_fields=("active",))
     generation_two = _building_publication(department=department, scope=scope, version=2)
-    references_two = build_fire_plan_v2_generation(publication=generation_two)
-    assert {reference.fire_plan_id for reference in references_two} == {first.id, third.id}
-    assert not PublicationFirePlanArtifactReference.objects.filter(
-        publication=generation_two, fire_plan=second
+    references_two = build_document_v2_generation(publication=generation_two)
+    assert {reference.canonical_document_id for reference in references_two} == {first.id, third.id}
+    assert not PublicationDocumentArtifactReference.objects.filter(
+        publication=generation_two, canonical_document_id=second.id
     ).exists()
-    assert FirePlanDocumentArtifact.objects.count() == 3
+    assert DocumentArtifact.objects.count() == 3
 
 
 @pytest.mark.django_db(transaction=True)
@@ -226,8 +233,8 @@ def test_v2_rejects_cancelled_and_stale_snapshots_without_generation_membership(
     cancelled.status = DatasetPublication.Status.CANCELLED
     cancelled.save(update_fields=("status",))
     with pytest.raises(PublicationBuildError, match="building publication"):
-        build_fire_plan_v2_generation(publication=cancelled)
-    assert not PublicationFirePlanArtifactReference.objects.filter(publication=cancelled).exists()
+        build_document_v2_generation(publication=cancelled)
+    assert not PublicationDocumentArtifactReference.objects.filter(publication=cancelled).exists()
 
     stale = _building_publication(department=department, scope=scope, version=2)
     changed_pdf = b"PDF B changed"
@@ -235,7 +242,88 @@ def test_v2_rejects_cancelled_and_stale_snapshots_without_generation_membership(
     changed_plan.save(update_fields=("sha256",))
     (accepted_root / changed_plan.document_key).write_bytes(changed_pdf)
     with pytest.raises(PublicationBuildError, match="frozen metadata"):
-        build_fire_plan_v2_generation(publication=stale)
-    assert not PublicationFirePlanArtifactReference.objects.filter(publication=stale).exists()
-    assert not PublicationFirePlanArtifactReference.objects.filter(fire_plan=plan).exists()
+        build_document_v2_generation(publication=stale)
+    assert not PublicationDocumentArtifactReference.objects.filter(publication=stale).exists()
+    assert not PublicationDocumentArtifactReference.objects.filter(
+        canonical_document_id=plan.id
+    ).exists()
     assert stale.status == DatasetPublication.Status.BUILDING
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "missing",
+        "modified",
+        "unsafe_key",
+        "duplicate",
+        "bad_id",
+        "unknown_id",
+        "bad_hash",
+        "extra",
+        "not_list",
+        "department",
+        "station",
+        "page_count",
+        "coordinate",
+    ],
+)
+def test_invalid_accepted_source_fails_closed(v2_context, invalid):
+    from apps.organizations.models import Station
+
+    admin, department, scope, root = v2_context
+    plan = _plan(
+        admin=admin, department=department, accepted_root=root, identifier="A", pdf=b"PDF A"
+    )
+    publication = _building_publication(department=department, scope=scope, version=1)
+    entry = publication.source_snapshot["fire_plans"][0]
+    if invalid == "missing":
+        (root / plan.document_key).unlink()
+    elif invalid == "modified":
+        (root / plan.document_key).write_bytes(b"altered")
+    elif invalid == "unsafe_key":
+        plan.document_key = "../escape.pdf"
+        plan.save(update_fields=("document_key",))
+    elif invalid == "duplicate":
+        publication.source_snapshot["fire_plans"].append(entry.copy())
+    elif invalid == "bad_id":
+        entry["id"] = "not-a-uuid"
+    elif invalid == "unknown_id":
+        entry["id"] = str(uuid.uuid4())
+    elif invalid == "bad_hash":
+        entry["sha256"] = "x" * 64
+    elif invalid == "extra":
+        entry["unexpected"] = True
+    elif invalid == "not_list":
+        publication.source_snapshot["fire_plans"] = {}
+    elif invalid == "department":
+        publication.department = Department.objects.create(
+            name="Other", short_code="OTH", created_by=admin
+        )
+    elif invalid == "station":
+        publication.station = Station.objects.create(
+            department=department, name="Station", short_code="STA"
+        )
+    elif invalid == "page_count":
+        entry["page_count"] = True
+    else:
+        entry["longitude"] = float("nan")
+    with pytest.raises(PublicationBuildError):
+        build_document_v2_generation(publication=publication)
+    assert not publication.document_artifact_references.exists()
+    assert not DocumentArtifact.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_existing_generation_rechecks_accepted_pdf(v2_context):
+    admin, department, scope, root = v2_context
+    plan = _plan(
+        admin=admin, department=department, accepted_root=root, identifier="A", pdf=b"PDF A"
+    )
+    publication = _building_publication(department=department, scope=scope, version=1)
+    refs = build_document_v2_generation(publication=publication)
+    assert build_document_v2_generation(publication=publication)[0].id == refs[0].id
+    (root / plan.document_key).write_bytes(b"changed bytes")
+    with pytest.raises(PublicationBuildError, match="hash"):
+        build_document_v2_generation(publication=publication)

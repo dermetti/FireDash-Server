@@ -357,6 +357,18 @@ class DatasetPublication(models.Model):
                 "Review-ready and published publications require a ready artifact."
             )
 
+        if document_v2 and self.status in (self.Status.READY_FOR_REVIEW, self.Status.PUBLISHED):
+            from apps.publications.builders import PublicationBuildError
+            from apps.publications.document_v2 import (
+                DocumentV2Error,
+                validate_ready_document_generation,
+            )
+
+            try:
+                validate_ready_document_generation(self)
+            except (DocumentV2Error, PublicationBuildError) as error:
+                raise ValidationError(str(error)) from error
+
 
 class LegacyArtifactScopeSignatureUpgrade(models.Model):
     """One-shot migration state for a pre-scope READY artifact envelope.

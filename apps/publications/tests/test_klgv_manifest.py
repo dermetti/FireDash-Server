@@ -386,6 +386,8 @@ def test_station_assigned_manifest_uses_default_feature_delivery_and_keeps_stati
         department=department, dataset_type_code="department_klgv_plans"
     )
     klgv = _klgv_publication(department=department, scope=klgv_scope, version=1)
+    build_document_v2_generation(publication=klgv)
+    build_document_v2_manifest(publication=klgv)
     klgv.status = klgv.Status.PUBLISHED
     klgv.artifact_status = klgv.ArtifactStatus.READY
     klgv.artifact_ready = True

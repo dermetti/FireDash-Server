@@ -8,9 +8,11 @@ construction for datasets which start directly on schema two.
 
 import base64
 import hashlib
+import re
 import secrets
 
 from cryptography.hazmat.primitives import keywrap
+from cryptography.hazmat.primitives.keywrap import InvalidUnwrap
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -21,8 +23,8 @@ from apps.publications.artifacts import (
     build_encrypted_generic_document_artifact,
 )
 from apps.publications.builders import PublicationBuildError
+from apps.publications.document_authorization import _authorized_generation
 from apps.publications.document_dataset_adapters import document_dataset_adapter
-from apps.publications.fire_plan_v2_delivery import _authorized_generation
 from apps.publications.hpke import (
     HPKE_CIPHERSUITE,
     DocumentGenerationHPKEContext,
@@ -106,6 +108,8 @@ def get_or_create_document_artifact(*, dataset_type_code, canonical_document_id,
 
 
 def build_document_v2_generation(*, publication):
+    if publication.schema_version != 2:
+        raise PublicationBuildError("Document v2 generation requires schema version two.")
     if publication.status != publication.Status.BUILDING:
         raise PublicationBuildError("Document v2 generation requires a building publication.")
     adapter = document_dataset_adapter(dataset_type_code=publication.dataset_type_code)
@@ -116,26 +120,36 @@ def build_document_v2_generation(*, publication):
             "document_artifact"
         )
     )
+    # Read and verify accepted bytes even when references/artifacts already exist.
+    pdfs = {}
+    for entry in entries:
+        try:
+            pdf = read_accepted_pdf(
+                document_key=entry.accepted_document_key,
+                accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT,
+            )
+        except PdfBundleError as error:
+            raise PublicationBuildError("Accepted document is unavailable.") from error
+        if hashlib.sha256(pdf).hexdigest() != entry.sanitized_pdf_sha256:
+            raise PublicationBuildError("Accepted document hash does not match frozen metadata.")
+        pdfs[entry.canonical_document_id] = pdf
     if existing:
-        if len(existing) != len(expected) or {ref.canonical_document_id for ref in existing} != set(
-            expected
+        if (
+            len(existing) != len(expected)
+            or {ref.canonical_document_id for ref in existing} != set(expected)
+            or any(
+                ref.document_artifact.canonical_document_id != ref.canonical_document_id
+                or ref.document_artifact.dataset_type_code != publication.dataset_type_code
+                or ref.document_artifact.sanitized_pdf_sha256 != expected[ref.canonical_document_id]
+                for ref in existing
+            )
         ):
             raise PublicationBuildError("Document v2 generation membership is incomplete.")
         return tuple(existing)
     with transaction.atomic():
         refs = []
         for entry in entries:
-            try:
-                pdf = read_accepted_pdf(
-                    document_key=entry.accepted_document_key,
-                    accepted_root=settings.REFERENCE_DATA_ACCEPTED_ROOT,
-                )
-            except PdfBundleError as error:
-                raise PublicationBuildError("Accepted KLGV document is unavailable.") from error
-            if hashlib.sha256(pdf).hexdigest() != entry.sanitized_pdf_sha256:
-                raise PublicationBuildError(
-                    "Accepted KLGV document hash does not match frozen metadata."
-                )
+            pdf = pdfs[entry.canonical_document_id]
             artifact, _ = get_or_create_document_artifact(
                 dataset_type_code=publication.dataset_type_code,
                 canonical_document_id=entry.canonical_document_id,
@@ -155,6 +169,8 @@ def ensure_generation_key(*, publication):
     existing = DocumentGenerationKey.objects.filter(publication=publication).first()
     if existing:
         return existing
+    if publication.status != publication.Status.BUILDING:
+        raise DocumentV2Error("A generation key must be built before publication.")
     candidate = DocumentGenerationKey(
         publication=publication,
         wrapped_key=keywrap.aes_key_wrap(_kek(), secrets.token_bytes(32)),
@@ -190,7 +206,11 @@ def build_document_v2_manifest(*, publication):
     documents = []
     for ref in refs:
         artifact, entry = ref.document_artifact, entries[str(ref.canonical_document_id)]
-        if artifact.sanitized_pdf_sha256 != entry.sanitized_pdf_sha256:
+        if (
+            artifact.sanitized_pdf_sha256 != entry.sanitized_pdf_sha256
+            or artifact.dataset_type_code != publication.dataset_type_code
+            or artifact.canonical_document_id != ref.canonical_document_id
+        ):
             raise DocumentV2Error("Artifact does not match frozen document content.")
         cek = keywrap.aes_key_unwrap(_kek(), bytes(artifact.wrapped_cek))
         documents.append(
@@ -247,9 +267,29 @@ def build_document_v2_manifest(*, publication):
 @transaction.atomic
 def request_generation_key_grant(*, publication, installation):
     _authorized_generation(publication=publication, installation=installation)
-    grant, _ = DocumentGenerationKeyGrant.objects.get_or_create(
+    grant, _ = DocumentGenerationKeyGrant.objects.select_for_update().get_or_create(
         publication=publication, app_installation=installation
     )
+    if grant.status in (grant.Status.FAILED, grant.Status.REVOKED):
+        # Only fresh persisted authorization can request replacement key material.
+        grant.status = grant.Status.PENDING
+        grant.hpke_ciphersuite = ""
+        grant.hpke_encapsulated_key = None
+        grant.hpke_wrapped_generation_key = None
+        grant.completed_at = None
+        grant.revoked_at = None
+        grant.error_message = ""
+        grant.save(
+            update_fields=(
+                "status",
+                "hpke_ciphersuite",
+                "hpke_encapsulated_key",
+                "hpke_wrapped_generation_key",
+                "completed_at",
+                "revoked_at",
+                "error_message",
+            )
+        )
     return grant
 
 
@@ -257,7 +297,7 @@ def process_next_generation_key_grant():
     with transaction.atomic():
         grant = (
             DocumentGenerationKeyGrant.objects.select_for_update(skip_locked=True)
-            .filter(status="PENDING")
+            .filter(status__in=("PENDING", "RUNNING"))
             .order_by("created_at")
             .first()
         )
@@ -265,12 +305,6 @@ def process_next_generation_key_grant():
             return None
         grant.status = grant.Status.RUNNING
         grant.save(update_fields=("status",))
-    with transaction.atomic():
-        grant = (
-            DocumentGenerationKeyGrant.objects.select_for_update()
-            .select_related("publication", "app_installation__tablet")
-            .get(pk=grant.pk)
-        )
         try:
             installation = _authorized_generation(
                 publication=grant.publication, installation=grant.app_installation
@@ -284,6 +318,7 @@ def process_next_generation_key_grant():
                     publication=grant.publication, installation=installation
                 ),
             )
+            _authorized_generation(publication=grant.publication, installation=installation)
             (
                 grant.status,
                 grant.hpke_ciphersuite,
@@ -300,7 +335,15 @@ def process_next_generation_key_grant():
                     "completed_at",
                 )
             )
-        except (ArtifactError, DocumentV2Error, KeyGrantError, ManifestError, ValueError) as error:
+        except ManifestError as error:
+            grant.status, grant.completed_at, grant.revoked_at, grant.error_message = (
+                grant.Status.REVOKED,
+                timezone.now(),
+                timezone.now(),
+                str(error)[:512],
+            )
+            grant.save(update_fields=("status", "completed_at", "revoked_at", "error_message"))
+        except (ArtifactError, DocumentV2Error, KeyGrantError, InvalidUnwrap, ValueError) as error:
             grant.status, grant.completed_at, grant.error_message = (
                 grant.Status.FAILED,
                 timezone.now(),
@@ -308,3 +351,73 @@ def process_next_generation_key_grant():
             )
             grant.save(update_fields=("status", "completed_at", "error_message"))
         return grant
+
+
+def validate_ready_document_generation(publication):
+    """Validate persisted generic membership before model-level publication closeout."""
+    adapter = document_dataset_adapter(dataset_type_code=publication.dataset_type_code)
+    entries = {str(e.canonical_document_id): e for e in adapter.frozen_documents(publication)}
+    manifest = DocumentGenerationManifest.objects.filter(publication=publication).first()
+    key = DocumentGenerationKey.objects.filter(publication=publication).first()
+    if (
+        not manifest
+        or not key
+        or publication.artifact_path
+        or len(bytes(key.wrapped_key)) != 40
+        or key.wrapping_algorithm != "AES-KW-RFC3394"
+        or not key.kek_version
+        or manifest.signature_algorithm != "Ed25519"
+        or len(bytes(manifest.signature)) != 64
+        or not manifest.signing_key_version
+    ):
+        raise DocumentV2Error("Publication requires a complete ready document generation.")
+    payload = manifest.payload
+    if not isinstance(payload, dict):
+        raise DocumentV2Error("Document generation manifest is invalid.")
+    if any(
+        payload.get(k) != v
+        for k, v in {
+            "format": "document-generation-v2",
+            "dataset_type": publication.dataset_type_code,
+            "publication_id": str(publication.id),
+            "schema_version": 2,
+            "version": publication.version_number,
+        }.items()
+    ) or not isinstance(payload.get("documents"), list):
+        raise DocumentV2Error("Document generation manifest is invalid.")
+    refs = list(
+        PublicationDocumentArtifactReference.objects.filter(publication=publication).select_related(
+            "document_artifact"
+        )
+    )
+    if (
+        len(refs) != len(entries)
+        or len(payload["documents"]) != len(entries)
+        or not all(isinstance(document, dict) for document in payload["documents"])
+    ):
+        raise DocumentV2Error("Document v2 generation membership is incomplete.")
+    for ref in refs:
+        artifact = ref.document_artifact
+        entry = entries.get(str(ref.canonical_document_id))
+        documents = [d for d in payload["documents"] if d.get("artifact_id") == str(artifact.id)]
+        if (
+            not entry
+            or len(documents) != 1
+            or artifact.dataset_type_code != publication.dataset_type_code
+            or artifact.canonical_document_id != ref.canonical_document_id
+            or artifact.sanitized_pdf_sha256 != entry.sanitized_pdf_sha256
+            or documents[0].get(adapter.manifest_metadata_key) != entry.metadata
+            or documents[0].get("ciphertext_sha256") != artifact.ciphertext_sha256
+            or documents[0].get("ciphertext_size") != artifact.ciphertext_size
+            or documents[0].get("sanitized_pdf_sha256") != artifact.sanitized_pdf_sha256
+            or documents[0].get("nonce") != base64.b64encode(bytes(artifact.nonce)).decode("ascii")
+            or documents[0].get("download_path")
+            != (
+                f"/api/v1/tablet/document-generations/{publication.id}/artifacts/{artifact.id}/download"
+            )
+            or documents[0].get("generation_key_wrapping_algorithm") != "AES-KW-RFC3394"
+            or not re.fullmatch(
+                r"[A-Za-z0-9+/]{54}==", documents[0].get("generation_wrapped_cek", "")
+            )
+        ):
+            raise DocumentV2Error("Artifact does not match frozen document content.")

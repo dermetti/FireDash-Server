@@ -1,18 +1,17 @@
 """Regression tests for the distributed Fire Plan publication manifest schema."""
 
 import hashlib
-import io
 import json
 import uuid
-import zipfile
 
 import pytest
 from django.contrib.gis.geos import Point
-from django.test import override_settings
 
 from apps.accounts.models import User
 from apps.organizations.models import Department
-from apps.publications.builders import build_artifact
+from apps.publications.builders import build_source_payload
+from apps.publications.document_dataset_adapters import document_dataset_adapter
+from apps.publications.models import DatasetPublication
 from apps.publications.registry import get_dataset_definition
 from apps.reference_data.models import FirePlan
 
@@ -63,21 +62,21 @@ def _create_plan(admin, department, accepted_root, **overrides):
     return plan
 
 
-def _build_artifact_bytes(department, accepted_root, source_revision=42):
-    definition = get_dataset_definition("department_fire_plans")
-    with override_settings(REFERENCE_DATA_ACCEPTED_ROOT=accepted_root):
-        return build_artifact(
-            definition=definition,
-            department=department,
-            station=None,
-            source_revision=source_revision,
-        )
-
-
 def _build_manifest(department, accepted_root, source_revision=42):
-    artifact = _build_artifact_bytes(department, accepted_root, source_revision)
-    with zipfile.ZipFile(io.BytesIO(artifact)) as archive:
-        return json.loads(archive.read("manifest.json"))
+    definition = get_dataset_definition("department_fire_plans")
+    snapshot = build_source_payload(definition=definition, department=department, station=None)
+    publication = DatasetPublication(
+        department=department,
+        dataset_type_code=definition.code,
+        schema_version=2,
+        source_snapshot=snapshot,
+    )
+    adapter = document_dataset_adapter(dataset_type_code=definition.code)
+    return {"fire_plans": [entry.metadata for entry in adapter.frozen_documents(publication)]}
+
+
+def _build_artifact_bytes(department, accepted_root, source_revision=42):
+    return json.dumps(_build_manifest(department, accepted_root), sort_keys=True).encode()
 
 
 @pytest.mark.django_db
@@ -102,7 +101,6 @@ def test_fire_plan_manifest_publishes_exact_schema(manifest_context):
         "latitude",
         "sha256",
         "page_count",
-        "path",
     }
     assert entry == {
         "id": str(plan.id),
@@ -118,7 +116,6 @@ def test_fire_plan_manifest_publishes_exact_schema(manifest_context):
         "latitude": 53.59229519,
         "sha256": PDF_SHA256,
         "page_count": 12,
-        "path": f"plans/{plan.id}.pdf",
     }
 
 
@@ -188,7 +185,7 @@ def test_fire_plan_manifest_preserves_existing_pdf_metadata(manifest_context):
     assert entry["id"] == str(plan.id)
     assert entry["sha256"] == PDF_SHA256
     assert entry["page_count"] == 12
-    assert entry["path"] == f"plans/{plan.id}.pdf"
+    assert "path" not in entry
 
 
 @pytest.mark.django_db

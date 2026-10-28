@@ -19,6 +19,7 @@ from apps.publications.feature_services import is_feature_enabled
 from apps.publications.models import (
     DatasetKeyGrant,
     DatasetPublication,
+    DocumentGenerationKeyGrant,
     DocumentGenerationManifest,
     FirePlanGenerationManifest,
     SignedManifest,
@@ -144,7 +145,7 @@ def _publication_manifest_entry(publication: DatasetPublication) -> dict[str, ob
             "artifact_format": "document-manifest-v2",
             "manifest_url": (
                 f"/api/v1/tablet/fire-plan-generations/{publication.id}/manifest"
-                if publication.dataset_type_code == "department_fire_plans"
+                if not DocumentGenerationManifest.objects.filter(publication=publication).exists()
                 else f"/api/v1/tablet/document-generations/{publication.id}/manifest"
             ),
         }
@@ -409,7 +410,14 @@ def request_dataset_key_grant(
 
 def revoke_dataset_key_grants(*, installation: AppInstallation) -> int:
     """Make prior HPKE grant material unusable after access is withdrawn."""
-    return DatasetKeyGrant.objects.filter(
+    generic_count = (
+        DocumentGenerationKeyGrant.objects.filter(
+            app_installation=installation,
+        )
+        .exclude(status="REVOKED")
+        .update(status="REVOKED", revoked_at=timezone.now())
+    )
+    return generic_count + DatasetKeyGrant.objects.filter(
         app_installation=installation,
         status__in=(
             DatasetKeyGrant.Status.PENDING,
@@ -428,7 +436,16 @@ def revoke_publication_dataset_key_grants(*, publication: DatasetPublication) ->
     same lifecycle boundary makes the stored grant state match that authority
     decision as well, while retaining the immutable grant history.
     """
-    return DatasetKeyGrant.objects.filter(
+    generic_count = 0
+    if publication.dataset_type_code not in {"department_files", "station_files"}:
+        generic_count = (
+            DocumentGenerationKeyGrant.objects.filter(
+                publication=publication,
+            )
+            .exclude(status="REVOKED")
+            .update(status="REVOKED", revoked_at=timezone.now())
+        )
+    return generic_count + DatasetKeyGrant.objects.filter(
         publication=publication,
         status__in=(
             DatasetKeyGrant.Status.PENDING,
