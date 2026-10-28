@@ -109,10 +109,10 @@ def validate_hydrants(plaintext: bytes, dataset: dict[str, Any], out: Output) ->
 
         diameter = properties["diameter_mm"]
         if diameter is not None:
-            if not isinstance(diameter, int) or diameter <= 0:
+            if type(diameter) is not int or diameter < 0:
                 fail(
                     f"department_hydrants.features[{index}].diameter_mm "
-                    "must be a positive integer or null"
+                    "must be a non-negative integer or null"
                 )
             diameters.append(diameter)
 
