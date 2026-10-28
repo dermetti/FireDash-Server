@@ -86,6 +86,28 @@ def publish(actor, library):
     return job.build_publication
 
 
+@pytest.mark.parametrize("station_scope", [False, True])
+def test_scheduled_file_publication_detail_offers_build_now(client, scope, station_scope):
+    actor = scope[1] if station_scope else scope[0]
+    library = (
+        services.get_library(actor, station_id=scope[5].id)
+        if station_scope
+        else library_for(scope)
+    )
+    services.create_folder(actor=actor, library_id=library.id, name="Guides")
+    job = PublicationJob.objects.get(**scope_kwargs(library), status="PENDING")
+    assert job.build_publication.status == "STAGED"
+    client.force_login(actor)
+
+    response = client.get(reverse("publications-scope-detail", args=(job.scope_state_id,)))
+
+    assert response.status_code == 200
+    assert response.context["row"]["actions"]["build_now"]
+    content = response.content.decode()
+    assert content.count('<button class="btn btn-primary">Build now</button>') == 1
+    assert content.count(reverse("publications-scope-build-now", args=(job.scope_state_id,))) == 1
+
+
 def test_empty_scheduled_and_manual_libraries(scope, crypto):
     initialize_missing_libraries()
     assert (

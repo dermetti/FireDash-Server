@@ -11,7 +11,7 @@
 <section class="mb-4"><form method="post" action="{% url 'publications-scope-fire-plan-document-manifest-cutover' scope.id %}">{% csrf_token %}<button class="btn btn-warning" type="submit">Migrate this Fire Plan scope to document-manifest v2</button></form></section>
 {% endif %}
 
-{% if not row.is_file_publication %}{% include "publications/_scope_actions.html" %}{% endif %}
+{% include "publications/_scope_actions.html" %}
 
 <section class="mb-4">
   <h2 class="h5 mb-3">Version history</h2>

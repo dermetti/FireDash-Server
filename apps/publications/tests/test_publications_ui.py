@@ -269,6 +269,10 @@ def test_staged_action_modal_is_scope_authorized_and_explains_history(
     assert "Delete staged" in list_content
     assert "Build now" in list_content
     assert "Roll back" not in list_content
+    detail_content = client.get(
+        reverse("publications-scope-detail", args=(scope.id,))
+    ).content.decode()
+    assert detail_content.count('<button class="btn btn-primary">Build now</button>') == 1
     modal = client.get(modal_url, HTTP_HX_REQUEST="true")
     assert modal.status_code == 200
     assert "Delete staged publication v8?" in modal.content.decode()
