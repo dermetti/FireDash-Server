@@ -246,3 +246,4 @@ misc_md_files/
 .DS_Store
 context/
 .pytest*
+.firedash-fake-ipad*/
