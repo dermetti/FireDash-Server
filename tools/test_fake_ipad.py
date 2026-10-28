@@ -25,6 +25,7 @@ from typing import Any, cast
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -964,3 +965,399 @@ def test_validate_fire_plans_requires_new_metadata():
     dataset = {"type": "department_fire_plans", "schema_version": 1}
     with pytest.raises(ClientError):
         datasets.validate_fire_plans(archive, dataset, Output())
+
+
+# --- SYSTEM Dangerous Goods --------------------------------------------------
+
+
+def _dangerous_goods_document():
+    return {
+        "dataset_type": "dangerous_goods",
+        "schema_version": 1,
+        "metadata": {
+            "publication_profile": "compact",
+            "record_count": 1,
+            "eri_card_count": 1,
+            "adr_edition": "2025",
+            "ericards_version": "2025.1",
+            "placard_catalog": {
+                "available_assets": {code: "bundled.svg" for code in ("3", "7A", "7B", "7C")},
+                "special_values": {
+                    "7X": {
+                        "kind": "variable",
+                        "candidate_codes": ["7A", "7B", "7C"],
+                        "selection_basis": "transport_index_and_dose_rate",
+                    }
+                },
+            },
+        },
+        "goods": [
+            {
+                "id": "bam-example",
+                "un_number": "1203",
+                "names": {
+                    "official": {"de": "BENZIN", "es": "GASOLINA"},
+                    "aliases": {"de": ["MOTORBENZIN"]},
+                },
+                "adr": {"class": "3", "placards": ["3"]},
+                "eri": ["3-01"],
+            }
+        ],
+        "eri_cards": {"3-01": [["title", "BENZIN"], ["heading", "Gefahr"], ["item", "Text"]]},
+        "eri_defaults": {"1203": "3-01"},
+        "sources": [
+            {
+                "id": source_id,
+                "provider": source_id,
+                "dataset": source_id,
+                "source_file": "example.json",
+                "sha256": "example",
+                "source_url": "https://example.test",
+                "legal": (
+                    {"legal_url": "", "license": {}, "attribution": {}, "processing": {}}
+                    if source_id == "bam"
+                    else {
+                        "terms_url": "",
+                        "guidance_url": "",
+                        "disclaimer_url": "",
+                        "attribution": {},
+                        "reproduction": {},
+                    }
+                ),
+            }
+            for source_id in ("bam", "ericards")
+        ],
+    }
+
+
+def _dangerous_goods_descriptor():
+    return {
+        "type": "dangerous_goods",
+        "scope": {"type": "SYSTEM"},
+        "schema_version": 1,
+        "required": True,
+        "artifact_format": "json",
+        "minimum_app_version": None,
+    }
+
+
+def test_validate_dangerous_goods_preserves_plaintext_and_reports_summary(tmp_path):
+    plaintext = json.dumps(_dangerous_goods_document(), indent=2, ensure_ascii=False).encode()
+    summary = datasets.validate_plaintext(
+        plaintext,
+        _dangerous_goods_descriptor(),
+        {},
+        Output(),
+        save_plaintext=True,
+        state_dir=tmp_path,
+    )
+    assert summary == {
+        "record_count": 1,
+        "eri_card_count": 1,
+        "adr_edition": "2025",
+        "ericards_version": "2025.1",
+        "sha256": hashlib.sha256(plaintext).hexdigest(),
+    }
+    assert (tmp_path / "last-plaintext" / "dangerous_goods.json").read_bytes() == plaintext
+
+
+@pytest.mark.parametrize("plaintext", [b"{", b"\xff", b"[]", b"null", b'{"extra":NaN}'])
+def test_dangerous_goods_rejects_invalid_json(plaintext):
+    with pytest.raises(ClientError, match="dangerous_goods"):
+        datasets.validate_dangerous_goods(plaintext, _dangerous_goods_descriptor(), Output())
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("dataset_type",), "other"),
+        (("schema_version",), 2),
+        (("schema_version",), True),
+        (("metadata", "publication_profile"), "full"),
+        (("metadata", "record_count"), 2),
+        (("metadata", "eri_card_count"), 0),
+        (("metadata", "record_count"), True),
+        (("metadata", "eri_card_count"), 1.0),
+        (("goods",), {}),
+        (("eri_cards",), []),
+        (("eri_defaults",), []),
+        (("goods", 0, "id"), None),
+        (("goods", 0, "un_number"), 1203),
+        (("goods", 0, "names", "official"), {}),
+        (("goods", 0, "names", "aliases"), {"de": "alias"}),
+        (("goods", 0, "adr", "class"), 3),
+        (("goods", 0, "adr", "placards"), ["7D"]),
+        (
+            ("goods", 0, "adr", "placards"),
+            [
+                {
+                    "kind": "variable",
+                    "candidate_codes": ["7D"],
+                    "selection_basis": "transport_index_and_dose_rate",
+                }
+            ],
+        ),
+        (("goods", 0, "eri"), ["missing"]),
+        (("eri_defaults", "1203"), "missing"),
+        (("eri_cards", "3-01"), [["item", "missing title"]]),
+        (("eri_cards", "3-01"), [[[], "invalid kind"]]),
+        (("sources",), []),
+        (("sources", 0, "id"), []),
+    ],
+)
+def test_dangerous_goods_rejects_invalid_schema(path, value):
+    document = _dangerous_goods_document()
+    target = document
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    with pytest.raises(ClientError, match="dangerous_goods"):
+        datasets.validate_dangerous_goods(
+            json.dumps(document).encode(),
+            _dangerous_goods_descriptor(),
+            Output(),
+        )
+
+
+@pytest.mark.parametrize(
+    "placard",
+    [
+        "3",
+        {"kind": "conditional", "code": "3"},
+        {
+            "kind": "variable",
+            "candidate_codes": ["7A", "7B", "7C"],
+            "selection_basis": "transport_index_and_dose_rate",
+        },
+        {"kind": "none"},
+        {"kind": "reference", "reference": "ADR 5.2.2.1.12"},
+    ],
+)
+@pytest.mark.parametrize("eri", [None, [], ["3-01"]])
+def test_dangerous_goods_accepts_documented_record_representations(placard, eri):
+    document = _dangerous_goods_document()
+    document["goods"][0]["adr"]["placards"] = [placard]
+    document["goods"][0]["eri"] = eri
+    summary = datasets.validate_dangerous_goods(
+        json.dumps(document).encode(),
+        _dangerous_goods_descriptor(),
+        Output(),
+    )
+    assert summary["record_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"type": "DEPARTMENT", "department_id": "department"},
+        {"type": "STATION", "department_id": "department", "station_id": "station"},
+        {"type": "SYSTEM", "department_id": "department"},
+        {"type": "SYSTEM", "station_id": "station"},
+        {"type": "SYSTEM", "department_id": None, "station_id": None},
+    ],
+)
+def test_dangerous_goods_requires_exact_system_scope(scope):
+    descriptor = dict(_dangerous_goods_descriptor(), scope=scope)
+    with pytest.raises(ClientError, match="exactly SYSTEM"):
+        FakeIPadClient.scope_for_dataset(
+            descriptor,
+            {"department_id": "department", "station_id": "station"},
+        )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"schema_version": 2},
+        {"schema_version": True},
+        {"schema_version": 1.0},
+        {"artifact_format": "zip"},
+        {"minimum_app_version": "99.0.0"},
+    ],
+)
+def test_required_dangerous_goods_cannot_be_skipped(tmp_path, overrides):
+    descriptor = dict(_dangerous_goods_descriptor(), **overrides)
+    with pytest.raises(ClientError, match="dangerous_goods: required dataset is unsupported"):
+        _client(DeviceState(tmp_path), StubApi()).select_compatible_datasets(
+            {"datasets": [descriptor]}
+        )
+
+
+def _dangerous_goods_delivery(tmp_path, monkeypatch, *, invalid_plaintext=False):
+    """Real signatures, HPKE and AES-GCM over synthetic data; only transport is stubbed."""
+    fixture_path = (
+        Path(__file__).resolve().parent.parent
+        / "apps"
+        / "publications"
+        / "tests"
+        / "fixtures"
+        / "complete_manifest_contract.json"
+    )
+    manifest = json.loads(fixture_path.read_text(encoding="utf-8"))["wire_manifest"]
+    descriptor = dict(manifest["datasets"][0], **_dangerous_goods_descriptor())
+    manifest["datasets"] = [descriptor]
+    config = manifest["configuration"]
+    state = DeviceState(tmp_path / "state")
+    state.ensure_identity(server_url="https://test.example", app_version="1.0.0")
+    state.store_installation(
+        installation_id=config["installation_id"],
+        tablet_id=config["tablet_id"],
+        credential="test-credential",
+        authorization_valid_until=manifest["authorization_valid_until"],
+    )
+    plaintext = b"{" if invalid_plaintext else json.dumps(_dangerous_goods_document()).encode()
+    cek, nonce = os.urandom(32), os.urandom(12)
+    ciphertext = AESGCM(cek).encrypt(nonce, plaintext, None)
+    descriptor.update(
+        encrypted_size=len(ciphertext),
+        ciphertext_sha256=hashlib.sha256(ciphertext).hexdigest(),
+        content_encryption_nonce=base64.b64encode(nonce).decode(),
+    )
+    info = {
+        "ciphertext_sha256": descriptor["ciphertext_sha256"],
+        "installation_id": config["installation_id"],
+        "protocol": "firedash-hpke-v1",
+        "publication_id": descriptor["publication_id"],
+        "schema_version": 1,
+        "scope": {
+            "dataset_type_code": "dangerous_goods",
+            "department_id": None,
+            "station_id": None,
+        },
+        "tablet_id": config["tablet_id"],
+        "version_number": descriptor["version"],
+    }
+    encrypted = HPKE_SUITE.encrypt(
+        cek, state.load_private_key().private_key.public_key(), info=canonical_json_bytes(info)
+    )
+    descriptor["key_grant"].update(
+        encapsulated_key=base64.b64encode(encrypted[:65]).decode(),
+        wrapped_content_key=base64.b64encode(encrypted[65:]).decode(),
+    )
+    signer = ed25519.Ed25519PrivateKey.generate()
+    payload = {
+        "ciphertext_sha256": descriptor["ciphertext_sha256"],
+        "ciphertext_size": len(ciphertext),
+        "encryption_algorithm": descriptor["content_encryption_algorithm"],
+        "kek_version": descriptor["content_key_kek_version"],
+        "nonce": descriptor["content_encryption_nonce"],
+        "schema_version": 1,
+        "scope": {"dataset_type_code": "dangerous_goods", "type": "SYSTEM"},
+        "version_number": descriptor["version"],
+        "wrapped_cek": descriptor["content_key_wrapped_for_kek"],
+        "wrapping_algorithm": descriptor["content_key_wrapping_algorithm"],
+    }
+    descriptor["artifact_signature"] = base64.b64encode(
+        signer.sign(canonical_json_bytes(payload))
+    ).decode()
+    unsigned = {key: value for key, value in manifest.items() if key != "signature"}
+    manifest["signature"] = base64.b64encode(signer.sign(canonical_json_bytes(unsigned))).decode()
+    etag_payload = {key: value for key, value in manifest.items() if key != "generated_at"}
+    etag = f'"{hashlib.sha256(canonical_json_bytes(etag_payload)).hexdigest()}"'
+    response = HttpResponse(
+        status=200,
+        headers={"etag": etag},
+        body=json.dumps(manifest).encode(),
+        url="https://test.example/api/v1/tablet/manifest",
+    )
+    api = StubApi()
+    api.handlers[descriptor["download_url"]] = lambda b, r: (
+        (
+            200,
+            ciphertext,
+            {
+                "content-type": "application/octet-stream",
+                "accept-ranges": "bytes",
+                "etag": f'"{descriptor["ciphertext_sha256"]}"',
+            },
+        )
+        if sum(c["path"] == descriptor["download_url"] for c in api.calls) == 1
+        else (304, b"", {})
+    )
+    stream = io.StringIO()
+    client = _client(state, api, out=Output(stream=stream))
+    monkeypatch.setattr(client, "get_signing_key", lambda *_: signer.public_key())
+    monkeypatch.setattr(
+        client, "get_status", lambda: {"status": "active", "purge_provisioned_data": False}
+    )
+    monkeypatch.setattr(client, "check_in", lambda: {})
+    monkeypatch.setattr(client, "get_configuration", lambda: config)
+    monkeypatch.setattr(
+        client,
+        "fetch_manifest",
+        lambda **kw: HttpResponse(status=304, headers={}, body=b"", url=response.url)
+        if kw.get("if_none_match")
+        else response,
+    )
+    return client, descriptor, config, stream
+
+
+def test_verify_reports_validated_system_dangerous_goods(tmp_path, monkeypatch):
+    client, descriptor, config, stream = _dangerous_goods_delivery(tmp_path, monkeypatch)
+    assert client.scope_for_dataset(descriptor, config) == {
+        "dataset_type_code": "dangerous_goods",
+        "department_id": None,
+        "station_id": None,
+    }
+    result = client.verify()
+    assert result["datasets"]["dangerous_goods"]["record_count"] == 1
+    assert client.state.state["last_dataset_validation"] == result["datasets"]
+    assert "DATASET dangerous_goods" in stream.getvalue()
+    assert "VERIFY RESULT: PASS" in stream.getvalue()
+
+
+def test_verify_fails_when_required_dangerous_goods_is_malformed(tmp_path, monkeypatch):
+    client, _, _, stream = _dangerous_goods_delivery(tmp_path, monkeypatch, invalid_plaintext=True)
+    with pytest.raises(ClientError, match="UTF-8 JSON"):
+        client.verify()
+    assert "VERIFY RESULT: PASS" not in stream.getvalue()
+    assert "last_dataset_validation" not in client.state.state
+
+
+def test_dangerous_goods_descriptor_must_be_required(tmp_path, monkeypatch):
+    client, _, config, _ = _dangerous_goods_delivery(tmp_path, monkeypatch)
+    with pytest.raises(ClientError, match="required=true"):
+        manifest = client.fetch_manifest().json()
+        manifest["datasets"][0]["required"] = False
+        client.validate_manifest_structure(manifest, config)
+
+
+@pytest.mark.parametrize("owner", ["department_id", "station_id"])
+def test_dangerous_goods_hpke_rejects_installation_owners_in_context(tmp_path, monkeypatch, owner):
+    client, descriptor, config, _ = _dangerous_goods_delivery(tmp_path, monkeypatch)
+    crypto = client.state.load_private_key()
+    # A correctly bound grant is reusable even if the receiving owner's IDs change.
+    assert (
+        len(
+            client.unwrap_cek(
+                descriptor,
+                dict(config, department_id=str(uuid.uuid4()), station_id=str(uuid.uuid4())),
+                crypto,
+            )
+        )
+        == 32
+    )
+    info = {
+        "ciphertext_sha256": descriptor["ciphertext_sha256"],
+        "installation_id": config["installation_id"],
+        "protocol": "firedash-hpke-v1",
+        "publication_id": descriptor["publication_id"],
+        "schema_version": 1,
+        "scope": {
+            "dataset_type_code": "dangerous_goods",
+            "department_id": None,
+            "station_id": None,
+        },
+        "tablet_id": config["tablet_id"],
+        "version_number": descriptor["version"],
+    }
+    info["scope"][owner] = config[owner]
+    encrypted = HPKE_SUITE.encrypt(
+        os.urandom(32), crypto.private_key.public_key(), info=canonical_json_bytes(info)
+    )
+    descriptor["key_grant"].update(
+        encapsulated_key=base64.b64encode(encrypted[:65]).decode(),
+        wrapped_content_key=base64.b64encode(encrypted[65:]).decode(),
+    )
+    with pytest.raises(ClientError, match="HPKE open failed"):
+        client.unwrap_cek(descriptor, config, crypto)

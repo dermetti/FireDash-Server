@@ -681,6 +681,8 @@ class FakeIPadClient:
             seen_publications.add(publication_id)
 
             self.scope_for_dataset(dataset, config)
+            if dataset_type == "dangerous_goods" and dataset["required"] is not True:
+                fail("dangerous_goods: descriptor must declare required=true")
             if not isinstance(dataset["version"], int) or dataset["version"] <= 0:
                 fail(f"{dataset_type}: version must be positive integer")
             if not isinstance(dataset["schema_version"], int) or dataset["schema_version"] <= 0:
@@ -792,7 +794,10 @@ class FakeIPadClient:
         artifact_format, schema_versions = supported
         if dataset["artifact_format"] != artifact_format:
             return "artifact format is not implemented by this client"
-        if dataset["schema_version"] not in schema_versions:
+        if (
+            type(dataset["schema_version"]) is not int
+            or dataset["schema_version"] not in schema_versions
+        ):
             return "schema version is not implemented by this client"
         minimum = dataset["minimum_app_version"]
         if minimum is not None:
@@ -828,6 +833,8 @@ class FakeIPadClient:
         scope = dataset["scope"]
         if not isinstance(scope, dict):
             fail("Dataset scope must be an explicit scope object")
+        if dataset["type"] == "dangerous_goods" and scope != {"type": "SYSTEM"}:
+            fail("dangerous_goods: scope must be exactly SYSTEM with no owner IDs")
         scope_type = scope.get("type")
         if scope_type == "SYSTEM":
             expected = {"type": "SYSTEM"}
@@ -1125,7 +1132,11 @@ class FakeIPadClient:
         self.state.state["last_dataset_validation"] = dataset_results
         self.state.save()
 
-        return {"changed": True, "manifest_generation": manifest["manifest_generation"]}
+        return {
+            "changed": True,
+            "manifest_generation": manifest["manifest_generation"],
+            "datasets": dataset_results,
+        }
 
     def compare_manifest_summaries(
         self, previous: dict[str, Any], current: dict[str, Any]

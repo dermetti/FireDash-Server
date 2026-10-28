@@ -2,7 +2,7 @@
 
 These are pure format validators: they receive decrypted plaintext plus the
 verified manifest entry and assert the documented on-disk formats (GeoJSON
-hydrants, ZIP fire plans, JSON personnel). No HTTP and no key material here.
+hydrants, ZIP fire plans, JSON personnel and dangerous goods). No HTTP and no key material here.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import re
 import zipfile
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NoReturn
 
 from tools.fake_ipad.crypto import sha256_hex
 from tools.fake_ipad.errors import fail
@@ -25,6 +25,7 @@ _EXTENSIONS = {
     "department_hydrants": "geojson",
     "department_fire_plans": "zip",
     "station_personnel": "json",
+    "dangerous_goods": "json",
 }
 
 # This is intentionally the capability table of the current fake/iOS-equivalent
@@ -35,6 +36,7 @@ SUPPORTED_DATASETS = MappingProxyType(
         "department_hydrants": ("geojson", frozenset({1})),
         "department_fire_plans": ("zip", frozenset({1})),
         "station_personnel": ("json", frozenset({1})),
+        "dangerous_goods": ("json", frozenset({1})),
     }
 )
 
@@ -312,6 +314,244 @@ def validate_fire_plans(plaintext: bytes, dataset: dict[str, Any], out: Output) 
         }
 
 
+# Standalone mirror of apps/ingestion/dangerous_goods.py: no Django/server imports.
+_DG_UN = re.compile(r"^[0-9]{4}$")
+_DG_ADR_STRING_FIELDS = {
+    "class",
+    "classification_code",
+    "hazard_identification_number",
+    "packing_group",
+}
+
+
+def _dg_fail(message: str) -> NoReturn:
+    fail(f"dangerous_goods: {message}")
+
+
+def _dg_mapping(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        _dg_fail(f"{label} must be an object.")
+    return value
+
+
+def _dg_nonempty_string(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        _dg_fail(f"{label} must be a non-empty string.")
+    return value
+
+
+def _dg_validate_placard(value: Any, assets: dict[str, Any]) -> None:
+    if isinstance(value, str):
+        if value not in assets:
+            _dg_fail("Placard string does not resolve through the asset catalog.")
+        return
+    placard = _dg_mapping(value, "Placard")
+    kind = placard.get("kind")
+    if kind == "conditional":
+        if (
+            set(placard) != {"kind", "code"}
+            or not isinstance(placard["code"], str)
+            or placard["code"] not in assets
+        ):
+            _dg_fail("Conditional placard must reference one catalog asset.")
+    elif kind == "variable":
+        if set(placard) != {"kind", "candidate_codes", "selection_basis"} or not isinstance(
+            placard["selection_basis"], str
+        ):
+            _dg_fail("Variable placard is invalid.")
+        # 7X is deliberately a three-candidate contract; never add/infer 7D.
+        if placard["candidate_codes"] != ["7A", "7B", "7C"] or any(
+            code not in assets for code in placard["candidate_codes"]
+        ):
+            _dg_fail("Variable placard must use exactly 7A, 7B, and 7C.")
+    elif kind == "none":
+        if set(placard) != {"kind"}:
+            _dg_fail("None placard is invalid.")
+    elif kind == "reference":
+        if set(placard) != {"kind", "reference"}:
+            _dg_fail("Reference placard is invalid.")
+        _dg_nonempty_string(placard["reference"], "Reference placard")
+    else:
+        _dg_fail("Placard object kind is invalid.")
+
+
+def _dg_valid_remarks(value: Any) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(language, str)
+        and isinstance(texts, list)
+        and all(isinstance(text, str) for text in texts)
+        for language, texts in value.items()
+    )
+
+
+def validate_dangerous_goods(
+    payload: bytes, dataset: dict[str, Any], out: Output
+) -> dict[str, Any]:
+    """Validate compact schema 1 without rewriting or normalizing source bytes."""
+    try:
+        document = json.loads(
+            payload.decode("utf-8"),
+            parse_constant=lambda value: _dg_fail(f"Invalid JSON constant: {value}."),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        _dg_fail(f"Source must be UTF-8 JSON: {error}")
+    root = _dg_mapping(document, "Document")
+    if root.get("dataset_type") != "dangerous_goods" or root.get("schema_version") != 1:
+        _dg_fail("Document must be dangerous_goods schema version 1.")
+    if (
+        type(root["schema_version"]) is not int
+        or type(dataset["schema_version"]) is not int
+        or dataset["schema_version"] != 1
+    ):
+        _dg_fail("Unsupported schema version; expected 1.")
+    metadata = _dg_mapping(root.get("metadata"), "metadata")
+    if metadata.get("publication_profile") != "compact":
+        _dg_fail("metadata.publication_profile must be compact.")
+    catalog = _dg_mapping(metadata.get("placard_catalog"), "metadata.placard_catalog")
+    assets = _dg_mapping(
+        catalog.get("available_assets"), "metadata.placard_catalog.available_assets"
+    )
+    if any(
+        not isinstance(key, str) or not isinstance(value, str) or not value
+        for key, value in assets.items()
+    ):
+        _dg_fail("Placard asset catalog is invalid.")
+    special_values = _dg_mapping(
+        catalog.get("special_values"), "metadata.placard_catalog.special_values"
+    )
+    seven_x = special_values.get("7X")
+    if (
+        not isinstance(seven_x, dict)
+        or seven_x.get("kind") != "variable"
+        or seven_x.get("candidate_codes") != ["7A", "7B", "7C"]
+    ):
+        _dg_fail("Declared 7X placard contract must use exactly 7A, 7B, and 7C.")
+    goods = root.get("goods")
+    cards = _dg_mapping(root.get("eri_cards"), "eri_cards")
+    if not isinstance(goods, list):
+        _dg_fail("goods must be a list.")
+    if any(type(metadata.get(key)) is not int for key in ("record_count", "eri_card_count")):
+        _dg_fail("Metadata counts must be integers.")
+    if metadata.get("record_count") != len(goods) or metadata.get("eri_card_count") != len(cards):
+        _dg_fail("Metadata counts do not match the document.")
+    ids: set[str] = set()
+    for item in goods:
+        good = _dg_mapping(item, "goods entry")
+        identifier = _dg_nonempty_string(good.get("id"), "goods.id")
+        if identifier in ids:
+            _dg_fail("goods IDs must be unique.")
+        ids.add(identifier)
+        un = good.get("un_number")
+        if not isinstance(un, str) or not _DG_UN.fullmatch(un):
+            _dg_fail("UN number must be a four-digit string.")
+        names = _dg_mapping(good.get("names"), "names")
+        official = _dg_mapping(names.get("official"), "names.official")
+        if not official or any(
+            not isinstance(language, str) or not isinstance(name, str) or not name.strip()
+            for language, name in official.items()
+        ):
+            _dg_fail("names.official must be a non-empty language-keyed string mapping.")
+        aliases = names.get("aliases")
+        if aliases is not None and (
+            not isinstance(aliases, dict)
+            or any(
+                not isinstance(language, str)
+                or not isinstance(values, list)
+                or any(not isinstance(name, str) for name in values)
+                for language, values in aliases.items()
+            )
+        ):
+            _dg_fail("names.aliases must be language-keyed string arrays.")
+        adr = good.get("adr")
+        if adr is not None:
+            adr = _dg_mapping(adr, "adr")
+            if any(
+                field in adr and not isinstance(adr[field], str) for field in _DG_ADR_STRING_FIELDS
+            ):
+                _dg_fail("ADR field type is invalid.")
+            if "remarks" in adr and not _dg_valid_remarks(adr["remarks"]):
+                _dg_fail("ADR remarks type is invalid.")
+            if "placards" in adr:
+                if not isinstance(adr["placards"], list):
+                    _dg_fail("ADR placards must be a list.")
+                for placard in adr["placards"]:
+                    _dg_validate_placard(placard, assets)
+        eri = good.get("eri")
+        if eri not in (None, []) and (
+            not isinstance(eri, list)
+            or any(not isinstance(code, str) or code not in cards for code in eri)
+        ):
+            _dg_fail("ERI references must point to existing ERI cards.")
+    defaults = _dg_mapping(root.get("eri_defaults"), "eri_defaults")
+    if any(
+        not isinstance(un, str)
+        or not _DG_UN.fullmatch(un)
+        or not isinstance(code, str)
+        or code not in cards
+        for un, code in defaults.items()
+    ):
+        _dg_fail("ERI defaults must reference valid UN numbers and cards.")
+    for code, entries in cards.items():
+        if not isinstance(code, str) or not isinstance(entries, list) or not entries:
+            _dg_fail("ERI cards must be non-empty lists.")
+        for index, entry in enumerate(entries):
+            if (
+                not isinstance(entry, list)
+                or len(entry) != 2
+                or not isinstance(entry[0], str)
+                or entry[0] not in {"title", "heading", "item"}
+                or not isinstance(entry[1], str)
+            ):
+                _dg_fail("ERI card entries must be [kind, text] pairs.")
+            if index == 0 and entry[0] != "title":
+                _dg_fail("ERI cards must start with a title.")
+    sources = root.get("sources")
+    if not isinstance(sources, list):
+        _dg_fail("Sources must be a list.")
+    source_by_id = {
+        source.get("id"): source
+        for source in sources
+        if isinstance(source, dict) and isinstance(source.get("id"), str)
+    }
+    for source_id in ("bam", "ericards"):
+        source = source_by_id.get(source_id)
+        if not isinstance(source, dict) or not isinstance(source.get("legal"), dict):
+            _dg_fail("Required BAM and ERICards provenance/legal structures are missing.")
+        if not all(
+            isinstance(source.get(key), str) and source[key]
+            for key in ("provider", "dataset", "source_file", "sha256", "source_url")
+        ):
+            _dg_fail("Required source provenance is incomplete.")
+        legal = source["legal"]
+        if source_id == "bam" and not (
+            isinstance(legal.get("legal_url"), str)
+            and isinstance(legal.get("license"), dict)
+            and isinstance(legal.get("attribution"), dict)
+            and isinstance(legal.get("processing"), dict)
+        ):
+            _dg_fail("BAM legal source structure is incomplete.")
+        if source_id == "ericards" and not (
+            all(
+                isinstance(legal.get(key), str)
+                for key in ("terms_url", "guidance_url", "disclaimer_url")
+            )
+            and isinstance(legal.get("attribution"), dict)
+            and isinstance(legal.get("reproduction"), dict)
+        ):
+            _dg_fail("ERICards legal source structure is incomplete.")
+    summary = {
+        "record_count": len(goods),
+        "eri_card_count": len(cards),
+        "adr_edition": metadata.get("adr_edition"),
+        "ericards_version": metadata.get("ericards_version"),
+        "sha256": sha256_hex(payload),
+    }
+    out.line("\n  [DANGEROUS GOODS JSON]")
+    for key, value in summary.items():
+        out.line(f"    {key}: {value if value is not None else '(not supplied)'}")
+    return summary
+
+
 def validate_plaintext(
     plaintext: bytes,
     dataset: dict[str, Any],
@@ -335,6 +575,11 @@ def validate_plaintext(
         if dataset["artifact_format"] != "zip":
             fail("department_fire_plans artifact_format must be zip")
         return validate_fire_plans(plaintext, dataset, out)
+
+    if dataset_type == "dangerous_goods":
+        if dataset["artifact_format"] != "json":
+            fail("dangerous_goods artifact_format must be json")
+        return validate_dangerous_goods(plaintext, dataset, out)
 
     if dataset_type == "station_personnel":
         if dataset["artifact_format"] != "json":
