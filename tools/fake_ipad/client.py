@@ -34,7 +34,7 @@ from tools.fake_ipad.crypto import (
     strict_b64,
 )
 from tools.fake_ipad.errors import ClientError, fail
-from tools.fake_ipad.output import Output, verification_statistics
+from tools.fake_ipad.output import Output, ordered_datasets, verification_statistics
 from tools.fake_ipad.state import DeviceState, secure_write_json
 from tools.fake_ipad.transport import ApiClient, HttpResponse, problem_text
 from tools.fake_ipad.validation import (
@@ -1086,17 +1086,20 @@ class FakeIPadClient:
             }
             raise
 
+        self.out.verification_header(manifest, installation_status=self.installation_status)
         crypto = self.state.load_private_key()
         dataset_results: dict[str, Any] = {}
 
-        for dataset in manifest["datasets"]:
+        for dataset in ordered_datasets(manifest):
             if dataset["type"] not in supported_dataset_types:
+                self.out.dataset_result(dataset, status="SKIPPED (not verified)")
                 continue
             if (
                 dataset_types is not None
                 and dataset["type"] not in dataset_types
                 and not dataset["required"]
             ):
+                self.out.dataset_result(dataset, status="SKIPPED (not selected)")
                 continue
             self.verification_context = {
                 "dataset": dataset["type"],
@@ -1105,9 +1108,11 @@ class FakeIPadClient:
                 "stage": "dataset_validation",
             }
             try:
-                dataset_results[dataset["type"]] = self.verify_dataset(
-                    dataset, config, crypto, key_cache
-                )
+                with self.out.dataset_progress(dataset):
+                    dataset_results[dataset["type"]] = self.verify_dataset(
+                        dataset, config, crypto, key_cache
+                    )
+                self.out.dataset_result(dataset, dataset_results[dataset["type"]])
             except ClientError as exc:
                 exc.context = {**self.verification_context, **exc.context}
                 raise
@@ -1140,9 +1145,7 @@ class FakeIPadClient:
             self.state.save()
 
         self.last_verification_statistics = verification_statistics(manifest, dataset_results)
-        self.out.verification(
-            manifest, dataset_results, installation_status=self.installation_status
-        )
+        self.out.verification_footer(manifest, dataset_results)
         return manifest, etag, dataset_results
 
     def full_active_verification(

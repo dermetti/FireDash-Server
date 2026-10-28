@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import threading
+from contextlib import contextmanager
 from typing import Any, TextIO
 
 _SECRET_KEYS = {
@@ -21,6 +24,27 @@ _SECRET_KEYS = {
     "authorization",
     "generation_wrapped_cek",
 }
+
+_DATASET_NAMES = {
+    "dangerous_goods": "Dangerous Goods",
+    "department_hydrants": "Hydrants",
+    "station_personnel": "Personnel",
+    "department_phonebook": "Department Phonebook",
+    "station_phonebook": "Station Phonebook",
+    "department_files": "Department Files",
+    "station_files": "Station Files",
+    "department_fire_plans": "Fire Plans",
+    "department_klgv_plans": "KLGV Plans",
+}
+_SCOPES = ("SYSTEM", "DEPARTMENT", "STATION")
+
+
+def ordered_datasets(manifest: dict) -> list[dict]:
+    """The display order is also the actual verification order."""
+    return sorted(
+        manifest["datasets"],
+        key=lambda d: (_SCOPES.index(d["scope"]["type"]), _DATASET_NAMES.get(d["type"], d["type"])),
+    )
 
 
 def redact(value: Any, key: str | None = None) -> Any:
@@ -57,6 +81,10 @@ class Output:
         self.verbose = verbose
         self.compact = False
         self._stream = stream or sys.stdout
+        self._lock = threading.RLock()
+        self._scope: str | None = None
+        self._active_line: str | None = None
+        self._line_width = 0
 
     def line(self, message: str = "") -> None:
         if not self.compact or self.verbose:
@@ -64,7 +92,13 @@ class Output:
 
     def summary(self, message: str = "") -> None:
         target = sys.stderr if self.json_mode else self._stream
-        print(message, file=target)
+        with self._lock:
+            # Even unexpected diagnostics cannot interleave with a spinner frame.
+            if self._active_line is not None:
+                self._rewrite_line("")
+            print(message, file=target, flush=True)
+            if self._active_line is not None:
+                self._rewrite_line(self._active_line)
 
     def detail(self, message: str = "") -> None:
         if self.verbose:
@@ -107,7 +141,112 @@ class Output:
     def emit(self, result: dict[str, Any]) -> None:
         if not self.json_mode:
             return
-        print(json.dumps(redact(result), sort_keys=True, ensure_ascii=False), file=self._stream)
+        with self._lock:
+            print(
+                json.dumps(redact(result), sort_keys=True, ensure_ascii=False),
+                file=self._stream,
+                flush=True,
+            )
+
+    def _rewrite_line(self, text: str) -> None:
+        """Carriage return and padding work in PowerShell without ANSI/VT setup."""
+        try:
+            columns = os.get_terminal_size(self._stream.fileno()).columns
+        except (AttributeError, OSError, ValueError):
+            columns = 80
+        width = max(0, columns - 1)
+        text = text[:width]
+        self._line_width = min(width, max(self._line_width, len(text)))
+        print("\r" + text.ljust(self._line_width) + "\r", end="", file=self._stream, flush=True)
+
+    def dataset_scope(self, dataset: dict) -> None:
+        scope = dataset["scope"]["type"]
+        if scope != self._scope:
+            self.summary("\n" + scope)
+            self._scope = scope
+
+    @contextmanager
+    def dataset_progress(self, dataset: dict):
+        """Own and join the animation thread, including on BaseException exits."""
+        self.dataset_scope(dataset)
+        animate = not self.verbose and not self.json_mode and self._stream.isatty()
+        stop = threading.Event()
+        thread = None
+        if animate:
+            frames = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
+            try:
+                frames.encode(getattr(self._stream, "encoding", None) or "utf-8")
+            except UnicodeEncodeError:
+                frames = "|/-\\"
+            label = _DATASET_NAMES.get(dataset["type"], dataset["type"])
+
+            def frame(index: int) -> None:
+                with self._lock:
+                    self._active_line = (
+                        f"  {label:<22} {frames[index % len(frames)]} RUNNING "
+                        "- downloading and verifying..."
+                    )
+                    self._rewrite_line(self._active_line)
+
+            def spin() -> None:
+                index = 1
+                while not stop.wait(0.1):
+                    try:
+                        frame(index)
+                    except (OSError, ValueError):
+                        stop.set()
+                    index += 1
+
+        try:
+            if animate:
+                frame(0)
+                thread = threading.Thread(target=spin, name="fake-ipad-spinner", daemon=True)
+                thread.start()
+            yield
+        except BaseException:
+            self._stop_progress(stop, thread)
+            self.dataset_result(dataset, status="FAIL")
+            raise
+        finally:
+            self._stop_progress(stop, thread)
+
+    def _stop_progress(self, stop: threading.Event, thread: threading.Thread | None) -> None:
+        stop.set()
+        if thread is not None and thread.ident is not None:
+            thread.join()
+        with self._lock:
+            if self._active_line is not None:
+                self._active_line = None
+                self._rewrite_line("")
+                self._line_width = 0
+
+    def dataset_result(
+        self, dataset: dict, result: dict | None = None, *, status: str = "PASS"
+    ) -> None:
+        self.dataset_scope(dataset)
+        metrics = []
+        for key, unit in (
+            ("record_count", "records"),
+            ("eri_card_count", "ERI cards"),
+            ("documents", "PDFs"),
+            ("fire_plans", "PDFs"),
+            ("features", "features"),
+            ("people", "persons"),
+            ("entries", "entries"),
+        ):
+            if result is not None and key in result:
+                metrics.append(f"{result[key]:,} {unit}")
+        label = _DATASET_NAMES.get(dataset["type"], dataset["type"])
+        self.summary(f"  {label:<22} {status:<13} {' / '.join(metrics)}".rstrip())
+
+    def verification_header(
+        self, manifest: dict, *, cached: bool = False, installation_status: str | None = None
+    ) -> None:
+        self._scope = None
+        if installation_status:
+            self.summary(f"\nInstallation: {installation_status.upper()}")
+        self.summary("Manifest:     " + ("UNCHANGED / PASS" if cached else "PASS (Ed25519, ETag)"))
+        self.summary(f"Datasets:     {len(manifest['datasets'])}")
 
     def verification(
         self,
@@ -117,51 +256,23 @@ class Output:
         cached: bool = False,
         installation_status: str | None = None,
     ) -> None:
-        """Render validated data only; counters never depend on log messages."""
-        names = {
-            "dangerous_goods": "Dangerous Goods",
-            "department_hydrants": "Hydrants",
-            "station_personnel": "Personnel",
-            "department_phonebook": "Department Phonebook",
-            "station_phonebook": "Station Phonebook",
-            "department_files": "Department Files",
-            "station_files": "Station Files",
-            "department_fire_plans": "Fire Plans",
-            "department_klgv_plans": "KLGV Plans",
-        }
+        """Render an already verified snapshot, without starting an animation."""
+        self.verification_header(manifest, cached=cached, installation_status=installation_status)
+        for dataset in ordered_datasets(manifest):
+            result = results.get(dataset["type"])
+            self.dataset_result(
+                dataset,
+                result,
+                status=("CACHED / PASS" if cached else "PASS")
+                if result is not None
+                else "SKIPPED (not verified)",
+            )
+        self.verification_footer(manifest, results, cached=cached)
+
+    def verification_footer(self, manifest: dict, results: dict, *, cached: bool = False) -> None:
+        """Only called after the manifest's conditional GET has succeeded."""
         stats = verification_statistics(manifest, results, cached=cached)
         totals = stats["cached_verified"] if cached else stats["downloaded_verified"]
-        if installation_status:
-            self.summary(f"\nInstallation: {installation_status.upper()}")
-        self.summary("Manifest:     " + ("UNCHANGED / PASS" if cached else "PASS (Ed25519, ETag)"))
-        self.summary(f"Datasets:     {len(manifest['datasets'])}")
-        for scope in totals:
-            self.summary("\n" + scope)
-            for dataset in sorted(
-                manifest["datasets"], key=lambda d: names.get(d["type"], d["type"])
-            ):
-                if dataset["scope"]["type"] != scope:
-                    continue
-                kind = dataset["type"]
-                result = results.get(kind)
-                label = names.get(kind, kind)
-                if result is None:
-                    self.summary(f"  {label:<22} SKIPPED (not verified)")
-                    continue
-                metrics = []
-                for key, unit in (
-                    ("record_count", "records"),
-                    ("eri_card_count", "ERI cards"),
-                    ("documents", "PDFs"),
-                    ("fire_plans", "PDFs"),
-                    ("features", "features"),
-                    ("people", "persons"),
-                    ("entries", "entries"),
-                ):
-                    if key in result:
-                        metrics.append(f"{result[key]:,} {unit}")
-                status = "CACHED / PASS" if cached else "PASS"
-                self.summary(f"  {label:<22} {status:<13} {' / '.join(metrics)}")
         self.summary(
             "\nDOWNLOAD SUMMARY" + (" (verified cache reused; no new downloads)" if cached else "")
         )
