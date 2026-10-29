@@ -10,6 +10,15 @@ from contextlib import contextmanager
 from typing import Any, TextIO
 
 _SECRET_KEYS = {
+    "protected",
+    "encrypted_key",
+    "iv",
+    "ciphertext",
+    "tag",
+    "email",
+    "recipient_email",
+    "magic_link",
+    "link_url",
     "token",
     "credential",
     "challenge_response",

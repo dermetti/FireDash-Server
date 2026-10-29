@@ -91,8 +91,8 @@ def test_issued_portal_access_survives_operational_changes(
         response.close()
     # Only issuance continues to require today's operational authorization/scope.
     denied, _ = issue(submitted, mail)
-    assert denied.status_code == (404 if change == "assignment" else 403)
-    assert mail.send.call_count == 1
+    assert denied.status_code == (201 if change == "assignment" else 403)
+    assert mail.send.call_count == (2 if change == "assignment" else 1)
 
 
 def test_historical_scope_stays_bound_to_original_report(submitted, mail, report_key):  # noqa: F811

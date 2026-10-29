@@ -69,12 +69,11 @@ def check_transfer(row):
     return installation
 
 
-def check_report(row, transfer, installation, vehicle=None):
+def check_report(row, transfer, installation):
     if (
         row.installation_id != installation.pk
         or row.recipient_id != transfer.recipient_id
         or row.department_id != installation.tablet.department_id
-        or (vehicle is not None and row.station_id != vehicle.station_id)
         or row.document_schema_version != 1
         or row.state != "READY"
         or effective_expiry(row) <= timezone.now()
@@ -89,37 +88,57 @@ def transfer_result(row):
 
 @sensitive_variables()
 def request_transfer(*, installation, data):
-    require(isinstance(data, dict) and set(data) == {"transfer_request_id", "submission_ids"})
+    require(
+        isinstance(data, dict) and set(data) == {"transfer_request_id", "recipient_personnel_id"}
+    )
     try:
         request_id = UUID(data["transfer_request_id"])
-        ids = data["submission_ids"]
-        require(isinstance(ids, list) and 1 <= len(ids) <= 20)
-        ids = [UUID(i) for i in ids]
-        require(len(set(ids)) == len(ids))
+        person_id = UUID(data["recipient_personnel_id"])
     except (ValueError, TypeError, AttributeError):
         raise TransferError("invalid_package", 400) from None
-    fingerprint = hashlib.sha256(canonical(sorted(str(i) for i in ids))).hexdigest()
+    fingerprint = hashlib.sha256(canonical({"recipient_personnel_id": str(person_id)})).hexdigest()
     installation, _ = authorize(installation)
     with transaction.atomic():
+        # submit() uses this same lock: acceptance is wholly before or after
+        # this immutable snapshot, including concurrent submissions.
         lock_installation(installation.pk)
-        installation, vehicle = authorize(installation)
+        installation, _ = authorize(installation)
         prior = ReportTransfer.objects.filter(
             installation=installation, transfer_request_id=request_id
         ).first()
         if prior:
             if prior.request_digest != fingerprint:
                 raise TransferError("idempotency_conflict", 409)
+            recipient_for(installation, person_id)
             return transfer_result(prior), False
-        rows = list(
-            ReportSubmission.objects.select_for_update().filter(
-                installation=installation, submission_id__in=ids
+        recipient = recipient_for(installation, person_id)
+        rows = []
+        for row in (
+            ReportSubmission.objects.select_for_update()
+            .filter(
+                installation=installation,
+                recipient_id=person_id,
+                department_id=installation.tablet.department_id,
+                state="READY",
+                document_schema_version=1,
+                expires_at__gt=timezone.now(),
             )
-        )
-        if len(rows) != len(ids) or len({r.recipient_id for r in rows}) != 1:
-            raise TransferError("reports_not_authorized", 403)
-        recipient = recipient_for(installation, rows[0].recipient_id)
+            .order_by("pk")
+            .iterator()
+        ):
+            try:
+                check_report(row, row, installation)
+            except TransferError:
+                continue
+            rows.append(row)
+            if len(rows) > min(max(settings.REPORT_TRANSFER_MAX_REPORTS, 1), 100):
+                raise TransferError("too_many_reports", 409)
+        if not rows:
+            raise TransferError("no_reports_available", 409)
+        from apps.report_transfer.exports import load_verified_payload
+
         for row in rows:
-            check_report(row, row, installation, vehicle)
+            load_verified_payload(row)
         now = timezone.now()
         attempts = ReportTransfer.objects.filter(installation=installation)
         # Three immediate replacements remain possible; no cooldown on revocation.

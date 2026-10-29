@@ -130,12 +130,11 @@ def result(row):
 
 
 def status(*, installation, submission_id):
-    installation, vehicle = authorize(installation)
+    installation, _ = authorize(installation)
     row = ReportSubmission.objects.filter(
         installation=installation,
         submission_id=submission_id,
         department_id=installation.tablet.department_id,
-        station_id=vehicle.station_id,
     ).first()
     if row is None:
         raise TransferError("submission_not_found", 404)

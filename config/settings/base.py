@@ -351,6 +351,8 @@ REPORT_TRANSFER_MAX_IMAGE_PIXELS = get_typed_env(
 REPORT_TRANSFER_RETENTION_HOURS = get_typed_env("REPORT_TRANSFER_RETENTION_HOURS", int, default=168)
 REPORT_TRANSFER_MAILS_PER_MINUTE = get_typed_env("REPORT_TRANSFER_MAILS_PER_MINUTE", int, default=3)
 REPORT_TRANSFER_MAILS_PER_HOUR = get_typed_env("REPORT_TRANSFER_MAILS_PER_HOUR", int, default=10)
+# A snapshot never silently truncates eligible reports (hard ceiling: 100).
+REPORT_TRANSFER_MAX_REPORTS = get_typed_env("REPORT_TRANSFER_MAX_REPORTS", int, default=20)
 
 # Optional deployment-owned HTTPS egress proxy for outbound mail providers.
 # This is intentionally not a database/admin setting.

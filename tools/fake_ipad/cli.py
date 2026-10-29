@@ -270,6 +270,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Assert the dataset's scope-local publication version increased. Repeatable.",
     )
 
+    reports = sub.add_parser("report-test", help="Explicit synthetic report-transfer tests")
+    commands = reports.add_subparsers(dest="report_command", required=True)
+    for name in ("send", "storm", "status", "retry", "link", "revoke"):
+        command = commands.add_parser(name)
+        add_common_arguments(command)
+        argument = (
+            "recipient-personnel-id"
+            if name in ("send", "storm", "link")
+            else ("transfer-id" if name == "revoke" else "submission-id")
+        )
+        command.add_argument("--" + argument, required=True)
+        if name == "link":
+            command.add_argument(
+                "--transfer-request-id", help="Recover a stored request outcome without resending"
+            )
+
     reset = sub.add_parser(
         "reset", help="Delete only the local fake-iPad state (never server-side state)"
     )
@@ -289,6 +305,13 @@ def build_client(
     args: argparse.Namespace, out: Output
 ) -> tuple[DeviceState, FakeIPadClient | None]:
     state = DeviceState(Path(args.state_dir))
+    if args.command == "report-test" and (
+        args.app_version is not None
+        or args.app_build is not None
+        or args.clear_app_build
+        or args.save_plaintext
+    ):
+        fail("report-test cannot change app identity or save plaintext")
     if args.app_version is not None:
         require_app_version(args.app_version, label="--app-version")
     if args.app_build is not None:
@@ -389,6 +412,30 @@ def main(argv: list[str] | None = None) -> int:
                 simulate_lost_completion_response=args.simulate_lost_completion_response,
             )
             result = {"ok": True, "command": "adopt", **data}
+
+        elif args.command == "report-test":
+            from tools.fake_ipad.reports import ReportTest
+
+            reports = ReportTest(_require_client(client))
+            if args.report_command in ("send", "storm"):
+                data = reports.send(
+                    args.recipient_personnel_id, storm=args.report_command == "storm"
+                )
+            elif args.report_command == "link":
+                data = reports.link(
+                    args.recipient_personnel_id, request_id=args.transfer_request_id
+                )
+            elif args.report_command == "revoke":
+                data = reports.revoke(args.transfer_id)
+            else:
+                data = getattr(reports, args.report_command)(args.submission_id)
+            out.line(json.dumps(data, ensure_ascii=True, sort_keys=True))
+            result = {
+                "ok": True,
+                "command": "report-test",
+                "operation": args.report_command,
+                **data,
+            }
 
         elif args.command == "check-in":
             data = _require_client(client).check_in(telemetry=args.telemetry)

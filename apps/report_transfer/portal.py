@@ -3,6 +3,7 @@
 import io
 import logging
 from copy import deepcopy
+from datetime import datetime
 from functools import wraps
 from uuid import uuid4
 
@@ -117,10 +118,17 @@ def report_list(request):
                 "title": document["title"],
                 "report_type": document["report_type"],
                 "received_at": current.created_at,
+                "header_fields": display_fields(document["header"]),
+                "finalized_at": datetime.fromisoformat(
+                    document["finalization"]["finalized_at"].replace("Z", "+00:00")
+                ),
+                "photo_count": len(document["attachments"]),
+                "report_id": str(row.report_id),
                 "expires_at": effective_expiry(current),
                 "detail_url": reverse("report-portal-detail", args=[row.report_id]),
             }
         )
+    reports.sort(key=lambda item: (item["finalized_at"], item["report_id"]))
     return render(
         request, "report_transfer/list.html", {"reports": reports, "portal_authenticated": True}
     )

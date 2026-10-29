@@ -53,14 +53,14 @@ def submitted(context, report_key):  # noqa: F811
     return installation, person, tablet, ReportSubmission.objects.get(), payload
 
 
-def issue(submitted, mail, *, ids=None, request_id=None):
+def issue(submitted, mail, *, request_id=None, recipient_id=None):
     _, _, tablet, row, _ = submitted
     response = tablet.post(
         API,
         data=json.dumps(
             {
                 "transfer_request_id": str(request_id or uuid4()),
-                "submission_ids": ids or [str(row.submission_id)],
+                "recipient_personnel_id": str(recipient_id or row.recipient_id),
             }
         ),
         content_type="application/json",
@@ -312,22 +312,16 @@ def test_tablet_revoke_and_anonymous_foreign_uuid_denied(submitted, mail):
     assert row.payload_key
 
 
-@pytest.mark.parametrize(
-    "bad", ["email", "recipient", "duplicate", "empty", "too_many", "foreign", "bad_uuid"]
-)
+@pytest.mark.parametrize("bad", ["email", "submission_ids", "missing", "foreign", "bad_uuid"])
 def test_invalid_transfer_contract(submitted, mail, bad):
     _, _, tablet, row, _ = submitted
-    data = {"transfer_request_id": str(uuid4()), "submission_ids": [str(row.submission_id)]}
-    if bad in ("email", "recipient"):
+    data = {"transfer_request_id": str(uuid4()), "recipient_personnel_id": str(row.recipient_id)}
+    if bad in ("email", "submission_ids"):
         data[bad] = "not-accepted"
-    elif bad == "duplicate":
-        data["submission_ids"] *= 2
-    elif bad == "empty":
-        data["submission_ids"] = []
-    elif bad == "too_many":
-        data["submission_ids"] = [str(uuid4()) for _ in range(21)]
+    elif bad == "missing":
+        del data["recipient_personnel_id"]
     elif bad == "foreign":
-        data["submission_ids"] = [str(uuid4())]
+        data["recipient_personnel_id"] = str(uuid4())
     else:
         data["transfer_request_id"] = 123
     assert tablet.post(API, json.dumps(data), content_type="application/json").status_code in (
@@ -368,7 +362,7 @@ def test_issue_rechecks_authorization(submitted, mail, invalid):
         row.save()
     person.save()
     response, _ = issue(submitted, mail)
-    assert response.status_code in (403, 404, 410) and mail.send.call_count == 0
+    assert response.status_code in (403, 404, 409, 410) and mail.send.call_count == 0
 
 
 @pytest.mark.parametrize(
@@ -443,7 +437,7 @@ def test_parallel_issue_replay_only_one_mail(submitted, mail):
                 installation=installation,
                 data={
                     "transfer_request_id": request_id,
-                    "submission_ids": [str(row.submission_id)],
+                    "recipient_personnel_id": str(row.recipient_id),
                 },
             )
         finally:
@@ -513,14 +507,11 @@ def add_submission(submitted, report_key, *, recipient=None, full_document=False
 def test_multiple_reports_all_blocks_safe_html_and_conflicting_replay(submitted, mail, report_key):  # noqa: F811
     second = add_submission(submitted, report_key, full_document=True)
     request_id = uuid4()
-    ids = [str(submitted[3].submission_id), str(second.submission_id)]
-    response, url = issue(submitted, mail, ids=ids, request_id=request_id)
+    response, url = issue(submitted, mail, request_id=request_id)
     assert response.status_code == 201
-    assert (
-        issue(submitted, mail, ids=list(reversed(ids)), request_id=request_id)[0].status_code == 200
-    )
+    assert issue(submitted, mail, request_id=request_id)[0].status_code == 200
     assert mail.send.call_count == 1
-    assert issue(submitted, mail, request_id=request_id)[0].status_code == 409
+    assert issue(submitted, mail, request_id=request_id, recipient_id=uuid4())[0].status_code == 409
     browser, _, _ = browser_login(url)
     assert browser.get("/reports/").content.decode().count("Bericht öffnen") == 2
     html = browser.get(f"/reports/{second.report_id}/").content.decode()
@@ -542,11 +533,9 @@ def test_distinct_recipients_isolated_and_mixed_request_rejected(submitted, mail
     second = add_submission(submitted, report_key, recipient=other)
     _, first_url = issue(submitted, mail)
     first_browser, _, _ = browser_login(first_url)
-    mixed, _ = issue(
-        submitted, mail, ids=[str(submitted[3].submission_id), str(second.submission_id)]
-    )
-    assert mixed.status_code == 403
-    second_response, second_url = issue(submitted, mail, ids=[str(second.submission_id)])
+    first_transfer = ReportTransfer.objects.get()
+    assert list(first_transfer.submissions.values_list("pk", flat=True)) == [submitted[3].pk]
+    second_response, second_url = issue(submitted, mail, recipient_id=other.pk)
     assert second_response.status_code == 201
     second_browser, _, _ = browser_login(second_url)
     assert first_browser.get("/reports/").status_code == 200
@@ -583,8 +572,8 @@ def test_other_installation_cannot_issue_or_revoke(submitted, mail):
     ).hexdigest()
     installation.save(force_insert=True)
     client = Client(HTTP_AUTHORIZATION="Bearer other-credential")
-    request = {"transfer_request_id": str(uuid4()), "submission_ids": [str(row.submission_id)]}
-    assert client.post(API, json.dumps(request), content_type="application/json").status_code == 403
+    request = {"transfer_request_id": str(uuid4()), "recipient_personnel_id": str(row.recipient_id)}
+    assert client.post(API, json.dumps(request), content_type="application/json").status_code == 409
     assert client.post(f"{API}/{response.json()['transfer_id']}/revoke").status_code == 404
     assert Client().post(API, json.dumps(request), content_type="application/json").status_code in (
         401,
@@ -856,9 +845,7 @@ def test_asgi_stream_records_only_after_full_iteration(submitted, mail):
 
 def test_partial_expiry_does_not_hide_remaining_selected_reports(submitted, mail, report_key):  # noqa: F811
     second = add_submission(submitted, report_key)
-    _, url = issue(
-        submitted, mail, ids=[str(submitted[3].submission_id), str(second.submission_id)]
-    )
+    _, url = issue(submitted, mail)
     ReportSubmission.objects.filter(pk=submitted[3].pk).update(expires_at=timezone.now())
     browser, _, response = browser_login(url)
     assert response.status_code == 302

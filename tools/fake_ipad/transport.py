@@ -158,6 +158,7 @@ class ApiClient:
         bearer: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> HttpResponse:
+        report_request = path.startswith("/api/v1/tablet/report-")
         url = self.make_url(path)
         request_headers = {
             "Accept": "application/json",
@@ -174,7 +175,7 @@ class ApiClient:
             request_headers["Content-Type"] = "application/json"
 
         self.out.detail(f"\n→ {method} {url}")
-        if self.verbose and json_body is not None:
+        if self.verbose and json_body is not None and not report_request:
             self.out.detail("  request JSON:")
             self.out.detail(text_indent(pretty(json_body), "    "))
 
@@ -197,15 +198,23 @@ class ApiClient:
                 url=url,
             )
         except error.URLError as exc:
+            if report_request:
+                fail("Report request: transport failure; encrypted queue retained")
             fail(f"{method} {url}: transport failure: {exc}")
         except TimeoutError as exc:
+            if report_request:
+                fail("Report request: timeout; encrypted queue retained")
             fail(f"{method} {url}: timeout: {exc}")
+        except OSError:
+            if report_request:
+                fail("Report request: transport failure; encrypted queue retained")
+            raise
 
         self.out.detail(f"← HTTP {response.status}")
         request_id = response.headers.get("x-request-id")
         if request_id:
             self.out.detail(f"  X-Request-ID: {request_id}")
-        if self.verbose and response.body:
+        if self.verbose and response.body and not report_request:
             content_type = response.headers.get("content-type", "")
             if "json" in content_type:
                 try:
