@@ -74,14 +74,19 @@ def remove_payload(key):
     payload_path(key).unlink(missing_ok=True)
 
 
-def write_download_receipt(submission_pk, completed_at):
+def write_download_receipt(submission_pk, completed_at, *, download_audit=None):
     """Crash-recoverable completion metadata only; never content or bearer data."""
     path = root() / f"{submission_pk}-{uuid4()}.receipt"
     temporary = path.with_suffix(".receipt-tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="ascii") as output:
         json.dump(
-            {"submission_pk": submission_pk, "completed_at": completed_at.isoformat()}, output
+            {
+                "submission_pk": submission_pk,
+                "completed_at": completed_at.isoformat(),
+                "audit": download_audit,
+            },
+            output,
         )
         output.flush()
         os.fsync(output.fileno())
@@ -95,9 +100,9 @@ def write_download_receipt(submission_pk, completed_at):
     return path
 
 
-def read_download_receipt(path):
+def read_download_receipt(path, *, include_audit=False):
     try:
-        if path.is_symlink() or path.stat().st_size > 256:
+        if path.is_symlink() or path.stat().st_size > 512:
             raise ValueError
         receipt = json.loads(path.read_text(encoding="ascii"))
         pk = receipt["submission_pk"]
@@ -110,8 +115,19 @@ def read_download_receipt(path):
             or completed_at > timezone.now()
         ):
             raise ValueError
-        return pk, completed_at
-    except (ValueError, KeyError, TypeError, UnicodeError):
+        audit = receipt.get("audit")
+        if audit is not None:
+            if (
+                not isinstance(audit, dict)
+                or set(audit) != {"download_id", "transfer_id", "file_type"}
+                or audit["file_type"] not in ("pdf", "jpeg")
+            ):
+                raise ValueError
+            for field in ("download_id", "transfer_id"):
+                if str(UUID(audit[field])) != audit[field]:
+                    raise ValueError
+        return (pk, completed_at, audit) if include_audit else (pk, completed_at)
+    except (ValueError, KeyError, TypeError, AttributeError, UnicodeError):
         raise TransferError("report_storage_unavailable", 503) from None
 
 

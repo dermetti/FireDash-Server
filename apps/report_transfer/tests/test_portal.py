@@ -14,6 +14,7 @@ from django.test import Client
 from django.utils import timezone
 from PIL import Image
 
+from apps.audit.models import AuditEvent
 from apps.outbound_mail.runtime import MailAddress, MailSendResult, MessageRejectedError
 from apps.outbound_mail.tests.test_report_delivery_requests import request_context  # noqa: F401
 from apps.report_transfer import transfers
@@ -226,7 +227,7 @@ def test_live_authorization_on_each_portal_access(submitted, mail, mutation):
     root = f"/reports/{row.report_id}/"
     photo = payload["attachments"][0]["id"]
     for path in (root, root + "pdf/", root + f"photos/{photo}/", root + f"photos/{photo}/preview/"):
-        assert browser.get(path).status_code in (403, 404, 410)
+        assert browser.get(path).status_code in (403, 404, 409, 410)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -424,6 +425,8 @@ def test_parallel_redemption_only_once(submitted, mail):
         results = list(pool.map(lambda _: worker(), range(2)))
     assert sorted(results) == [302, 409]
     assert ReportPortalSession.objects.count() == 1
+    assert AuditEvent.objects.filter(action="report_transfer.login_succeeded").count() == 1
+    assert AuditEvent.objects.filter(action="report_transfer.login_failed").count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -450,6 +453,8 @@ def test_parallel_issue_replay_only_one_mail(submitted, mail):
         results = list(pool.map(lambda _: worker(), range(2)))
     assert sorted(created for _, created in results) == [False, True]
     assert mail.send.call_count == 1 and ReportTransfer.objects.count() == 1
+    assert AuditEvent.objects.filter(action="report_transfer.created").count() == 1
+    assert AuditEvent.objects.filter(action="report_transfer.link_issued").count() == 1
 
 
 def add_submission(submitted, report_key, *, recipient=None, full_document=False):  # noqa: F811

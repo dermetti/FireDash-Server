@@ -4,6 +4,7 @@ import io
 import logging
 from copy import deepcopy
 from functools import wraps
+from uuid import uuid4
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
@@ -15,9 +16,11 @@ from django.views.decorators.debug import sensitive_variables
 from django.views.decorators.http import require_GET, require_POST
 from PIL import Image, ImageOps
 
+from apps.audit.services import record_event
 from apps.report_transfer import storage, transfers
 from apps.report_transfer.contract import TransferError, decode
 from apps.report_transfer.exports import load_portal_submission
+from apps.report_transfer.models import ReportPortalSession
 from apps.report_transfer.pdf import render_pdf
 from apps.report_transfer.services import effective_expiry, record_successful_download
 
@@ -178,18 +181,29 @@ def detail(request, report_id):
     )
 
 
-def complete_download(request, row):
+def complete_download(request, row, file_type, *, transfer_id):
     receipt = None
     completed_at = timezone.now()
+    # Created only on normal stream exhaustion. UUID deduplicates a recovered
+    # receipt after a crash between database commit and receipt removal.
+    download_audit = {
+        "download_id": str(uuid4()),
+        "transfer_id": str(transfer_id),
+        "file_type": file_type,
+    }
     try:
-        receipt = storage.write_download_receipt(row.pk, completed_at)
+        receipt = storage.write_download_receipt(
+            row.pk, completed_at, download_audit=download_audit
+        )
     except (OSError, TransferError):
         logger.warning("Report download receipt could not be journaled.")
     try:
         # Keep completion and generation checks serialized with revocation.
         with transaction.atomic():
             transfers.portal_context(request, report_id=row.report_id)
-            record_successful_download(submission_pk=row.pk, completed_at=completed_at)
+            record_successful_download(
+                submission_pk=row.pk, completed_at=completed_at, download_audit=download_audit
+            )
         if receipt:
             receipt.unlink(missing_ok=True)
     except Exception:
@@ -209,18 +223,25 @@ def download_response(request, row, payload, media_type, extension):
         in (request.headers.get("Sec-Purpose", "") + request.headers.get("Purpose", "")).lower()
     ):
         raise TransferError("download_requires_explicit_request", 400)
+    transfer_id = ReportPortalSession.objects.values_list("transfer_id", flat=True).get(
+        pk=request.session["report_portal"]
+    )
 
     def chunks():
         for offset in range(0, len(payload), 256 * 1024):
             transfers.portal_context(request, report_id=row.report_id)
             yield payload[offset : offset + 256 * 1024]
-        complete_download(request, row)
+        complete_download(
+            request, row, "pdf" if extension == "pdf" else "jpeg", transfer_id=transfer_id
+        )
 
     async def async_chunks():
         for offset in range(0, len(payload), 256 * 1024):
             await sync_to_async(transfers.portal_context)(request, report_id=row.report_id)
             yield payload[offset : offset + 256 * 1024]
-        await sync_to_async(complete_download)(request, row)
+        await sync_to_async(complete_download)(
+            request, row, "pdf" if extension == "pdf" else "jpeg", transfer_id=transfer_id
+        )
 
     response = StreamingHttpResponse(
         async_chunks() if hasattr(request, "scope") else chunks(), content_type=media_type
@@ -241,7 +262,18 @@ def pdf(request, report_id):
         attachment_hashes={a["id"]: a["sha256"] for a in attachments},
         received_at=row.created_at,
     )
-    transfers.portal_context(request, report_id=report_id)
+    transfer, _ = transfers.portal_context(request, report_id=report_id)
+    record_event(
+        action="report_transfer.pdf_generated",
+        department=row.department,
+        target_type="report_submission",
+        target_uuid=row.submission_id,
+        metadata={
+            "file_type": "pdf",
+            "transfer_id": str(transfer.pk),
+            "installation_id": str(row.installation_id),
+        },
+    )
     return download_response(request, row, payload, "application/pdf", "pdf")
 
 

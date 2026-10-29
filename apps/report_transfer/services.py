@@ -9,6 +9,8 @@ from django.db.models import Q
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_variables
 
+from apps.audit.models import AuditEvent
+from apps.audit.services import record_event
 from apps.outbound_mail.report_admission import ReportAdmissionError, resolve_report_recipient
 from apps.publications.manifests import ManifestError, control_plane_context
 from apps.report_transfer import storage
@@ -97,6 +99,19 @@ def submit(*, installation, envelope):
                 expires_at=timezone.now()
                 + timedelta(hours=min(settings.REPORT_TRANSFER_RETENTION_HOURS, 168)),
             )
+            record_event(
+                action="report_transfer.submission_accepted",
+                actor_installation_uuid=installation.installation_uuid,
+                department=row.department,
+                station=row.station,
+                target_type="report_submission",
+                target_uuid=row.submission_id,
+                metadata={
+                    "report_id": str(row.report_id),
+                    "installation_id": str(row.installation_id),
+                    "accepted_at": row.created_at.isoformat(),
+                },
+            )
         return result(row), True
     except BaseException:
         if payload_key:
@@ -137,7 +152,7 @@ def effective_expiry(row):
     return deadline
 
 
-def record_successful_download(*, submission_pk, completed_at=None):
+def record_successful_download(*, submission_pk, completed_at=None, download_audit=None):
     """Trusted portal hook AFTER a completed explicit download, never a preview.
 
     The caller must authorize the resource before serving it. This is intentionally
@@ -156,6 +171,25 @@ def record_successful_download(*, submission_pk, completed_at=None):
             row.first_download_at = completed_at
         row.expires_at = effective_expiry(row)
         row.save(update_fields=("first_download_at", "expires_at"))
+        if (
+            download_audit
+            and not AuditEvent.objects.filter(
+                action="report_transfer.download_completed",
+                target_uuid=row.submission_id,
+                metadata__download_id=download_audit["download_id"],
+            ).exists()
+        ):
+            record_event(
+                action="report_transfer.download_completed",
+                department=row.department,
+                target_type="report_submission",
+                target_uuid=row.submission_id,
+                metadata={
+                    **download_audit,
+                    "installation_id": str(row.installation_id),
+                    "completed_at": completed_at.isoformat(),
+                },
+            )
         return row.expires_at
 
 
@@ -166,10 +200,14 @@ def cleanup(*, now=None):
     # This never fabricates an event for previews or interrupted streams.
     for path in storage.root().glob("*.receipt"):
         try:
-            pk, completed_at = storage.read_download_receipt(path)
+            pk, completed_at, download_audit = storage.read_download_receipt(
+                path, include_audit=True
+            )
             row = ReportSubmission.objects.filter(pk=pk).first()
             if row is not None and row.state == "READY":
-                record_successful_download(submission_pk=pk, completed_at=completed_at)
+                record_successful_download(
+                    submission_pk=pk, completed_at=completed_at, download_audit=download_audit
+                )
             path.unlink(missing_ok=True)
         except FileNotFoundError:
             continue
@@ -197,6 +235,14 @@ def cleanup(*, now=None):
                 row.payload_key = ""
                 row.state = "EXPIRED"
                 row.save(update_fields=("payload_key", "state"))
+                record_event(
+                    action="report_transfer.content_purged",
+                    department=row.department,
+                    station=row.station,
+                    target_type="report_submission",
+                    target_uuid=row.submission_id,
+                    metadata={"result": "expired", "installation_id": str(row.installation_id)},
+                )
                 expired += 1
         except (OSError, TransferError):
             failed += 1

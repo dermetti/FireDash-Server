@@ -113,7 +113,10 @@ Ablauf der 60 Token-Minuten weiterarbeiten, solange ihre Berichte verfügbar sin
 
 Jede Liste, Detailansicht, Vorschau und jeder Download prüft Generation,
 Sessionbindung, Inaktivität, aktuelle Empfängerberechtigung und Postfachbindung,
-Installations-/Stationsscope, Transfermitgliedschaft und effektive Report-TTL.
+historischen Installations-/Departmentscope, Transfermitgliedschaft und effektive
+Report-TTL. Seit Phase 3.3.1 hängt ein ausgestellter Zugang weder von der heutigen
+Lease noch von der aktuellen Fahrzeug-/Stationszuordnung ab; explizite Sperren
+werden weiterhin geprüft (siehe Nachtrag unten).
 Die Portal-Lader autorisieren die tatsächliche Transferfreigabe; sie rufen keinen
 Tablet-Export mit einer vorgetäuschten Tabletidentität auf. Die geprüfte
 Payload-Integritätsroutine wird gemeinsam verwendet. Kenntnis einer UUID gewährt
@@ -154,7 +157,8 @@ nur Autorisierung, Payload-Lesen und Abschlussverbuchung benutzen kurze
 Transaktionen. `X-Accel-Buffering: no` vermeidet die normale Nginx-Pufferung.
 
 Eine kleine atomar veröffentlichte `.receipt`-Datei im privaten Reportspool enthält
-nur interne Submission-PK und tatsächlichen Abschlusszeitpunkt, nie Inhalte oder
+nur interne Submission-PK, tatsächlichen Abschlusszeitpunkt und seit Phase 3.3.1
+optional Download-/Transfer-UUID sowie Dateityp für das Audit, nie Inhalte oder
 Tokens. Nach erfolgreichem DB-Update wird sie entfernt. Bei einem DB-Fehler
 erzwingt sie bereits bei Status-/Zugriffsprüfungen die kürzere Frist;
 `expire_report_submissions` verarbeitet sie erneut und entfernt sie nach der
@@ -240,3 +244,81 @@ Probleme. `makemigrations --check --dry-run`: keine fehlenden Migrationen. Ruff-
 Prüfung und Formatcheck aller betroffenen Python-Dateien: erfolgreich (29 Dateien
 formatiert geprüft). `git diff --check`: erfolgreich. Disposabler Teststorage nach
 dem Lauf entfernt. Keine vollständige Testsuite ausgeführt.
+
+## Nachtrag Phase 3.3.1 – Portalautorisierung und Audit
+
+`authorize()` bleibt für Upload, Tablet-Exporte und neue Linkanforderungen
+unverändert streng: aktuelle Lease und gültiger Fahrzeug-/Stationsscope.
+`check_transfer()` prüft ausgestellte Portalzugänge separat anhand gespeicherter
+Sicherheitszustände. ACTIVE und STALE sind zulässig, auch nach Lease-Ablauf oder
+Fahrzeug-/Stationswechsel. REVOKED/REPLACED, gesetztes `revoked_at`, deaktiviertes
+Tablet, INACTIVE/LOST/RETIRED und nicht aktives Department sperren weiterhin.
+Empfängerberechtigung, verifizierte unveränderte Mailbindung, Domainpolicy,
+Generation, Sessionbindung, Einmalanmeldung, Inaktivität und TTL bleiben wirksam.
+Der historische Bericht wird nicht umgehängt: Installation, Department, Empfänger,
+Station und IDs müssen zusätzlich mit dem authentifizierten JWE-Umschlag
+übereinstimmen. Freigaben erschließen ausschließlich ihre ausgewählten Berichte.
+
+Alle folgenden Ereignisse verwenden direkt `apps.audit.services.record_event()`:
+
+| Aktion (`report_transfer.`) | Tatsächlicher Auslöser |
+| --- | --- |
+| `submission_accepted` | Erstmalige Annahme, atomar mit dem Submission-Datensatz |
+| `created` | Neue Transfer-Generation, atomar mit der Freigabe |
+| `link_issued` | Einmaliger Versandversuch abgeschlossen; `result` SENT/FAILED/UNKNOWN und bereinigter `code`, keine Zustellbehauptung |
+| `login_succeeded` | Tokenverbrauch und Portal-Session atomar gespeichert |
+| `login_failed` | Abgewiesener Einlöse-POST; kein Erfolg bei abgelaufenem/verwendetem/gesperrtem Zugang |
+| `revoked` | Zustandswechsel mit Quelle `tablet`, `portal`, `consumed_token` oder `replacement` |
+| `pdf_generated` | Generischer Renderer erfolgreich, unabhängig vom späteren Downloadabschluss |
+| `download_completed` | Vollständige serverseitige PDF-/JPEG-Streamübergabe, auch bei späterer Receipt-Recovery |
+| `content_purged` | Verschlüsselten Inhalt entfernt und EXPIRED gespeichert; Dateifehler bleiben wiederholbar |
+
+Tablet-Aktionen tragen die bestehende `actor_installation_uuid`. Portalaktionen
+haben keinen persönlich authentifizierten Django-User und keinen vorgetäuschten
+Tablet-Akteur. Ziele sind Transfer- oder Submission-UUIDs; zusätzliche Metadaten
+beschränken sich auf notwendige IDs, Serverzeitpunkte, Dateityp und feste
+Ergebnis-/Quellcodes. Kein Request-Objekt wird an diese Audit-Aufrufe übergeben:
+keine URL, IP, User-Agent, Mailadresse, Token/Hash, Sessionkey oder Berichtsinhalte.
+Ein `report_finalized`-Ereignis wird nicht erzeugt.
+
+Fehlversuche bekannter Generationen werden unter dem Installationslock höchstens
+einmal je Generation erfasst. Nicht zuordenbare Tokenversuche erzeugen global
+höchstens einen anonymen `unidentified_token`-Eintrag pro rollender Minute.
+Ein nicht wartender PostgreSQL-Transaktionslock sichert diese Grenze auch zwischen
+Workern; weitere Versuche erzeugen keine Audit-Zeilen. Es werden keine
+Token-Fingerprints oder Clientdaten für diese Begrenzung gespeichert. GET und vor
+der View durch CSRF abgewiesene Anfragen erzeugen keine Loginereignisse.
+
+Idempotente Uploads, Linkanforderungen und Widerrufe erzeugen keine erneuten
+Zustandsänderungsereignisse. Jeder tatsächlich abgeschlossene neue Download ist
+ein eigenes Ereignis; Wiederverarbeitung desselben Abschlussbelegs ist keines.
+Die vorhandenen temporären Receipts enthalten dafür optional eine zufällige
+Download-UUID, Transfer-UUID und `pdf`/`jpeg`; Audit und Retention werden gemeinsam
+unter dem Submission-Lock gespeichert. Alte Receipts ohne diese Metadaten bleiben
+für Retention verarbeitbar; unbekannte Dateitypen werden nicht nachträglich
+erfunden. Die dokumentierten Grenzen der Erkennung vollständiger Übertragung
+gelten weiterhin. Keine neuen Modelle oder Migrationen und keine Änderungen an
+JWE, ReportDocument, PDF-Layout, Mailprovider-Auswahl, Publications oder Fake-iPad.
+
+Fokussierte PostgreSQL-Validierung mit isoliertem Dateispeicher und gemockter Mail:
+
+```powershell
+$env:DJANGO_SETTINGS_MODULE='config.settings.test'
+.venv/Scripts/python.exe -m pytest -p no:cacheprovider apps/report_transfer/tests apps/outbound_mail/tests/test_report_admission.py apps/outbound_mail/tests/test_report_delivery.py apps/outbound_mail/tests/test_report_delivery_requests.py apps/tablets/tests/test_api.py -q --tb=short
+```
+
+Zusätzliche Tests prüfen Lease-Ablauf/STALE und Neuzuweisung vor und nach
+Einmalanmeldung, unveränderten historischen Scope, alle expliziten Sperrpfade,
+Audit-Datensparsamkeit und Ergebniszuordnung, parallele/beschränkt protokollierte
+Fehlanmeldungen, Zustandsrollback, unterbrochene Downloads, fehlgeschlagene
+Löschung und wiederholte Receipt-Verarbeitung. Die vorhandene Append-only-Sperre
+des Audit-Systems wird nicht verändert; Zeitfenster werden per Uhr-Mock geprüft.
+
+Ergebnis Phase 3.3.1: **298 Tests bestanden in 109,69 Sekunden**, einschließlich
+36 neuer Autorisierungs-/Audit-Tests, bestehender JWE-/ReportDocument-, Idempotenz-,
+Portal-/Generationen-/Retention-, PDF-Mail- und Tablet-API-Tests. Keine Warnungen.
+Django `check`: keine Probleme. `makemigrations --check --dry-run`: keine Änderungen.
+Ruff und Formatcheck: erfolgreich (26 Python-Dateien). `git diff --check`:
+erfolgreich. Disposabler Teststorage nach dem Lauf entfernt. Keine vollständige
+Testsuite, Git-Schreibaktionen, echten E-Mails, Deployments, Live-Cleanup-Jobs
+oder Live-Datenbankänderungen.

@@ -7,10 +7,12 @@ from datetime import timedelta
 from uuid import UUID
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_variables
 
+from apps.audit.models import AuditEvent
+from apps.audit.services import record_event
 from apps.outbound_mail.report_admission import ReportAdmissionError, resolve_report_recipient
 from apps.outbound_mail.report_delivery import recipient_to_mail_address
 from apps.outbound_mail.resolution import resolve_department_mail_provider
@@ -48,19 +50,31 @@ def recipient_for(installation, person_id):
 def check_transfer(row):
     if row.revoked_at or row.mail_state != "SENT":
         raise TransferError("access_unavailable", 403)
-    installation, vehicle = authorize(row.installation)
+    # Issued grants outlive operational leases/assignments, but never explicit
+    # asset, installation or department revocation. Always reload persisted state.
+    installation = AppInstallation.objects.select_related("tablet__department").get(
+        pk=row.installation_id
+    )
+    if (
+        installation.status not in (AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE)
+        or installation.revoked_at is not None
+        or not installation.tablet.active
+        or installation.tablet.status != installation.tablet.Status.ACTIVE
+        or installation.tablet.department.status != installation.tablet.department.Status.ACTIVE
+    ):
+        raise TransferError("access_unavailable", 403)
     recipient = recipient_for(installation, row.recipient_id)
     if not hmac.compare_digest(email_digest(recipient.email), row.recipient_email_digest):
         raise TransferError("access_unavailable", 403)
-    return installation, vehicle
+    return installation
 
 
-def check_report(row, transfer, installation, vehicle):
+def check_report(row, transfer, installation, vehicle=None):
     if (
         row.installation_id != installation.pk
         or row.recipient_id != transfer.recipient_id
         or row.department_id != installation.tablet.department_id
-        or row.station_id != vehicle.station_id
+        or (vehicle is not None and row.station_id != vehicle.station_id)
         or row.document_schema_version != 1
         or row.state != "READY"
         or effective_expiry(row) <= timezone.now()
@@ -125,9 +139,20 @@ def request_transfer(*, installation, data):
         except (RuntimeError, ValueError):
             raise TransferError("portal_unavailable", 503) from None
         token = secrets.token_urlsafe(32)
-        ReportTransfer.objects.filter(
+        previous = ReportTransfer.objects.filter(
             installation=installation, recipient_id=recipient.personnel_id, revoked_at__isnull=True
-        ).update(revoked_at=now)
+        )
+        previous_ids = list(previous.values_list("pk", flat=True))
+        previous.update(revoked_at=now)
+        for previous_id in previous_ids:
+            record_event(
+                action="report_transfer.revoked",
+                actor_installation_uuid=installation.installation_uuid,
+                department=installation.tablet.department,
+                target_type="report_transfer",
+                target_uuid=previous_id,
+                metadata={"source": "replacement", "revoked_at": now.isoformat()},
+            )
         transfer = ReportTransfer.objects.create(
             installation=installation,
             recipient_id=recipient.personnel_id,
@@ -139,10 +164,27 @@ def request_transfer(*, installation, data):
             token_expires_at=now + timedelta(minutes=60),
         )
         transfer.submissions.set(rows)
+        record_event(
+            action="report_transfer.created",
+            actor_installation_uuid=installation.installation_uuid,
+            department=installation.tablet.department,
+            target_type="report_transfer",
+            target_uuid=transfer.pk,
+            metadata={"issued_at": now.isoformat()},
+        )
     # Claim committed before any provider I/O. A crash remains PROCESSING;
     # neither replay nor a worker may retry this uncertain send.
     state, code = send_link(transfer.pk, token)
-    ReportTransfer.objects.filter(pk=transfer.pk).update(mail_state=state, mail_code=code)
+    with transaction.atomic():
+        ReportTransfer.objects.filter(pk=transfer.pk).update(mail_state=state, mail_code=code)
+        record_event(
+            action="report_transfer.link_issued",
+            actor_installation_uuid=installation.installation_uuid,
+            department=installation.tablet.department,
+            target_type="report_transfer",
+            target_uuid=transfer.pk,
+            metadata={"result": state, "code": code},
+        )
     transfer.refresh_from_db()
     return transfer_result(transfer), True
 
@@ -199,6 +241,14 @@ def revoke_tablet(*, installation, transfer_id):
         if row.revoked_at is None:
             row.revoked_at = timezone.now()
             row.save(update_fields=("revoked_at",))
+            record_event(
+                action="report_transfer.revoked",
+                actor_installation_uuid=installation.installation_uuid,
+                department=installation.tablet.department,
+                target_type="report_transfer",
+                target_uuid=row.pk,
+                metadata={"source": "tablet", "revoked_at": row.revoked_at.isoformat()},
+            )
         return transfer_result(row)
 
 
@@ -227,17 +277,63 @@ def token_transfer(token):
 
 @sensitive_variables()
 def redeem(request, token):
+    try:
+        _redeem(request, token)
+    except TransferError as error:
+        # No attacker-chosen token, IP, UA or arbitrary text is retained. Known
+        # generations get at most one failure; unknown tokens share a global
+        # one-minute audit window across workers, without blocking on its lock.
+        candidate = (
+            ReportTransfer.objects.filter(token_digest=digest(token)).first()
+            if isinstance(token, str) and len(token) == 43
+            else None
+        )
+        if candidate:
+            with transaction.atomic():
+                lock_installation(candidate.installation_id)
+                if not AuditEvent.objects.filter(
+                    action="report_transfer.login_failed", target_uuid=candidate.pk
+                ).exists():
+                    record_event(
+                        action="report_transfer.login_failed",
+                        target_type="report_transfer",
+                        target_uuid=candidate.pk,
+                        metadata={"code": error.code},
+                    )
+        else:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT pg_try_advisory_xact_lock(%s)", [7361031002])
+                    acquired = cursor.fetchone()[0]
+                if (
+                    acquired
+                    and not AuditEvent.objects.filter(
+                        action="report_transfer.login_failed",
+                        target_uuid__isnull=True,
+                        timestamp__gte=timezone.now() - timedelta(minutes=1),
+                    ).exists()
+                ):
+                    record_event(
+                        action="report_transfer.login_failed",
+                        target_type="report_transfer",
+                        metadata={"code": "unidentified_token"},
+                    )
+        raise
+
+
+@sensitive_variables()
+def _redeem(request, token):
     candidate = token_transfer(token)
     with transaction.atomic():
         lock_installation(candidate.installation_id)
         row = token_transfer(token)
         if row.consumed_at:
             raise TransferError("access_used", 409)
-        installation, vehicle = check_transfer(row)
+        installation = check_transfer(row)
         available = False
         for report in row.submissions.all():
             try:
-                check_report(report, row, installation, vehicle)
+                check_report(report, row, installation)
             except TransferError:
                 continue
             available = True
@@ -256,6 +352,13 @@ def redeem(request, token):
         request.session.set_expiry(1800)
         row.consumed_at = timezone.now()
         row.save(update_fields=("consumed_at",))
+        record_event(
+            action="report_transfer.login_succeeded",
+            department=installation.tablet.department,
+            target_type="report_transfer",
+            target_uuid=row.pk,
+            metadata={"consumed_at": row.consumed_at.isoformat()},
+        )
 
 
 @sensitive_variables()
@@ -270,6 +373,12 @@ def revoke_token(token):
             raise TransferError("access_unavailable", 403)
         row.revoked_at = timezone.now()
         row.save(update_fields=("revoked_at",))
+        record_event(
+            action="report_transfer.revoked",
+            target_type="report_transfer",
+            target_uuid=row.pk,
+            metadata={"source": "consumed_token", "revoked_at": row.revoked_at.isoformat()},
+        )
 
 
 def portal_context(request, *, report_id=None):
@@ -298,7 +407,7 @@ def portal_context(request, *, report_id=None):
             or not hmac.compare_digest(portal.session_digest, digest(request.session.session_key))
         ):
             raise TransferError("access_unavailable", 403)
-        installation, vehicle = check_transfer(transfer)
+        installation = check_transfer(transfer)
         if transfer.consumed_at is None:
             raise TransferError("access_unavailable", 403)
         rows = list(
@@ -309,7 +418,7 @@ def portal_context(request, *, report_id=None):
         available = []
         for row in rows:
             try:
-                check_report(row, transfer, installation, vehicle)
+                check_report(row, transfer, installation)
             except TransferError:
                 if report_id:
                     raise
@@ -327,9 +436,16 @@ def revoke_portal(request):
     transfer, _ = portal_context(request)
     with transaction.atomic():
         lock_installation(transfer.installation_id)
-        ReportTransfer.objects.filter(pk=transfer.pk, revoked_at__isnull=True).update(
-            revoked_at=timezone.now()
-        )
+        now = timezone.now()
+        if ReportTransfer.objects.filter(pk=transfer.pk, revoked_at__isnull=True).update(
+            revoked_at=now
+        ):
+            record_event(
+                action="report_transfer.revoked",
+                target_type="report_transfer",
+                target_uuid=transfer.pk,
+                metadata={"source": "portal", "revoked_at": now.isoformat()},
+            )
 
 
 def logout(request):

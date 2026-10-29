@@ -6,6 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_variables
 
+from apps.audit.services import record_event
 from apps.report_transfer import storage
 from apps.report_transfer.contract import (
     TransferError,
@@ -51,6 +52,18 @@ def load_verified_payload(row):
         raise TransferError("report_integrity_failure", 409)
     envelope = parse_json(raw)
     header = inspect_envelope(envelope)
+    # Historical scope is bound to authenticated ciphertext, never today's
+    # station assignment. A changed database reference must fail closed too.
+    for field, expected in (
+        ("installation_id", row.installation_id),
+        ("department_id", row.department_id),
+        ("station_id", row.station_id),
+        ("recipient_personnel_id", row.recipient_id),
+        ("submission_id", row.submission_id),
+        ("report_id", row.report_id),
+    ):
+        if header[field] != str(expected):
+            raise TransferError("report_integrity_failure", 409)
     document, attachments, digest = decrypt_and_validate(envelope, header)
     if digest != row.document_digest or document["report_id"] != str(row.report_id):
         raise TransferError("report_integrity_failure", 409)
@@ -73,11 +86,20 @@ def render_submission_pdf(*, installation, submission_id):
     row, document, attachments = load_submission(
         installation=installation, submission_id=submission_id
     )
-    return render_pdf(
+    payload = render_pdf(
         document,
         attachment_hashes={a["id"]: a["sha256"] for a in attachments},
         received_at=row.created_at,
     )
+    record_event(
+        action="report_transfer.pdf_generated",
+        actor_installation_uuid=installation.installation_uuid,
+        department=row.department,
+        target_type="report_submission",
+        target_uuid=row.submission_id,
+        metadata={"file_type": "pdf", "installation_id": str(row.installation_id)},
+    )
+    return payload
 
 
 @sensitive_variables()
