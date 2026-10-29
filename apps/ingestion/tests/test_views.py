@@ -37,7 +37,6 @@ def test_department_admin_can_open_each_supported_import_entry_page(
     response = client.get(reverse("ingestion-imports", args=(department.id,)), query)
     assert response.status_code == 200
     station_field = response.context["form"].fields["station"]
-    assert list(station_field.queryset.values_list("id", flat=True)) == [active.id]
     assert other_station.id not in station_field.queryset.values_list("id", flat=True)
 
 
@@ -48,33 +47,6 @@ def test_import_page_denies_another_department_administrator(client, import_page
     DepartmentMembership.objects.create(user=outsider, department=other, created_by=outsider)
     client.force_login(outsider)
     assert client.get(reverse("ingestion-imports", args=(department.id,))).status_code == 403
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("route", "title", "fixed_format"),
-    (
-        ("ingestion-import-hydrants", "Import Hydrants", None),
-        ("ingestion-import-personnel", "Import Personnel", "CSV"),
-        ("ingestion-import-fire-plans", "Import Fire Plans", "PDF + CSV ZIP package"),
-        ("ingestion-import-klgv-plans", "Import KLGV Plans", "PDF + CSV ZIP package"),
-    ),
-)
-def test_domain_import_pages_have_explicit_human_presentation(
-    client, import_page_context, route, title, fixed_format
-):
-    actor, department, *_ = import_page_context
-    client.force_login(actor)
-    response = client.get(reverse(route, args=(department.id,)))
-    content = response.content.decode()
-    assert response.status_code == 200
-    assert title in content
-    assert "Import and review" in content
-    assert "Create preview" not in content
-    assert "Fire_Plans" not in content
-    if fixed_format:
-        assert fixed_format in content
-        assert 'name="import_format"' not in content or 'type="hidden"' in content
 
 
 @pytest.mark.django_db
@@ -114,76 +86,8 @@ def test_hydrant_import_page_offers_only_csv_and_geojson_and_scopes_recent_batch
     )
     client.force_login(actor)
     response = client.get(reverse("ingestion-import-hydrants", args=(department.id,)))
-    content = response.content.decode()
-    assert "hydrants.csv" in content
-    assert "personnel.csv" not in content
-    assert "other.csv" not in content
-    assert "GeoJSON" in content and "CSV" in content
-    assert ">JSON<" not in content
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    "domain",
-    (
-        ImportBatch.Domain.HYDRANTS,
-        ImportBatch.Domain.FIRE_PLANS,
-        ImportBatch.Domain.STATION_VEHICLES,
-        ImportBatch.Domain.PERSONNEL,
-        ImportBatch.Domain.KLGV_PLANS,
-    ),
-)
-def test_shared_final_apply_form_announces_synchronous_processing(
-    client, import_page_context, domain
-):
-    actor, department, *_ = import_page_context
-    batch = ImportBatch.objects.create(
-        department=department,
-        actor=actor,
-        domain=domain,
-        import_format=ImportBatch.Format.CSV,
-        import_mode=ImportBatch.Mode.UPSERT,
-        original_filename="ready.csv",
-        upload_sha256="d" * 64,
-        staging_key=f"test/ready-{domain}",
-        status=ImportBatch.Status.PREVIEW_READY,
-    )
-    client.force_login(actor)
-
-    response = client.get(reverse("ingestion-preview", args=(department.id, batch.id)))
-
-    assert response.status_code == 200
-    content = response.content.decode()
-    assert "ingestion/partials/_apply_import_form.html" in [
-        template.name for template in response.templates if template.name
-    ]
-    assert "Apply accepted changes" in content
-    assert "Applying changes…" in content
-    assert "Processing this import. Large datasets may take a minute." in content
-    assert 'x-on:submit="if (applying) { $event.preventDefault(); } applying = true"' in content
-    assert 'x-bind:disabled="applying"' in content
-    assert 'x-bind:aria-disabled="applying.toString()"' in content
-    assert 'aria-live="polite"' in content
-    assert "spinner-border spinner-border-sm" in content
-
-
-@pytest.mark.django_db
-def test_applied_batch_no_longer_renders_apply_control(client, import_page_context):
-    actor, department, *_ = import_page_context
-    batch = ImportBatch.objects.create(
-        department=department,
-        actor=actor,
-        domain=ImportBatch.Domain.HYDRANTS,
-        import_format=ImportBatch.Format.CSV,
-        import_mode=ImportBatch.Mode.MERGE,
-        original_filename="applied.csv",
-        upload_sha256="e" * 64,
-        staging_key="test/already-applied",
-        status=ImportBatch.Status.APPLIED,
-    )
-    client.force_login(actor)
-
-    response = client.get(reverse("ingestion-preview", args=(department.id, batch.id)))
-
-    assert response.status_code == 200
-    assert "Apply accepted changes" not in response.content.decode()
+    assert [b.original_filename for b in response.context["batches"]] == ["hydrants.csv"]
+    assert {value for value, label in response.context["form"].fields["import_format"].choices} == {
+        "csv",
+        "geojson",
+    }

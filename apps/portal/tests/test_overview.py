@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import User
-from apps.authorization.models import DepartmentMembership, StationAdminAssignment, SystemRole
+from apps.authorization.models import DepartmentMembership, StationAdminAssignment
 from apps.organizations.models import Department, Station
 from apps.portal.overview import _publication_attention, attention_for_request, department_attention
 from apps.portal.views import _nav_context
@@ -197,43 +197,3 @@ def test_overview_and_topbar_share_cached_role_scoped_attention(
     assert calls == [department.id]
 
     client.force_login(station_admin)
-    content = client.get(reverse("dashboard")).content.decode()
-    assert "No current attention items require action." in content
-    overview_start = content.index("Requires attention")
-    overview_end = content.index("Operational state", overview_start)
-    overview_content = content[overview_start:overview_end]
-    assert reverse("tablet-list", args=[department.id]) not in overview_content
-    assert reverse("publications-list", args=[department.id]) not in overview_content
-
-
-@pytest.mark.django_db
-def test_dashboard_renders_attention_first_quiet_state_and_accessible_operational_text(
-    client, overview_scope
-):
-    admin, department = overview_scope
-    client.force_login(admin)
-    quiet = client.get(reverse("dashboard")).content.decode()
-    assert quiet.index("Requires attention") < quiet.index("Operational state")
-    assert 'role="status"' in quiet
-    assert "No current attention items require action." in quiet
-    assert "active station(s)" in quiet
-
-    DatasetScopeState.objects.create(department=department, dataset_type_code="department_hydrants")
-    active = client.get(reverse("dashboard")).content.decode()
-    assert "Not published" in active
-    assert 'Attention <span class="badge text-bg-dark">1</span>' in active
-
-
-@pytest.mark.django_db
-def test_system_overview_uses_orphan_recovery_only(client, overview_scope):
-    admin, _department = overview_scope
-    system = User.objects.create_user("system-overview@example.test", "System", "password")
-    SystemRole.objects.create(user=system)
-    orphan = Department.objects.create(name="Orphan", short_code="ORP", created_by=admin)
-    client.force_login(system)
-
-    content = client.get(reverse("dashboard")).content.decode()
-
-    assert "administrator recovery" in content
-    assert reverse("portal-system-department", args=[orphan.id]) in content
-    assert "System Health" not in content and "Backups" not in content

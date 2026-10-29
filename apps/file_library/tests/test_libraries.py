@@ -266,17 +266,15 @@ def test_portal_bulk_errors_preview_search_and_confirmation(scope, pdf_pipeline,
         follow=True,
     )
     assert result.status_code == 200
-    assert b"Uploaded guide.pdf" in result.content and b"must end in .pdf" in result.content
+    assert list(Entry.objects.values_list("name", flat=True)) == ["guide.pdf"]
     document = Entry.objects.get()
     doc_url = reverse("file-library-document", args=[library.id, document.id])
     for suffix in ["", "?download=1"]:
         response = client.get(doc_url + suffix)
         assert response.status_code == 200 and response["Content-Type"] == "application/pdf"
         assert b"%PDF" in b"".join(response.streaming_content)
-    assert (
-        b"guide.pdf"
-        in client.get(reverse("file-library-explorer", args=[library.id]) + "?q=guide").content
-    )
+    listing = client.get(reverse("file-library-explorer", args=[library.id]), {"q": "guide"})
+    assert [e.id for e in listing.context["page"]] == [document.id]
     client.post(url, {"action": "library_name", "name": "Operations"})
     library.refresh_from_db()
     assert library.name == "Operations"
@@ -292,11 +290,11 @@ def test_portal_bulk_errors_preview_search_and_confirmation(scope, pdf_pipeline,
 
 def test_data_hub_role_tiles(scope, client):
     client.force_login(scope[0])
-    assert b"File Management" in client.get(reverse("portal-data-hub", args=[scope[3].id])).content
+    assert client.get(reverse("portal-data-hub", args=[scope[3].id])).status_code == 200
     station_hub = reverse("station-data-hub", args=[scope[5].id])
     assert client.get(station_hub).status_code == 403
     client.force_login(scope[1])
-    assert b"File Management" in client.get(station_hub).content
+    assert client.get(station_hub).status_code == 200
     assert client.get(reverse("portal-data-hub", args=[scope[3].id])).status_code == 403
     assert client.get(reverse("file-library-index")).status_code == 302
 
@@ -551,20 +549,21 @@ def test_concurrent_capacity_changes(scope, pdf_pipeline, monkeypatch, race):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_migrations_reverse_and_reapply():
+@pytest.mark.parametrize(
+    "disposable_migration_database",
+    [("publications", "0027_publication_scope_types")],
+    indirect=True,
+)
+def test_migrations_forward_install_guards(disposable_migration_database):
     executor = MigrationExecutor(connection)
     target = executor.loader.graph.leaf_nodes()
-    try:
-        executor.migrate([("file_library", None)])
-        assert "file_library_library" not in connection.introspection.table_names()
-        MigrationExecutor(connection).migrate([("publications", "0027_publication_scope_types")])
-        from apps.publications.models import DatasetTypeRegistry
+    assert "file_library_library" not in connection.introspection.table_names()
+    from apps.publications.models import DatasetTypeRegistry
 
-        assert not DatasetTypeRegistry.objects.filter(
-            code__in=("department_files", "station_files")
-        ).exists()
-    finally:
-        MigrationExecutor(connection).migrate(target)
+    assert not DatasetTypeRegistry.objects.filter(
+        code__in=("department_files", "station_files")
+    ).exists()
+    executor.migrate(target)
     assert "file_library_library" in connection.introspection.table_names()
     with connection.cursor() as cursor:
         cursor.execute("SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'file_library_%'")

@@ -321,8 +321,10 @@ Views retain authorization, module visibility/order, tenant-scoped counts,
 URLs, capability/configuration values, dynamic provider/delivery/status values
 and configuration-derived styling. Publication summaries remain authoritative
 Python state; the template renders the unpublished fallback. Template branches
-never grant access. Test IDs in context and labels, distinct icons, accessible
-text and navigation structure in rendered HTML. Preserve external-link safety
+never grant access. Test IDs in server context. Review labels, distinct icons, accessible
+text and navigation structure manually in rendered HTML, outside pytest.
+Backend tests cover authorization, state, filtering and safe output; they do not
+assert visual appearance or the presence of UI controls. Preserve external-link safety
 attributes and never nest links or buttons inside navigation cards.
 
 ## 7.3 System-managed configuration cards

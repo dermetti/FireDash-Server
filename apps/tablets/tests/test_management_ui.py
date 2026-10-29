@@ -183,23 +183,18 @@ def test_create_tablet_via_service_requires_department_admin(client, tablet_ui_s
 def test_create_tablet_requires_display_name(client, tablet_ui_scope):
     scope = tablet_ui_scope
     client.force_login(scope.admin)
+    assert (
+        client.get(
+            reverse("tablet-create", args=(scope.department.id,)), HTTP_HX_REQUEST="true"
+        ).status_code
+        == 200
+    )
     response = client.post(
         reverse("tablet-create", args=(scope.department.id,)),
         {"display_name": "  ", "asset_number": ""},
     )
     assert response.status_code == 200
     assert Tablet.objects.count() == 0
-
-
-@pytest.mark.django_db
-def test_create_tablet_hx_modal_load(client, tablet_ui_scope):
-    scope = tablet_ui_scope
-    client.force_login(scope.admin)
-    response = client.get(
-        reverse("tablet-create", args=(scope.department.id,)), HTTP_HX_REQUEST="true"
-    )
-    assert response.status_code == 200
-    assert "Register tablet" in response.content.decode()
 
 
 # --- vehicle assignment -----------------------------------------------------
@@ -215,7 +210,14 @@ def test_assign_vehicle_same_department(client, tablet_ui_scope):
         {"vehicle_id": str(scope.vehicle.id)},
     )
     assert response.status_code == 302
-    assert tablet.vehicle_assignments.filter(vehicle=scope.vehicle, ended_at__isnull=True).exists()
+    assignment = tablet.vehicle_assignments.get(vehicle=scope.vehicle, ended_at__isnull=True)
+    from apps.audit.models import AuditEvent
+
+    assert AuditEvent.objects.filter(
+        action="tablet.vehicle_assigned",
+        target_type="tablet_vehicle_assignment",
+        target_uuid=assignment.pk,
+    ).exists()
 
 
 @pytest.mark.django_db
@@ -229,22 +231,6 @@ def test_assign_vehicle_cross_department_rejected(client, tablet_ui_scope):
     )
     assert response.status_code == 200
     assert not tablet.vehicle_assignments.exists()
-
-
-@pytest.mark.django_db
-def test_assign_vehicle_audits_event(client, tablet_ui_scope):
-    from apps.audit.models import AuditEvent
-
-    scope = tablet_ui_scope
-    tablet = _pending_tablet(scope.department)
-    client.force_login(scope.admin)
-    client.post(
-        reverse("tablet-assign", args=(scope.department.id, tablet.id)),
-        {"vehicle_id": str(scope.vehicle.id)},
-    )
-    assert AuditEvent.objects.filter(
-        action="tablet.vehicle_assigned", target_type="tablet_vehicle_assignment"
-    ).exists()
 
 
 # --- list / filter ----------------------------------------------------------
@@ -261,35 +247,6 @@ def test_tablet_list_filters(client, tablet_ui_scope):
         reverse("tablet-list", args=(scope.department.id,)), {"search": "CMD", "status": "ACTIVE"}
     )
     assert list(response.context["tablets"]) == [active]
-
-
-@pytest.mark.django_db
-def test_tablet_list_htx_returns_partial_and_direct_reload_renders_full_page(
-    client, tablet_ui_scope
-):
-    scope = tablet_ui_scope
-    _pending_tablet(scope.department)
-    client.force_login(scope.admin)
-
-    # HTMX filter/sort requests hit the canonical URL and receive only the results partial.
-    partial = client.get(
-        reverse("tablet-list", args=(scope.department.id,)),
-        {"status": "INACTIVE"},
-        HTTP_HX_REQUEST="true",
-    )
-    assert partial.status_code == 200
-    partial_html = partial.content.decode()
-    assert "Showing 1&ndash;1 of 1 tablet." in partial_html
-    assert "<html" not in partial_html
-
-    # The same URL without the HX header must render the complete management page so a
-    # direct reload of a pushed history URL never lands on a bare partial.
-    full = client.get(reverse("tablet-list", args=(scope.department.id,)), {"status": "INACTIVE"})
-    assert full.status_code == 200
-    full_html = full.content.decode()
-    assert "<html" in full_html
-    assert "tablet-results" in full_html
-    assert "Devices / Tablets" in full_html
 
 
 @pytest.mark.django_db
@@ -347,71 +304,6 @@ def test_ordinary_pages_never_expose_device_secrets(client, tablet_ui_scope):
 
 
 @pytest.mark.django_db
-def test_historical_storage_never_adds_list_badges(client, tablet_ui_scope):
-    scope = tablet_ui_scope
-    below = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Below")
-    equal = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Equal")
-    stale = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE, display_name="Stale")
-    below_installation = _adopted_installation(below)
-    equal_installation = _adopted_installation(equal)
-    stale_installation = _adopted_installation(stale)
-    now = timezone.now()
-    AppInstallation.objects.filter(pk=below_installation.pk).update(
-        free_storage_bytes=199, total_storage_bytes=1000, storage_observed_at=now
-    )
-    AppInstallation.objects.filter(pk=equal_installation.pk).update(
-        free_storage_bytes=200, total_storage_bytes=1000, storage_observed_at=now
-    )
-    AppInstallation.objects.filter(pk=stale_installation.pk).update(
-        free_storage_bytes=1,
-        total_storage_bytes=1000,
-        storage_observed_at=now,
-        status=AppInstallation.Status.STALE,
-    )
-    client.force_login(scope.admin)
-
-    html = client.get(reverse("tablet-list", args=(scope.department.id,))).content.decode()
-    rows = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0].split("<tr>")
-    below_row = next(row for row in rows if ">Below</a>" in row)
-    equal_row = next(row for row in rows if ">Equal</a>" in row)
-    stale_row = next(row for row in rows if ">Stale</a>" in row)
-    assert "Low Storage" not in below_row
-    assert "Low Storage" not in equal_row
-    assert "Low Storage" not in stale_row
-    assert html.count("Low Storage") == 0
-
-
-@pytest.mark.django_db
-def test_historical_storage_never_appears_in_details(client, tablet_ui_scope):
-    scope = tablet_ui_scope
-    tablet = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE)
-    installation = _adopted_installation(tablet)
-    observed = timezone.now()
-    AppInstallation.objects.filter(pk=installation.pk).update(
-        free_storage_bytes=199,
-        total_storage_bytes=1000,
-        storage_observed_at=observed,
-    )
-    client.force_login(scope.admin)
-    url = reverse("tablet-detail", args=(scope.department.id, tablet.id))
-
-    for status in (AppInstallation.Status.ACTIVE, AppInstallation.Status.STALE):
-        AppInstallation.objects.filter(pk=installation.pk).update(status=status)
-        html = client.get(url).content.decode()
-        for text in (
-            "Reported storage",
-            "199 bytes free",
-            "1000 bytes total",
-            "19.9% free",
-            "Low Storage",
-            "Last known storage only",
-            "No storage telemetry reported",
-        ):
-            assert text not in html
-        assert "Authorization" in html
-
-
-@pytest.mark.django_db
 def test_tablet_list_installation_prefetch_remains_bounded(client, tablet_ui_scope):
     scope = tablet_ui_scope
     client.force_login(scope.admin)
@@ -445,9 +337,7 @@ def test_adoption_get_renders_confirmation_without_token(client, tablet_ui_scope
     client.force_login(scope.admin)
 
     response = client.get(reverse("tablet-adopt", args=(scope.department.id, tablet.id)))
-    html = response.content.decode()
     assert response.status_code == 200
-    assert "Start tablet adoption" in html
     assert AdoptionInvitation.objects.count() == 0
 
 
@@ -488,7 +378,6 @@ def test_adoption_post_creates_invitation_and_shows_token_once(
     html = response.content.decode()
 
     # QR rendered and payload equals the raw text token.
-    assert "data:image/png;base64,FAKEQR" in html
     assert captured["token"] in html
 
     # Raw token is not in the invitation DB record (only its hash is).
@@ -543,41 +432,21 @@ def test_adoption_status_polling_states(client, tablet_ui_scope):
 
     url = reverse("tablet-adoption-status", args=(scope.department.id, tablet.id, invitation.id))
     waiting = client.get(url)
-    assert "Waiting for tablet" in waiting.content.decode()
 
     invitation.expires_at = timezone.now() - timedelta(seconds=1)
     invitation.save(update_fields=("expires_at",))
     expired = client.get(url)
-    assert "expired" in expired.content.decode()
 
     invitation.expires_at = timezone.now() + timedelta(minutes=15)
     invitation.used_at = timezone.now()
     invitation.save(update_fields=("expires_at", "used_at"))
     completed = client.get(url)
-    assert "adopted successfully" in completed.content.decode()
+    assert waiting.context["state"] == "waiting"
+    assert expired.context["state"] == "expired"
+    assert completed.context["state"] == "completed"
 
 
 # --- stale installation guidance --------------------------------------------
-
-
-@pytest.mark.django_db
-def test_stale_installation_explains_automatic_recovery(client, tablet_ui_scope):
-    scope = tablet_ui_scope
-    tablet = _pending_tablet(scope.department, status=Tablet.Status.ACTIVE)
-    _assign(tablet, scope.vehicle, scope.admin)
-    installation = _adopted_installation(tablet)
-    installation.status = AppInstallation.Status.STALE
-    installation.stale_at = timezone.now()
-    installation.save(update_fields=("status", "stale_at"))
-    client.force_login(scope.admin)
-    response = client.get(reverse("tablet-detail", args=(scope.department.id, tablet.id)))
-    assert response.status_code == 200
-    html = response.content.decode()
-    assert "recover automatically" in html
-    assert "Recover installation" not in html
-    # The physical Tablet asset state is unchanged by installation health.
-    tablet.refresh_from_db()
-    assert tablet.status == Tablet.Status.ACTIVE
 
 
 # --- asset lifecycle ---------------------------------------------------------

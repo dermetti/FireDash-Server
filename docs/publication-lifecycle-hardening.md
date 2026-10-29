@@ -83,7 +83,7 @@ After a separately reviewed deployment, using existing authorized administrator 
 4. Validate restoration only with an owner-approved complete generic generation, including an empty generation if useful. Current deletion must be unavailable without a safe predecessor; any destructive acceptance action requires separate owner authorization.
 5. Preserve the ACTIVE Fake-iPad installation, credentials, keys and history. This task requires no adoption, reset, live client verification or historical artifact cleanup.
 
-No known unresolved test failures remain. Browser-level visual acceptance is owner controlled; local validation covers rendered HTML, forms, IDs, modal targets and existing HTMX responses. UI eligibility is deliberately a metadata-only preflight; transaction-locked service validation is authoritative and may refuse a stale or additionally invalid candidate.
+Historical validation is superseded by the Phase 3.5 [test-suite report](test-suite-optimization.md). Browser appearance and interaction acceptance is manual; Python tests cover server state, permissions, form validation and HTTP/HTMX response protocols. UI eligibility is deliberately a metadata-only preflight; transaction-locked service validation is authoritative and may refuse a stale or additionally invalid candidate.
 
 No Git writes, deployment, SSH, live server requests, live migrations, server data changes, historical data/ciphertext cleanup or Fake-iPad state operations were performed.
 

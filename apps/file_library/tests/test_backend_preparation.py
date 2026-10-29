@@ -414,7 +414,14 @@ def test_department_publication_endpoint_rolls_back_on_audit_failure(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_decimal_migration_preserves_explicit_and_legacy_changes_independently(scope, capsys):
+@pytest.mark.parametrize(
+    "disposable_migration_database",
+    [("file_library", "0008_department_quota_policy")],
+    indirect=True,
+)
+def test_decimal_migration_preserves_explicit_and_legacy_changes_independently(
+    disposable_migration_database, scope, capsys
+):
     admin, _, _, department, outside, station, _ = scope
     executor = MigrationExecutor(connection)
     latest = executor.loader.graph.leaf_nodes()
@@ -498,7 +505,9 @@ def test_decimal_migration_preserves_explicit_and_legacy_changes_independently(s
             metadata={"old_quota_bytes": 99, "new_quota_bytes": 1_073_741_824},
         )
         before_events = list(AuditEvent.objects.values().order_by("id"))
-        before_jobs = list(PublicationJob.objects.values())
+        HistoricalJob = old_apps.get_model("publications", "PublicationJob")
+        job_fields = [f.attname for f in HistoricalJob._meta.concrete_fields]
+        before_jobs = list(HistoricalJob.objects.values(*job_fields))
         before_entries = list(Entry.objects.values().order_by("id"))
         before_content = list(Content.objects.values().order_by("id"))
         MigrationExecutor(connection).migrate(latest)
@@ -517,15 +526,18 @@ def test_decimal_migration_preserves_explicit_and_legacy_changes_independently(s
         library.refresh_from_db()
         assert (library.source_revision, library.usage_bytes) == (17, 42)
         assert list(AuditEvent.objects.values().order_by("id")) == before_events
-        assert list(PublicationJob.objects.values()) == before_jobs
+        assert list(PublicationJob.objects.values(*job_fields)) == before_jobs
         assert list(Entry.objects.values().order_by("id")) == before_entries
         assert list(Content.objects.values().order_by("id")) == before_content
         output = capsys.readouterr().out
         assert "department_files_bytes: 2 updated, 4 preserved" in output
         assert "station_files_bytes: 2 updated, 4 preserved" in output
         # A data reversal never rewrites later administrator choices.
-        executor = MigrationExecutor(connection)
-        executor.migrate(old_target)
+        module = importlib.import_module("apps.file_library.migrations.0009_decimal_quota_defaults")
+        from django.apps import apps
+
+        with connection.schema_editor() as editor:
+            module.Migration.operations[-1].reverse_code(apps, editor)
         assert values(outside) == (5_000_000_000, 2_000_000_000)
     finally:
         MigrationExecutor(connection).migrate(latest)

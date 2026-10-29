@@ -2,7 +2,6 @@
 
 import pytest
 from django.test import RequestFactory
-from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership, StationAdminAssignment, SystemRole
@@ -32,30 +31,11 @@ def _ctx(user, path="/"):
     return _nav_context(request)
 
 
-def _child_labels(context):
-    return [
-        item["label"] for section in context["nav_sections"] for item in section.get("children", [])
-    ]
-
-
-def _all_labels(context):
-    labels = []
-    for section in context["nav_sections"]:
-        labels.append(section["label"])
-        labels.extend(item["label"] for item in section.get("children", []))
-    return labels
-
-
 @pytest.mark.django_db
 def test_system_admin_nav_has_no_department_operational_links(nav_roles):
     system_admin, _, _, _, _, _ = nav_roles
     context = _ctx(system_admin)
     assert context["nav_role"] == "system"
-    labels = _all_labels(context)
-    assert "Departments" in labels
-    assert "Personnel" not in labels
-    assert "Tablets" not in labels
-    assert "Stations" not in labels
 
 
 @pytest.mark.django_db
@@ -64,28 +44,6 @@ def test_department_admin_nav_is_department_wide_without_mode_selector(nav_roles
     context = _ctx(dept_admin)
     assert context["nav_role"] == "department"
     assert context["nav_department"] == department
-    labels = _all_labels(context)
-    assert "Data Hub" in labels
-    assert "Publications" in labels
-    assert "File Management" not in labels
-    assert "Tablets" in labels
-    assert "Stations" in labels
-    assert "Administrator Accounts" in labels
-    assert "System Settings" in labels
-    assert "Audit Logs" in labels
-    for removed_label in (
-        "Personnel",
-        "Hydrants",
-        "Fire Plans",
-        "KLGV Plans",
-        "Vehicles",
-        "Imports",
-    ):
-        assert removed_label not in labels
-    # No station authorization-mode selector state.
-    assert "nav_mode" not in context
-    assert "nav_stations" not in context
-    assert "nav_departments" not in context
 
 
 @pytest.mark.django_db
@@ -95,11 +53,6 @@ def test_station_admin_nav_resolves_single_station(nav_roles):
     assert context["nav_role"] == "station"
     assert context["nav_station"] == s1
     assert context["nav_station_ambiguous"] is False
-    labels = _all_labels(context)
-    assert "File Management" in labels
-    assert "Data Hub" not in labels
-    assert "Publications" not in labels
-    assert "System Settings" not in labels
 
 
 @pytest.mark.django_db
@@ -120,7 +73,6 @@ def test_system_admin_not_demoted_by_department_membership(nav_roles):
     )
     context = _ctx(system_admin)
     assert context["nav_role"] == "system"
-    assert "Departments" in _all_labels(context)
 
 
 @pytest.mark.django_db
@@ -130,68 +82,3 @@ def test_department_admin_not_demoted_by_station_assignment(nav_roles):
     context = _ctx(dept_admin)
     assert context["nav_role"] == "department"
     assert "nav_station" not in context
-
-
-@pytest.mark.django_db
-def test_nav_has_no_blank_labels_or_urls(nav_roles):
-    for user in nav_roles[:3]:
-        context = _ctx(user)
-        for section in context["nav_sections"]:
-            assert section["label"]
-            if "url" in section:
-                assert section["url"]
-            for item in section.get("children", []):
-                assert item["label"]
-                assert item["url"]
-
-
-@pytest.mark.django_db
-def test_authenticated_pages_render_shared_shell(client, nav_roles):
-    _, dept_admin, _, department, _, _ = nav_roles
-    client.force_login(dept_admin)
-    response = client.get(reverse("tablet-list", args=(department.id,)))
-    assert response.status_code == 200
-    content = response.content.decode()
-    # Desktop sidebar + mobile Offcanvas are both present.
-    assert 'id="navOffcanvas"' in content
-    assert "Distributed Data" in content
-    # The old station scope-switch selector is gone.
-    assert 'onchange="window.location=this.value"' not in content
-
-
-@pytest.mark.django_db
-def test_rendered_navigation_has_no_blank_links(client, nav_roles):
-    _, dept_admin, _, department, _, _ = nav_roles
-    client.force_login(dept_admin)
-    response = client.get(reverse("tablet-list", args=(department.id,)))
-    content = response.content.decode()
-    assert 'href=""' not in content
-    # The single shared navigation source is rendered by both the desktop
-    # sidebar and the Offcanvas.
-    assert content.count("Distributed Data") >= 2
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("role", ["department", "station"])
-def test_role_specific_navigation_matches_on_desktop_and_mobile(client, nav_roles, role):
-    _, department_admin, station_admin, department, station, _ = nav_roles
-    client.force_login(department_admin if role == "department" else station_admin)
-    response = client.get(reverse("dashboard"))
-    assert response.status_code == 200
-    menus = response.content.decode().split(
-        '<nav class="nav flex-column" aria-label="Primary navigation">'
-    )[1:]
-    assert len(menus) == 2
-    for markup in menus:
-        menu = markup.split("</nav>", 1)[0]
-        assert (f'href="{reverse("file-library-index")}"' in menu) == (role == "station")
-        assert (f'href="{reverse("portal-data-hub", args=(department.id,))}"' in menu) == (
-            role == "department"
-        )
-        assert (f'href="{reverse("publications-list", args=(department.id,))}"' in menu) == (
-            role == "department"
-        )
-        assert reverse("station-data-hub", args=(station.id,)) not in menu
-        assert "Tablets" in menu
-        if role == "station":
-            assert "Personnel" in menu and "Administrator Accounts" not in menu

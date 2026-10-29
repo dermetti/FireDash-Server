@@ -145,6 +145,7 @@ def sanitizer_stub(settings, tmp_path, monkeypatch):
 @pytest.mark.django_db
 def test_preview_is_side_effect_free_and_apply_dirties_one_scope(context):
     actor, department = context
+    before_scopes = list(DatasetScopeState.objects.order_by("id").values())
     batch = create_preview(
         actor=actor,
         department=department,
@@ -156,7 +157,7 @@ def test_preview_is_side_effect_free_and_apply_dirties_one_scope(context):
     )
     assert batch.status == ImportBatch.Status.PREVIEW_READY
     assert not Hydrant.objects.exists()
-    assert not DatasetScopeState.objects.exists()
+    assert list(DatasetScopeState.objects.order_by("id").values()) == before_scopes
     assert not DatasetPublication.objects.exists()
     assert not DatasetKeyGrant.objects.exists()
     assert not SignedManifest.objects.exists()
@@ -313,6 +314,7 @@ def test_chunking_preserves_explicit_deactivate_and_absent_semantics(context, mo
 @pytest.mark.django_db
 def test_invalid_preview_has_no_staged_canonical_side_effects(context):
     actor, department = context
+    before_scopes = list(DatasetScopeState.objects.order_by("id").values())
     batch = create_preview(
         actor=actor,
         department=department,
@@ -324,12 +326,13 @@ def test_invalid_preview_has_no_staged_canonical_side_effects(context):
     )
     assert batch.status == ImportBatch.Status.INVALID
     assert not Hydrant.objects.exists()
-    assert not DatasetScopeState.objects.exists()
+    assert list(DatasetScopeState.objects.order_by("id").values()) == before_scopes
 
 
 @pytest.mark.django_db(transaction=True)
 def test_cancelled_preview_never_mutates_canonical_data_or_publication_state(context):
     actor, department = context
+    before_scopes = list(DatasetScopeState.objects.order_by("id").values())
     batch = create_preview(
         actor=actor,
         department=department,
@@ -342,7 +345,7 @@ def test_cancelled_preview_never_mutates_canonical_data_or_publication_state(con
     cancel_preview(actor=actor, batch_id=batch.id)
     assert ImportBatch.objects.get(pk=batch.id).status == ImportBatch.Status.CANCELLED
     assert not Hydrant.objects.filter(department=department).exists()
-    assert not DatasetScopeState.objects.exists()
+    assert list(DatasetScopeState.objects.order_by("id").values()) == before_scopes
     with pytest.raises(ImportError, match="not confirmable"):
         apply_preview(actor=actor, batch_id=batch.id)
 

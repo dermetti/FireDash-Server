@@ -11,6 +11,7 @@ from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
 from apps.publications.models import DatasetPublication, DatasetScopeState, PublicationJob
 from apps.publications.services import (
+    PublicationError,
     claim_next_job,
     fail_publication_job,
     finalize_publication_job,
@@ -160,28 +161,39 @@ def test_different_scopes_have_independent_debounce_windows(debounce_context):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_user_request_makes_existing_pending_job_immediately_eligible(debounce_context):
+def test_user_request_rejects_an_existing_pending_attempt(debounce_context):
     admin, department, station_a, _ = debounce_context
     mark_dirty(
         department=department, station=station_a, dataset_type_code="station_personnel", actor=admin
     )
 
-    request_rebuild(
-        actor=admin, department=department, station=station_a, dataset_type_code="station_personnel"
-    )
-
-    jobs = PublicationJob.objects.filter(department=department)
-    assert jobs.count() == 1
-    job = jobs.get()
-    assert job.trigger_type == PublicationJob.TriggerType.USER_REQUEST
-    assert job.not_before is not None
+    before = list(PublicationJob.objects.filter(department=department).values())
+    with pytest.raises(PublicationError, match="queued"):
+        request_rebuild(
+            actor=admin,
+            department=department,
+            station=station_a,
+            dataset_type_code="station_personnel",
+        )
+    assert list(PublicationJob.objects.filter(department=department).values()) == before
 
 
 @pytest.mark.django_db(transaction=True)
 def test_user_request_without_pending_work_is_immediately_claimable(debounce_context):
     admin, department, station_a, _ = debounce_context
-    # Keep a real commit: the rebuild must remain unclaimable until its
-    # on_commit enqueue callback runs after the outer transaction exits.
+    # A staged attempt is allocated in the caller transaction, but remains
+    # invisible to another worker connection until commit.
+    from concurrent.futures import ThreadPoolExecutor
+
+    from django.db import close_old_connections
+
+    def visible_to_worker():
+        close_old_connections()
+        try:
+            return PublicationJob.objects.filter(department=department).exists()
+        finally:
+            close_old_connections()
+
     with transaction.atomic():
         request_rebuild(
             actor=admin,
@@ -189,8 +201,9 @@ def test_user_request_without_pending_work_is_immediately_claimable(debounce_con
             station=station_a,
             dataset_type_code="station_personnel",
         )
-        assert not PublicationJob.objects.filter(department=department).exists()
-        assert claim_next_job() is None
+        assert PublicationJob.objects.filter(department=department).count() == 1
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            assert worker.submit(visible_to_worker).result(timeout=10) is False
 
     job = claim_next_job()
     assert job is not None

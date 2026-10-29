@@ -149,7 +149,7 @@ def _coordinate_update_preview(actor, department, *external_identifiers):
     )
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_pending_update_blocks_confirm(wizard_fixture):
     actor, department = wizard_fixture
     _existing_plan(department, actor, "A", OLD_CONTENT)
@@ -166,7 +166,7 @@ def test_pending_update_blocks_confirm(wizard_fixture):
     assert plan.sha256 == hashlib.sha256(OLD_CONTENT).hexdigest()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_approved_update_is_applied(wizard_fixture):
     actor, department = wizard_fixture
     _existing_plan(department, actor, "A", OLD_CONTENT)
@@ -181,7 +181,7 @@ def test_approved_update_is_applied(wizard_fixture):
     assert plan.sha256 == hashlib.sha256(NEW_CONTENT).hexdigest()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_skipped_update_has_zero_effect(wizard_fixture):
     actor, department = wizard_fixture
     _existing_plan(department, actor, "A", OLD_CONTENT)
@@ -198,7 +198,7 @@ def test_skipped_update_has_zero_effect(wizard_fixture):
     assert not PublicationJob.objects.filter(department=department).exists()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_approve_all_pending_updates(wizard_fixture):
     actor, department = wizard_fixture
     _existing_plan(department, actor, "A", OLD_CONTENT)
@@ -228,7 +228,7 @@ def test_approve_all_pending_updates(wizard_fixture):
     assert FirePlan.objects.get(external_identifier="B").sha256 == new_digest
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_review_decision_is_bound_to_preview_state(wizard_fixture):
     actor, department = wizard_fixture
     plan = _existing_plan(department, actor, "A", OLD_CONTENT)
@@ -245,7 +245,7 @@ def test_review_decision_is_bound_to_preview_state(wizard_fixture):
         apply_preview(actor=actor, batch_id=batch.id)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_adds_do_not_require_review(wizard_fixture):
     actor, department = wizard_fixture
 
@@ -271,7 +271,7 @@ def test_adds_do_not_require_review(wizard_fixture):
     assert FirePlan.objects.filter(department=department).count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     ("field", "invalid_value", "other_value", "expected_error"),
     (
@@ -300,19 +300,17 @@ def test_invalid_coordinate_accept_returns_bound_htmx_review_region(
         HTTP_HX_REQUEST="true",
     )
 
-    content = response.content.decode()
     batch.refresh_from_db()
     plan.refresh_from_db()
     assert response.status_code == 200
-    assert '<div id="import-review-region">' in content
-    assert f'value="{invalid_value}"' in content
-    assert expected_error in content
+    assert expected_error in str(response.context["coordinate_form"].errors[field])
+    assert response.context["coordinate_form"][field].value() == invalid_value
     assert key not in batch.validation_summary["review_decisions"]
     assert plan.sha256 == hashlib.sha256(OLD_CONTENT).hexdigest()
     assert plan.location is None
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_valid_coordinate_accept_stages_value_and_advances_without_canonical_mutation(
     client, wizard_fixture
 ):
@@ -329,13 +327,10 @@ def test_valid_coordinate_accept_stages_value_and_advances_without_canonical_mut
         HTTP_HX_REQUEST="true",
     )
 
-    content = response.content.decode()
     batch.refresh_from_db()
     first.refresh_from_db()
     second.refresh_from_db()
     assert response.status_code == 200
-    assert '<div id="import-review-region">' in content
-    assert "B" in content
     assert batch.normalized_intent["rows"][0]["longitude"] == pytest.approx(10.000992)
     assert batch.normalized_intent["rows"][0]["latitude"] == pytest.approx(53.551323)
     assert batch.validation_summary["review_decisions"][key]["decision"] == "approved"
@@ -344,7 +339,7 @@ def test_valid_coordinate_accept_stages_value_and_advances_without_canonical_mut
     assert second.sha256 == hashlib.sha256(OLD_CONTENT).hexdigest()
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_coordinate_accept_preserves_existing_partial_coordinate(client, wizard_fixture):
     actor, department = wizard_fixture
     _existing_plan(department, actor, "A", OLD_CONTENT)

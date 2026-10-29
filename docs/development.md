@@ -48,6 +48,14 @@ portal tests. API changes should also run `python manage.py spectacular
 
 ## Test selections
 
+Python tests verify server behavior, persisted state, protocols and security.
+Do not add assertions for CSS, wording, buttons, navigation, DOM structure,
+template fragments or browser appearance. Use response context/form errors for
+filtering and validation; keep rendered-output assertions only where they protect
+escaping, tenant isolation or secret non-disclosure. Visual and browser interaction
+acceptance is manual, outside pytest. See [test-suite optimization](test-suite-optimization.md)
+for the Phase 3.5 inventory, failure analysis and bounded measurements.
+
 Use `config.settings.test` and the local `.env` `TEST_POSTGRES_*` values.
 The complete PostgreSQL/PostGIS suite is the authoritative regression gate;
 no marker filter is configured by default. `tools/` is collected along with

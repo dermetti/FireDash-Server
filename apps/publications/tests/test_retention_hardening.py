@@ -347,7 +347,9 @@ def test_audit_mixed_scopes_empty_histories_and_configured_limit(retention_scope
     station = Station.objects.create(department=department, name="Station", short_code="ST")
     scopes = [
         original,
-        DatasetScopeState.objects.create(dataset_type_code="dangerous_goods", scope_type="SYSTEM"),
+        DatasetScopeState.objects.get_or_create(
+            dataset_type_code="dangerous_goods", scope_type="SYSTEM"
+        )[0],
         DatasetScopeState.objects.create(
             dataset_type_code="station_personnel",
             scope_type="STATION",

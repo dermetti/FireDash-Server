@@ -12,6 +12,7 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from apps.accounts.models import User
 from apps.accounts.reauth import ReauthRedirect, pending_action, require_recent_reauthentication
+from apps.audit.models import AuditEvent
 from apps.authorization.models import SystemRole
 from apps.organizations.models import Department
 
@@ -189,10 +190,6 @@ def test_htmx_reauthentication_uses_full_page_redirect_and_explicit_form_action(
 
     assert reauth_page.status_code == 200
     assert reauth_page.wsgi_request.path == reverse("accounts-reauthenticate")
-    assert (
-        f'action="{reverse("accounts-reauthenticate")}?pending={token}"'
-        in reauth_page.content.decode()
-    )
 
     valid_response = client.post(
         reauth_url,
@@ -235,7 +232,10 @@ def test_invalid_htmx_reauthentication_otp_stays_on_the_reauthentication_page(cl
 
     assert invalid_response.status_code == 200
     assert invalid_response.wsgi_request.path == reverse("accounts-reauthenticate")
-    assert b"Invalid TOTP code." in invalid_response.content
+    assert AuditEvent.objects.filter(
+        action="authentication.reauthentication_failed", target_uuid=user.pk
+    ).exists()
+    assert "recent_reauthentication_at" not in client.session
     assert "pending_reauth" in client.session
     assert not Department.objects.filter(short_code="EAST").exists()
 

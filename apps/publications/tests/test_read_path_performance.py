@@ -78,8 +78,9 @@ def test_publication_list_query_count_is_bounded_and_only_enriches_visible_page(
     assert calls == [min(total, 50), 0]
     assert context["system_scope_rows"] == []
     # count + paged scopes + latest publications + active jobs + predecessor
-    # lookup + empty SYSTEM panel; this stays constant as tenant scope count grows.
-    assert len(queries) == 6
+    # lookup + empty SYSTEM panel + two batched live-attempt guards.
+    # Eight queries remain bounded across 4, 50 and 400 tenant scopes.
+    assert len(queries) <= 8
     sql = "\n".join(query["sql"].lower() for query in queries.captured_queries)
     # The compact read model may use ``IS NOT NULL`` to annotate retention,
     # but it must not select the JSON payload itself.

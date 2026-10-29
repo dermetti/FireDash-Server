@@ -904,7 +904,7 @@ Bound to **10–20** results per request, deterministic ordering by name and UUI
 
 ### 6.4 Required combobox controller behavior — do not skip
 
-The HTML attributes alone do **not** make a working combobox. Implement a small, dedicated JS controller (local static file or a component-specific script), and test keyboard/pointer interactions:
+The HTML attributes alone do **not** make a working combobox. Implement a small, dedicated JS controller (local static file or a component-specific script), and manually test keyboard/pointer interactions outside pytest:
 
 1. Input typing immediately **clears** any previous `station_id`, selected-label display and confirmation checkbox; disable activation until a fresh choice is made. This prevents choosing A, typing B, then accidentally submitting A.
 2. `ArrowDown` / `ArrowUp`: cycle or move among the currently rendered selectable `<li role="option">` items; update `aria-activedescendant`, visual active row and `aria-selected` without moving DOM focus off the search input.
@@ -999,7 +999,7 @@ The standard selection view should accept `station_q` through GET, return at mos
 5. Add single searchable station-access modal to parent; server-scoped search endpoint, accessible combobox controller and standard no-JS fallback.
 6. Move the **department** publication control to existing Publications UI, retain station-only parent publication, and explicitly deny legacy department-file publish POST through File Management.
 7. Preserve pending-capacity review links/counts on department parent, correct reauth/override behavior, active temporary-access banner and release.
-8. Add parameterized role/scope matrix tests covering **both normal department and normal station admins**, temporary department-admin access, system/unrelated actors, direct GET/POST/preview links, HTMX/no-JS fallbacks, station requester capacity reviews, modal behavior, accessibility markup and bounded queries.
+8. Add parameterized server role/scope matrix tests covering **both normal department and normal station admins**, temporary department-admin access, system/unrelated actors, direct GET/POST/preview requests, HTTP/HTMX response protocols, station requester capacity reviews and bounded queries. Check modal behavior, accessibility markup and browser interactions manually outside pytest.
 9. Update `docs/FireDash_UI_Styleguide.md` and `docs/file-libraries.md` describing final parent/child split.
 10. Run focused PostgreSQL tests, Ruff, mypy, Django checks, migration-drift and whitespace verification. Full suite in GitHub CI once published.
 

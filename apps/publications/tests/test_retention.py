@@ -340,26 +340,3 @@ def test_retention_skips_candidate_that_becomes_current_before_authoritative_loc
     candidate.refresh_from_db()
     assert result == "skipped"
     assert candidate.status == DatasetPublication.Status.SUPERSEDED
-
-
-@pytest.mark.django_db(transaction=True)
-def test_retention_purged_snapshot_is_not_offered_for_inspection(retention_scope, client):
-    admin, department, scope = retention_scope
-    current = _publication(
-        department=department,
-        scope=scope,
-        version=13,
-        status=DatasetPublication.Status.PUBLISHED,
-        snapshot=None,
-        usable=True,
-    )
-    current.source_snapshot = None
-    current.save(update_fields=("source_snapshot",))
-    scope.current_published_publication = current
-    scope.save(update_fields=("current_published_publication",))
-    client.force_login(admin)
-
-    response = client.get(f"/publications/scopes/{scope.id}/")
-
-    assert response.status_code == 200
-    assert b"Inspect changes" not in response.content

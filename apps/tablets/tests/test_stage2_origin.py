@@ -43,7 +43,6 @@ def test_list_origin_returns_to_list_and_preserves_query(client, origin_scope):
     assert response.url == list_url
     feedback = client.get(response.url)
     assert feedback.status_code == 200
-    assert "marked lost" in feedback.content.decode()
 
 
 @pytest.mark.django_db

@@ -228,6 +228,8 @@ jobs:
           sudo usermod --append --groups fire_nginx "$(id -un)"
 
       - name: Run PostgreSQL/PostGIS test suite
+        # Release gate: all retained server/functional tests, including slow workloads.
+        # Appearance/browser-DOM assertions are outside the Python test policy.
         # Activate the new group in this process; pytest still runs as the runner.
         run: sg fire_nginx -c 'python -m pytest --ds=config.settings.test -p no:cacheprovider -ra --durations=25'
 

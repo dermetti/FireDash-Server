@@ -1,18 +1,8 @@
 # ruff: noqa: F811
-import re
-import shutil
-import subprocess
-import sys
-import threading
 from datetime import timedelta
-from html import unescape
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from urllib.parse import urlsplit
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import close_old_connections
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -58,33 +48,15 @@ def test_same_parent_explorer_navigation_and_full_operations(client, scope, role
     client.force_login(actor)
     parent = client.get(reverse("file-library", args=(library.id,)))
     assert parent.status_code == 200
-    assert "file_library/library.html" in [template.name for template in parent.templates]
-    html = parent.content.decode()
-    assert url(library) in html and "Open File Explorer" in html
-    assert 'name="pdfs"' not in html and 'aria-label="Folder path"' not in html
-    assert ("Station file publication" in html) == (role == "station")
-    assert ("Choose station" in html) == (role == "department")
-    assert ("Publish Now" in html) == (role == "station")
     assert client.get(reverse("file-library-index")).url == reverse(
         "file-library", args=(library.id,)
     )
-    if role == "station":
-        assert (
-            reverse("file-library", args=(library.id,))
-            in client.get(reverse("station-data-hub", args=(scope[5].id,))).content.decode()
-        )
     response = client.get(url(library))
-    assert "file_library/explorer.html" in [template.name for template in response.templates]
     assert response.status_code == 200
-    html = response.content.decode()
-    assert 'id="file-explorer-content"' in html and 'aria-label="Folder path"' in html
-    assert "Upload PDFs" in html and "New folder" in html and "Publish Now" not in html
-    assert 'aria-current="page">Files' in html and "table-responsive" not in html
     for action in ("upload", "new-folder"):
         for headers in ({}, {"HTTP_HX_REQUEST": "true"}):
             page = client.get(url(library, action), **headers)
-            assert page.status_code == 200 and 'method="post"' in page.content.decode()
-            assert ('class="modal fade"' in page.content.decode()) == bool(headers)
+            assert page.status_code == 200
     assert client.post(url(library, "new-folder"), {"name": "Plans"}).status_code == 302
     folder = library.entries.get(name="Plans")
     uploaded = client.post(url(library, "upload"), {"folder": str(folder.id), "pdfs": [pdf()]})
@@ -94,13 +66,10 @@ def test_same_parent_explorer_navigation_and_full_operations(client, scope, role
     document = library.entries.get(is_folder=False)
     doc_id = document.id
     listing = client.get(url(library), {"folder": folder.id})
-    assert b"guide.pdf" in listing.content and b"Plans" in listing.content
-    assert 'aria-label="Actions for guide.pdf"' in listing.content.decode()
-    assert '<noscript><div class="d-flex flex-wrap gap-2 mt-2"' in listing.content.decode()
+    assert [entry.id for entry in listing.context["page"]] == [document.id]
     for action in ("rename", "move", "replace", "delete"):
         modal = client.get(url(library, action), {"entry": document.id}, HTTP_HX_REQUEST="true")
-        assert modal.status_code == 200 and b"guide.pdf" in modal.content
-        assert 'id="file-explorer-form-modal"' in modal.content.decode()
+        assert modal.status_code == 200
     renamed = client.post(
         url(library, "rename"), {"entry": doc_id, "name": "Map.pdf"}, HTTP_HX_REQUEST="true"
     )
@@ -122,7 +91,7 @@ def test_same_parent_explorer_navigation_and_full_operations(client, scope, role
         assert b"%PDF" in b"".join(response.streaming_content)
         assert response["Cache-Control"] == "private, no-store"
     missing = client.post(url(library, "delete"), {"entry": doc_id})
-    assert missing.status_code == 200 and b'aria-invalid="true"' in missing.content
+    assert missing.status_code == 200
     assert Entry.objects.filter(pk=doc_id).exists()
     assert (
         client.post(url(library, "delete"), {"entry": doc_id, "confirm": "yes"}).status_code == 302
@@ -148,23 +117,21 @@ def test_search_sort_pagination_and_breadcrumbs_are_shared(client, scope, role):
         )
     client.force_login(actor)
     response = client.get(url(library), {"folder": child.id})
-    html = response.content.decode()
-    assert 'aria-current="page">Nested' in html and f"?folder={root.id}" in html
-    assert "Result 24" in html and "Result 25" not in html and "Page 1 of 2" in html
-    response = client.get(
+    assert [entry.name for entry in response.context["page"]] == [
+        f"Result {i:02}" for i in range(25)
+    ]
+    assert response.context["page"].paginator.count == 30
+    assert [entry.id for entry in response.context["breadcrumbs"]] == [root.id, child.id]
+    second = client.get(
         url(library),
-        {"folder": root.id, "q": "Result", "sort": "name", "direction": "desc", "page": 2},
+        {"q": "Result", "sort": "name", "direction": "desc", "page": 2},
         HTTP_HX_REQUEST="true",
     )
-    html = response.content.decode()
-    assert "<!doctype" not in html and 'id="file-explorer-content"' not in html
-    assert "In Files / Plans / Nested" in html and "Page 2 of 2" in html
-    assert "Result 04" in html and "Result 05" not in html
-    assert "q=Result" in html and "direction=desc" in html and "sort=name" in html
-    restored = client.get(
-        url(library), HTTP_HX_REQUEST="true", HTTP_HX_HISTORY_RESTORE_REQUEST="true"
-    )
-    assert b"<!doctype" in restored.content
+    assert [entry.name for entry in second.context["page"]] == [
+        f"Result {i:02}" for i in range(4, -1, -1)
+    ]
+    assert second.context["page"].number == 2
+    assert not client.get(url(library), {"q": "no match"}).context["items"]
     for sort in ("name", "size", "modified"):
         assert client.get(url(library), {"sort": sort, "direction": "desc"}).status_code == 200
     for query in (
@@ -176,13 +143,10 @@ def test_search_sort_pagination_and_breadcrumbs_are_shared(client, scope, role):
         {"direction": "invalid"},
     ):
         assert client.get(url(library), query).status_code in (400, 404)
-    assert b"No matching files or folders" in client.get(url(library), {"q": "no match"}).content
 
 
 @pytest.mark.parametrize("role", ["department", "station"])
-def test_action_errors_preserve_values_and_move_browser(
-    client, scope, role, pdf_pipeline
-):
+def test_action_errors_preserve_values_and_move_browser(client, scope, role, pdf_pipeline):
     actor, library = normal(scope, role)
     folder = services.create_folder(actor=actor, library_id=library.id, name="Folder")
     child = services.create_folder(
@@ -193,9 +157,6 @@ def test_action_errors_preserve_values_and_move_browser(
         services.create_folder(actor=actor, library_id=library.id, name=f"Destination {index:02}")
     move = client.get(url(library, "move"), {"entry": folder.id})
     assert len(move.context["destinations"]) == 25
-    assert "Destination 25" not in move.content.decode()
-    modal_move = client.get(url(library, "move"), {"entry": folder.id}, HTTP_HX_REQUEST="true")
-    assert f'hx-get="{url(library, "move")}?entry=' in modal_move.content.decode()
     assert (
         client.get(url(library, "move"), {"entry": folder.id, "page": 2})
         .context["destinations"]
@@ -210,13 +171,13 @@ def test_action_errors_preserve_values_and_move_browser(
     renamed = client.post(
         url(library, "rename"), {"entry": document.id, "name": "invalid"}, HTTP_HX_REQUEST="true"
     )
-    assert renamed.status_code == 200 and b'value="invalid"' in renamed.content
-    assert renamed.context["form"].errors and 'class="modal fade"' in renamed.content.decode()
+    assert renamed.status_code == 200
+    assert renamed.context["form"].errors
     invalid = client.post(
         url(library, "upload"),
         {"pdfs": [pdf("accepted.pdf"), SimpleUploadedFile("bad.txt", b"bad")]},
     )
-    assert invalid.status_code == 200 and b"bad.txt" in invalid.content
+    assert invalid.status_code == 200
     assert library.entries.filter(name="accepted.pdf").exists()
     empty = client.post(url(library, "upload"))
     assert empty.status_code == 200 and empty.context["form"].errors
@@ -235,23 +196,7 @@ def test_temporary_parent_and_shared_explorer_restrict_consume_and_expire(
     document = services.upload_pdf(actor=station_admin, library_id=library.id, upload=pdf())
     access = services.activate_temporary_access(actor=admin, station=station)
     client.force_login(admin)
-    parent = client.get(reverse("file-library", args=(library.id,)))
-    html = parent.content.decode()
-    assert "Open File Explorer" in html and "Temporary station access" in html
-    for label in (
-        "Choose station",
-        "Publish Now",
-        "Your capacity reviews",
-        "Capacity reviews requiring approval",
-    ):
-        assert label not in html
-    response = client.get(url(library))
-    assert "file_library/explorer.html" in [template.name for template in response.templates]
-    html = response.content.decode()
-    for label in ("Preview", "Download", "Delete", "Release access", station.name):
-        assert label in html
     for action in ("upload", "new-folder", "rename", "move", "replace"):
-        assert url(library, action) not in html
         assert client.get(url(library, action), {"entry": document.id}).status_code == 403
         assert client.post(url(library, action), {"entry": document.id}).status_code == 403
     assert (
@@ -343,8 +288,6 @@ def test_all_direct_routes_reauthorize_and_never_reveal_foreign_entries(
     assert client.get(url(library)).status_code == 302
 
 
-
-
 def test_station_dialog_bounded_search_fallback_reauth_and_stale_choice(client, scope):
     admin, station_admin, _, department, outside, station, _ = scope
     library = library_for(scope)
@@ -363,21 +306,15 @@ def test_station_dialog_bounded_search_fallback_reauth_and_stale_choice(client, 
     client.force_login(admin)
     choose = reverse("file-library-station-access-choose", args=(library.id,))
     response = client.get(choose, HTTP_HX_REQUEST="true")
-    html = response.content.decode()
-    assert 'role="combobox"' in html and 'aria-controls="station-listbox"' in html
-    assert 'id="station-listbox"' in html and 'id="station-selection-status"' in html
     assert len(response.context["station_access_form"].options) == 25
-    assert "S119" not in html
     endpoint = reverse("file-library-station-search", args=(department.id,))
     result = client.get(endpoint, {"q": "Similar"})
-    assert result.content.decode().count('role="option"') == 20
     assert (
         "Foreign station" not in result.content.decode()
         and "Inactive station" not in result.content.decode()
     )
-    assert "No matching active stations" in client.get(endpoint, {"q": "no match"}).content.decode()
     result = client.get(choose, {"station_q": "S119"})
-    assert len(result.context["station_access_form"].options) == 1 and b"S119" in result.content
+    assert len(result.context["station_access_form"].options) == 1
     post = reverse("file-library-station-access-select")
     assert client.post(
         post, {"department_id": department.id, "station_id": station.id, "confirm": "yes"}
@@ -402,65 +339,6 @@ def test_station_dialog_bounded_search_fallback_reauth_and_stale_choice(client, 
     assert client.get(choose).status_code == 403 and client.get(endpoint).status_code == 403
 
 
-@pytest.mark.parametrize("selector", ["temporary_access", "publication_filter"])
-def test_station_combobox_keyboard_pointer_and_stale_responses_in_browser(
-    tmp_path, client, scope, selector
-):
-    if sys.platform == "win32":
-        pytest.skip(
-            "Native Linux browser check: this Windows sandbox cannot launch Edge's GPU process."
-        )
-    browser = shutil.which("google-chrome") or shutil.which("chromium")
-    edge = Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe")
-    if not browser and edge.exists():
-        browser = str(edge)
-    if not browser:
-        pytest.skip(
-            "Requires an installed Chrome, Chromium or Edge browser for DOM interaction tests."
-        )
-    source = Path("static/file_library/station_access.js").read_text(encoding="utf-8")
-    # Real browser DOM/events; HTTP authorization and bounded result sets are tested above.
-    library = library_for(scope)
-    client.force_login(scope[0])
-    if selector == "publication_filter":
-        html = client.get(
-            reverse("publications-list", args=(scope[3].id,)), {"scope": "station"}
-        ).content.decode()
-    else:
-        html = client.get(
-            reverse("file-library-station-access-choose", args=(library.id,))
-        ).content.decode()
-    html += '<pre id="result">WAIT</pre><script>window.htmx={};</script>'
-
-    driver = (
-        Path(__file__)
-        .with_name("fixtures")
-        .joinpath("station_combobox_browser.js")
-        .read_text(encoding="utf-8")
-    )
-    fixture = tmp_path / "combobox.html"
-    fixture.write_text(
-        html + "<script>" + source + "</script><script>" + driver + "</script>", encoding="utf-8"
-    )
-    result = subprocess.run(
-        [
-            browser,
-            "--headless",
-            "--disable-gpu",
-            "--no-first-run",
-            f"--user-data-dir={tmp_path / 'browser'}",
-            "--dump-dom",
-            fixture.as_uri(),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
-    assert '<pre id="result">PASS</pre>' in result.stdout, result.stdout + result.stderr
-
-
 @pytest.mark.parametrize("role", ["department", "station"])
 def test_library_rename_overview_form_and_authorization(client, scope, role):
     actor, library = normal(scope, role)
@@ -468,42 +346,16 @@ def test_library_rename_overview_form_and_authorization(client, scope, role):
     client.force_login(actor)
     library.refresh_from_db()
     revision, usage, original_name = library.source_revision, library.usage_bytes, library.name
-    overview = client.get(parent_url)
-    card = (
-        overview.content.decode()
-        .split('aria-label="Library overview">', 1)[1]
-        .split("</section>", 1)[0]
-    )
-    assert '<div class="card-body">' in card
-    assert library.name in card and 'aria-label="Rename library"' in card
-    assert " used</p>" in card
-    assert "justify-content-between" not in card
-    assert card.rstrip().endswith(
-        'Open File Explorer <span aria-hidden="true">&rarr;</span></a>\n  </div>'
-    )
 
-    assert 'aria-label="Rename library"' in overview.content.decode()
-    assert f'href="{parent_url}?rename=1#library-rename"' in overview.content.decode()
-    edit = client.get(parent_url, {"rename": "1"})
-    html = edit.content.decode()
-    assert 'id="library-rename" method="post"' in html
-    assert 'name="csrfmiddlewaretoken"' in html
-    assert f'value="{original_name}"' in html
-    assert '<label class="form-label" for="library-name">Library name</label>' in html
-    assert ">Save</button>" in html and f'href="{parent_url}">Cancel</a>' in html
-    assert 'name="action" value="library_name"' not in client.get(url(library)).content.decode()
     for invalid in ("", "../invalid", "x" * 256):
         response = client.post(parent_url, {"action": "library_name", "name": invalid})
         assert response.status_code == 200
-        assert 'id="library-name-error"' in response.content.decode()
-        assert 'aria-invalid="true"' in response.content.decode()
-        assert f'value="{invalid}"' in response.content.decode()
         library.refresh_from_db()
         assert library.name == original_name and library.source_revision == revision
     response = client.post(
         parent_url, {"action": "library_name", "name": "New library"}, follow=True
     )
-    assert response.status_code == 200 and b"Library renamed." in response.content
+    assert response.status_code == 200
     assert response.redirect_chain == [(parent_url, 302)]
     library.refresh_from_db()
     assert library.name == "New library" and library.source_revision == revision + 1
@@ -541,8 +393,6 @@ def test_temporary_access_cannot_rename_library(client, scope):
     for query in ({}, {"rename": "1"}):
         response = client.get(reverse("file-library", args=(library.id,)), query)
         assert response.status_code == 200
-        html = response.content.decode()
-        assert 'aria-label="Rename library"' not in html and 'id="library-rename"' not in html
     assert (
         client.post(
             reverse("file-library", args=(library.id,)),
@@ -558,98 +408,31 @@ def test_temporary_access_cannot_rename_library(client, scope):
 
 
 @pytest.mark.parametrize("role", ["department", "station"])
-def test_move_destination_presentation_and_navigation(client, scope, role):
+def test_move_destination_pagination_and_mutation(client, scope, role):
     actor, library = normal(scope, role)
     item = services.create_folder(actor=actor, library_id=library.id, name="Test")
-    plans = services.create_folder(actor=actor, library_id=library.id, name="KLGV Plans")
+    plans = services.create_folder(actor=actor, library_id=library.id, name="Plans")
     child = services.create_folder(
         actor=actor, library_id=library.id, name="Subfolder", parent_id=plans.id
     )
+    Entry.objects.bulk_create(
+        [
+            Entry(
+                library=library, parent=plans, name=f"Folder {i}", is_folder=True, modified_by=actor
+            )
+            for i in range(26)
+        ]
+    )
     client.force_login(actor)
-
-    def browser_links(response, enhanced):
-        browser = re.search(
-            r'<div id="move-destination-browser">(.*?)</div>', response.content.decode(), re.S
-        )
-        assert browser is not None
-        assert browser[1].count('name="destination"') == 1
-        links = re.findall(r"<a [^>]+>", browser[1])
-        assert links
-        for link in links:
-            href = re.search(r'href="([^"]+)"', link)
-            assert href is not None
-            if enhanced:
-                assert f'hx-get="{href[1]}"' in link
-                assert 'hx-target="#move-destination-browser"' in link
-                assert 'hx-select="#move-destination-browser"' in link
-                assert 'hx-swap="outerHTML"' in link
-                assert 'hx-target="#file-explorer-action-modal"' not in link
-            else:
-                assert "hx-get=" not in link
-        return browser[1]
-
-    for headers in ({}, {"HTTP_HX_REQUEST": "true"}):
-        root = client.get(url(library, "move"), {"entry": item.id}, **headers)
-        browser_links(root, bool(headers))
-        assert root.status_code == 200
-        assert (
-            '<strong>Destination:</strong> <em class="text-body-secondary">Files</em>'
-            in root.content.decode()
-        )
-        assert 'aria-label="Destination pages"' not in root.content.decode()
-        response = client.get(
-            url(library, "move"), {"entry": item.id, "destination": child.id}, **headers
-        )
-        html = response.content.decode()
-        browser_links(response, bool(headers))
-        assert "<strong>Test</strong>" in html
-        assert (
-            '<strong>Destination:</strong> <em class="text-body-secondary">'
-            "Files / KLGV Plans / Subfolder</em>" in html
-        )
-        assert "The selected item will be moved here when you confirm." in html
-        assert ">Up one level</a>" in html and ">Files</a>" in html
-        assert f"destination={plans.id}" in html
-        assert 'name="destination"' in html and f'value="{child.id}"' in html
-        assert "Page 1 of 1" not in html and 'aria-label="Destination pages"' not in html
-        assert ">Move here</button>" in html
-        assert ("hx-get=" in html) == bool(headers)
-        assert ("hx-post=" in html) == bool(headers)
-    for index in range(26):
-        services.create_folder(
-            actor=actor, library_id=library.id, name=f"Folder {index}", parent_id=plans.id
-        )
-    page = client.get(
-        url(library, "move"), {"entry": item.id, "destination": plans.id}, HTTP_HX_REQUEST="true"
-    )
-    assert 'aria-label="Destination pages"' in page.content.decode()
-    assert "Page 1 of 2" in page.content.decode()
+    params = {"entry": item.id, "destination": plans.id}
+    page = client.get(url(library, "move"), params)
     assert page.context["destinations"].has_next()
-    browser = browser_links(page, True)
-    next_link = re.search(r'href="([^"]+)"[^>]*>Next</a>', browser)
-    assert next_link is not None
-    page2 = client.get(unescape(next_link[1]), HTTP_HX_REQUEST="true")
-    assert page2.context["destinations"].number == 2
-    previous = re.search(r'href="([^"]+)"[^>]*>Previous</a>', browser_links(page2, True))
-    assert previous is not None
-    assert client.get(unescape(previous[1])).context["destinations"].number == 1
-    assert f'name="destination" value="{plans.id}"' in page2.content.decode()
-    selected = client.get(
-        url(library, "move"), {"entry": item.id, "destination": child.id}, HTTP_HX_REQUEST="true"
-    )
-    browser = browser_links(selected, True)
-    for label, expected in (("Files", None), ("Up one level", plans.id)):
-        link = re.search(r'href="([^"]+)"[^>]*>' + label + r"</a>", browser)
-        assert link is not None
-        navigated = client.get(unescape(link[1]), HTTP_HX_REQUEST="true")
-        assert (navigated.context["destination"].id if expected else None) == expected
-        assert f'name="destination" value="{expected or ""}"' in navigated.content.decode()
-    destination = re.search(r'name="destination" value="([^"]*)"', browser)
-    assert destination is not None
+    second = client.get(url(library, "move"), params | {"page": 2}, HTTP_HX_REQUEST="true")
+    assert second.context["destinations"].number == 2
+    selected = client.get(url(library, "move"), params | {"destination": child.id})
+    assert selected.context["destination"].id == child.id
     response = client.post(
-        url(library, "move"),
-        {"entry": item.id, "destination": destination[1]},
-        HTTP_HX_REQUEST="true",
+        url(library, "move"), params | {"destination": child.id}, HTTP_HX_REQUEST="true"
     )
     assert response.status_code == 204
     item.refresh_from_db()
@@ -678,131 +461,3 @@ def test_actions_reject_missing_or_invalid_entries(client, scope, role, action):
     assert library.source_revision == revision
     assert AuditEvent.objects.count() == events
     assert not library.entries.exists()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_move_destination_navigation_keeps_bootstrap_modal_mounted_in_browser(
-    tmp_path, client, scope
-):
-    if sys.platform == "win32":
-        pytest.skip(
-            "Native Linux browser check: this Windows sandbox cannot launch Edge's GPU process."
-        )
-    browser = shutil.which("google-chrome") or shutil.which("chromium")
-    if not browser:
-        pytest.skip("Requires native Linux Chrome or Chromium for live HTMX interaction tests.")
-    actor, library = normal(scope, "department")
-    item = services.create_folder(actor=actor, library_id=library.id, name="Moving")
-    target = services.create_folder(actor=actor, library_id=library.id, name="Target")
-    Entry.objects.bulk_create(
-        [
-            Entry(
-                library=library,
-                parent=target,
-                name=f"Child {index:02}",
-                is_folder=True,
-                modified_by=actor,
-            )
-            for index in range(26)
-        ]
-    )
-    client.force_login(actor)
-    cookies = client.cookies.output(header="", sep=";").strip()
-    assets = {
-        "/static/" + path: Path("static", path).read_bytes()
-        for path in (
-            "vendor/bootstrap/bootstrap.min.css",
-            "vendor/bootstrap/bootstrap.bundle.min.js",
-            "vendor/htmx/htmx.min.js",
-            "vendor/alpine/alpine.min.js",
-        )
-    }
-    driver = (
-        Path(__file__)
-        .with_name("fixtures")
-        .joinpath("move_destination_browser.js")
-        .read_text(encoding="utf-8")
-    )
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            path = urlsplit(self.path).path
-            if path in assets:
-                self.send_response(200)
-                self.send_header(
-                    "Content-Type",
-                    "text/css" if path.endswith(".css") else "application/javascript",
-                )
-                self.end_headers()
-                self.wfile.write(assets[path])
-                return
-            self.respond("get")
-
-        def do_POST(self):
-            self.respond("post")
-
-        def respond(self, method):
-            close_old_connections()
-            try:
-                headers = {"HTTP_COOKIE": cookies}
-                if self.headers.get("HX-Request"):
-                    headers["HTTP_HX_REQUEST"] = "true"
-                if method == "post":
-                    body = self.rfile.read(int(self.headers["Content-Length"]))
-                    response = Client().post(
-                        self.path,
-                        data=body,
-                        content_type="application/x-www-form-urlencoded",
-                        **headers,
-                    )
-                else:
-                    response = Client().get(self.path, **headers)
-                content = response.content
-                if method == "get" and urlsplit(self.path).path == url(library):
-                    marker = (
-                        f'<pre id="result" data-move-test-entry="{item.id}" '
-                        f'data-move-test-target="{target.id}">WAIT</pre><script>{driver}</script>'
-                    )
-                    content = content.replace(b"</body>", marker.encode() + b"</body>")
-                self.send_response(response.status_code)
-                for name in ("Content-Type", "HX-Redirect"):
-                    if name in response:
-                        self.send_header(name, response[name])
-                self.end_headers()
-                self.wfile.write(content)
-            finally:
-                close_old_connections()
-
-        def log_message(self, *_args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        result = subprocess.run(
-            [
-                browser,
-                "--headless",
-                "--disable-gpu",
-                "--no-first-run",
-                f"--user-data-dir={tmp_path / 'browser'}",
-                "--virtual-time-budget=15000",
-                "--dump-dom",
-                f"http://127.0.0.1:{server.server_port}{url(library)}",
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=40,
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-    assert result.returncode == 0, result.stderr
-    assert re.search(r'<pre id="result"[^>]*>PASS</pre>', result.stdout), (
-        result.stdout + result.stderr
-    )
-    item.refresh_from_db()
-    assert item.parent_id == target.id

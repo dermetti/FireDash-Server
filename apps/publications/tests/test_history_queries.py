@@ -162,7 +162,6 @@ def test_history_payload_scaling(publication_ui_context, history_count, page_num
         )
     assert response.status_code == 200
     assert stats["snapshots"] == 0
-    assert b"Rebuild publication" in response.content
     assert response.context["history_page"].number == page.number
     assert stats["queries"] == 25
     print(f"history request={history_count} page={page_number}: {stats}")
@@ -277,7 +276,7 @@ def test_mixed_ownership_predecessor_checks_are_batched(publication_ui_context):
         ("department_hydrants", department, None),
         ("station_personnel", department, station),
     ):
-        scope = DatasetScopeState.objects.create(
+        scope, _ = DatasetScopeState.objects.get_or_create(
             dataset_type_code=code,
             department=owner,
             station=selected_station,

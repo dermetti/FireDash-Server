@@ -13,16 +13,16 @@ from apps.reference_data.models import Hydrant
 
 
 @pytest.mark.django_db(transaction=True)
-def test_hydrant_location_migration_preserves_point_and_leaves_text_location_null():
+@pytest.mark.parametrize(
+    "disposable_migration_database",
+    [("reference_data", "0012_finalize_klgv_required_metadata")],
+    indirect=True,
+)
+def test_hydrant_location_migration_preserves_point_and_leaves_text_location_null(
+    disposable_migration_database,
+):
     executor = MigrationExecutor(connection)
     latest_targets = executor.loader.graph.leaf_nodes()
-    before_targets = [
-        ("reference_data", "0012_finalize_klgv_required_metadata")
-        if app == "reference_data"
-        else (app, migration)
-        for app, migration in latest_targets
-    ]
-    executor.migrate(before_targets)
     try:
         # Latest app targets depend on the geometry rename. Use the state
         # actually applied after rollback rather than reintroducing those leaves.

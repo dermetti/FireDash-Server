@@ -121,8 +121,8 @@ def test_scanner_get_then_exactly_one_login_and_used_revoke(submitted, mail):
     assert browser.post(path + "redeem/", secure=True).status_code == 403  # CSRF rotated
     assert Client().post(path + "redeem/").status_code == 409
     used = scanner.get(path)
-    assert "Dieser Zugangslink wurde bereits verwendet." in used.content.decode()
-    assert "Zugang unwiderruflich sperren" in used.content.decode()
+    assert used.context["token_state"] == "used"
+
     assert scanner.get(path + "revoke/").status_code == 405
     confirm = scanner.post(path + "revoke/")
     assert confirm.status_code == 200
@@ -153,7 +153,7 @@ def test_token_sixty_minute_boundary(submitted, mail, used):
         browser_login(url)
     ReportTransfer.objects.update(token_expires_at=timezone.now())
     client = Client()
-    assert "Link nicht mehr gültig" in client.get(path).content.decode()
+    assert client.get(path).context["token_state"] != "fresh"
     assert client.post(path + "redeem/").status_code == 403
     assert client.post(path + "revoke/", {"confirm": "yes"}).status_code == 403
     assert ReportTransfer.objects.get().revoked_at is None
@@ -236,7 +236,7 @@ def test_pdf_jpeg_preview_and_retention(submitted, mail):
     browser, _, _ = browser_login(url)
     row, payload = submitted[3:]
     root = f"/reports/{row.report_id}/"
-    assert "arbitrary.future-report" in browser.get(root).content.decode()
+    assert browser.get(root).context["document"]["report_type"] == "arbitrary.future-report"
     photo = payload["attachments"][0]["id"]
     preview = browser.get(root + f"photos/{photo}/preview/")
     assert preview.status_code == 200 and preview["Content-Type"] == "image/jpeg"
@@ -513,9 +513,8 @@ def test_multiple_reports_all_blocks_safe_html_and_conflicting_replay(submitted,
     assert mail.send.call_count == 1
     assert issue(submitted, mail, request_id=request_id, recipient_id=uuid4())[0].status_code == 409
     browser, _, _ = browser_login(url)
-    assert browser.get("/reports/").content.decode().count("Bericht öffnen") == 2
+    assert len(browser.get("/reports/").context["reports"]) == 2
     html = browser.get(f"/reports/{second.report_id}/").content.decode()
-    assert "Bestätigt" in html and "Ja" in html and "Spalte" in html
     assert "&amp;lt;script&amp;gt;" in html and "<script>" not in html
     assert "Beliebiger Typ &amp; &quot;Zitat&quot;" in html
 
@@ -798,7 +797,7 @@ def test_used_token_revoke_does_not_depend_on_remaining_recipient_eligibility(su
     person = submitted[1]
     person.email_verified_at = None
     person.save()
-    assert "bereits verwendet" in Client().get(path).content.decode()
+    assert Client().get(path).context["token_state"] == "used"
     assert Client().post(path + "revoke/", {"confirm": "yes"}).status_code == 302
     assert ReportTransfer.objects.get().revoked_at is not None
     assert browser.get("/reports/").status_code == 403
@@ -851,6 +850,6 @@ def test_partial_expiry_does_not_hide_remaining_selected_reports(submitted, mail
     ReportSubmission.objects.filter(pk=submitted[3].pk).update(expires_at=timezone.now())
     browser, _, response = browser_login(url)
     assert response.status_code == 302
-    assert browser.get("/reports/").content.decode().count("Bericht öffnen") == 1
+    assert len(browser.get("/reports/").context["reports"]) == 1
     assert browser.get(f"/reports/{second.report_id}/").status_code == 200
     assert browser.get(f"/reports/{submitted[3].report_id}/").status_code == 404

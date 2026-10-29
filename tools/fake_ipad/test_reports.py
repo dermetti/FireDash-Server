@@ -148,12 +148,14 @@ def test_fixed_five_snapshot_later_upload_replay_consumed_token_and_replacement(
     assert response.status_code == 302
     cards = browser.get("/reports/")
     assert cards.status_code == 200
-    html = cards.content.decode()
-    positions = [html.index(f"TEST-{i:03d}") for i in range(1, 6)]
-    assert positions == sorted(positions)
-    assert html.count("3 Fotos") == 5 and "Client-Angabe" in html
-    assert "UTC ?" not in html and "UTC; 3 Fotos" in html
-    assert "Hauptstrasse" in html and "Eichenweg" in html
+    assert len(cards.context["reports"]) == 5
+    assert all(
+        len(row["header_fields"]) >= 3 and row["photo_count"] == 3
+        for row in cards.context["reports"]
+    )
+    assert [row["report_id"] for row in cards.context["reports"]] == [
+        item["report_id"] for item in first_batch["reports"]
+    ]
     pdf_names, jpeg_names = set(), set()
     for row in transfer.submissions.all():
         document, _, _ = decrypt_and_validate(

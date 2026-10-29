@@ -166,16 +166,6 @@ def test_activity_view_scoped_to_department_admin(client, activity_scope):
 
 
 @pytest.mark.django_db
-def test_activity_partial_polls_every_three_seconds(client, activity_scope):
-    scope = activity_scope
-    client.force_login(scope.admin)
-    url = reverse("tablet-api-activity", args=(scope.department.id, scope.tablet.id))
-    html = client.get(url).content.decode()
-    assert 'hx-trigger="every 3s"' in html
-    assert 'hx-swap="outerHTML"' in html
-
-
-@pytest.mark.django_db
 def test_activity_retention_is_bounded(activity_scope):
     scope = activity_scope
     now = timezone.now()

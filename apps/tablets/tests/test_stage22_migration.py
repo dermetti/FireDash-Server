@@ -13,14 +13,13 @@ from apps.tablets.models import AdoptionInvitation, Tablet
 
 
 @pytest.mark.django_db(transaction=True)
-def test_stage22_migration_deletes_only_removed_tablet_dependents():
+@pytest.mark.parametrize(
+    "disposable_migration_database", [("tablets", "0005_alter_tablet_status")], indirect=True
+)
+def test_stage22_migration_deletes_only_removed_tablet_dependents(disposable_migration_database):
     executor = MigrationExecutor(connection)
     latest_targets = executor.loader.graph.leaf_nodes()
-    before_targets = [
-        ("tablets", "0005_alter_tablet_status") if app == "tablets" else (app, migration)
-        for app, migration in latest_targets
-    ]
-    executor.migrate(before_targets)
+    before_targets = list(executor.loader.applied_migrations)
     try:
         old_apps = executor.loader.project_state(before_targets).apps
         OldTablet = old_apps.get_model("tablets", "Tablet")

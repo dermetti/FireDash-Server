@@ -163,10 +163,8 @@ def test_scope_operational_states_derives_per_scope_state():
     rows = scope_operational_states(department)
     assert len(rows) == 1
     row = rows[0]
-    assert row["dataset_name"] == "Station personnel"
-    assert row["scope_label"] == "Station A"
+    assert row["dataset_type_code"] == "station_personnel"
     assert row["state"] == UPDATE_QUEUED
-    assert row["state_label"] == "Update queued"
     assert row["distributed_version"] is None
     assert row["source_revision"] == 1
     assert len(row["source_fingerprint"]) == 64

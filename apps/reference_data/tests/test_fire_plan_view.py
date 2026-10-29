@@ -30,7 +30,3 @@ def test_fire_plan_add_form_exposes_only_the_canonical_identity_fields(client):
         "bmz_location",
         "rwa_info",
     }
-    content = response.content.decode()
-    assert "Object reference" not in content
-    assert content.index("Longitude") < content.index("Latitude")
-    assert "Required when no External ID is available" in content

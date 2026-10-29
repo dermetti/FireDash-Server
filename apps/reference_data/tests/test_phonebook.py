@@ -1,5 +1,3 @@
-from html.parser import HTMLParser
-
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.urls import reverse
@@ -173,15 +171,6 @@ def test_phonebook_list_and_crud_presentation(client, phonebook_scope):
     list_url = reverse("reference-data-phonebook", args=[department.id])
     response = client.get(list_url)
     assert response.status_code == 200
-    for label in (
-        "Name",
-        "Function",
-        "Phone number",
-        "Scope",
-        "Ada Lovelace",
-        "Station One",
-    ):
-        assert label.encode() in response.content
     detail_url = reverse("reference-data-phonebook-detail", args=[entry.id])
     assert client.get(detail_url).status_code == 200
     edit_url = reverse("reference-data-phonebook-edit", args=[entry.id])
@@ -268,28 +257,8 @@ def test_phonebook_manual_station_binding_and_list_filters(client, phonebook_sco
         HTTP_HX_REQUEST="true",
     )
     assert live_response.status_code == 200
-    assert "phonebook-results" in live_response.content.decode()
-    assert "Grace Hopper" in live_response.content.decode()
     assert foreign_station.name not in response.content.decode()
-    assert first_station.name in response.content.decode()
     assert client.get(list_url, {"scope": "department"}).context["total_count"] == 1
-    body = client.get(list_url).content.decode()
-    for label in (
-        "Status",
-        "Actions",
-        "Existing Phonebook entries",
-        "Add entry",
-        "Import CSV",
-        "Review duplicates",
-        "Name",
-        "Function",
-        "Phone number",
-        "Scope",
-    ):
-        assert label in body
-    assert "Download CSV template" not in body
-    assert "hx-trigger" in body
-    assert "input changed delay:1s" in body
 
 
 @pytest.mark.django_db
@@ -308,14 +277,9 @@ def test_phonebook_modal_create_uses_fragment_success_and_non_htmx_fallback(
         "phone_number": "555 100",
     }
     response = client.post(create_url, values, HTTP_HX_REQUEST="true")
-    body = response.content.decode()
     assert response.status_code == 200
     assert "HX-Redirect" not in response
     assert response["HX-Trigger"] == '{"phonebook-modal-close": {}}'
-    assert "phonebook-feedback" in body
-    assert 'id="phonebook-status"' in body
-    assert 'id="phonebook-results"' in body
-    assert body.count('hx-swap-oob="true"') == 3
     assert PhonebookEntry.objects.filter(department=department, first_name="Grace").exists()
 
     fallback = client.post(
@@ -343,9 +307,8 @@ def test_phonebook_invalid_htmx_create_stays_in_bound_modal(client, phonebook_sc
         HTTP_HX_REQUEST="true",
     )
     assert response.status_code == 200
-    assert "modal" in response.content.decode()
-    assert "This field is required" in response.content.decode()
-    assert "Only" in response.content.decode()
+    assert response.context["form"].errors
+    assert response.context["form"]["first_name"].value() == "Only"
 
 
 @pytest.mark.django_db
@@ -374,7 +337,6 @@ def test_manual_phonebook_duplicate_create_transitions_to_dedicated_review_and_u
     review = client.get(review_url)
     candidate = review.context["candidate"]
     assert review.status_code == 200 and review.context["candidate_index"] == 0
-    assert "Proposed entry" in review.content.decode()
     response = client.post(
         review_url,
         {
@@ -498,7 +460,6 @@ def test_phonebook_pagination_preserves_filters_and_resets_for_live_filtering(
     assert response.status_code == 200
     assert response.context["page"].number == 2
     assert response.context["page_query"] == (f"q=Dispatch&scope=station&station={station.id}")
-    assert 'hx-target="#phonebook-results"' in response.content.decode()
     reset_response = client.get(
         list_url,
         {"q": "Dispatch", "scope": "station", "station": station.id},
@@ -507,39 +468,3 @@ def test_phonebook_pagination_preserves_filters_and_resets_for_live_filtering(
     assert reset_response.context["page"].number == 1
     ids = [entry.id for entry in reset_response.context["entries"]]
     assert ids == sorted(ids, key=str)
-
-
-class _SearchInputParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.inputs = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "input":
-            self.inputs.append(dict(attrs))
-
-
-@pytest.mark.django_db
-def test_data_hub_search_inputs_render_the_personnel_live_search_contract(client, phonebook_scope):
-    actor, department, _, _ = phonebook_scope
-    client.force_login(actor)
-    expected = {
-        "personnel-list": ("q", "#person-results", "#person-filter-form"),
-        "reference-data-hydrants": ("q", "#hydrant-results", "#hydrant-filter-form"),
-        "reference-data-fire-plans": ("q", "#fire-plan-results", "#fire-plan-filter-form"),
-        "reference-data-klgv-plans": ("q", "#klgv-plan-results", "#klgv-filter-form"),
-        "reference-data-phonebook": ("q", "#phonebook-results", "#phonebook-filter-form"),
-    }
-    for name, (field_name, target, include) in expected.items():
-        response = client.get(reverse(name, args=[department.id]))
-        assert response.status_code == 200
-        parser = _SearchInputParser()
-        parser.feed(response.content.decode())
-        field = next(input_ for input_ in parser.inputs if input_.get("name") == field_name)
-        assert field["type"] == "search"
-        assert field["hx-trigger"] == "input changed delay:1s"
-        assert field["hx-target"] == target
-        assert field["hx-swap"] == "outerHTML"
-        assert field["hx-include"] == include
-        assert field["hx-push-url"] == "true"
-        assert field["hx-get"] == reverse(name, args=[department.id])

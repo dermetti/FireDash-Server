@@ -80,7 +80,7 @@ def assert_clean(library, active):
     assert scope_operational_states_for_scopes([state])[0]["state"] == "CURRENT"
     with CaptureQueriesContext(connection) as queries:
         status = publication_state(library)
-    assert status["label"] == "Current" and not status["unpublished"]
+    assert not status["unpublished"]
     assert "capacity_review" not in status and not status["can_publish"]
     assert not any(
         query["sql"].lstrip().split()[0] in {"INSERT", "UPDATE", "DELETE"} for query in queries
@@ -603,7 +603,12 @@ def test_build_now_and_explicit_pending_coalescing_keep_distinct_intent(scope, c
     pending = PublicationJob.objects.get(scope_state=active.scope_state, status="PENDING")
     attempt_id = pending.build_publication_id
     if explicit:
-        request_rebuild(actor=scope[0], **kwargs(library))
+        enqueue_publication_job(
+            **kwargs(library),
+            requested_by=scope[0],
+            trigger_type="USER_REQUEST",
+            allow_clean_rebuild=True,
+        )
     else:
         build_staged_publication(actor=scope[0], scope=active.scope_state)
     pending.refresh_from_db()

@@ -356,10 +356,6 @@ def test_registration_ui_uses_department_policy_without_consuming_preview(
     url = reverse("tablet-create", args=(department.id,))
     response = client.get(url)
     assert response.status_code == 200
-    content = response.content.decode()
-    assert "Generate automatically" not in content
-    assert 'value="0001"' in content
-    assert "readonly" in content
     department.refresh_from_db()
     assert department.tablet_asset_number_sequence == 0
     response = client.post(
@@ -381,9 +377,6 @@ def test_registration_ui_manual_field_when_automatic_numbering_is_disabled(
     client.force_login(admin)
     url = reverse("tablet-create", args=(department.id,))
     response = client.get(url)
-    content = response.content.decode()
-    assert "Generate automatically" not in content
-    assert "readonly" not in content
     response = client.post(url, {"display_name": "Manual UI", "asset_number": "MANUAL-10"})
     assert response.status_code == 302
     assert (
@@ -398,9 +391,9 @@ def test_preview_changes_with_policy_but_does_not_reserve_the_candidate(client, 
     _set_policy(admin, department, prefix="TAB", width=4)
     client.force_login(admin)
     url = reverse("tablet-create", args=(department.id,))
-    assert 'value="TAB0001"' in client.get(url).content.decode()
+    assert client.get(url).context["form"].asset_number_preview == "TAB0001"
     _set_policy(admin, department, prefix="NEW", width=6)
-    assert 'value="NEW000001"' in client.get(url).content.decode()
+    assert client.get(url).context["form"].asset_number_preview == "NEW000001"
     department.refresh_from_db()
     assert department.tablet_asset_number_sequence == 0
 
@@ -413,7 +406,7 @@ def test_post_after_preview_allocates_current_candidate_not_the_stale_preview(
     _set_policy(admin, department, width=4)
     client.force_login(admin)
     url = reverse("tablet-create", args=(department.id,))
-    assert 'value="0001"' in client.get(url).content.decode()
+    assert client.get(url).context["form"].asset_number_preview == "0001"
     create_tablet(
         actor=admin, department=department, display_name="Concurrent", asset_number="ignored"
     )

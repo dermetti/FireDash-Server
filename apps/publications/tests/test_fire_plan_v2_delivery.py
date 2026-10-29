@@ -969,15 +969,6 @@ def test_incomplete_historical_generation_never_activates(v2_delivery_context, c
     page = client.get(reverse("publications-scope-detail", args=(scope.id,)))
     assert page.status_code == 200
     assert not page.context["history_page"].object_list[1].can_rollback
-    assert (
-        "Incomplete document generation" in page.content.decode()
-        or "legacy document format" in page.content.decode()
-    )
-    assert (
-        reverse("publications-lifecycle-modal", args=(old.id, "rollback"))
-        not in page.content.decode()
-    )
-    assert "Danger zone" not in page.content.decode()
     before = PublicationActivation.objects.count()
     response = client.post(reverse("publications-lifecycle-modal", args=(old.id, "rollback")))
     assert response.status_code == 200

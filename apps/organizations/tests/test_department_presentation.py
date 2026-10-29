@@ -110,10 +110,6 @@ def test_locale_time_settings_card_is_authorized_and_preserves_other_policy(
     client.force_login(admin)
     url = reverse("portal-department-settings", args=(department.id,))
     response = client.get(url)
-    content = response.content.decode()
-    assert "Locale and time display" in content
-    assert "Europe/Berlin" in content and "de-DE" in content
-    assert "Publication retention" not in content
     session = client.session
     session["recent_reauthentication_at"] = timezone.now().timestamp()
     session.save()

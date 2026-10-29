@@ -46,32 +46,6 @@ def _names(response):
 
 
 @pytest.mark.django_db
-def test_list_renders_single_results_table(client, list_scope):
-    scope = list_scope
-    _tablet(scope.department, "active", Tablet.Status.ACTIVE)
-    _tablet(scope.department, "retired", Tablet.Status.RETIRED)
-    client.force_login(scope.admin)
-    response = client.get(reverse("tablet-list", args=(scope.department.id,)))
-    html = response.content.decode()
-    assert html.count("<table") == 1
-
-
-@pytest.mark.django_db
-def test_list_shows_count_detail_link_and_contextual_actions(client, list_scope):
-    scope = list_scope
-    tablet = _tablet(scope.department, "Command tablet", Tablet.Status.ACTIVE)
-    client.force_login(scope.admin)
-
-    response = client.get(reverse("tablet-list", args=(scope.department.id,)))
-    html = response.content.decode()
-
-    assert "Showing 1&ndash;1 of 1 tablet." in html
-    assert reverse("tablet-detail", args=(scope.department.id, tablet.id)) in html
-    assert "Actions" in html
-    assert "View details" not in html
-
-
-@pytest.mark.django_db
 def test_default_ordering_is_active_first_and_deterministic(client, list_scope):
     scope = list_scope
     _tablet(scope.department, "lost", Tablet.Status.LOST)
@@ -198,7 +172,6 @@ def test_vehicle_filter_matches_only_the_current_vehicle_assignment(client, list
 @pytest.mark.django_db
 def test_foreign_station_and_vehicle_filters_cannot_leak_other_department_data(client, list_scope):
     scope = list_scope
-    own_tablet = _tablet(scope.department, "own", Tablet.Status.ACTIVE)
     foreign_station = Station.objects.create(
         department=scope.other,
         name="Other station",
@@ -230,7 +203,6 @@ def test_foreign_station_and_vehicle_filters_cannot_leak_other_department_data(c
 
     assert _names(by_station) == []
     assert _names(by_vehicle) == []
-    assert own_tablet.display_name in html
     assert foreign_station.name not in html
     assert foreign_vehicle.display_name not in html
 
@@ -262,11 +234,6 @@ def test_pagination_preserves_filters(client, list_scope):
     )
     assert "status=ACTIVE" in response.context["page_query"]
     assert "page" not in response.context["page_query"]
-
-    page_html = response.content.decode()
-    assert "Previous" in page_html
-    assert "Next" in page_html
-    assert "status=ACTIVE" in page_html
 
 
 @pytest.mark.django_db

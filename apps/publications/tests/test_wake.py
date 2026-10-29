@@ -11,7 +11,7 @@ from apps.accounts.models import User
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station
 from apps.publications.models import DatasetScopeState, PublicationJob
-from apps.publications.services import bulk_request_rebuilds, request_rebuild
+from apps.publications.services import PublicationError, bulk_request_rebuilds, request_rebuild
 from apps.publications.wake import (
     PUBLICATION_BUILD_WAKE_FD_NAME,
     drain_publication_build_activation_wakes,
@@ -56,14 +56,15 @@ def test_successful_manual_rebuild_commits_one_wake_and_coalesces(wake_context):
             dataset_type_code="station_personnel",
         )
         wake.assert_called_once()
-        request_rebuild(
-            actor=admin,
-            department=department,
-            station=station,
-            dataset_type_code="station_personnel",
-        )
+        with pytest.raises(PublicationError, match="queued"):
+            request_rebuild(
+                actor=admin,
+                department=department,
+                station=station,
+                dataset_type_code="station_personnel",
+            )
     assert PublicationJob.objects.filter(department=department).count() == 1
-    assert wake.call_count == 2  # one harmless advisory notification per committed click
+    assert wake.call_count == 1  # Rejected duplicate never schedules a second wake.
 
 
 @pytest.mark.django_db(transaction=True)

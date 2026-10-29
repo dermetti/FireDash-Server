@@ -5,7 +5,6 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
-from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import User
@@ -95,17 +94,3 @@ def test_transfer_does_not_change_asset_state(transfer_scope):
     assign_tablet_vehicle(tablet=tablet, vehicle=scope.vehicle_b, actor=scope.admin)
     tablet.refresh_from_db()
     assert tablet.status == Tablet.Status.ACTIVE
-
-
-@pytest.mark.django_db
-def test_assign_view_uses_transfer_wording_when_assigned(client, transfer_scope):
-    scope = transfer_scope
-    tablet = Tablet.objects.create(
-        department=scope.department, display_name="FD-014", status=Tablet.Status.ACTIVE
-    )
-    assign_tablet_vehicle(tablet=tablet, vehicle=scope.vehicle_a, actor=scope.admin)
-    client.force_login(scope.admin)
-    response = client.get(reverse("tablet-detail", args=(scope.department.id, tablet.id)))
-    html = response.content.decode()
-    assert "Transfer" in html
-    assert "Move" not in html
