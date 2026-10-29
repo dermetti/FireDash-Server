@@ -120,14 +120,17 @@ flags **after the report subcommand**, as with other Fake iPad commands:
 | `storm --recipient-personnel-id UUID` | Finalize five independent reports, persist the whole batch, upload sequentially and verify all five READY; no email |
 | `status --submission-id UUID` | Recheck a stored report's status and matching IDs |
 | `retry --submission-id UUID` | Resubmit the exact stored JWE; accept 201 or exact 200 replay, reject 409 conflict; verify READY |
-| `link --recipient-personnel-id UUID` | Check all locally known reports for that IC are READY, then explicitly request one generic link |
+| `link --recipient-personnel-id UUID` | Confirm current reports READY and historical records EXPIRED on the server, then explicitly request one generic link |
 | `link --recipient-personnel-id UUID --transfer-request-id UUID` | Recover a previously persisted link request outcome, without issuing a fresh grant |
 | `revoke --transfer-id UUID` | Explicitly revoke this installation's transfer |
 
-`link` uses read-only status checks. If any check fails or returns non-READY, it
-reports the outstanding count and sends no link request; use `retry` to synchronize
-and run `link` again. A lost upload response can also be recovered by a READY
-status check. A lost link response can be recovered with the saved request UUID.
+`link` uses read-only status checks. READY is acceptable; server-confirmed EXPIRED
+is a terminal historical record and does not block access to current reports.
+If any check fails or cannot confirm either state, it reports the outstanding
+count and sends no link request; use `retry` to synchronize and run `link` again.
+A cached EXPIRED value alone never bypasses a missing, failed or malformed server
+response. A lost upload response can also be recovered by a READY status check.
+A lost link response can be recovered with the saved request UUID.
 
 `tools/fake_ipad/reports.py` contains the focused, Django-independent fixture/JWE
 producer and queue. It reuses FakeIPadClient configuration, ApiClient transport,
@@ -253,3 +256,84 @@ $env:DJANGO_SETTINGS_MODULE = 'config.settings.test'
 - No full suite, live traffic, emails, cleanup jobs, deployment, Git writes or
   adopted Fake-iPad state/dataset modifications were performed. The manual
   testserver checklist above remains explicitly unexecuted.
+
+## Phase 3.4.1 — pre-acceptance corrections
+
+Only download naming, historical Fake-iPad queue handling and the overview typo
+change in this follow-up. Authorization, cryptography, ReportDocument, PDF layout,
+retention, Magic Links and existing dataset tooling retain their behavior.
+
+Download basenames are deterministic and ASCII-only:
+
+- PDF: `report-{sanitized-report-title}-{report-UUID}.pdf` (at most 96 characters).
+- JPEG: `report-{sanitized-report-title}-foto-{NN}-{sanitized-attachment-title}-{report-UUID}-{attachment-UUID}.jpg`
+  (at most 182 characters for valid v1 documents).
+
+Report/attachment title segments use the existing Django ASCII slugification,
+bounded to 48/40 characters. Empty segments fall back to `bericht`/`bild`. Only
+letters, digits, underscores and hyphens enter those segments; fixed safe prefixes
+and extensions avoid Windows device basenames, trailing dots/spaces, paths,
+control characters and HTTP header injection. Complete UUID suffixes remain
+untruncated, including when different titles normalize to the same segment.
+Photograph numbering follows the finalized document's attachment order, independent
+of transport ordering. Repeated downloads propose the same basename.
+
+Fake-iPad access requests continue to fetch and validate server status for every
+local record for that IC. Confirmed EXPIRED history is retained on disk and no
+longer blocks current READY reports. PENDING/failed/unconfirmed delivery, a missing
+server record, network error or malformed response still prevents a fresh link.
+No encrypted record is deleted; installation state and datasets are untouched.
+
+The overview uses the accessible separator `UTC; … Fotos` instead of `UTC ?`.
+Tests check all five identifiable PDF names and fifteen distinct JPEG names in the
+storm fixture, repeated download stability, ordering, malicious/empty/long titles,
+and mixed expired/ready/pending queues with failed and missing status requests.
+
+### Phase 3.4.1 validation (2026-10-29)
+
+```powershell
+$env:DJANGO_SETTINGS_MODULE = 'config.settings.test'
+.venv/Scripts/python.exe -m pytest -p no:cacheprovider apps/report_transfer/tests/test_download_filenames.py tools/fake_ipad/test_reports.py -q --tb=short -rs
+# Full repository suite, including relevant regressions and slow-marked tests:
+.venv/Scripts/python.exe -m pytest -p no:cacheprovider -q --tb=short -rs
+.venv/Scripts/python.exe manage.py check
+.venv/Scripts/python.exe manage.py makemigrations --check --dry-run
+.venv/Scripts/ruff.exe check apps/report_transfer tools/fake_ipad
+.venv/Scripts/ruff.exe format --check apps/report_transfer/portal.py apps/report_transfer/tests/test_portal.py apps/report_transfer/tests/test_download_filenames.py tools/fake_ipad/reports.py tools/fake_ipad/test_reports.py
+```
+
+- Focused PostgreSQL/CLI/filename tests: **40 passed**, no skips, in 48.29 seconds.
+- Full suite: **2,039 passed, 22 failed, 14 skipped**, in 1,131.13 seconds
+  (18:51). This is **not** a green full-suite result. All Report Transfer,
+  Fake-iPad, PDF-Mail and tablet API regression cases passed within this run.
+- Django check: zero issues. Migration drift check: no changes detected.
+  Ruff checks and formatting pass; read-only Git whitespace check passes.
+
+The 22 full-suite failures are outside the changed report-transfer/queue code and
+were not fixed in this narrowly scoped follow-up. Observed failures, without
+claiming a baseline full-suite comparison:
+
+| Tests | Count | Observed failure |
+|---|---:|---|
+| `ingestion/tests/test_services.py` | 2 | Expected no canonical scope state, but a state already exists |
+| `portal/tests/test_stage5_system_administration.py` | 2 | Expected system dataset list excludes the present `dangerous_goods` entry |
+| `publications/tests/test_history_queries.py`, `test_publications_ui.py`, `test_retention_hardening.py` | 5 | Duplicate SYSTEM `dangerous_goods` scope violates `unique_dataset_scope_state` |
+| `publications/tests/test_read_path_performance.py` | 3 | Eight queries observed, six expected |
+| `file_library/tests/test_backend_preparation.py`, `test_libraries.py`, `test_management_ux.py`; `reference_data/tests/test_hydrant_location_migration.py` | 4 | Rollback encounters irreversible `publications.0033_strict_document_generation_metadata` |
+| `file_library/tests/test_publication_reverts.py`; `publications/tests/test_debounce.py`, `test_wake.py` | 4 | Rebuild rejected for existing queued work, or expected empty job queue is populated |
+| `reference_data/tests/test_document_management_ui.py` | 1 | Missing legacy `department_fire_plans` artifact builder |
+| `tablets/tests/test_stage22_migration.py` | 1 | Migration plan mixes forwards and backwards operations |
+
+All 14 skips are platform-specific:
+
+- Six browser cases require the native Linux Chrome/Chromium harness (File Library,
+  ingestion and publication scope-filter UI).
+- One publication artifact case requires Unix group ownership.
+- Six PDF sanitizer broker cases require Linux `dir_fd`, `O_NOFOLLOW`, ownership
+  and FIFO behavior.
+- One Fake-iPad owner-only mode case requires POSIX permissions.
+
+Tests used isolated local PostgreSQL, disposable storage and mocked/in-process
+HTTP/mail. No live email, testserver traffic, cleanup job, deployment, Git write,
+production database change or adopted Fake-iPad identity/dataset modification
+was performed.

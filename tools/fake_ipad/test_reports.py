@@ -152,7 +152,9 @@ def test_fixed_five_snapshot_later_upload_replay_consumed_token_and_replacement(
     positions = [html.index(f"TEST-{i:03d}") for i in range(1, 6)]
     assert positions == sorted(positions)
     assert html.count("3 Fotos") == 5 and "Client-Angabe" in html
+    assert "UTC ?" not in html and "UTC; 3 Fotos" in html
     assert "Hauptstrasse" in html and "Eichenweg" in html
+    pdf_names, jpeg_names = set(), set()
     for row in transfer.submissions.all():
         document, _, _ = decrypt_and_validate(
             runner.load(str(row.submission_id))["envelope"],
@@ -160,14 +162,28 @@ def test_fixed_five_snapshot_later_upload_replay_consumed_token_and_replacement(
         )
         assert browser.get(f"/reports/{row.report_id}/").status_code == 200
         pdf = browser.get(f"/reports/{row.report_id}/pdf/")
+        pdf_name = pdf["Content-Disposition"]
+        incident = document["header"][0]["value"]["value"].lower()
+        assert incident in pdf_name and str(row.report_id) in pdf_name
+        pdf_names.add(pdf_name)
         assert b"".join(pdf.streaming_content).startswith(b"%PDF-")
         pdf.close()
-        for attachment in document["attachments"]:
+        for number, attachment in enumerate(document["attachments"], start=1):
             photo_url = f"/reports/{row.report_id}/photos/{attachment['id']}/"
             assert browser.get(photo_url + "preview/").status_code == 200
             jpeg = browser.get(photo_url)
+            name = jpeg["Content-Disposition"]
+            assert incident in name and f"-foto-{number:02d}-test-foto-{number}-" in name
+            jpeg_names.add(name)
             assert b"".join(jpeg.streaming_content).startswith(b"\xff\xd8")
             jpeg.close()
+        repeated_pdf = browser.get(f"/reports/{row.report_id}/pdf/")
+        assert repeated_pdf["Content-Disposition"] == pdf_name
+        repeated_pdf.close()
+        repeated_jpeg = browser.get(photo_url)
+        assert repeated_jpeg["Content-Disposition"] == name
+        repeated_jpeg.close()
+    assert len(pdf_names) == 5 and len(jpeg_names) == 15
     later = runner.send(str(person.pk))["reports"][0]
     request_id = str(transfer.transfer_request_id)
     assert runner.link(str(person.pk), request_id=request_id) == outcome
@@ -216,6 +232,84 @@ def test_lost_upload_response_exact_retry_pending_blocks_mail(context, runner, m
     with pytest.raises(ClientError, match="1 finalized local reports"):
         runner.link(str(context[1].pk))
     assert mail.send.call_count == 0 and ReportTransfer.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_confirmed_expired_history_does_not_block_current_ready_reports(context, runner, mail):
+    recipient = str(context[1].pk)
+    records = runner.send(recipient, storm=True)["reports"]
+    historical = records[0]
+    ReportSubmission.objects.filter(submission_id=historical["submission_id"]).update(
+        expires_at=timezone.now()
+    )
+    # A locally PENDING record whose server upload completed is resolved by status.
+    current = runner.load(records[1]["submission_id"])
+    current["state"] = "PENDING"
+    runner.save(current)
+    original_state = dict(runner.client.state.state)
+    original_envelopes = {
+        r["submission_id"]: runner.load(r["submission_id"])["envelope"] for r in records
+    }
+    result = runner.link(recipient)
+    assert result["status"] == "SENT" and mail.send.call_count == 1
+    transfer = ReportTransfer.objects.get(pk=result["transfer_id"])
+    assert transfer.submissions.count() == 4
+    assert not transfer.submissions.filter(submission_id=historical["submission_id"]).exists()
+    assert runner.load(historical["submission_id"])["state"] == "EXPIRED"
+    assert runner.load(current["submission_id"])["state"] == "READY"
+    assert len(list(runner.root.glob("*.json"))) == 5
+    assert runner.client.state.state == original_state
+    assert {
+        r["submission_id"]: runner.load(r["submission_id"])["envelope"] for r in records
+    } == original_envelopes
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "failure", ["pending", "failed", "missing_cached_expired", "network", "malformed"]
+)
+def test_expired_and_ready_history_never_hide_unconfirmed_uploads(
+    context, runner, mail, monkeypatch, failure
+):
+    recipient = str(context[1].pk)
+    records = runner.send(recipient)["reports"]
+    historical = records[0]
+    ReportSubmission.objects.filter(submission_id=historical["submission_id"]).update(
+        expires_at=timezone.now()
+    )
+    assert runner.status(historical["submission_id"])["state"] == "EXPIRED"
+    ready = runner.send(recipient)["reports"][0]
+    current = runner.send(recipient)["reports"][0]
+    record = runner.load(current["submission_id"])
+    unchanged_envelope = record["envelope"]
+    record["state"] = (
+        "EXPIRED"
+        if failure == "missing_cached_expired"
+        else "FAILED"
+        if failure == "failed"
+        else "PENDING"
+    )
+    runner.save(record)
+    if failure in ("pending", "failed", "missing_cached_expired"):
+        # Unaccepted/missing server records must not be mistaken for expiry.
+        ReportSubmission.objects.filter(submission_id=current["submission_id"]).delete()
+    else:
+        real_call = runner.client.api.call
+
+        def failed_status(method, path, **kwargs):
+            if current["submission_id"] in path:
+                if failure == "network":
+                    raise ClientError("Report request: transport failure")
+                return HttpResponse(200, {}, b'{"state":"EXPIRED"}', path)
+            return real_call(method, path, **kwargs)
+
+        monkeypatch.setattr(runner.client.api, "call", failed_status)
+    with pytest.raises(ClientError, match="1 finalized local reports"):
+        runner.link(recipient)
+    assert not mail.send.called and not ReportTransfer.objects.exists()
+    assert runner.load(current["submission_id"])["envelope"] == unchanged_envelope
+    assert len(list(runner.root.glob("*.json"))) == 3
+    assert runner.load(ready["submission_id"])["state"] == "READY"
 
 
 @pytest.mark.django_db

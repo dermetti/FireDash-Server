@@ -672,7 +672,9 @@ def test_revoke_interrupts_an_inflight_download(submitted, mail):
     request = RequestFactory().get("/reports/")
     request.session = browser.session
     row = submitted[3]
-    stream_response = download_response(request, row, b"x" * 600_000, "application/pdf", "pdf")
+    stream_response = download_response(
+        request, row, b"x" * 600_000, "application/pdf", "pdf", filename="test-report.pdf"
+    )
     stream = iter(stream_response.streaming_content)
     assert len(next(stream)) == 256 * 1024
     submitted[2].post(f"{API}/{response.json()['transfer_id']}/revoke")

@@ -4,7 +4,7 @@
 <div class="page-heading"><p class="eyebrow">BERICHTSTRANSFER</p><h1>Ihre Berichte</h1><p class="muted">Zur vorübergehenden Übernahme in SyBOS bereitgestellt.</p></div>
 <section class="report-list">
 {% for report in reports %}
-  <article class="card report-card"><div><p class="eyebrow">{{ report.report_type }}</p><h2>{{ report.title }}</h2><dl class="key-values">{% for field in report.header_fields %}<div><dt>{{ field.label }}</dt><dd>{{ field.display_value }}</dd></div>{% endfor %}</dl><p class="muted">Finalisiert in der App (Client-Angabe): {{ report.finalized_at|date:"d.m.Y H:i" }} UTC ? {{ report.photo_count }} Fotos</p><p class="muted">Bereitgestellt: {{ report.received_at|date:"d.m.Y H:i" }} UTC</p><p class="expiry">Verfügbar bis: {{ report.expires_at|date:"d.m.Y H:i" }} UTC</p></div><a class="btn btn-primary" href="{{ report.detail_url }}">Bericht öffnen</a></article>
+  <article class="card report-card"><div><p class="eyebrow">{{ report.report_type }}</p><h2>{{ report.title }}</h2><dl class="key-values">{% for field in report.header_fields %}<div><dt>{{ field.label }}</dt><dd>{{ field.display_value }}</dd></div>{% endfor %}</dl><p class="muted">Finalisiert in der App (Client-Angabe): {{ report.finalized_at|date:"d.m.Y H:i" }} UTC; {{ report.photo_count }} Fotos</p><p class="muted">Bereitgestellt: {{ report.received_at|date:"d.m.Y H:i" }} UTC</p><p class="expiry">Verfügbar bis: {{ report.expires_at|date:"d.m.Y H:i" }} UTC</p></div><a class="btn btn-primary" href="{{ report.detail_url }}">Bericht öffnen</a></article>
 {% empty %}
   <div class="card"><h2>Keine Berichte verfügbar</h2><p class="muted">Der Transfer enthält keine abrufbaren Berichte mehr.</p></div>
 {% endfor %}

@@ -13,6 +13,7 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.text import slugify
 from django.views.decorators.debug import sensitive_variables
 from django.views.decorators.http import require_GET, require_POST
 from PIL import Image, ImageOps
@@ -220,7 +221,26 @@ def complete_download(request, row, file_type, *, transfer_id):
         logger.warning("Report download completion could not be recorded.")
 
 
-def download_response(request, row, payload, media_type, extension):
+def download_filename(document, *, attachment_id=None):
+    """Stable ASCII basenames; user text never becomes a path or header syntax.
+
+    The prefix avoids Windows device names, and fixed UUID suffixes survive
+    truncation/transliteration collisions. JPEG order comes from the document.
+    """
+    title = slugify(document["title"])[:48].strip("-_") or "bericht"
+    if attachment_id is None:
+        return f"report-{title}-{document['report_id']}.pdf"
+    for number, attachment in enumerate(document["attachments"], start=1):
+        if attachment["id"] == str(attachment_id):
+            photo = slugify(attachment["title"])[:40].strip("-_") or "bild"
+            return (
+                f"report-{title}-foto-{number:02d}-{photo}-"
+                f"{document['report_id']}-{attachment['id']}.jpg"
+            )
+    raise TransferError("attachment_not_found", 404)
+
+
+def download_response(request, row, payload, media_type, extension, *, filename):
     """Count only normal stream exhaustion, after each yielded chunk was sent.
 
     WSGI/ASGI can establish server handoff, never browser receipt/save. Closing
@@ -254,7 +274,7 @@ def download_response(request, row, payload, media_type, extension):
     response = StreamingHttpResponse(
         async_chunks() if hasattr(request, "scope") else chunks(), content_type=media_type
     )
-    response["Content-Disposition"] = f'attachment; filename="report-{row.report_id}.{extension}"'
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
     response["Content-Length"] = str(len(payload))
     response["X-Accel-Buffering"] = "no"
     return response
@@ -282,14 +302,16 @@ def pdf(request, report_id):
             "installation_id": str(row.installation_id),
         },
     )
-    return download_response(request, row, payload, "application/pdf", "pdf")
+    return download_response(
+        request, row, payload, "application/pdf", "pdf", filename=download_filename(document)
+    )
 
 
 @require_GET
 @boundary
 @sensitive_variables()
 def jpeg(request, report_id, attachment_id, *, preview=False):
-    row, _, attachments = load_portal_submission(request, report_id)
+    row, document, attachments = load_portal_submission(request, report_id)
     attachment = next((a for a in attachments if a["id"] == str(attachment_id)), None)
     if attachment is None:
         raise TransferError("attachment_not_found", 404)
@@ -303,7 +325,14 @@ def jpeg(request, report_id, attachment_id, *, preview=False):
             image.convert("RGB").save(output, format="JPEG", quality=75)
         transfers.portal_context(request, report_id=report_id)
         return HttpResponse(output.getvalue(), content_type="image/jpeg")
-    return download_response(request, row, payload, "image/jpeg", "jpg")
+    return download_response(
+        request,
+        row,
+        payload,
+        "image/jpeg",
+        "jpg",
+        filename=download_filename(document, attachment_id=attachment_id),
+    )
 
 
 @require_POST

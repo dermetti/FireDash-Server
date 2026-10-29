@@ -364,13 +364,15 @@ class ReportTest:
             if record["recipient_personnel_id"] != recipient:
                 continue
             try:
-                if self.status(record["submission_id"])["state"] != "READY":
+                # Only a fresh, validated server response can confirm terminal
+                # expiry; local cached EXPIRED must never bypass a failed check.
+                if self.status(record["submission_id"])["state"] not in ("READY", "EXPIRED"):
                     pending += 1
             except ClientError:
                 pending += 1
         if pending:
             fail(
-                f"{pending} finalized local reports are not confirmed READY; "
+                f"{pending} finalized local reports are not confirmed READY or EXPIRED; "
                 "retry synchronization before requesting access. No link requested."
             )
         # An intentional invocation always uses a new UUID. Persist it so an
