@@ -281,7 +281,7 @@ def test_csrf_headers_logout_and_idle_timeout(submitted, mail):
     for address in (path, "/reports/", f"/reports/{submitted[3].report_id}/"):
         response = browser.get(address, secure=True)
         assert response["Cache-Control"] == "private, no-store"
-        assert response["Referrer-Policy"] == "no-referrer"
+        assert response["Referrer-Policy"] == "strict-origin"
         assert "frame-ancestors 'none'" in response["Content-Security-Policy"]
         assert response["X-Frame-Options"] == "DENY"
     assert browser.get("/reports/logout/").status_code == 405

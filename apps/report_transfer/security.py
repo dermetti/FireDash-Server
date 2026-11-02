@@ -38,7 +38,7 @@ class PortalSecurityMiddleware:
         response = self.get_response(request)
         if portal:
             response["Cache-Control"] = "private, no-store"
-            response["Referrer-Policy"] = "no-referrer"
+            response["Referrer-Policy"] = "strict-origin"
             response["Content-Security-Policy"] = (
                 "default-src 'none'; style-src 'self'; img-src 'self'; "
                 "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
