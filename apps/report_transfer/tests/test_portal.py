@@ -66,7 +66,9 @@ def issue(submitted, mail, *, request_id=None, recipient_id=None):
         content_type="application/json",
     )
     if response.status_code in (200, 201) and mail.send.called:
-        url = re.search(r"https://\S+", mail.send.call_args.args[0].body).group()
+        match = re.search(r"https://\S+", mail.send.call_args.args[0].body)
+        assert match is not None
+        url = match.group()
     else:
         url = None
     return response, url
@@ -315,7 +317,10 @@ def test_tablet_revoke_and_anonymous_foreign_uuid_denied(submitted, mail):
 @pytest.mark.parametrize("bad", ["email", "submission_ids", "missing", "foreign", "bad_uuid"])
 def test_invalid_transfer_contract(submitted, mail, bad):
     _, _, tablet, row, _ = submitted
-    data = {"transfer_request_id": str(uuid4()), "recipient_personnel_id": str(row.recipient_id)}
+    data: dict[str, object] = {
+        "transfer_request_id": str(uuid4()),
+        "recipient_personnel_id": str(row.recipient_id),
+    }
     if bad in ("email", "submission_ids"):
         data[bad] = "not-accepted"
     elif bad == "missing":
@@ -501,7 +506,7 @@ def add_submission(submitted, report_key, *, recipient=None, full_document=False
         )
         payload["report"].update(content(json.dumps(document).encode()))
     assert post(client, encrypt(report_key, header, payload)).status_code == 201
-    return ReportSubmission.objects.get(submission_id=header["submission_id"])
+    return ReportSubmission.objects.get(submission_id=str(header["submission_id"]))
 
 
 def test_multiple_reports_all_blocks_safe_html_and_conflicting_replay(submitted, mail, report_key):  # noqa: F811
@@ -832,6 +837,9 @@ def test_asgi_stream_records_only_after_full_iteration(submitted, mail):
         client.cookies = browser.cookies
         try:
             response = await client.get(f"/reports/{row.report_id}/pdf/", secure=True)
+            from django.http import StreamingHttpResponse
+
+            assert isinstance(response, StreamingHttpResponse)
             assert response.status_code == 200 and response.is_async
             return b"".join([chunk async for chunk in response.streaming_content])
         finally:
@@ -853,3 +861,12 @@ def test_partial_expiry_does_not_hide_remaining_selected_reports(submitted, mail
     assert len(browser.get("/reports/").context["reports"]) == 1
     assert browser.get(f"/reports/{second.report_id}/").status_code == 200
     assert browser.get(f"/reports/{submitted[3].report_id}/").status_code == 404
+
+
+@pytest.mark.parametrize("session_id", [None, 123, "malformed", str(uuid4())])
+def test_invalid_portal_session_id_is_denied(session_id):
+    browser = Client()
+    session = browser.session
+    session["report_portal"] = session_id
+    session.save()
+    assert browser.get("/reports/", secure=True).status_code == 403

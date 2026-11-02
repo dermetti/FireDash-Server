@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 # Called by verify-deployment.sh with its fail()/ok() accumulator and context.
-# All unit properties below are effective systemd values, including overrides.
+# Complex D-Bus properties may be [unprintable] on Debian. Inspect effective
+# fragments/drop-ins only when systemd confirms no pending daemon reload. The
+# running-process probe below independently checks the credential mount.
+
+report_unit_property() {
+    local property=$1 unit=$2 value
+    value=$(systemctl show -p "$property" --value "$unit") || return 1
+    # Accept both --value and property-prefixed representations, never empty.
+    value=${value#"$property="}
+    [[ -n $value && $value != '[unprintable]' ]] || return 1
+    printf '%s' "$value"
+}
+
+report_unit_configuration() {
+    local unit=$1 mode=$2 configuration
+    [[ $(report_unit_property NeedDaemonReload "$unit") == no ]] || return 1
+    configuration=$(systemctl cat -- "$unit") || return 1
+    [[ -n $configuration ]] || return 1
+    # No cat output (which may include administrator secrets) reaches logs.
+    printf '%s\n' "$configuration" | "$RELEASE/venv/bin/python" \
+        "$RELEASE/deploy/scripts/report-transfer-credential.py" inspect-unit "$mode"
+}
+
 verify_report_transfer() {
     local credential="$SECRET_DIR/report-transfer-keyring.json" version pid unit value nginx_block
     version=$(report_transfer_active_key) || { fail "invalid Report Transfer active version"; return; }
@@ -12,18 +34,12 @@ verify_report_transfer() {
         fail "Report Transfer keyring missing, invalid or not root:root 0600; restore retained credentials"
     fi
 
-    value=$(systemctl show -p LoadCredential --value fire-backend.service) || value=""
-    [[ " $value " == *" report-transfer-keyring:/etc/fire-backend/credentials/report-transfer-keyring.json "* ]] \
-        && ok "web loads canonical report credential" || fail "web missing canonical report LoadCredential"
-    value=$(systemctl show -p LoadCredentialEncrypted --value fire-backend.service) || value=report-transfer-keyring
-    [[ $value != *report-transfer-keyring* ]] \
-        || fail "web has conflicting encrypted report credential override"
-    [[ $(systemctl show -p User --value fire-backend.service) == fire_backend \
-        && $(systemctl show -p Group --value fire-backend.service) == fire_backend ]] \
+    report_unit_configuration fire-backend.service web \
+        && ok "web canonical report credential and spool write boundary" \
+        || fail "web report unit configuration missing/conflicting or daemon reload pending"
+    [[ $(report_unit_property User fire-backend.service) == fire_backend \
+        && $(report_unit_property Group fire-backend.service) == fire_backend ]] \
         && ok "web report identity" || fail "web must run as fire_backend"
-    value=$(systemctl show -p ReadWritePaths --value fire-backend.service) || value=""
-    [[ " $value " == *" /var/spool/firedash-reports "* && " $value " == *" /var/lib/fire-backend "* ]] \
-        && ok "web report spool write boundary" || fail "web ReadWritePaths missing report spool or existing application data"
     validate_report_spool && ok "private report spool fire_backend:fire_backend 0700" \
         || fail "unsafe or missing report spool"
     runuser -u fire_backend -- test -r "$REPORT_SPOOL" \
@@ -43,36 +59,27 @@ verify_report_transfer() {
     done
 
     for unit in fire-report-expiry.service fire-report-expiry.timer; do
-        [[ $(systemctl show -p LoadState --value "$unit") == loaded ]] \
+        [[ $(report_unit_property LoadState "$unit") == loaded ]] \
             && ok "$unit installed" || fail "$unit not installed"
     done
     systemctl is-enabled --quiet fire-report-expiry.timer \
         && systemctl is-active --quiet fire-report-expiry.timer \
         && ok "report expiry timer enabled and active" || fail "report expiry timer disabled or inactive"
-    [[ $(systemctl show -p User --value fire-report-expiry.service) == fire_backend \
-        && $(systemctl show -p Group --value fire-report-expiry.service) == fire_backend \
-        && $(systemctl show -p WorkingDirectory --value fire-report-expiry.service) == /srv/firedash/current \
-        && $(systemctl show -p ProtectSystem --value fire-report-expiry.service) == strict \
-        && $(systemctl show -p NoNewPrivileges --value fire-report-expiry.service) == yes \
-        && $(systemctl show -p ReadWritePaths --value fire-report-expiry.service) == /var/spool/firedash-reports ]] \
+    [[ $(report_unit_property User fire-report-expiry.service) == fire_backend \
+        && $(report_unit_property Group fire-report-expiry.service) == fire_backend \
+        && $(report_unit_property WorkingDirectory fire-report-expiry.service) == /srv/firedash/current \
+        && $(report_unit_property ProtectSystem fire-report-expiry.service) == strict \
+        && $(report_unit_property NoNewPrivileges fire-report-expiry.service) == yes ]] \
         && ok "report expiry identity and narrow write boundary" || fail "report expiry identity/sandbox unexpected"
-    value=$(systemctl show -p ExecStart --value fire-report-expiry.service) || value=""
-    [[ $value == *'argv[]=/srv/firedash/current/venv/bin/python manage.py expire_report_submissions ;'* ]] \
-        && ok "report expiry command" || fail "report expiry command unexpected"
-    value=$(systemctl show -p Environment --value fire-report-expiry.service) || value=""
-    [[ " $value " == *' DJANGO_SETTINGS_MODULE=config.settings.production '* ]] \
-        && [[ $(systemctl show -p EnvironmentFiles --value fire-report-expiry.service) == '/etc/fire-backend/fire-backend.env (ignore_errors=no)' ]] \
-        && ok "report expiry production environment" || fail "report expiry runtime environment unexpected"
-    value=$(systemctl show -p TimersMonotonic --value fire-report-expiry.timer) || value=""
-    [[ $value == *'OnBootUSec=5min'* && $value == *'OnUnitActiveUSec=5min'* \
-        && $(systemctl show -p Unit --value fire-report-expiry.timer) == fire-report-expiry.service \
-        && $(systemctl show -p Persistent --value fire-report-expiry.timer) == yes ]] \
-        && ok "report expiry five-minute schedule" || fail "report expiry schedule unexpected"
-    for unit in fire-report-expiry.service fire-publication-build.service fire-publication-delivery.service fire-publication-maintenance.service fire-import-staging-maintenance.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
-        value=$(systemctl show -p LoadCredential -p LoadCredentialEncrypted --value "$unit") || { fail "cannot inspect $unit credentials"; continue; }
-        if [[ $value == *report-transfer-keyring* ]]; then
-            fail "$unit unnecessarily receives report RSA keyring"
-        fi
+    report_unit_configuration fire-report-expiry.service expiry \
+        && ok "report expiry command, environment and narrow write boundary" \
+        || fail "report expiry effective configuration unexpected or daemon reload pending"
+    report_unit_configuration fire-report-expiry.timer timer \
+        && ok "report expiry five-minute schedule" \
+        || fail "report expiry schedule unexpected or daemon reload pending"
+    for unit in fire-publication-build.service fire-publication-delivery.service fire-publication-maintenance.service fire-import-staging-maintenance.service fire-temporary-assignment-expiry.service fire-stale-installation.service; do
+        report_unit_configuration "$unit" worker \
+            || fail "cannot confirm $unit excludes report RSA keyring (check unit configuration/daemon reload)"
     done
 
     nginx_block=$(awk '
@@ -87,7 +94,7 @@ verify_report_transfer() {
     [[ $value == "https://$HOST" ]] && normalize_base_url "$value" >/dev/null \
         && ok "report links use canonical HTTPS origin" || fail "Report Transfer public HTTPS origin unexpected"
 
-    pid=$(systemctl show -p MainPID --value fire-backend.service) || pid=0
+    pid=$(report_unit_property MainPID fire-backend.service) || pid=0
     if [[ $pid =~ ^[1-9][0-9]*$ ]] \
         && PYTHONPATH="$RELEASE" "$RELEASE/venv/bin/python" \
             "$RELEASE/deploy/scripts/report-transfer-credential.py" probe "$pid" "$RELEASE" "$version" "https://$HOST"; then

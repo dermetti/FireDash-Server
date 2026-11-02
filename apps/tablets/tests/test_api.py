@@ -161,7 +161,7 @@ def test_attachment_limit_keeps_configuration_and_signed_manifest_current(
         configuration = client.get("/api/v1/tablet/configuration", **headers)
         assert configuration.status_code == 200
         assert configuration.json()["report_delivery_max_attachment_bytes"] == limit
-        conditional = {"HTTP_IF_NONE_MATCH": previous["ETag"]} if previous else {}
+        conditional: dict[str, str] = {"HTTP_IF_NONE_MATCH": previous["ETag"]} if previous else {}
         assert client.get("/api/v1/tablet/manifest", **headers, **conditional).status_code == 202
         built = process_next_signed_manifest()
         assert built is not None and built.status == SignedManifest.Status.READY
@@ -191,6 +191,7 @@ def test_attachment_limit_keeps_configuration_and_signed_manifest_current(
         )
         if previous is not None:
             assert response["ETag"] != previous["ETag"]
+            assert previous_manifest is not None
             assert built.pk != previous_manifest.pk
             assert built.state_hash != previous_manifest.state_hash
             assert payload["datasets"] == previous.json()["datasets"]

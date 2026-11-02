@@ -720,6 +720,8 @@ def test_previously_blocked_job_freezes_latest_source_without_review(
     claimed = claim_next_job()
     assert claimed is not None and claimed.id == job.id
     assert claimed.build_publication_id == staged_id
+    assert claimed.build_publication is not None
+    assert claimed.build_publication.source_snapshot is not None
     assert any(
         folder["name"] == "Newest"
         for folder in claimed.build_publication.source_snapshot["folders"]

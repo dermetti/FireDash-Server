@@ -1,5 +1,7 @@
 """Shared restore policy. UI checks are batched; activation validates under locks."""
 
+from uuid import UUID
+
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Exists, F, OuterRef, Prefetch, Q, Window
 from django.db.models.functions import RowNumber
@@ -133,7 +135,7 @@ def scopes_with_eligible_predecessor(scope_ids):
         for s in scopes
         if definitions[s.dataset_type_code].artifact_format == "document-manifest-v2"
     }
-    cursors = {}
+    cursors: dict[UUID, int] = {}
     while pending:
         bounds = Q(pk__in=[])
         for scope_id in pending:
@@ -161,7 +163,7 @@ def scopes_with_eligible_predecessor(scope_ids):
                 .order_by("scope_state_id", "-version_number")
             )
         )
-        counts = {}
+        counts: dict[UUID, int] = {}
         for publication in batch:
             scope_id = publication.scope_state_id
             counts[scope_id] = counts.get(scope_id, 0) + 1
@@ -372,7 +374,7 @@ def select_restorable_predecessors(*, scope, limit):
     """Return up to limit strictly restorable predecessors without mutation."""
     if limit < 0:
         raise ValueError("Predecessor limit must not be negative.")
-    selected = []
+    selected: list[DatasetPublication] = []
     if limit == 0:
         return selected
     for publication, reason in iter_predecessor_assessments(scope=scope):

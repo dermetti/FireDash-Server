@@ -56,7 +56,7 @@ PLAN_FIELDS = {
 }
 
 
-def exact(value: Any, fields: set[str], label: str) -> dict:
+def exact(value: Any, fields: set[str], label: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != fields:
         fail(f"{label}: incorrect object fields")
     return value
@@ -86,11 +86,11 @@ def binary(value: Any, size: int, label: str) -> bytes:
     return raw
 
 
-def endpoint(dataset: dict) -> str:
+def endpoint(dataset: dict[str, Any]) -> str:
     return f"/api/v1/tablet/document-generations/{dataset['publication_id']}"
 
 
-def validate_generation(payload: dict, dataset: dict) -> list[dict]:
+def validate_generation(payload: dict[str, Any], dataset: dict[str, Any]) -> list[dict[str, Any]]:
     """Validate the entire signed snapshot before fetching any document."""
     fire = dataset["type"] == "department_fire_plans"
     library = dataset["type"] in {"department_files", "station_files"}
@@ -135,7 +135,7 @@ def validate_generation(payload: dict, dataset: dict) -> list[dict]:
         if folder_order != sorted(folder_order):
             fail("folders: UUID order mismatch")
         for folder_id in folders:
-            seen = set()
+            seen: set[str] = set()
             current = folder_id
             while current is not None:
                 if current not in folders or current in seen or len(seen) >= 5:
@@ -217,7 +217,7 @@ def validate_generation(payload: dict, dataset: dict) -> list[dict]:
     return documents
 
 
-def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
+def verify_generation(client, dataset, config, crypto, key_cache) -> dict[str, Any]:
     """Authenticate, decrypt and validate every PDF; never persist partial results."""
     client.verification_stage("generation_manifest")
     scope = client.scope_for_dataset(dataset, config)
@@ -291,7 +291,7 @@ def verify_generation(client, dataset, config, crypto, key_cache) -> dict:
     total = 0
     client.verification_context.update(documents_total=len(documents), documents_verified=0)
     for index, document in enumerate(documents):
-        metadata = next(
+        metadata: dict[str, Any] = next(
             (document[k] for k in ("file", "fire_plan", "klgv_plan") if k in document), {}
         )
         client.verification_context.update(

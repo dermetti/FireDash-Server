@@ -94,6 +94,7 @@ def test_scheduled_file_publication_detail_offers_build_now(client, scope, stati
     )
     services.create_folder(actor=actor, library_id=library.id, name="Guides")
     job = PublicationJob.objects.get(**scope_kwargs(library), status="PENDING")
+    assert job.build_publication is not None
     assert job.build_publication.status == "STAGED"
     client.force_login(actor)
 

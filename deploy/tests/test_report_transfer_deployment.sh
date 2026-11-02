@@ -195,15 +195,81 @@ cmp "$dropin" "$TMP/admin-before"
 
 echo 'ok: RSA generation/parser, active/history preservation, fail-closed upgrades, private spool and override reconciliation'
 
+# Inspect real canonical units and realistic drop-in semantics without systemd.
+"$RELEASE/venv/bin/python" - "$ROOT" "$RELEASE/deploy/scripts/report-transfer-credential.py" <<'PY'
+import runpy
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+inspect = runpy.run_path(sys.argv[2])["inspect_unit"]
+web = (root / "deploy/systemd/fire-backend.service").read_text()
+expiry = (root / "deploy/systemd/fire-report-expiry.service").read_text()
+timer = (root / "deploy/systemd/fire-report-expiry.timer").read_text()
+canonical = "report-transfer-keyring:/etc/fire-backend/credentials/report-transfer-keyring.json"
+for mode, unit in (("web", web), ("expiry", expiry), ("timer", timer)):
+    inspect(mode, unit)
+inspect("web", web + '\n[Service]\nLoadCredential=\nLoadCredential="' + canonical + '"\n')
+inspect("web", web + "\n[Service]\nReadWritePaths=\nReadWritePaths=/var/lib/fire-backend " + chr(92) + "\n /var/spool/firedash-reports\n")
+inspect("expiry", expiry.replace("manage.py expire_report_submissions", '"manage.py" "expire_report_submissions"'))
+inspect("timer", timer.replace("5min", "300s") + "\n[Timer]\nPersistent=yes\n")
+invalid = [
+    ("web", ""),
+    ("web", web + "\n[Service]\nLoadCredential=\n"),
+    ("web", web + "\n[Service]\nLoadCredential=" + canonical + "\n"),
+    ("web", web + "\n[Service]\nLoadCredential=report-transfer-keyring:/wrong\n"),
+    ("web", web + "\n[Service]\nLoadCredentialEncrypted=report-transfer-keyring:/wrong\n"),
+    ("worker", "[Service]\nLoadCredential=" + canonical),
+    ("worker", "[Service]\nImportCredential=report-*"),
+    ("worker", "[Service]\nSetCredential=report-transfer-keyring:private-test-value"),
+    ("expiry", expiry + "\n[Service]\nReadWritePaths=/tmp\n"),
+    ("expiry", expiry + "\n[Service]\nExecStart=\nExecStart=/bin/false\n"),
+    ("timer", timer + "\n[Timer]\nOnCalendar=daily\n"),
+    ("timer", timer.replace("5min", "60min")),
+    ("timer", timer + "\n[Timer]\nPersistent=false\n"),
+]
+for mode, unit in invalid:
+    try:
+        inspect(mode, unit)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unsafe unit configuration accepted: " + mode)
+print("ok: effective unit quoting, continuations, resets, conflicts and timer equivalence")
+PY
+
 # Exercise the actual verifier with an effective-systemd-property model.
-systemctl() {
+systemctl_model() {
     local property=${3:-} unit=${*: -1}
     case $1 in
+        cat)
+            [[ $BAD != cat-missing ]] || return 1
+            local source="$ROOT/deploy/systemd/$unit"
+            [[ -f $source ]] || return 1
+            case "$BAD:$unit" in
+                LoadCredential:fire-backend.service) sed '/^LoadCredential=report-transfer-keyring:/d' "$source" ;;
+                ReadWritePaths:fire-backend.service) sed '/^ReadWritePaths=/d' "$source" ;;
+                *) cat "$source" ;;
+            esac
+            case "$BAD:$unit" in
+                encrypted-conflict:fire-backend.service) printf '\n[Service]\nLoadCredentialEncrypted=report-transfer-keyring:/wrong\n' ;;
+                wrong-credential:fire-backend.service) printf '\n[Service]\nLoadCredential=report-transfer-keyring:/wrong\n' ;;
+                credential-reset:fire-backend.service) printf '\n[Service]\nLoadCredential=\n' ;;
+                worker-leak:fire-report-expiry.service) printf '\n[Service]\nLoadCredential=report-transfer-keyring:/etc/fire-backend/credentials/report-transfer-keyring.json\n' ;;
+                worker-import:fire-publication-build.service) printf '\n[Service]\nImportCredential=*\n' ;;
+                ExecStart:fire-report-expiry.service) printf '\n[Service]\nExecStart=\nExecStart=/bin/false\n' ;;
+                Environment:fire-report-expiry.service) printf '\n[Service]\nEnvironment=\n' ;;
+                EnvironmentFiles:fire-report-expiry.service) printf '\n[Service]\nEnvironmentFile=\n' ;;
+                TimersMonotonic:fire-report-expiry.timer) printf '\n[Timer]\nOnBootSec=\nOnUnitActiveSec=\n' ;;
+                Unit:fire-report-expiry.timer) printf '\n[Timer]\nUnit=wrong.service\n' ;;
+                Persistent:fire-report-expiry.timer) printf '\n[Timer]\nPersistent=false\n' ;;
+            esac
+            ;;
         is-enabled) [[ $BAD != disabled ]] ;;
         is-active) [[ $BAD != inactive ]] ;;
         show)
             [[ $property != "$BAD" ]] || return 1
             case $property in
+                NeedDaemonReload) [[ $BAD == pending-reload ]] && echo yes || echo no ;;
                 LoadCredential)
                     [[ $unit != fire-backend.service ]] || echo 'report-transfer-keyring:/etc/fire-backend/credentials/report-transfer-keyring.json'
                     [[ $BAD != worker-leak || $unit != fire-report-expiry.service ]] || echo 'report-transfer-keyring:/etc/fire-backend/credentials/report-transfer-keyring.json'
@@ -226,6 +292,20 @@ systemctl() {
         *) return 1 ;;
     esac
 }
+# Debian has rendered complex D-Bus properties as [unprintable]. Effective
+# configuration and the running credential probe must remain authoritative.
+REPRESENTATION=plain
+systemctl() {
+    local value property=${3:-}
+    if [[ $1 != show ]]; then systemctl_model "$@"; return; fi
+    value=$(systemctl_model "$@") || return 1
+    case "$REPRESENTATION:$property" in
+        opaque:LoadCredential|opaque:ReadWritePaths|opaque:ExecStart|opaque:TimersMonotonic) echo '[unprintable]' ;;
+        empty:LoadCredential|empty:ReadWritePaths|empty:ExecStart|empty:TimersMonotonic) : ;;
+        prefixed:*) printf '%s=%s\n' "$property" "$value" ;;
+        *) printf '%s\n' "$value" ;;
+    esac
+}
 id() { return 0; }
 runuser() { [[ $2 == fire_backend && $BAD != access || $BAD == public-access ]]; }
 HOST=firedash.example.test
@@ -234,9 +314,13 @@ cp "$ROOT/deploy/nginx/fire-backend.conf" "$FIREDASH_NGINX_SITE"
 FAIL=0
 fail() { FAIL=$((FAIL + 1)); }
 ok() { :; }
-verify_report_transfer
-[[ $FAIL == 0 ]]
-for BAD in LoadCredential LoadCredentialEncrypted encrypted-conflict ReadWritePaths LoadState disabled inactive User Group WorkingDirectory ProtectSystem NoNewPrivileges ExecStart Environment EnvironmentFiles TimersMonotonic Unit Persistent MainPID permissions access public-access worker-leak; do
+for REPRESENTATION in plain opaque empty prefixed; do
+    FAIL=0
+    verify_report_transfer
+    [[ $FAIL == 0 ]] || { echo "FAIL: rejected supported $REPRESENTATION properties"; exit 1; }
+done
+REPRESENTATION=plain
+for BAD in LoadCredential encrypted-conflict wrong-credential credential-reset cat-missing pending-reload worker-import ReadWritePaths LoadState disabled inactive User Group WorkingDirectory ProtectSystem NoNewPrivileges ExecStart Environment EnvironmentFiles TimersMonotonic Unit Persistent MainPID permissions access public-access worker-leak; do
     FAIL=0
     verify_report_transfer
     [[ $FAIL -gt 0 ]] || { echo "FAIL: verifier ignored $BAD"; exit 1; }

@@ -685,6 +685,7 @@ def test_current_rebuild_confirmation_and_duplicate_rejection(client, publicatio
     assert client.post(url, {"confirm_rebuild": "yes"}).status_code == 302
     job = PublicationJob.objects.get(scope_state=scope)
     assert job.allow_clean_rebuild and job.requested_by == admin
+    assert job.build_publication is not None
     assert job.build_publication.version_number > current.version_number
     assert client.post(url, {"confirm_rebuild": "yes"}).status_code == 302
     assert PublicationJob.objects.filter(scope_state=scope).count() == 1

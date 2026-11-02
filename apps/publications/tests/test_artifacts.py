@@ -131,6 +131,7 @@ def test_final_directory_permissions_apply_group_and_mode(tmp_path, monkeypatch)
 @pytest.mark.skipif(artifacts.grp is None, reason="Requires native Unix group ownership support")
 def test_final_permissions_on_real_filesystem(tmp_path):
     group_id = artifacts._fire_nginx_gid()
+    assert hasattr(os, "geteuid")
     assert os.geteuid() != 0, "Publication permission tests must run without root privileges"
     directory = tmp_path / "publication"
     directory.mkdir(mode=0o700)

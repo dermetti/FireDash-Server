@@ -319,10 +319,10 @@ def jpeg(request, report_id, attachment_id, *, preview=False):
     if preview:
         with Image.open(io.BytesIO(payload)) as image:
             # EXIF orientation/metadata never leaves the server in thumbnails.
-            image = ImageOps.exif_transpose(image)
-            image.thumbnail((640, 480))
+            thumbnail = ImageOps.exif_transpose(image)
+            thumbnail.thumbnail((640, 480))
             output = io.BytesIO()
-            image.convert("RGB").save(output, format="JPEG", quality=75)
+            thumbnail.convert("RGB").save(output, format="JPEG", quality=75)
         transfers.portal_context(request, report_id=report_id)
         return HttpResponse(output.getvalue(), content_type="image/jpeg")
     return download_response(

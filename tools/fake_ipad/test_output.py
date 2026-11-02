@@ -197,7 +197,7 @@ def test_cli_failure_is_always_visible_and_json_is_single_document(
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-def test_transport_details_are_centralized_and_redacted(verbose):
+def test_transport_details_are_centralized_and_redacted(verbose, monkeypatch):
     stream = io.StringIO()
     out = Output(verbose=verbose, stream=stream)
     api = ApiClient("https://tablet.example", verbose=verbose, out=out)
@@ -217,7 +217,7 @@ def test_transport_details_are_centralized_and_redacted(verbose):
             assert request.get_header("Authorization") == "Bearer do-not-print-bearer"
             yield Response()
 
-    api._opener = Opener()
+    monkeypatch.setattr(api, "_opener", Opener())
     api.call(
         "POST",
         "/api/v1/tablet/test",
@@ -371,6 +371,10 @@ class Terminal(io.StringIO):
     def encoding(self):
         return self._encoding
 
+    @encoding.setter
+    def encoding(self, value):
+        self._encoding = value
+
     def isatty(self):
         return True
 
@@ -390,7 +394,9 @@ class Terminal(io.StringIO):
 
 def rendered_lines(text):
     """Interpret CR overwrites like ConsoleHost, keeping completed lines intact."""
-    lines, line, cursor = [], [], 0
+    lines: list[str] = []
+    line: list[str] = []
+    cursor = 0
     for char in text:
         if char == "\r":
             cursor = 0
@@ -480,7 +486,7 @@ def test_results_are_flushed_before_later_datasets_finish_in_non_tty(nine, monke
     nine.stream = LogStream()
     nine.client.out._stream = nine.stream
     original = nine.client.verify_dataset
-    verified = []
+    verified: list[str] = []
 
     def verify(dataset, *args):
         text = nine.stream.getvalue()

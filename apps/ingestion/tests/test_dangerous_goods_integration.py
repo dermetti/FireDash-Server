@@ -181,7 +181,9 @@ def test_build_encrypts_and_publishes_exact_retained_source(
         next_job = PublicationJob.objects.get(scope_type="SYSTEM", status="PENDING")
         next_job.not_before = timezone.now()
         next_job.save(update_fields=("not_before",))
-        assert process_next_job().status == PublicationJob.Status.SUCCEEDED
+        completed_job = process_next_job()
+        assert completed_job is not None
+        assert completed_job.status == PublicationJob.Status.SUCCEEDED
         current = DatasetPublication.objects.get(
             scope_state=publication.scope_state, status="PUBLISHED"
         )
@@ -274,6 +276,6 @@ def test_department_admin_cannot_use_system_publication_lifecycle(context):
             operation(actor=outsider, publication=publication)
     with pytest.raises(PermissionDenied):
         build_staged_publication(actor=outsider, scope=scope)
-    for operation in (request_rebuild, stage_publication_update):
+    for scope_operation in (request_rebuild, stage_publication_update):
         with pytest.raises(PermissionDenied):
-            operation(actor=outsider, department=None, dataset_type_code="dangerous_goods")
+            scope_operation(actor=outsider, department=None, dataset_type_code="dangerous_goods")

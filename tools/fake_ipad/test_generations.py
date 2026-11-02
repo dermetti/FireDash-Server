@@ -6,6 +6,7 @@ import io
 import json
 import os
 import uuid
+from typing import Any
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -34,11 +35,12 @@ class Delivery:
     """Authenticated simulated transport, with mutable signed server responses."""
 
     def __init__(self, tmp_path):
+        self.server_url = "https://tablet.example"
         self.state = DeviceState(tmp_path / "synthetic-installation")
         self.crypto = self.state.ensure_identity(
             server_url="https://tablet.example", app_version="1.0.0"
         )
-        self.config = {
+        self.config: dict[str, Any] = {
             k: uid()
             for k in ("installation_id", "tablet_id", "department_id", "station_id", "vehicle_id")
         }
@@ -50,7 +52,7 @@ class Delivery:
             authorization_valid_until="2099-01-01T00:00:00Z",
         )
         self.signer = Ed25519PrivateKey.generate()
-        self.manifest = {
+        self.manifest: dict[str, Any] = {
             "configuration": self.config,
             "manifest_generation": 1,
             "generated_at": "2026-01-01T00:00:00Z",
@@ -263,7 +265,9 @@ class Delivery:
         assert json_body in (None, {})  # no capacity telemetry, including check-in/refresh
         headers = headers or {}
         self.calls.append((method, path, headers))
-        status, body, response_headers = 200, {}, {}
+        status = 200
+        body: bytes | dict[str, Any] = {}
+        response_headers: dict[str, str] = {}
         if path in self.failures:
             status = self.failures[path]
         elif self.pending.get(path, 0):
@@ -574,7 +578,7 @@ def test_generation_pending_empty_body_and_retry_after(delivery, monkeypatch):
     descriptor, _ = delivery.add_v2("department_fire_plans")
     delivery.pending[descriptor["manifest_url"]] = 2
     delivery.seal_main()
-    sleeps = []
+    sleeps: list[float] = []
     monkeypatch.setattr("tools.fake_ipad.generations.time.sleep", sleeps.append)
     delivery.client.verify()
     assert sleeps == [5, 5]
@@ -687,7 +691,7 @@ def test_phonebook_contract_rejects_invalid_entries_and_scope(delivery, kind, fa
         "function": None,
         "phone_number": "112",
     }
-    doc = {"entries": [entry], "source_revision": 1}
+    doc: dict[str, Any] = {"entries": [entry], "source_revision": 1}
     if fault == "duplicate":
         doc["entries"].append(entry.copy())
     elif fault == "identity":
@@ -751,7 +755,7 @@ def test_generation_202_is_not_a_main_manifest_pending_response(delivery, monkey
     descriptor, _ = delivery.add_v2("department_files")
     delivery.seal_main()
     original = delivery.call
-    sleeps = []
+    sleeps: list[float] = []
     monkeypatch.setattr("tools.fake_ipad.generations.time.sleep", sleeps.append)
 
     def pending(method, path, **kwargs):
@@ -833,12 +837,14 @@ def test_plan_specific_schema_two_metadata(delivery, kind, fault):
 
 
 def test_five_folder_levels_are_valid(delivery):
-    folders = []
+    folders: list[dict[str, str | None]] = []
     for i in range(5):
         folders.append(
             {"id": uid(), "name": str(i), "parent_id": folders[-1]["id"] if folders else None}
         )
-    delivery.add_v2("department_files", folders=sorted(folders, key=lambda folder: folder["id"]))
+    delivery.add_v2(
+        "department_files", folders=sorted(folders, key=lambda folder: str(folder["id"]))
+    )
     delivery.seal_main()
     delivery.client.verify()
 

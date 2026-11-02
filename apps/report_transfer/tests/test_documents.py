@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from django.utils import timezone
 from pypdf import PdfReader
+from pypdf.generic import DictionaryObject
 
 from apps.organizations.models import Station
 from apps.report_transfer import storage
@@ -109,8 +110,12 @@ def test_all_content_kinds_and_arbitrary_type():
         assert float(page.mediabox.width) == pytest.approx(595.276, abs=0.01)
         assert float(page.mediabox.height) == pytest.approx(841.89, abs=0.01)
         assert not page.get("/Annots")
-        assert not page.get("/Resources").get("/XObject")
-    assert "/OpenAction" not in pdf.trailer["/Root"]
+        resources = page["/Resources"]
+        assert isinstance(resources, DictionaryObject)
+        assert not resources.get("/XObject")
+    root = pdf.trailer["/Root"]
+    assert isinstance(root, DictionaryObject)
+    assert "/OpenAction" not in root
 
 
 @pytest.mark.parametrize(

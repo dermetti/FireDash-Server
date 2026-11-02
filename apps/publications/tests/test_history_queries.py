@@ -1,3 +1,5 @@
+# Imported pytest fixtures are injected by name.
+# ruff: noqa: F811
 """Isolated query/payload measurements for publication presentation paths."""
 
 import json
@@ -14,13 +16,8 @@ from apps.organizations.models import Station
 from apps.publications.models import DatasetPublication, DatasetScopeState
 from apps.publications.restore import scopes_with_eligible_predecessor
 from apps.publications.state import scope_operational_states_for_scopes
-from apps.publications.tests import test_publications_ui as ui_tests
+from apps.publications.tests.test_publications_ui import publication_ui_context  # noqa: F401
 from apps.publications.views import _decorate_scope_rows, _scope_history_context
-
-
-@pytest.fixture
-def publication_ui_context(db):
-    return ui_tests.publication_ui_context.__wrapped__(db)
 
 
 def _publication(*, department, scope, version_number, status):

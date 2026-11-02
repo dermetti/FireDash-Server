@@ -688,8 +688,10 @@ def test_generic_fire_plan_worker_failure_preserves_current_publication(
         allow_clean_rebuild=True,
     )
     job = process_next_job()
+    assert job is not None
     assert job.status == "FAILED"
     failed = job.build_publication
+    assert failed is not None
     assert failed.status == "FAILED" and failed.artifact_path == ""
     assert not failed.document_artifact_references.exists()
     scope.refresh_from_db()
@@ -1120,7 +1122,7 @@ def test_document_membership_index_reads_each_artifact_identity_once(
     build_document_v2_generation(publication=publication)
     manifest = build_document_v2_manifest(publication=publication)
 
-    class CountedDocument(dict):
+    class CountedDocument(dict[str, object]):
         identity_reads = 0
 
         def get(self, key, default=None):

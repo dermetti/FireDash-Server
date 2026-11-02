@@ -138,6 +138,8 @@ class DatasetSourceRevision(models.Model):
 
 
 class DatasetPublication(models.Model):
+    _restore_validation_batch: bool
+
     class ArtifactStatus(models.TextChoices):
         PENDING = "PENDING", "Pending"
         READY = "READY", "Ready"

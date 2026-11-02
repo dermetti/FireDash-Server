@@ -239,7 +239,7 @@ def require_publication_scope(actor, *, department, station, dataset_type_code):
         require_department_admin(actor, department)
 
 
-def require_department_admin(actor, department: Department) -> None:
+def require_department_admin(actor, department: Department | None) -> None:
     if (
         department is None
         or department.status != Department.Status.ACTIVE

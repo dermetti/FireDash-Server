@@ -4,6 +4,7 @@ import io
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from typing import cast
 from xml.sax.saxutils import escape
 
 import reportlab
@@ -34,7 +35,7 @@ def fonts():
 def printable(value):
     # Preserve unsupported Unicode visibly rather than silently printing missing glyphs.
     # The bundled portable font covers Western European text. No host-font dependency.
-    supported = pdfmetrics.getFont("ReportVera").face.charToGlyph
+    supported = cast(TTFont, pdfmetrics.getFont("ReportVera")).face.charToGlyph
     return "".join(c if ord(c) in supported or c in "\n\t" else f"[U+{ord(c):04X}]" for c in value)
 
 

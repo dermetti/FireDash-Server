@@ -49,6 +49,7 @@ def test_external_client_accepts_real_signed_file_generations(
     )
 
     class DjangoTransport:
+        server_url = "https://tablet.example"
         expect = ApiClient.expect
 
         def call(self, method, path, *, bearer=None, headers=None, json_body=None):

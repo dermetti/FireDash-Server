@@ -111,7 +111,11 @@ class DocumentDatasetAdapter:
                     field: metadata[document_id][field] for field in self.manifest_metadata_fields
                 },
                 accepted_document_key=(
-                    (plans[document_id].document_key if is_fire_plan else plans[document_id].path)
+                    (
+                        cast(FirePlan, plans[document_id]).document_key
+                        if is_fire_plan
+                        else cast(KlgvPlan, plans[document_id]).path
+                    )
                     if resolve_accepted_source
                     else ""
                 ),

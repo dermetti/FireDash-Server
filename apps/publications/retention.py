@@ -61,7 +61,7 @@ def _retained_predecessor_ids() -> Iterable[object]:
 def _candidate_ids(*, limit: int, now: datetime) -> list[UUID]:
     """Fetch at most ``limit`` lightweight, potentially retainable rows."""
     if settings.PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED:
-        superseded_ids = []
+        superseded_ids: list[UUID] = []
         scopes = (
             DatasetScopeState.objects.filter(
                 pk__in=DatasetPublication.objects.filter(status="SUPERSEDED").values(

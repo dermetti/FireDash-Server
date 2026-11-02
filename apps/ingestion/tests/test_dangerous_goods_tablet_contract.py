@@ -154,7 +154,7 @@ def compact_payload() -> bytes:
 
 
 def _authorization(credential: str) -> dict[str, str]:
-    return {"HTTP_AUTHORIZATION": f"Bearer {credential}"}
+    return {"Authorization": f"Bearer {credential}"}
 
 
 def _installation(*, department: Department, actor: User, private_key):
@@ -276,11 +276,16 @@ def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypa
     job = PublicationJob.objects.get(dataset_type_code="dangerous_goods")
     job.not_before = timezone.now()
     job.save(update_fields=("not_before",))
-    job = process_next_job()
+    completed_job = process_next_job()
+    assert completed_job is not None
+    job = completed_job
     assert job.status == PublicationJob.Status.SUCCEEDED, job.error_message
     publication = DatasetPublication.objects.get(dataset_type_code="dangerous_goods")
     ciphertext = (settings.PUBLICATION_ARTIFACT_ROOT / publication.artifact_path).read_bytes()
     public_key = Ed25519PrivateKey.from_private_bytes(b"s" * 32).public_key()
+    assert publication.artifact_signature is not None
+    assert publication.artifact_wrapped_cek is not None
+    assert publication.artifact_nonce is not None
     public_key.verify(
         bytes(publication.artifact_signature),
         _signature_payload(
@@ -299,16 +304,21 @@ def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypa
         )
         client = Client()
         assert (
-            client.get("/api/v1/tablet/manifest", **_authorization(credential)).status_code == 202
+            client.get("/api/v1/tablet/manifest", headers=_authorization(credential)).status_code
+            == 202
         )
         grant = process_next_dataset_key_grant()
+        assert grant is not None
         assert grant.status == "READY", grant.error_message
         manifest = process_next_signed_manifest()
+        assert manifest is not None
         assert manifest.status == "READY", manifest.error_message
-        response = client.get("/api/v1/tablet/manifest", **_authorization(credential))
+        response = client.get("/api/v1/tablet/manifest", headers=_authorization(credential))
         assert response.status_code == 200
         body = response.json()
-        configuration = client.get("/api/v1/tablet/configuration", **_authorization(credential))
+        configuration = client.get(
+            "/api/v1/tablet/configuration", headers=_authorization(credential)
+        )
         assert configuration.status_code == 200
         assert body["configuration"] == configuration.json()
         assert body["configuration"]["report_delivery_max_attachment_bytes"] == (
@@ -348,7 +358,7 @@ def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypa
             recipient_private_key=private,
             context=context,
         )
-        response = client.get(entry["download_url"], **_authorization(credential))
+        response = client.get(entry["download_url"], headers=_authorization(credential))
         assert response.status_code == 200
         assert (
             response["X-Accel-Redirect"]
@@ -377,11 +387,12 @@ def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypa
     )
     with pytest.raises(ManifestError):
         request_dataset_key_grant(publication=publication, installation=installation)
-    assert client.get(url, **_authorization(credential)).status_code in (403, 404)
+    assert client.get(url, headers=_authorization(credential)).status_code in (403, 404)
     grant = DatasetKeyGrant.objects.get(publication=publication, app_installation=installation)
     grant.status = "PENDING"
     grant.save(update_fields=("status",))
     denied = process_next_dataset_key_grant()
+    assert denied is not None
     assert denied.status == "REVOKED"
     feature.delete()
 
@@ -390,7 +401,7 @@ def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypa
     assignment.save(update_fields=("ended_at",))
     with pytest.raises(ManifestError):
         request_dataset_key_grant(publication=publication, installation=installation)
-    assert client.get(url, **_authorization(credential)).status_code in (403, 404)
+    assert client.get(url, headers=_authorization(credential)).status_code in (403, 404)
     assignment.ended_at = None
     assignment.save(update_fields=("ended_at",))
 
@@ -398,25 +409,27 @@ def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypa
     installation.save(update_fields=("authorization_valid_until",))
     with pytest.raises(ManifestError):
         request_dataset_key_grant(publication=publication, installation=installation)
-    assert client.get(url, **_authorization(credential)).status_code in (401, 403)
+    assert client.get(url, headers=_authorization(credential)).status_code in (401, 403)
     installation.authorization_valid_until = timezone.now() + timedelta(days=1)
     installation.save(update_fields=("authorization_valid_until",))
     installation.status = AppInstallation.Status.REVOKED
     installation.save(update_fields=("status",))
     with pytest.raises(ManifestError):
         request_dataset_key_grant(publication=publication, installation=installation)
-    assert client.get(url, **_authorization(credential)).status_code in (401, 403)
+    assert client.get(url, headers=_authorization(credential)).status_code in (401, 403)
     installation.status = AppInstallation.Status.ACTIVE
     installation.save(update_fields=("status",))
     installation.tablet.status = Tablet.Status.INACTIVE
     installation.tablet.save(update_fields=("status",))
     with pytest.raises(ManifestError):
         request_dataset_key_grant(publication=publication, installation=installation)
-    assert client.get(url, **_authorization(credential)).status_code in (403, 404)
+    assert client.get(url, headers=_authorization(credential)).status_code in (403, 404)
     installation.tablet.status = Tablet.Status.ACTIVE
     installation.tablet.save(update_fields=("status",))
     ApiVersionCompatibilityPolicy.objects.create(
         api_major=1, minimum_app_version="2.0.0", updated_by=actor
     )
-    assert client.get("/api/v1/tablet/manifest", **_authorization(credential)).status_code == 426
-    assert client.get(url, **_authorization(credential)).status_code == 426
+    assert (
+        client.get("/api/v1/tablet/manifest", headers=_authorization(credential)).status_code == 426
+    )
+    assert client.get(url, headers=_authorization(credential)).status_code == 426

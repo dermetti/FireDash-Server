@@ -59,6 +59,7 @@ def write_payload(raw):
             output.flush()
             os.fsync(output.fileno())
         if os.name == "posix":
+            assert hasattr(os, "O_DIRECTORY")
             directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(directory)
@@ -92,6 +93,7 @@ def write_download_receipt(submission_pk, completed_at, *, download_audit=None):
         os.fsync(output.fileno())
     os.replace(temporary, path)
     if os.name == "posix":
+        assert hasattr(os, "O_DIRECTORY")
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)

@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, time, timedelta
 from typing import Any
+from uuid import UUID
 
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, IntegrityError, transaction
@@ -659,7 +660,7 @@ def build_claimed_job(*, job_id) -> PublicationJob:
             error_message="Claim did not allocate a publication.",
         )
     artifact: dict[str, Any] | None = None
-    created_document_artifacts = []
+    created_document_artifacts: list[tuple[UUID, str]] = []
     try:
         definition = get_dataset_definition(job.dataset_type_code)
         _validate_scope(

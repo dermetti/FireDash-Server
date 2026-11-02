@@ -350,9 +350,11 @@ def test_transfer_filtering_limits_historical_scope_and_no_silent_truncation(
     TabletVehicleAssignment.objects.filter(
         tablet=installation.tablet, ended_at__isnull=True
     ).update(ended_at=timezone.now())
+    vehicle = Vehicle.objects.filter(station=first.station).first()
+    assert vehicle is not None
     TabletVehicleAssignment.objects.create(
         tablet=installation.tablet,
-        vehicle=Vehicle.objects.filter(station=first.station).first(),
+        vehicle=vehicle,
         valid_from=timezone.now(),
         created_by=first.department.created_by,
     )
@@ -434,7 +436,8 @@ def test_transport_never_prints_report_payloads(json_mode, verbose, capsys):
     context_manager = Mock()
     context_manager.__enter__ = Mock(return_value=response)
     context_manager.__exit__ = Mock(return_value=False)
-    api._opener.open = Mock(return_value=context_manager)
+    api._opener = Mock()
+    api._opener.open.return_value = context_manager
     wire = {
         key: "secret-" + key for key in ("protected", "encrypted_key", "iv", "ciphertext", "tag")
     }

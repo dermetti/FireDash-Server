@@ -1,3 +1,5 @@
+# Imported pytest fixtures are injected by name.
+# ruff: noqa: F811
 """Restore-aware policy, read-only audit and physical cleanup accounting."""
 
 import io
@@ -27,18 +29,9 @@ from apps.publications.models import (
 from apps.publications.paths import document_artifact_relative_path
 from apps.publications.registry import get_dataset_definition
 from apps.publications.restore import select_restorable_predecessors
-from apps.publications.tests import test_fire_plan_v2_delivery as delivery
 from apps.publications.tests import test_retention as existing
-
-
-@pytest.fixture
-def retention_scope(db):
-    return existing.retention_scope.__wrapped__(db)
-
-
-@pytest.fixture
-def v2_delivery_context(db, tmp_path, monkeypatch):
-    yield from delivery.v2_delivery_context.__wrapped__(db, tmp_path, monkeypatch)
+from apps.publications.tests.test_fire_plan_v2_delivery import v2_delivery_context  # noqa: F401
+from apps.publications.tests.test_retention import retention_scope  # noqa: F401
 
 
 def _document(scope, version, *, valid=True, status="SUPERSEDED"):

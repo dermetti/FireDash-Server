@@ -36,7 +36,7 @@ from tools.fake_ipad.crypto import (
 from tools.fake_ipad.errors import ClientError, fail
 from tools.fake_ipad.output import Output, ordered_datasets, verification_statistics
 from tools.fake_ipad.state import DeviceState, secure_write_json
-from tools.fake_ipad.transport import ApiClient, HttpResponse, problem_text
+from tools.fake_ipad.transport import HttpResponse, Transport, problem_text
 from tools.fake_ipad.validation import (
     require_app_build,
     require_app_version,
@@ -58,7 +58,7 @@ class FakeIPadClient:
     def __init__(
         self,
         state: DeviceState,
-        api: ApiClient,
+        api: Transport,
         *,
         app_version: str | None = None,
         app_build: int | None = None,

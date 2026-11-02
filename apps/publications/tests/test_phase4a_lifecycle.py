@@ -501,7 +501,9 @@ def test_rebuild_cannot_modify_an_existing_attempt(lifecycle_scope, running):
     request_rebuild(actor=admin, department=department, dataset_type_code=scope.dataset_type_code)
     job = PublicationJob.objects.get(scope_state=scope)
     if running:
-        job = claim_next_job()
+        claimed_job = claim_next_job()
+        assert claimed_job is not None
+        job = claimed_job
     original = (job.requested_by_id, job.build_publication_id, job.not_before, job.status)
     with pytest.raises(PublicationError, match="Rebuild unavailable"):
         request_rebuild(

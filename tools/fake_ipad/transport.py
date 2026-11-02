@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import ssl
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from urllib import error, parse, request
 
 from tools.fake_ipad.errors import ClientError, fail
@@ -78,6 +78,23 @@ def problem_text(response: HttpResponse) -> str:
         except Exception:
             pass  # nosec B110
     return f"HTTP {response.status} ({len(response.body)} bytes)"
+
+
+class Transport(Protocol):
+    def call(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        bearer: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> HttpResponse: ...
+
+    def expect(self, response: HttpResponse, *ok: int, label: str) -> HttpResponse: ...
+
+    @property
+    def server_url(self) -> str: ...
 
 
 class ApiClient:

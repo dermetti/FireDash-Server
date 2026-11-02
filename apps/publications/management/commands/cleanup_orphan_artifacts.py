@@ -58,6 +58,7 @@ class Command(BaseCommand):
                     removed += 1
                     self.stdout.write(f"Would remove orphan {path}")
                     continue
+                assert cleanup is not None
                 try:
                     outcome = remove_artifact_path(path.name)
                 except (ArtifactError, OSError) as error:

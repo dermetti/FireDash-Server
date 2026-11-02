@@ -96,7 +96,7 @@ class StubApi:
 
 
 def _client(state: DeviceState, api: StubApi, *, out: Output | None = None) -> FakeIPadClient:
-    return FakeIPadClient(state, api, out=out or Output())  # type: ignore[arg-type]
+    return FakeIPadClient(state, api, out=out or Output())
 
 
 # --- crypto ------------------------------------------------------------------

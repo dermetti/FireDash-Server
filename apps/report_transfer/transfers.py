@@ -221,7 +221,7 @@ def send_link(transfer_id, token):
         if email_digest(recipient.email) != row.recipient_email_digest:
             return "FAILED", "recipient_changed"
         resolution = resolve_department_mail_provider(department=installation.tablet.department)
-        if not resolution.is_usable:
+        if not resolution.is_usable or resolution.provider is None:
             return "FAILED", "provider_unavailable"
         provider = resolution.provider
         message = OutboundMessage(
@@ -407,6 +407,8 @@ def portal_context(request, *, report_id=None):
         pk = UUID(key) if isinstance(key, str) else None
     except ValueError:
         pk = None
+    if pk is None:
+        raise TransferError("access_unavailable", 403)
     candidate = ReportPortalSession.objects.filter(pk=pk).first()
     if candidate is None or not request.session.session_key:
         raise TransferError("access_unavailable", 403)

@@ -35,7 +35,8 @@ def retention_audit():
     for scope in scopes.iterator(chunk_size=100):
         current = scope.current_published_publication
         candidates = []
-        ready, restorable = [], []
+        ready: list[int] = []
+        restorable: list[int] = []
         for publication, reason in iter_predecessor_assessments(scope=scope):
             if (
                 publication.artifact_status == "READY"

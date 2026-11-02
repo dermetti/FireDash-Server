@@ -452,3 +452,15 @@ are reviewed and released at a committed, pushed exact SHA, an operator should:
 
 Local validation, changed-file inventory and Linux acceptance limitations are
 recorded in [report-transfer-phase3-6.md](report-transfer-phase3-6.md).
+
+
+### Debian systemd property rendering
+
+Report Transfer verification does not require printable complex `systemctl show`
+properties. Debian may display `LoadCredential=[unprintable]`. The installer
+privately checks the effective unit fragment and drop-ins, requires
+`NeedDaemonReload=no`, and retains the running web-process credential probe.
+Missing/conflicting declarations, unknown configuration or a failed probe still
+stop verification. Do not dump credential contents when troubleshooting.
+See [Phase 3.6.2 validation](ci-type-deployment-compatibility.md) for modeled
+representations and the outstanding native Debian/LXC acceptance boundary.

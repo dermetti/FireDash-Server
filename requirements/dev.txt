@@ -8,3 +8,4 @@ pip-audit==2.9.0
 pytest==9.0.3
 pytest-django==4.11.1
 ruff==0.12.8
+types-reportlab==4.5.1.20260827

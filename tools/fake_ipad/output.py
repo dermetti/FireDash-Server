@@ -48,7 +48,7 @@ _DATASET_NAMES = {
 _SCOPES = ("SYSTEM", "DEPARTMENT", "STATION")
 
 
-def ordered_datasets(manifest: dict) -> list[dict]:
+def ordered_datasets(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """The display order is also the actual verification order."""
     return sorted(
         manifest["datasets"],
@@ -168,14 +168,14 @@ class Output:
         self._line_width = min(width, max(self._line_width, len(text)))
         print("\r" + text.ljust(self._line_width) + "\r", end="", file=self._stream, flush=True)
 
-    def dataset_scope(self, dataset: dict) -> None:
+    def dataset_scope(self, dataset: dict[str, Any]) -> None:
         scope = dataset["scope"]["type"]
         if scope != self._scope:
             self.summary("\n" + scope)
             self._scope = scope
 
     @contextmanager
-    def dataset_progress(self, dataset: dict):
+    def dataset_progress(self, dataset: dict[str, Any]):
         """Own and join the animation thread, including on BaseException exits."""
         self.dataset_scope(dataset)
         animate = not self.verbose and not self.json_mode and self._stream.isatty()
@@ -230,7 +230,7 @@ class Output:
                 self._line_width = 0
 
     def dataset_result(
-        self, dataset: dict, result: dict | None = None, *, status: str = "PASS"
+        self, dataset: dict[str, Any], result: dict[str, Any] | None = None, *, status: str = "PASS"
     ) -> None:
         self.dataset_scope(dataset)
         metrics = []
@@ -249,7 +249,11 @@ class Output:
         self.summary(f"  {label:<22} {status:<13} {' / '.join(metrics)}".rstrip())
 
     def verification_header(
-        self, manifest: dict, *, cached: bool = False, installation_status: str | None = None
+        self,
+        manifest: dict[str, Any],
+        *,
+        cached: bool = False,
+        installation_status: str | None = None,
     ) -> None:
         self._scope = None
         if installation_status:
@@ -259,8 +263,8 @@ class Output:
 
     def verification(
         self,
-        manifest: dict,
-        results: dict,
+        manifest: dict[str, Any],
+        results: dict[str, Any],
         *,
         cached: bool = False,
         installation_status: str | None = None,
@@ -278,7 +282,9 @@ class Output:
             )
         self.verification_footer(manifest, results, cached=cached)
 
-    def verification_footer(self, manifest: dict, results: dict, *, cached: bool = False) -> None:
+    def verification_footer(
+        self, manifest: dict[str, Any], results: dict[str, Any], *, cached: bool = False
+    ) -> None:
         """Only called after the manifest's conditional GET has succeeded."""
         stats = verification_statistics(manifest, results, cached=cached)
         totals = stats["cached_verified"] if cached else stats["downloaded_verified"]
@@ -307,7 +313,9 @@ class Output:
             self.summary("Conditional GET: PASS")
 
 
-def verification_statistics(manifest: dict, results: dict, *, cached: bool = False) -> dict:
+def verification_statistics(
+    manifest: dict[str, Any], results: dict[str, Any], *, cached: bool = False
+) -> dict[str, Any]:
     """Count completed results by signed scope, independent of rendering and HTTP logs.
 
     A v1 archive/JSON/GeoJSON is one artifact. Each completed v2 document is
