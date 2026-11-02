@@ -331,6 +331,21 @@ def test_retention_postcommit_deletions_are_in_maintenance_accounting(retention_
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_legacy_orphan_cleanup_preserves_dry_run_and_counters(tmp_path, settings, dry_run):
+    settings.PUBLICATION_ARTIFACT_ROOT = tmp_path
+    settings.PUBLICATION_ARTIFACT_TEMP_ROOT = tmp_path / ".tmp"
+    orphan = tmp_path / "legacy.bin"
+    orphan.write_bytes(b"test ciphertext")
+    output = io.StringIO()
+    call_command("cleanup_orphan_artifacts", dry_run=dry_run, stdout=output)
+    assert orphan.exists() is dry_run
+    assert f"{'Would remove' if dry_run else 'Removed'} 1 orphan artifact(s)." in output.getvalue()
+    if not dry_run:
+        assert "files_deleted: 1" in output.getvalue()
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("limit", [0, 1, 2])
 def test_audit_mixed_scopes_empty_histories_and_configured_limit(retention_scope, limit):
     from apps.organizations.models import Station

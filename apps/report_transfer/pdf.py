@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import cast
-from xml.sax.saxutils import escape
+
+# Output escaping only: no XML parsing or untrusted XML input.
+from xml.sax.saxutils import escape  # nosec B406
 
 import reportlab
 from django.utils import timezone
