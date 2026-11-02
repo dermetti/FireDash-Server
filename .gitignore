@@ -247,3 +247,5 @@ misc_md_files/
 context/
 .pytest*
 .firedash-fake-ipad*/
+# Local output from the informational CI dependency scan.
+/dependency-audit/

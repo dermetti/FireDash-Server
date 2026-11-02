@@ -220,11 +220,6 @@ jobs:
       - name: Security scan
         run: bandit -r apps config manage.py --exclude "*/tests/*,*/migrations/*"
 
-      - name: Dependency audit
-        run: |
-          pip-audit -r requirements/base.txt
-          pip-audit -r requirements/dev.txt
-
       - name: Prepare publication artifact test group
         run: |
           sudo groupadd --system --force fire_nginx
@@ -238,3 +233,28 @@ jobs:
 
       - name: Validate OpenAPI schema
         run: python manage.py spectacular --validate
+
+  dependency-audit:
+    # Independent advisory reporting must not gate mandatory engineering checks.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install pinned audit tool
+        run: python -m pip install "$(grep '^pip-audit==' requirements/dev.txt)"
+      - name: Report dependency advisories
+        run: python tools/dependency_audit.py
+      - name: Report audit infrastructure failure
+        if: failure()
+        run: echo 'Dependency audit could not complete; vulnerability totals are UNKNOWN. Review this job before release approval.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish dependency advisory report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-advisories
+          path: dependency-audit/
+          if-no-files-found: warn

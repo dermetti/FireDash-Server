@@ -464,3 +464,41 @@ Missing/conflicting declarations, unknown configuration or a failed probe still
 stop verification. Do not dump credential contents when troubleshooting.
 See [Phase 3.6.2 validation](ci-type-deployment-compatibility.md) for modeled
 representations and the outstanding native Debian/LXC acceptance boundary.
+
+### Dependency advisory review and release approval
+
+Dependency advisories are tracked maintenance findings, not automatic CI failures.
+Every standard CI run has an independent, non-blocking `dependency-audit` job.
+It scans both pinned requirements files with dependency resolution, publishes
+`dependency-advisories` JSON/Markdown artifacts and a job summary, and reports
+advisory-entry and affected-package counts separately for each scan. Counts can
+overlap between scans and advisory aliases. Each scan has a four-minute limit.
+Timeouts, resolution/service errors and skipped dependencies are reported as
+**INCOMPLETE**, with unknown totals; they must never be interpreted as zero
+vulnerabilities. Tool-installation failures are also reported in the job summary.
+Raw resolver logs and environment values are not published.
+
+The independent quality job retains mandatory deployment tests, Django checks,
+migration drift, Ruff, mypy, Bandit, the full PostgreSQL/PostGIS regression suite
+and OpenAPI validation. Its success does not mean the advisory scan is clean or
+that dependencies are secure. No blanket advisory ignores are applied.
+
+Review each advisory for severity (unknown severity is not harmless), affected
+functionality used by FireDash, reachability from untrusted inputs, patched-version
+availability, compatibility and regression results. Confirmed exploitable
+critical/high-severity vulnerabilities in reachable FireDash functionality must
+block production release approval through an explicit release decision. Require
+green quality checks independently of this review. This policy triggers no
+automatic deployment or credential operation.
+
+For local reproduction, run `python tools/dependency_audit.py`. This executes
+`pip-audit -r requirements/base.txt` and `pip-audit -r requirements/dev.txt` with
+JSON output and the same timeout/reporting rules. If resolution cannot complete,
+`pip-audit --local` audits the actual installed environment, including transitives,
+but is not proof of a fresh requirements resolution. A supplementary
+`pip-audit -r requirements/base.txt --no-deps --disable-pip` checks direct pins
+only; scan dev separately, since this mode does not include its nested base file.
+Always record the scan mode and incomplete results.
+
+See [Phase 3.6.4 dependency remediation](dependency-remediation-phase3-6-4.md)
+for selected versions, local results and outstanding advisory review.

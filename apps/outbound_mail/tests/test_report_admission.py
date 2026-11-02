@@ -139,7 +139,7 @@ def test_only_password_required_aes256_r6_pdfs_are_accepted(report_scope):
 
 def test_parsed_pypdf_contract_rejects_spoofed_and_incomplete_encryption(report_scope, monkeypatch):
     _admin, department, _other_department, person = report_scope
-    assert pypdf.__version__ == "6.19.0"
+    assert pypdf.__version__ == "6.21.4"
     weak_with_markers = _encrypted_pdf(revision=4) + b"\n/R 6 /Length 256 /AESV3\n"
     with pytest.raises(ReportAdmissionError) as error:
         _admit(department, person, weak_with_markers)

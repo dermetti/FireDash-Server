@@ -173,7 +173,7 @@ def _validated_filename(filename: str) -> str:
 def _inspect_aes256_password_pdf(pdf_bytes: bytes) -> None:
     """Accept only parsed, password-required AES-256 revision-6 PDFs.
 
-    ``pypdf==6.19.0`` parses the encryption dictionary without authenticating a
+    ``pypdf==6.21.4`` parses the encryption dictionary without authenticating a
     password.  The small private-API use below is isolated deliberately:
     pypdf's effective ``Encryption`` fields account for crypt-filter defaults
     (notably an omitted ``/EFF``), which the raw parsed dictionary alone cannot
