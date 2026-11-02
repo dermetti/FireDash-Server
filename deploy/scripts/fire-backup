@@ -22,6 +22,8 @@ pg_dump --format=custom --file="$dump_path" --host="$BACKUP_PG_HOST" \
 restic backup --tag firedash --tag database --tag "$stamp" "$dump_path"
 restic backup --tag firedash --tag fire-plans /var/lib/fire-backend/fire-plans
 restic backup --tag firedash --tag publications /var/lib/fire-backend/publications
+# Durable RSA keyrings are backed up here. The temporary report spool/receipts
+# are outside every file-backup source; never add /var/spool to this list.
 restic backup --tag firedash --tag credentials /etc/fire-backend/credentials
 restic forget --prune --keep-daily "${RESTIC_KEEP_DAILY:-14}" \
     --keep-weekly "${RESTIC_KEEP_WEEKLY:-8}" --keep-monthly "${RESTIC_KEEP_MONTHLY:-12}"

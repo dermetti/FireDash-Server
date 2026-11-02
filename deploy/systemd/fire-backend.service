@@ -13,6 +13,7 @@ Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env
 LoadCredential=publication-signing-public-key-ring:/etc/fire-backend/credentials/publication-signing-public-key-ring.json
 LoadCredential=application-secret-kek-ring:/etc/fire-backend/credentials/application-secret-kek-ring.json
+LoadCredential=report-transfer-keyring:/etc/fire-backend/credentials/report-transfer-keyring.json
 ExecStart=/srv/firedash/current/venv/bin/gunicorn --config deploy/gunicorn/gunicorn.conf.py config.wsgi:application
 Restart=on-failure
 RestartSec=5s
@@ -32,6 +33,7 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/fire-backend
+ReadWritePaths=/var/spool/firedash-reports
 
 [Install]
 WantedBy=multi-user.target

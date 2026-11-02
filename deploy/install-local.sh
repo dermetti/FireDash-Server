@@ -153,6 +153,11 @@ FIREDASH_PHASE=bootstrap
 FIREDASH_PHASE=release-build
 "$ROOT/deploy/deploy-release.sh" build
 
+# Close all report writers before proving missing-key initial enablement safe.
+FIREDASH_PHASE=quiesce
+FIREDASH_MAINTENANCE=1
+quiesce
+
 FIREDASH_PHASE=secrets
 "$ROOT/deploy/initialize-firedash.sh" secrets
 
@@ -161,10 +166,6 @@ postgres_bootstrap "$ROOT/deploy/postgresql/bootstrap-production.sql"
 
 FIREDASH_PHASE=nginx
 install_nginx
-
-FIREDASH_PHASE=quiesce
-FIREDASH_MAINTENANCE=1
-quiesce
 
 FIREDASH_PHASE=activate
 "$ROOT/deploy/deploy-release.sh" activate

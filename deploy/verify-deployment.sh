@@ -9,6 +9,12 @@ ROOT=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
 source "$SELF_DIR/lib/common.sh"
 # shellcheck source=lib/postgresql.sh
 source "$SELF_DIR/lib/postgresql.sh"
+# shellcheck source=lib/secrets.sh
+source "$SELF_DIR/lib/secrets.sh"
+# shellcheck source=lib/report-transfer.sh
+source "$SELF_DIR/lib/report-transfer.sh"
+# shellcheck source=lib/verify-report-transfer.sh
+source "$SELF_DIR/lib/verify-report-transfer.sh"
 
 FAIL=0
 fail() { log_err "FAIL: $*"; FAIL=$((FAIL + 1)); }
@@ -56,7 +62,7 @@ log "=== host ==="
 is_debian_13 && ok "Debian 13" || fail "not Debian 13"
 is_amd64 && ok "amd64" || fail "not amd64"
 is_systemd && ok "systemd PID 1" || fail "systemd is not PID 1"
-for b in psql nginx curl openssl restic git; do
+for b in psql nginx curl openssl restic git nsenter; do
     command -v "$b" >/dev/null 2>&1 && ok "binary $b" || fail "binary $b missing"
 done
 [[ $(psql --version 2>/dev/null | grep -oE '[0-9]+' | head -n1) == 17 ]] && ok "PostgreSQL 17" || fail "PostgreSQL is not version 17"
@@ -621,6 +627,10 @@ if curl -fsS --resolve "$HOST:443:127.0.0.1" "https://$HOST/health/ready" >/dev/
 else
     fail "HTTPS readiness failed"
 fi
+
+# -------- Report Transfer --------
+log "=== Report Transfer ==="
+verify_report_transfer
 
 # -------- summary --------
 echo

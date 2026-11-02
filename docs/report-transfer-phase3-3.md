@@ -1,5 +1,12 @@
 # Phase 3.3 – Magic-Link API und Berichtsportal
 
+**Deployment-Nachtrag Phase 3.6:** Der Standardinstaller provisioniert jetzt
+Keyring, privaten Spool und Expiry-Units automatisch und verweigert Erfolg bei
+fehlender oder unsicherer Infrastruktur. Die damaligen manuellen Beispiele sind
+durch kanonische Units ersetzt; siehe [Deployment](deployment.md#automatic-report-transfer-infrastructure-phase-36)
+und [Validierung Phase 3.6](report-transfer-phase3-6.md). Die unten beschriebene
+fehlende automatische Installation ist der historische Stand von Phase 3.3.
+
 Die Implementierung verwendet ReportSubmission, das unveränderte JWE-Protokoll,
 ReportDocument v1, den generischen A4-Renderer und die bestehende verifizierte
 Department-Mailprovider-Auflösung. PDF-Mail bleibt unverändert verfügbar.
@@ -198,9 +205,11 @@ Mailprovider-Systeme müssen denselben Bearerpfad ausschließen und dürfen kein
 Mailkörper, Request-/Responsebodies oder Tokens aufzeichnen. Eine alte laufende
 Proxykonfiguration wird durch lokale Dateiänderungen nicht geschützt.
 
-[Deploy-Beispiele](../deploy/examples/report-transfer/) werden vom bisherigen
-Deployment nicht automatisch installiert: dedizierte Web-Keyring-Credential,
-privater 0700-Spool, Expiry-Oneshot und Fünfminutentimer. Der Cleanup benötigt
+[Deployment](deployment.md#automatic-report-transfer-infrastructure-phase-36)
+installiert seit Phase 3.6 automatisch die dedizierte Web-Keyring-Credential,
+den privaten 0700-Spool, Expiry-Oneshot und Fünfminutentimer. Die ehemaligen
+[Beispiele](../deploy/examples/report-transfer/) verweisen auf die kanonischen
+Units. Der Cleanup benötigt
 keinen privaten Berichtsschlüssel; Web benötigt zum Lesen den dedizierten
 Report-Keyring sowie die vorhandenen Mail-Credentials. Spool einschließlich
 Receipts aus Backups/Snapshots ausschließen. `REPORT_TRANSFER_ROOT` muss zwischen

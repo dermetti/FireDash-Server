@@ -65,4 +65,7 @@ find /var/lib/fire-backend/fire-plans -xdev -type f -name '*.pdf' -exec chown fi
 install -d -o fire_publication -g fire_nginx -m 2750 /var/lib/fire-backend/publications
 install -d -o fire_publication -g fire_publication -m 0700 /var/lib/fire-backend/publications/.tmp
 install -d -o root -g root -m 0700 /etc/fire-backend/credentials
+# Validate before tmpfiles can converge permissions; never touch report contents.
+bash -c 'source "$1/deploy/lib/report-transfer.sh"; ensure_report_spool' \
+    bash "$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 echo "Created service accounts and runtime directories."

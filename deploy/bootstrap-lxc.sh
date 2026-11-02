@@ -24,7 +24,7 @@ PACKAGES=(ca-certificates git sudo python3 python3-venv python3-dev build-essent
           libpq-dev libffi-dev libssl-dev libmagic1
           postgresql-17 postgresql-17-postgis-3 postgresql-17-postgis-3-scripts postgresql-client-17
           gdal-bin libgdal-dev libgeos-dev libproj-dev proj-bin
-          qpdf nginx restic openssl curl)
+          qpdf nginx restic openssl curl util-linux)
 
 require_root
 is_debian_13 || die "Debian 13 (trixie) is required"
@@ -59,6 +59,10 @@ log "converging obsolete deployment artifacts"
 remove_obsolete_deployment_artifacts
 
 systemd-tmpfiles --create
+# A local tmpfiles override must not undo the private spool boundary.
+# shellcheck source=lib/report-transfer.sh
+source "$SELF_DIR/lib/report-transfer.sh"
+ensure_report_spool
 
 log "converging PostgreSQL configuration"
 postgres_converge

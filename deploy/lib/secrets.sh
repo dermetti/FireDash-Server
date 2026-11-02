@@ -70,7 +70,8 @@ PY
 
 # Render /etc/fire-backend/fire-backend.env. Empty runtime_password/secret_key reuse existing values.
 render_env() {
-    local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1 application_secret_kek_version=1
+    local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1 application_secret_kek_version=1 report_key_version
+    report_key_version=$(report_transfer_active_key) || return 1
     local ingest_upload_bytes=268435456 pdf_package_documents=250 outbound_mail_https_proxy
     outbound_mail_https_proxy=$(effective_outbound_mail_https_proxy)
     if [[ -f $ENV_FILE ]]; then
@@ -148,10 +149,90 @@ PUBLICATION_ARTIFACT_STALE_SECONDS=3600
 PUBLICATION_KEK_VERSION=1
 PUBLICATION_SIGNING_KEY_VERSION=$signing_key_version
 APPLICATION_SECRET_KEK_VERSION=$application_secret_kek_version
+REPORT_TRANSFER_ACTIVE_KEY=$report_key_version
+REPORT_TRANSFER_ROOT=/var/spool/firedash-reports
 OUTBOUND_MAIL_HTTPS_PROXY=$outbound_mail_https_proxy
 EOF
     install_file_atomic "$tmp" "$ENV_FILE" 0640 root:fire_backend
     rm -f "$tmp"
+}
+
+report_transfer_active_key() {
+    local version=""
+    [[ ! -f $ENV_FILE ]] || version=$(env_value "$ENV_FILE" REPORT_TRANSFER_ACTIVE_KEY)
+    [[ -n $version ]] || version=1
+    [[ $version =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "REPORT_TRANSFER_ACTIVE_KEY is invalid"
+    printf '%s' "$version"
+}
+
+# Before migrations: absence of tables is normal on pre-feature upgrades, but
+# connection/catalog failures are never evidence that generation is safe.
+report_transfer_initial_enablement_safe() {
+    local spool=${FIREDASH_REPORT_SPOOL:-/var/spool/firedash-reports} result
+    [[ ! -e $FIREDASH_ETC/report-transfer-initialized ]] || return 1
+    [[ ! -L $spool ]] || return 1
+    if [[ -e $spool ]]; then
+        [[ -d $spool ]] || return 1
+        result=$(find "$spool" -mindepth 1 -maxdepth 1 -print -quit) || return 1
+        [[ -z $result ]] || return 1
+    fi
+    result=$(as_postgres psql -X -v ON_ERROR_STOP=1 -d postgres -tAc \
+        "SELECT count(*) FROM pg_database WHERE datname='fire_backend'") || return 1
+    [[ $result != 0 ]] || return 0
+    [[ $result == 1 ]] || return 1
+    result=$(as_postgres psql -X -v ON_ERROR_STOP=1 -d fire_backend -tAc \
+        "SELECT to_regclass('public.report_transfer_reportsubmission') IS NOT NULL") || return 1
+    if [[ $result == t ]]; then
+        result=$(as_postgres psql -X -v ON_ERROR_STOP=1 -d fire_backend -tAc \
+            'SELECT EXISTS (SELECT 1 FROM public.report_transfer_reportsubmission)') || return 1
+        [[ $result == f ]]
+    elif [[ $result == f ]]; then
+        # A previously migrated but now missing table is not a pre-feature DB.
+        result=$(as_postgres psql -X -v ON_ERROR_STOP=1 -d fire_backend -tAc \
+            "SELECT to_regclass('public.django_migrations') IS NOT NULL") || return 1
+        [[ $result == t ]] || return 1
+        result=$(as_postgres psql -X -v ON_ERROR_STOP=1 -d fire_backend -tAc \
+            "SELECT EXISTS (SELECT 1 FROM public.django_migrations WHERE app='report_transfer')") || return 1
+        [[ $result == f ]]
+    else
+        return 1
+    fi
+}
+
+validate_report_transfer_keyring() {
+    local release=$1 credential=$2 version=$3
+    PYTHONPATH="$release${PYTHONPATH:+:$PYTHONPATH}" "$release/venv/bin/python" \
+        "$release/deploy/scripts/report-transfer-credential.py" validate "$credential" "$version"
+}
+
+ensure_report_transfer_keyring() {
+    local release=$1 credential="$SECRET_DIR/report-transfer-keyring.json" version staging
+    [[ ! -L $SECRET_DIR && -d $SECRET_DIR ]] \
+        && [[ $(stat -c '%U:%G:%a' "$SECRET_DIR") == root:root:700 ]] \
+        || die "Report Transfer credentials directory must be a real root:root 0700 directory"
+    version=$(report_transfer_active_key) || return 1
+    if [[ -e $credential || -L $credential ]]; then
+        [[ ! -L $credential && -f $credential ]] \
+            && [[ $(stat -c '%U:%G:%a' "$credential") == root:root:600 ]] \
+            && validate_report_transfer_keyring "$release" "$credential" "$version" \
+            || die "invalid Report Transfer keyring or permissions at $credential; restore/repair without replacing any retained key versions"
+    else
+        report_transfer_initial_enablement_safe \
+            || die "Report Transfer keyring missing and safe initial enablement cannot be proved; restore $credential from protected credential backup before retrying"
+        staging=$(mktemp "$SECRET_DIR/.report-transfer.XXXXXX") || return 1
+        chmod 0600 "$staging"
+        if ! PYTHONPATH="$release${PYTHONPATH:+:$PYTHONPATH}" "$release/venv/bin/python" \
+            "$release/deploy/scripts/report-transfer-credential.py" generate "$staging" "$version" \
+            || ! validate_report_transfer_keyring "$release" "$staging" "$version"; then
+            rm -f "$staging"
+            die "could not generate a valid Report Transfer keyring"
+        fi
+        install_file_atomic "$staging" "$credential" 0600 root:root || { rm -f "$staging"; return 1; }
+        rm -f "$staging"
+        validate_report_transfer_keyring "$release" "$credential" "$version" \
+            || die "installed Report Transfer keyring is invalid; restore credential"
+    fi
+    write_string_atomic '1' "$FIREDASH_ETC/report-transfer-initialized" 0600 root:root
 }
 
 # The following three helpers intentionally use the same Python implementation
@@ -368,6 +449,15 @@ validate_established_secrets() {
 # Main entry. Requires FIREDASH_STATE, FIREDASH_RELEASE, FIREDASH_HOST from the caller.
 secrets_ensure() {
     local state=${FIREDASH_STATE:-PRISTINE} release=${FIREDASH_RELEASE:?} host=${FIREDASH_HOST:?} proxy_url
+    if [[ -f $ENV_FILE ]]; then
+        local configured_root configured_path
+        configured_root=$(env_value "$ENV_FILE" REPORT_TRANSFER_ROOT)
+        configured_path=$(env_value "$ENV_FILE" REPORT_TRANSFER_KEYRING_PATH)
+        [[ -z $configured_root || $configured_root == /var/spool/firedash-reports ]] \
+            || die "custom REPORT_TRANSFER_ROOT requires explicit spool migration review; installer will not move or abandon ciphertext"
+        [[ -z $configured_path ]] \
+            || die "remove direct REPORT_TRANSFER_KEYRING_PATH override only after restoring the canonical credential; installer requires systemd LoadCredential"
+    fi
     proxy_url=$(effective_outbound_mail_https_proxy)
     validate_outbound_mail_https_proxy "$release" "$proxy_url" \
         || die "OUTBOUND_MAIL_HTTPS_PROXY must be empty or an http:// or https:// proxy URL with a hostname"
@@ -379,4 +469,5 @@ secrets_ensure() {
         log "generating first-install secret set"
         generate_and_commit_secrets "$release" "$host"
     fi
+    ensure_report_transfer_keyring "$release"
 }

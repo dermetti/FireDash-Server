@@ -94,6 +94,9 @@ deployment setting. The separate reference-data sanitizer remains qpdf-based.
 
 ## Optional outbound-mail HTTPS egress proxy
 
+Report Transfer infrastructure is mandatory and automatically provisioned; it
+does not depend on choosing an outbound proxy. See the operational details below.
+
 Direct HTTPS egress is the default. Installations that require a fixed or
 NAT-controlled egress path may configure an HTTP(S) proxy with the persistent
 deployment option:
@@ -149,6 +152,10 @@ units and reloads systemd without restarting running application services. Befor
 migration, quiescing stops timers and activation sockets, then database workers
 and Gunicorn. A failed stop blocks migration. This includes the build wake socket
 and backup jobs, even if a running backup timer is not enabled at boot.
+Quiescing now precedes secret initialization as well as migrations: the missing
+Report Transfer keyring safety check must not race a report acceptance. A failed
+credential check leaves maintenance in effect; restore the credential and rerun
+the same installer, rather than manually restarting an old release.
 
 Activation requires a completed release and a valid final-path Gunicorn
 interpreter. It then runs owner-role migrations, reapplies runtime/backup grants,
@@ -319,3 +326,129 @@ locks in the migration transaction; the migration role must own those tables.
 The triggers are restored before commit. Do not grant the runtime role extra
 permissions. A verified backup and the captured inventory are needed before
 migration because the legacy data is not copied to SYSTEM.
+
+## Automatic Report Transfer infrastructure (Phase 3.6)
+
+The standard `deploy/install.sh` command now provisions Report Transfer without
+an enablement flag or a separate installer. The previous failure scenario—a
+generally healthy installation advertising `report_transfer.enabled=false`
+because its dedicated infrastructure was absent—is now a deployment failure.
+
+- `/etc/fire-backend/credentials/report-transfer-keyring.json` is a durable,
+  root-owned `0600` JSON credential. Its `keys` map contains immutable version
+  identifiers and PEM RSA private keys. Initial keys are RSA-3072, unencrypted
+  PKCS#8 inside the protected credential; generation uses the release's installed
+  `cryptography`. Validation uses the application's actual parser and derives the
+  active public key without printing it.
+- `REPORT_TRANSFER_ACTIVE_KEY` defaults to `1` and is preserved through environment
+  rendering. All existing key versions and valid file bytes are preserved. The
+  installer never rotates keys. Keep historical private versions until retained
+  ciphertext no longer needs them. No private RSA material belongs in the env file.
+- Gunicorn receives the keyring only through systemd `LoadCredential` and
+  `CREDENTIALS_DIRECTORY`. It retains `/var/lib/fire-backend` write access and adds
+  `/var/spool/firedash-reports`; publication private keys remain excluded.
+- `/var/spool/firedash-reports` is `fire_backend:fire_backend 0700`. Bootstrap
+  validates an existing directory before tmpfiles can converge it. Symlinks,
+  unexpected types, noncanonical parent paths, wrong ownership or permissions
+  stop installation. Existing ciphertext and download receipts are never removed,
+  moved or recursively chmodded by deployment.
+- `fire-report-expiry.timer` starts approximately five minutes after boot and five
+  minutes after its service last activated. The oneshot runs
+  `/srv/firedash/current/venv/bin/python manage.py expire_report_submissions` as
+  `fire_backend`, with production settings and the runtime database environment.
+  It has no RSA credential and its only writable exception under `ProtectSystem=strict`
+  is the report spool. It participates in quiesce, reruns and timer activation.
+
+Before secrets and migrations, the installer stops all database writers, including
+the expiry timer/service and web activation socket. If the keyring is absent,
+generation requires proof that the spool is empty, the feature-initialized marker
+is absent, and the database either does not exist, has no report records, or has
+no Report Transfer table/migration history yet. Catalog/connection errors and
+missing previously migrated tables fail closed. Any report row, including an
+expired historical row, requires restoring the original missing keyring. The
+root-only `/etc/fire-backend/report-transfer-initialized` marker also prevents
+silent regeneration after a later credential loss. An interrupted generation can
+be safely rerun; an installed valid keyring is always reused.
+
+The exact old documented web drop-in is removed when installing canonical units.
+Mixed/conflicting report overrides are preserved and stop the installer with the
+filename for review; unrelated administrator overrides are retained. Custom
+`REPORT_TRANSFER_ROOT` or direct `REPORT_TRANSFER_KEYRING_PATH` environment values
+also require explicit migration review rather than silently abandoning data.
+
+The verifier checks effective systemd properties, private storage/access, timer
+installation/enablement/schedule, credential separation, HTTPS origin and Nginx
+bearer-route logging suppression. It also enters the running Gunicorn master's
+mount namespace, drops to `fire_backend`, and validates the actual process
+environment, credential and enabled version-1 RSA-OAEP-256/A256GCM/JPEG configuration.
+It does not use a tablet token, create a report or send mail. Failure to inspect
+the namespace (including missing Linux capabilities) is a verification failure,
+not permission to fall back to an insecure credential path.
+
+### Backup and restore boundary
+
+The existing protected credential backup includes the dedicated keyring because
+it backs up `/etc/fire-backend/credentials`. Back up that durable secret and test
+its restoration together with the matching database. Never replace a lost keyring
+with freshly generated keys to make a retained report readable.
+
+Normal FireDash file backups explicitly select database dumps, accepted fire
+plans, publications and credentials. They do **not** select the report spool or
+its receipts. Database dumps still contain report metadata, not payload files.
+Hypervisor/LXC/volume snapshots and external backup agents are outside the
+installer's control: operators must exclude the spool, including receipts, from
+those retention paths. A full filesystem snapshot containing it does not satisfy
+the temporary-data boundary. The installer cannot guarantee infrastructure-level
+exclusions. Existing report retention and cleanup semantics remain unchanged.
+
+### Read-only troubleshooting
+
+On the host, these commands disclose metadata rather than private key contents:
+
+```bash
+sudo stat -c '%U:%G:%a %n' /etc/fire-backend/credentials/report-transfer-keyring.json /var/spool/firedash-reports
+sudo systemctl show fire-backend.service -p User -p Group -p LoadCredential -p ReadWritePaths -p MainPID
+sudo systemctl show fire-report-expiry.service -p User -p Group -p ExecStart -p EnvironmentFiles -p ReadWritePaths -p LoadCredential
+sudo systemctl show fire-report-expiry.timer -p Unit -p TimersMonotonic -p Persistent -p ActiveState -p UnitFileState
+sudo systemctl list-timers fire-report-expiry.timer --all
+sudo journalctl -u fire-report-expiry.service -n 20 --no-pager
+```
+
+Using an already-adopted Fake iPad, a configuration GET needs no re-adoption,
+dataset sync, report upload or email. Use its existing server and state directory:
+
+```powershell
+$config = .venv/Scripts/python.exe -m tools.fake_ipad configuration --server https://fire.example.org --state-dir C:\private\existing-ipad --json | ConvertFrom-Json
+$config.report_transfer | Select-Object enabled, version, kid, alg, enc, max_attachments
+```
+
+Expect `enabled=True`, `version=1`, the preserved active `kid`, `RSA-OAEP-256`,
+`A256GCM` and a positive attachment limit. Do not print the entire configuration
+unnecessarily. A working verified outbound-mail provider remains an existing
+application prerequisite; deployment verification sends no probe email.
+
+### Operator-controlled redeployment after review
+
+No deployment was performed during this local implementation. After the changes
+are reviewed and released at a committed, pushed exact SHA, an operator should:
+
+1. Verify the protected credential/database backups and external spool snapshot
+   exclusions; review existing custom Report Transfer overrides and paths.
+2. On the target host, run the normal installer for that approved SHA:
+
+   ```bash
+   sha='<approved-40-character-commit-SHA>'
+   curl -fsSL "https://raw.githubusercontent.com/dermetti/FireDash-Server/$sha/deploy/install.sh" | sudo bash -s -- --ref "$sha" --wait
+   ```
+
+   Established installations reuse their saved hostname/TLS configuration. There
+   are no new setup flags, interactive key generation or manual unit installation.
+3. Require the installer's final verification success. If credentials are invalid
+   or missing, restore/repair the original material and rerun the same command.
+   Do not delete the spool, regenerate keys or manually bypass maintenance.
+4. Check the timer and adopted-tablet configuration above. A separate operator
+   acceptance may later exercise real email/report downloads; it is not performed
+   by the deployment verifier.
+
+Local validation, changed-file inventory and Linux acceptance limitations are
+recorded in [report-transfer-phase3-6.md](report-transfer-phase3-6.md).
