@@ -127,8 +127,6 @@ class AppInstallation(models.Model):
         ]
 
 
-
-
 class AdoptionInvitation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tablet = models.ForeignKey(

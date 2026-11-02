@@ -198,8 +198,6 @@ def update_app_telemetry(
     return True
 
 
-
-
 def lease_target(*, department, now: datetime) -> datetime:
     """Return the department-owned maximum offline authorization lease target."""
     return now + timedelta(days=cast(int, department.tablet_lease_days))

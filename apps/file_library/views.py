@@ -262,5 +262,3 @@ def release_station_access(request):
     if access:
         messages.success(request, "Temporary station access released.")
     return redirect("file-library-index")
-
-

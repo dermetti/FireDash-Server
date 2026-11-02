@@ -176,10 +176,13 @@ jobs:
           bash -n deploy/scripts/fire-backup
           bash -n deploy/scripts/fire-restore
           python -m py_compile deploy/scripts/fire-pdf-sanitizer-broker
+          python -m py_compile deploy/scripts/report-transfer-credential.py
 
       - name: Run deployment helper tests
         run: |
           bash deploy/tests/test_application_secret_keyring.sh
+          bash deploy/tests/test_report_transfer_deployment.sh
+          bash deploy/tests/test_report_transfer_installer.sh
           bash deploy/tests/test_outbound_mail_proxy_env.sh
           bash deploy/tests/test_postgres_utf8.sh
           bash deploy/tests/test_state.sh

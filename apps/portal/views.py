@@ -575,7 +575,9 @@ def _system_dangerous_goods_state():
     from apps.publications.state import scope_operational_states_for_scopes
 
     scope = DatasetScopeState.objects.filter(
-        scope_type="SYSTEM", department__isnull=True, station__isnull=True,
+        scope_type="SYSTEM",
+        department__isnull=True,
+        station__isnull=True,
         dataset_type_code="dangerous_goods",
     ).first()
     values = {"count": 0, "publication_version": None, "publication_state": None}

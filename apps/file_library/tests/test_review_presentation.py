@@ -35,14 +35,6 @@ def assert_read_only(queries):
     ]
 
 
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize("hx", [False, True])
 def test_details_and_inspection_without_source_library_do_not_initialize_it(
     client, scope, pdf_pipeline, crypto, hx
