@@ -16,6 +16,7 @@ from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
 from django.test import Client, override_settings
 from django.utils import timezone
+from drf_spectacular.checks import schema_check
 from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory
@@ -1012,6 +1013,37 @@ def test_openapi_schema_is_available():
 
     assert response.status_code == 200
     assert "openapi: 3.1.0" in response.content.decode()
+
+
+def test_report_transfer_revoke_openapi_is_bodyless_and_documents_response():
+    response = Client().get("/api/v1/schema/")
+    assert response.status_code == 200
+    schema = yaml.safe_load(response.content)
+    path = schema["paths"]["/api/v1/tablet/report-transfers/{transfer_id}/revoke"]
+    assert set(path) == {"post"}
+    operation = path["post"]
+    assert "requestBody" not in operation
+    assert operation["security"] == [{"InstallationBearer": []}]
+    assert operation["parameters"] == [
+        {
+            "in": "path",
+            "name": "transfer_id",
+            "schema": {"type": "string", "format": "uuid"},
+            "required": True,
+        }
+    ]
+    result = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert set(result["required"]) == {"transfer_id", "status"}
+    assert result["properties"]["transfer_id"] == {"type": "string", "format": "uuid"}
+    status = result["properties"]["status"]
+    if "$ref" in status:
+        status = schema["components"]["schemas"][status["$ref"].rsplit("/", 1)[-1]]
+    assert status["type"] == "string"
+    assert status["enum"] == ["REVOKED"]
+    assert not any(
+        warning.id == "drf_spectacular.W002" and "TransferRevokeView" in warning.msg
+        for warning in schema_check(None)
+    )
 
 
 def test_document_generation_openapi_matches_json_binary_and_pending_contracts():

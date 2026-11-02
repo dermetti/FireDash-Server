@@ -74,7 +74,19 @@ class TransferView(ReportAPIView):
 
 
 class TransferRevokeView(ReportAPIView):
-    @extend_schema(responses={200: {"type": "object"}})
+    @extend_schema(
+        request=None,
+        responses={
+            200: {
+                "type": "object",
+                "required": ["transfer_id", "status"],
+                "properties": {
+                    "transfer_id": {"type": "string", "format": "uuid"},
+                    "status": {"type": "string", "enum": ["REVOKED"]},
+                },
+            }
+        },
+    )
     def post(self, request, transfer_id):
         from apps.report_transfer.transfers import revoke_tablet
 
