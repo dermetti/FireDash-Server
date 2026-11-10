@@ -173,27 +173,24 @@ MAX_PDF_INPUT_BYTES = get_typed_env("MAX_PDF_INPUT_BYTES", int, default=100 * 10
 FILE_LIBRARY_MAX_FILE_BYTES = get_typed_env(
     "FILE_LIBRARY_MAX_FILE_BYTES", int, default=25 * 1024 * 1024
 )
-FILE_LIBRARY_QUOTA_BYTES = get_typed_env(
-    "FILE_LIBRARY_QUOTA_BYTES", int, default=1024 * 1024 * 1024
-)
-# Keep the historical setting/callable unchanged for applied migrations. An
-# explicitly configured legacy default remains the fallback for both new keys.
+# Temporary migration-only constant: historical migrations 0001/0008/0009
+# still require this setting and models.default_quota. Never read from env.
+FILE_LIBRARY_QUOTA_BYTES = 1024 * 1024 * 1024
 FILE_LIBRARY_DEPARTMENT_QUOTA_BYTES = get_typed_env(
     "FILE_LIBRARY_DEPARTMENT_QUOTA_BYTES",
     int,
-    default=get_typed_env("FILE_LIBRARY_QUOTA_BYTES", int, default=5_000_000_000),
+    default=5_000_000_000,
 )
 FILE_LIBRARY_STATION_QUOTA_BYTES = get_typed_env(
     "FILE_LIBRARY_STATION_QUOTA_BYTES",
     int,
-    default=get_typed_env("FILE_LIBRARY_QUOTA_BYTES", int, default=2_000_000_000),
+    default=2_000_000_000,
 )
 FILE_LIBRARY_MAX_QUOTA_BYTES = get_typed_env(
     "FILE_LIBRARY_MAX_QUOTA_BYTES", int, default=1024 * 1024 * 1024 * 1024
 )
 MAX_PDF_OUTPUT_BYTES = get_typed_env("MAX_PDF_OUTPUT_BYTES", int, default=150 * 1024 * 1024)
 MAX_PDF_PAGES = get_typed_env("MAX_PDF_PAGES", int, default=500)
-MAX_HYDRANT_IMPORT_FEATURES = get_typed_env("MAX_HYDRANT_IMPORT_FEATURES", int, default=20_000)
 PDF_SANITIZER_TIMEOUT_SECONDS = get_typed_env("PDF_SANITIZER_TIMEOUT_SECONDS", int, default=60)
 PDF_SANITIZER_MEMORY_MAX_BYTES = get_typed_env(
     "PDF_SANITIZER_MEMORY_MAX_BYTES", int, default=512 * 1024 * 1024
@@ -206,12 +203,6 @@ PUBLICATION_JOB_HEARTBEAT_TIMEOUT_SECONDS = get_typed_env(
     "PUBLICATION_JOB_HEARTBEAT_TIMEOUT_SECONDS", int, default=300
 )
 PUBLICATION_JOB_MAX_ATTEMPTS = get_typed_env("PUBLICATION_JOB_MAX_ATTEMPTS", int, default=3)
-PUBLICATION_DATA_CHANGE_DEBOUNCE_SECONDS = get_typed_env(
-    "PUBLICATION_DATA_CHANGE_DEBOUNCE_SECONDS", int, default=120
-)
-PUBLICATION_DATA_CHANGE_MAX_DEFERRAL_SECONDS = get_typed_env(
-    "PUBLICATION_DATA_CHANGE_MAX_DEFERRAL_SECONDS", int, default=600
-)
 PUBLICATION_BUILD_WAKE_SOCKET_PATH = get_typed_env(
     "PUBLICATION_BUILD_WAKE_SOCKET_PATH", str, default="/run/fire-backend/publication-build.sock"
 )
@@ -254,13 +245,8 @@ def validate_publication_artifact_layout(*, root: Path, temp_root: Path) -> None
 validate_publication_artifact_layout(
     root=PUBLICATION_ARTIFACT_ROOT, temp_root=PUBLICATION_ARTIFACT_TEMP_ROOT
 )
-# The plaintext publication bundle ceiling. TEMPORARY compatibility value only:
-# department Fire Plans are still built as one monolithic ZIP of every active
-# plan (``_artifact_fire_plans``), so the ceiling is sized to the single-package
-# ingestion envelope (MAX_PDF_PACKAGE_EXPANDED_BYTES = 512 MiB + framing/AEAD
-# overhead), NOT to the ~2,800-plan production target. The scale solution is the
-# per-document architecture (signed generation manifest + immutable individual
-# encrypted PDF artifacts); do not treat a larger monolithic ceiling as scalable.
+# Ceiling per encrypted publication artifact. Document Generation v2 uses a
+# signed generation manifest and individual encrypted document artifacts.
 PUBLICATION_ARTIFACT_MAX_BYTES = get_typed_env(
     "PUBLICATION_ARTIFACT_MAX_BYTES", int, default=600 * 1024 * 1024
 )

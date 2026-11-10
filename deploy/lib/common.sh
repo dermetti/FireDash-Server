@@ -19,7 +19,28 @@ CURRENT_LINK=${FIREDASH_CURRENT_LINK:-/srv/firedash/current}
 ADMIN_SETUP_URL_FILE=${ADMIN_SETUP_URL_FILE:-/root/firedash-initial-admin-setup-url}
 ADMIN_CREATED_MARKER=${ADMIN_CREATED_MARKER:-/run/firedash-admin-created}
 
-log() { printf 'firedash: %s\n' "$*"; }
+log() { [[ ${FIREDASH_OUTPUT_MODE:-default} != quiet ]] || return 0; printf 'firedash: %s\n' "$*"; }
+log_complete() { printf 'firedash: %s\n' "$*"; }
+log_verbose() { [[ ${FIREDASH_OUTPUT_MODE:-default} == verbose ]] || return 0; log "$*"; }
+# Child tools can emit configuration or command arguments on failure. Keep their
+# raw output private and ephemeral; relay only installer-owned diagnostics.
+run_step() (
+    # A subshell preserves errexit for shell-function phases as well as scripts.
+    # Do not run the phase in an `if`/`||` condition: Bash disables errexit inside it.
+    set -Ee
+    local output
+    output=$(mktemp)
+    chmod 0600 "$output"
+    trap 'rc=$?; grep -E "^firedash (warning|error):" "$output" >&2 || true
+          rm -f "$output"
+          if (( rc != 0 )); then
+              log_err "phase ${FIREDASH_PHASE:-deployment} failed (exit $rc); resolve prerequisites and rerun the installer"
+          fi' EXIT
+    log_verbose "starting child phase: ${FIREDASH_PHASE:-deployment}"
+    "$@" > "$output" 2>&1
+    log_verbose "child phase completed: ${FIREDASH_PHASE:-deployment}"
+)
+
 log_warn() { printf 'firedash warning: %s\n' "$*" >&2; }
 log_err() { printf 'firedash error: %s\n' "$*" >&2; }
 die() { log_err "$*"; exit 1; }
@@ -103,7 +124,7 @@ normalize_base_url() {
     local raw=${1:-} url host
     [[ -n $raw ]] || die "FIREDASH_BASE_URL is required (e.g. https://firedash.example.com)"
     url=${raw//[[:space:]]/}
-    [[ $url == https://* ]] || die "base URL must use https:// (got: $raw)"
+    [[ $url == https://* ]] || die "FIREDASH_BASE_URL must use https://"
     url=${url#https://}
     url=${url%/}
     case "$url" in
@@ -115,9 +136,9 @@ normalize_base_url() {
     esac
     host=$url
     [[ -n $host ]] || die "base URL is missing a hostname"
-    [[ $host == *.* ]] || die "base URL hostname must be a fully-qualified domain name: $host"
+    [[ $host == *.* ]] || die "FIREDASH_BASE_URL requires a fully-qualified domain name"
     case "$host" in
-        *[!A-Za-z0-9.-]*) die "base URL hostname is invalid: $host" ;;
+        *[!A-Za-z0-9.-]*) die "FIREDASH_BASE_URL hostname is invalid" ;;
     esac
     printf 'https://%s' "$host"
 }

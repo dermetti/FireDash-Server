@@ -4,13 +4,20 @@
 set -Eeuo pipefail
 
 REPO=https://github.com/dermetti/FireDash-Server.git
-REF=${FIREDASH_REF:-main}
+REF=main
 PASSTHROUGH=()
+FIREDASH_OUTPUT_MODE=default
 
 die() { printf 'firedash: %s\n' "$*" >&2; exit 1; }
 
 while (($#)); do
     case "$1" in
+        --verbose|--quiet)
+            requested_mode=${1#--}
+            [[ $FIREDASH_OUTPUT_MODE == default || $FIREDASH_OUTPUT_MODE == "$requested_mode" ]] \
+                || die "--verbose and --quiet are mutually exclusive"
+            FIREDASH_OUTPUT_MODE=$requested_mode
+            PASSTHROUGH+=("$1"); shift ;;
         --ref) (($# >= 2)) || die "--ref requires a value"; REF=$2; shift 2 ;;
         --ref=*) REF=${1#--ref=}; shift ;;
         *) PASSTHROUGH+=("$1"); shift ;;
@@ -29,11 +36,14 @@ done
 need=""
 command -v curl >/dev/null 2>&1 || need="$need curl"
 command -v git >/dev/null 2>&1 || need="$need git"
+command -v python3 >/dev/null 2>&1 || need="$need python3"
 dpkg-query -W -f='${Status}' ca-certificates 2>/dev/null | grep -q 'install ok installed' || need="$need ca-certificates"
 if [[ -n $need ]]; then
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $need
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends $need
 fi
+
+[[ $FIREDASH_OUTPUT_MODE == quiet ]] || printf 'firedash: resolving requested release\n'
 
 TMP=$(mktemp -d)
 cleanup() { rm -rf "$TMP"; }
@@ -55,12 +65,13 @@ if [[ $REF =~ ^[0-9a-f]{40}$ && $SHA != "$REF" ]]; then
     die "resolved SHA $SHA does not match requested $REF"
 fi
 
+export FIREDASH_OUTPUT_MODE
 export FIREDASH_RESOLVED_SHA=$SHA
 export FIREDASH_REQUESTED_REF=$REF
 export FIREDASH_REPO_ROOT=$TMP
 
-printf 'firedash: requested ref: %s\n' "$REF"
-printf 'firedash: resolved SHA: %s\n' "$SHA"
+[[ $FIREDASH_OUTPUT_MODE == verbose ]] && printf 'firedash: requested ref: %s\n' "$REF"
+[[ $FIREDASH_OUTPUT_MODE == verbose ]] && printf 'firedash: resolved SHA: %s\n' "$SHA"
 
 set +e
 bash "$TMP/deploy/install-local.sh" "${PASSTHROUGH[@]}"

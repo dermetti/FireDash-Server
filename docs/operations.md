@@ -1,5 +1,15 @@
 # Operations runbook
 
+For routine updates, run `sudo bash /srv/firedash/current/deploy/install.sh`.
+It resolves latest `main` to an exact SHA; use `--ref <40-character-SHA>` to pin
+an approved release. Optional `--verbose` and `--quiet` are mutually exclusive.
+An unchanged release still applies validated configuration convergence. Completion
+prints resolved and successfully deployed SHAs; failed deployments preserve the
+previous successful SHA. Edit only allowlisted tuning in `overrides.env`, then
+rerun this command. See [deployment.md](deployment.md#standard-installation-and-updates)
+for first-install bootstrap and interrupted-upgrade recovery.
+
+
 Use this guide after deployment. Installation and account creation belong in
 [deployment.md](deployment.md); settings are in [configuration.md](configuration.md).
 

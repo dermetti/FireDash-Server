@@ -104,7 +104,7 @@ display_admin_setup_url() {
                 "$url" "$admin_setup_url_file" > /dev/tty
         ) || true
     else
-        log "Initial administrator setup URL stored at $admin_setup_url_file"
+        log_complete "Initial administrator setup URL stored at $admin_setup_url_file"
     fi
     rm -f "$admin_created_marker"
 }

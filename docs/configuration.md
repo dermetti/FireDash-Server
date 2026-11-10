@@ -1,9 +1,48 @@
 # Configuration reference
 
-This is the canonical runtime setting reference. The settings modules and
-installer are authoritative for names and defaults. Environment values live in
-`/etc/fire-backend/fire-backend.env`; secret material is delivered as systemd
-credentials, not added to that file.
+Production uses three files; systemd loads only the generated runtime file:
+
+| File | Owner / mode | Purpose |
+| --- | --- | --- |
+| `/etc/fire-backend/install.conf` | `root:root 0640` | Installer URL, manual TLS paths, mail proxy, requested release and successful SHA |
+| `/etc/fire-backend/overrides.env` | `root:root 0640` | Optional operator tuning; empty commented file on fresh installs |
+| `/etc/fire-backend/fire-backend.env` | `root:fire_backend 0640` | Installer-generated runtime configuration, including managed database/Django secrets |
+
+Edit `overrides.env`, then rerun `sudo bash /srv/firedash/current/deploy/install.sh`
+to validate and apply it. Values are literal `KEY=VALUE` data: no quotes, shell
+expansion, inline comments, duplicates, or unknown settings. Diagnostics identify
+setting names without their values. An absent override uses the application default.
+The installer preserves protected credential files in their existing directory.
+Do not edit the generated runtime file.
+
+| Approved override | Default | Accepted range |
+| --- | --- | --- |
+| `MAX_INGEST_UPLOAD_BYTES` | 268435456 | Integer 1 to 536870912 (archive expansion ceiling) |
+| `MAX_PDF_PACKAGE_DOCUMENTS` | 250 | Integer 1 to 1000 |
+| `FILE_LIBRARY_MAX_FILE_BYTES` | 26214400 | Integer 1 to 104857600 (PDF input ceiling); at most upload ceiling |
+| `REPORT_TRANSFER_MAX_REPORTS` | 20 | Integer 1 to 100; existing hard maximum retained |
+| `OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS` | 5 | Decimal 0.1 to 120; at most read timeout |
+| `OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS` | 15 | Decimal 0.1 to 300 |
+| `OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS` | 15 | Decimal 0.1 to 300 |
+
+Credentials, key selectors/paths, public origin and trust, TLS, storage, publication
+ceilings, encryption, retention and deletion policy are excluded. In particular,
+`PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED=True` still requires the separately
+approved read-only audit, backup review and activation safeguards documented in
+[operations.md](operations.md). The ordinary override mechanism cannot enable it.
+File-library quota defaults do not modify existing persisted department policies.
+Other settings below describe application defaults and internal configuration;
+the table does not expand the production override allowlist.
+
+Schema-1 migration compares the complete frozen installer baseline before
+maintenance. Managed secrets and all four key selectors are preserved exactly.
+A changed allowlisted limit needs an explicitly matching operator override;
+unclassified settings or altered fixed values stop deployment for review.
+No values are printed. An unchanged verified schema-1 server receives empty
+overrides. A protected `install.conf.pending` journal permits recovery across
+interrupted atomic runtime/install-file promotion; rerun the installer to converge.
+Historical quota migration scaffolding and the `HydrantImportPreview` model/table
+remain until migration consolidation; no migration history is rewritten here.
 
 ## Django and web
 
@@ -40,7 +79,6 @@ application environment settings.
 | `MAX_PDF_INPUT_BYTES` | 100 MiB |
 | `MAX_PDF_OUTPUT_BYTES` | 150 MiB |
 | `MAX_PDF_PAGES` | 500 |
-| `MAX_HYDRANT_IMPORT_FEATURES` | 20,000 |
 | `PDF_SANITIZER_TIMEOUT_SECONDS` | 60 |
 | `PDF_SANITIZER_MEMORY_MAX_BYTES` | 512 MiB |
 | `PDF_SANITIZER_BROKER_SOCKET` | `/run/fire-pdf-sanitizer-broker/broker.sock` |

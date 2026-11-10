@@ -42,12 +42,12 @@ pytestmark = pytest.mark.django_db
     "legacy,department,station,expected",
     [
         (None, None, None, (5_000_000_000, 2_000_000_000)),
-        ("1234567", None, None, (1234567, 1234567)),
-        ("1073741824", "5000000000", None, (5_000_000_000, 1_073_741_824)),
+        ("1234567", None, None, (5_000_000_000, 2_000_000_000)),
+        ("1073741824", "5000000000", None, (5_000_000_000, 2_000_000_000)),
         (None, "333", "222", (333, 222)),
     ],
 )
-def test_quota_setting_environment_compatibility(
+def test_quota_defaults_ignore_retired_environment_setting(
     monkeypatch, legacy, department, station, expected
 ):
     for key, value in (
@@ -64,7 +64,7 @@ def test_quota_setting_environment_compatibility(
         configured["FILE_LIBRARY_DEPARTMENT_QUOTA_BYTES"],
         configured["FILE_LIBRARY_STATION_QUOTA_BYTES"],
     ) == expected
-    assert configured["FILE_LIBRARY_QUOTA_BYTES"] == int(legacy or "1073741824")
+    assert configured["FILE_LIBRARY_QUOTA_BYTES"] == 1_073_741_824
 
 
 def test_defaults_shared_future_stations_worker_and_isolation(scope, settings):

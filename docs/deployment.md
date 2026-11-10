@@ -21,8 +21,40 @@ The installer is Bash (`deploy/install-local.sh` and shared `deploy/lib/`
 helpers). Current manual TLS takes operator-supplied certificate/key paths
 (`--tls-cert`, `--tls-key`). Existing logging prints `firedash:` progress to stdout
 and warnings/errors to stderr; retain relevant sanitized output and service journals.
-Automatic Let's Encrypt issuance and verbose/quiet installer modes are planned
-improvements, not current installer capabilities.
+Automatic Let's Encrypt issuance is outside the current installer scope.
+
+## Standard installation and updates
+
+For existing installations, use the installed bootstrap script:
+
+```bash
+sudo bash /srv/firedash/current/deploy/install.sh
+```
+
+No `--ref` resolves the latest `main` to an exact SHA. Pin an approved commit with
+`sudo bash /srv/firedash/current/deploy/install.sh --ref <40-character-SHA>`.
+Use `--verbose` for additional sanitized diagnostics or `--quiet` for required
+prompts, warnings, errors and concise completion; these flags are mutually
+exclusive and apply to both stages and their child phases. Setup URLs retain their
+secure terminal-only display. Verbose mode never enables shell tracing or dumps
+raw child output/configuration. Completion reports the resolved and successfully
+deployed SHA. Failure retains the previous successful SHA and recovery guidance.
+When no newer release is available, the installer says so and still converges
+configuration and verifies deployment. Routine updates need no manual Git lookup,
+bootstrap download or remote-code pipe.
+
+For a first installation only, retain the remote bootstrap method:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dermetti/FireDash-Server/main/deploy/install.sh | sudo bash
+```
+
+Configuration validation and read-only credential checks run before maintenance.
+See [configuration.md](configuration.md) for the three-file model and permitted
+overrides. Correct named settings and rerun on validation failure; never delete
+credentials, change selectors, move ciphertext or relax database privileges to
+bypass a failure. If maintenance has begun, follow the visible recovery guidance
+and rerun to converge rather than manually starting an old release after migrations.
 
 ## PostgreSQL and PostGIS
 
@@ -113,7 +145,7 @@ NAT-controlled egress path may configure an HTTP(S) proxy with the persistent
 deployment option:
 
 ```sh
-sudo deploy/install.sh --outbound-mail-https-proxy=http://proxy.example:3128
+sudo bash /srv/firedash/current/deploy/install.sh --outbound-mail-https-proxy=http://proxy.example:3128
 ```
 
 The installer stores this deployment-owned value in
@@ -437,7 +469,7 @@ are reviewed and released at a committed, pushed exact SHA, an operator should:
 
    ```bash
    sha='<approved-40-character-commit-SHA>'
-   curl -fsSL "https://raw.githubusercontent.com/dermetti/FireDash-Server/$sha/deploy/install.sh" | sudo bash -s -- --ref "$sha" --wait
+   sudo bash /srv/firedash/current/deploy/install.sh --ref "$sha" --wait
    ```
 
    Established installations reuse their saved hostname/TLS configuration. There

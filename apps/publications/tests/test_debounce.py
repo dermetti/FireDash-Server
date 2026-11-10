@@ -1,4 +1,4 @@
-"""Automatic publication debounce / coalescing regression tests."""
+"""Nightly publication scheduling and job coalescing regression tests."""
 
 from datetime import timedelta
 
@@ -98,7 +98,7 @@ def test_repeated_edits_coalesce_and_track_latest_revision(debounce_context):
 
 
 @pytest.mark.django_db
-def test_maximum_deferral_caps_the_debounce_window(debounce_context):
+def test_legacy_debounce_timestamp_does_not_move_the_nightly_window(debounce_context):
     admin, department, station_a, _ = debounce_context
     mark_dirty(
         department=department, station=station_a, dataset_type_code="station_personnel", actor=admin

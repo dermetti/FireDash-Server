@@ -17,31 +17,6 @@ sys.stdout.buffer.write(Ed25519PrivateKey.from_private_bytes(seed).public_key().
 PY
 }
 
-# Fail closed if a legacy FireDash environment carries variable names that the
-# current release renamed. FireDash never silently migrates, rewrites, or ignores
-# a configured value; the operator must explicitly migrate/remove the deprecated
-# names before the installer proceeds.
-require_no_deprecated_env_vars() {
-    [[ -f $ENV_FILE ]] || return 0
-    local matches
-    matches=$(grep -E '^(MAX_PDF_PACKAGE_BYTES|MAX_PDF_PACKAGE_MEMBERS)=' "$ENV_FILE" 2>/dev/null || true)
-    [[ -n $matches ]] || return 0
-    log_err "deprecated environment variable(s) detected:"
-    local line name replacement
-    while IFS= read -r line; do
-        name=${line%%=*}
-        case "$name" in
-            MAX_PDF_PACKAGE_BYTES) replacement="MAX_INGEST_UPLOAD_BYTES" ;;
-            MAX_PDF_PACKAGE_MEMBERS) replacement="MAX_PDF_PACKAGE_DOCUMENTS" ;;
-            *) replacement="<unknown replacement>" ;;
-        esac
-        log_err "  $line"
-        log_err "    -> migrate to $replacement, then remove the deprecated name"
-    done <<<"$matches"
-    log_err "FireDash will not rewrite or ignore these values automatically."
-    die "deprecated environment configuration must be migrated before continuing"
-}
-
 # Return the operator-selected proxy, preserving a legacy runtime value while
 # install.conf is being introduced as its canonical persistent source.
 effective_outbound_mail_https_proxy() {
@@ -54,15 +29,15 @@ effective_outbound_mail_https_proxy() {
 
 validate_outbound_mail_https_proxy() {
     local release=$1 proxy_url=$2
-    PYTHONPATH="$release${PYTHONPATH:+:$PYTHONPATH}" "$release/venv/bin/python" - "$proxy_url" <<'PY'
-import sys
+    FIREDASH_PROXY_TO_VALIDATE="$proxy_url" PYTHONPATH="$release${PYTHONPATH:+:$PYTHONPATH}" "$release/venv/bin/python" - <<'PY'
+import os
 from apps.outbound_mail.http_transport import (
     OutboundMailTransportError,
     validate_outbound_mail_https_proxy,
 )
 
 try:
-    validate_outbound_mail_https_proxy(sys.argv[1])
+    validate_outbound_mail_https_proxy(os.environ["FIREDASH_PROXY_TO_VALIDATE"])
 except (OutboundMailTransportError, TypeError, ValueError):
     raise SystemExit(1) from None
 PY
@@ -70,89 +45,14 @@ PY
 
 # Render /etc/fire-backend/fire-backend.env. Empty runtime_password/secret_key reuse existing values.
 render_env() {
-    local runtime_password=${1:-} secret_key=${2:-} host=${3:-} signing_key_version=1 application_secret_kek_version=1 report_key_version
-    report_key_version=$(report_transfer_active_key) || return 1
-    local ingest_upload_bytes=268435456 pdf_package_documents=250 outbound_mail_https_proxy
-    outbound_mail_https_proxy=$(effective_outbound_mail_https_proxy)
-    if [[ -f $ENV_FILE ]]; then
-        [[ -z $runtime_password ]] && runtime_password=$(env_value "$ENV_FILE" POSTGRES_PASSWORD)
-        [[ -z $secret_key ]] && secret_key=$(env_value "$ENV_FILE" DJANGO_SECRET_KEY)
-        signing_key_version=$(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION)
-        application_secret_kek_version=$(env_value "$ENV_FILE" APPLICATION_SECRET_KEK_VERSION)
-        local existing
-        existing=$(env_value "$ENV_FILE" MAX_INGEST_UPLOAD_BYTES)
-        [[ -n $existing ]] && ingest_upload_bytes=$existing
-        existing=$(env_value "$ENV_FILE" MAX_PDF_PACKAGE_DOCUMENTS)
-        [[ -n $existing ]] && pdf_package_documents=$existing
-    fi
-    [[ -n $runtime_password ]] || die "runtime database password is unavailable"
-    [[ -n $secret_key ]] || die "Django SECRET_KEY is unavailable"
-    [[ -n $host ]] || die "hostname is unavailable"
-    [[ -n $signing_key_version ]] || signing_key_version=1
-    [[ -n $application_secret_kek_version ]] || application_secret_kek_version=1
-    [[ $signing_key_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
-        || die "PUBLICATION_SIGNING_KEY_VERSION is invalid"
-    [[ $application_secret_kek_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
-        || die "APPLICATION_SECRET_KEK_VERSION is invalid"
-    require_no_deprecated_env_vars
     local tmp
     tmp=$(mktemp)
-    cat > "$tmp" <<EOF
-POSTGRES_DB=fire_backend
-POSTGRES_USER=application_runtime
-POSTGRES_PASSWORD=$runtime_password
-POSTGRES_HOST=127.0.0.1
-POSTGRES_PORT=5432
-DJANGO_SECRET_KEY=$secret_key
-DJANGO_ALLOWED_HOSTS=$host
-DJANGO_CSRF_TRUSTED_ORIGINS=https://$host
-FIREDASH_PUBLIC_ORIGIN=https://$host
-DJANGO_STATIC_ROOT=/var/lib/fire-backend/static
-ADMIN_SESSION_MAX_AGE_SECONDS=28800
-PRE_MFA_SESSION_MAX_AGE_SECONDS=600
-AUTH_THROTTLE_MAX_FAILURES=5
-AUTH_THROTTLE_WINDOW_SECONDS=900
-AUTH_THROTTLE_LOCKOUT_SECONDS=900
-RECENT_REAUTH_MAX_AGE_SECONDS=900
-TRUSTED_PROXY_IPS=127.0.0.1,::1
-REFERENCE_DATA_QUARANTINE_ROOT=/var/lib/fire-backend/quarantine
-REFERENCE_DATA_SANITIZER_OUTPUT_ROOT=/var/lib/fire-backend/sanitizer-output
-REFERENCE_DATA_ACCEPTED_ROOT=/var/lib/fire-backend/fire-plans
-REFERENCE_DATA_ACCEPTED_GROUP=fire_document_readers
-INGESTION_STAGING_ROOT=/var/lib/fire-backend/import-staging
-IMPORT_PREVIEW_RETENTION_DAYS=7
-IMPORT_APPLIED_SOURCE_RETENTION_DAYS=30
-MAX_STRUCTURED_IMPORT_BYTES=20971520
-MAX_STRUCTURED_IMPORT_ROWS=20000
-MAX_HYDRANT_GEOJSON_FEATURES=50000
-MAX_IMPORT_VALIDATION_ERRORS=200
-MAX_INGEST_UPLOAD_BYTES=$ingest_upload_bytes
-MAX_PDF_PACKAGE_EXPANDED_BYTES=536870912
-MAX_PDF_PACKAGE_DOCUMENTS=$pdf_package_documents
-MAX_PDF_INPUT_BYTES=104857600
-MAX_PDF_OUTPUT_BYTES=157286400
-MAX_PDF_PAGES=500
-MAX_HYDRANT_IMPORT_FEATURES=20000
-PDF_SANITIZER_TIMEOUT_SECONDS=60
-PDF_SANITIZER_MEMORY_MAX_BYTES=536870912
-PDF_SANITIZER_BROKER_SOCKET=/run/fire-pdf-sanitizer-broker/broker.sock
-PUBLICATION_WORKER_BATCH_SIZE=10
-PUBLICATION_JOB_HEARTBEAT_TIMEOUT_SECONDS=300
-PUBLICATION_JOB_MAX_ATTEMPTS=3
-TEMPORARY_ASSIGNMENT_EXPIRY_BATCH_SIZE=100
-PUBLICATION_BUILD_SUMMARY_MAX_ITEMS=50000
-SIGNED_MANIFEST_RETENTION_DAYS=30
-PUBLICATION_ARTIFACT_ROOT=/var/lib/fire-backend/publications
-PUBLICATION_ARTIFACT_TEMP_ROOT=/var/lib/fire-backend/publications/.tmp
-PUBLICATION_ARTIFACT_MAX_BYTES=629145600
-PUBLICATION_ARTIFACT_STALE_SECONDS=3600
-PUBLICATION_KEK_VERSION=1
-PUBLICATION_SIGNING_KEY_VERSION=$signing_key_version
-APPLICATION_SECRET_KEK_VERSION=$application_secret_kek_version
-REPORT_TRANSFER_ACTIVE_KEY=$report_key_version
-REPORT_TRANSFER_ROOT=/var/spool/firedash-reports
-OUTBOUND_MAIL_HTTPS_PROXY=$outbound_mail_https_proxy
-EOF
+    chmod 0600 "$tmp"
+    if ! FIREDASH_RUNTIME_PASSWORD=${1:-} FIREDASH_DJANGO_SECRET=${2:-} \
+        FIREDASH_HOST=${3:-} python3 "$_LIB_DIR/configuration.py" render > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
     install_file_atomic "$tmp" "$ENV_FILE" 0640 root:fire_backend
     rm -f "$tmp"
 }
@@ -313,12 +213,13 @@ ensure_application_secret_keyring() {
 # pair is represented by its configured immutable version.  The ring is loaded
 # as a public-only systemd credential by web and publication services.
 ensure_public_signing_key_ring() {
-    local release=$1 active_version tmp
+    local release=$1 mode=${2:-install} active_version tmp
     active_version=$(env_value "$ENV_FILE" PUBLICATION_SIGNING_KEY_VERSION)
     [[ -n $active_version ]] || active_version=1
     tmp=$(mktemp)
+    chmod 0600 "$tmp"
     "$release/venv/bin/python" - "$SECRET_DIR/publication-signing-public-key" \
-        "$SECRET_DIR/publication-signing-public-key-ring.json" "$active_version" > "$tmp" <<'PY'
+        "$SECRET_DIR/publication-signing-public-key-ring.json" "$active_version" > "$tmp" <<'PY' || { rm -f "$tmp"; return 1; }
 import base64
 import json
 import re
@@ -364,10 +265,16 @@ for version, encoded_key in keys.items():
 active_encoded = base64.b64encode(public_key).decode("ascii")
 if active_version in keys and keys[active_version] != active_encoded:
     raise SystemExit("active public key does not match its existing ring version")
-keys[active_version] = active_encoded
-sys.stdout.write(json.dumps({"keys": keys}, sort_keys=True, separators=(",", ":")) + "\n")
+if active_version in keys:
+    # A valid existing keyring remains byte-for-byte unchanged.
+    sys.stdout.write(ring_path.read_text(encoding="ascii"))
+else:
+    keys[active_version] = active_encoded
+    sys.stdout.write(json.dumps({"keys": keys}, sort_keys=True, separators=(",", ":")) + "\n")
 PY
-    install_file_atomic "$tmp" "$SECRET_DIR/publication-signing-public-key-ring.json" 0600 root:root
+    if [[ $mode == install ]]; then
+        install_file_atomic "$tmp" "$SECRET_DIR/publication-signing-public-key-ring.json" 0600 root:root
+    fi
     rm -f "$tmp"
 }
 
@@ -444,6 +351,40 @@ validate_established_secrets() {
     v=$(env_value "$ENV_FILE" DJANGO_SECRET_KEY)
     [[ -n $v ]] || die "established install: DJANGO_SECRET_KEY is missing"
     ensure_public_signing_key_ring "$release"
+}
+
+# Read-only validation before maintenance. Never provision or replace a key here.
+validate_premaintenance_secrets() {
+    local release=$1 f rederived version
+    for f in publication-kek publication-signing-key publication-signing-public-key; do
+        [[ -f $SECRET_DIR/$f && $(wc -c < "$SECRET_DIR/$f") -eq 32 ]] \
+            || die "publication credentials: missing or invalid; restore protected backup before retrying"
+    done
+    for f in database-owner-password backup-role-password; do
+        [[ $(read_secret "$SECRET_DIR/$f") =~ ^[0-9a-f]{64}$ ]] \
+            || die "database credentials: missing or invalid; restore protected backup before retrying"
+    done
+    [[ $(env_value "$ENV_FILE" POSTGRES_PASSWORD) =~ ^[0-9a-f]{64}$ ]] \
+        || die "POSTGRES_PASSWORD: invalid existing runtime password"
+    rederived=$(mktemp)
+    chmod 0600 "$rederived"
+    if ! derive_public_key "$release" "$SECRET_DIR/publication-signing-key" "$rederived"; then
+        rm -f "$rederived"
+        die "publication signing credentials: could not validate key pair"
+    fi
+    if ! cmp -s "$SECRET_DIR/publication-signing-public-key" "$rederived"; then
+        rm -f "$rederived"
+        die "publication signing credentials: key pair mismatch"
+    fi
+    rm -f "$rederived"
+    ensure_public_signing_key_ring "$release" validate-only >/dev/null 2>&1 \
+        || die "publication public keyring: invalid; restore or repair protected credential before retrying"
+    version=$(application_secret_kek_version)
+    validate_application_secret_keyring "$release" "$SECRET_DIR/application-secret-kek-ring.json" "$version" >/dev/null 2>&1 \
+        || die "application-secret keyring: restore or repair protected credential before retrying"
+    version=$(report_transfer_active_key)
+    validate_report_transfer_keyring "$release" "$SECRET_DIR/report-transfer-keyring.json" "$version" >/dev/null 2>&1 \
+        || die "Report Transfer keyring: restore or repair protected credential before retrying"
 }
 
 # Main entry. Requires FIREDASH_STATE, FIREDASH_RELEASE, FIREDASH_HOST from the caller.

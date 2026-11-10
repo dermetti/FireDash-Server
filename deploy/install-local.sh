@@ -40,12 +40,16 @@ on_error() {
 }
 trap on_error ERR
 
-require_root
-
 # --- application-level CLI options (--ref is consumed by stage-0) ---
 WAIT=0
 while (($#)); do
     case "$1" in
+        --verbose|--quiet)
+            requested_mode=${1#--}
+            [[ ${FIREDASH_OUTPUT_MODE:-default} == default || ${FIREDASH_OUTPUT_MODE} == "$requested_mode" ]] \
+                || die "--verbose and --quiet are mutually exclusive"
+            export FIREDASH_OUTPUT_MODE=$requested_mode
+            shift ;;
         --wait) WAIT=1; shift ;;
         --base-url) (($# >= 2)) || die "--base-url requires a value"; FIREDASH_BASE_URL=$2; shift 2 ;;
         --base-url=*) FIREDASH_BASE_URL=${1#--base-url=}; shift ;;
@@ -59,9 +63,12 @@ while (($#)); do
         --admin-name=*) FIREDASH_INITIAL_ADMIN_DISPLAY_NAME=${1#--admin-name=}; shift ;;
         --outbound-mail-https-proxy) (($# >= 2)) || die "--outbound-mail-https-proxy requires a value"; FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=$2; export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY; shift 2 ;;
         --outbound-mail-https-proxy=*) FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=${1#--outbound-mail-https-proxy=}; export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY; shift ;;
-        *) die "unknown argument: $1" ;;
+        *) die "unknown installer argument" ;;
     esac
 done
+
+require_root
+log "phase: startup"
 
 # --- installer lock ---
 exec 9>/run/lock/firedash-install.lock
@@ -73,8 +80,13 @@ else
     fi
 fi
 
+# Validate protected configuration before reading it or changing installation state.
+command -v python3 >/dev/null || die "python3 is required for configuration validation"
+python3 "$SELF_DIR/lib/configuration.py" check-files
+CONFIG_SOURCE=$(python3 "$SELF_DIR/lib/configuration.py" install-source)
+
 # --- load persisted non-secret configuration ---
-if [[ -f $INSTALL_CONF ]]; then
+if [[ -f $CONFIG_SOURCE ]]; then
     while IFS='=' read -r k v; do
         [[ -z ${k:-} || ${k:-} == \#* ]] && continue
         case "$k" in
@@ -85,7 +97,7 @@ if [[ -f $INSTALL_CONF ]]; then
                 [[ -z ${!k:-} ]] && export "$k=$v"
                 ;;
         esac
-    done < "$INSTALL_CONF"
+    done < "$CONFIG_SOURCE"
 fi
 
 # Preserve a proxy configured by a release before install.conf owned this
@@ -110,8 +122,8 @@ prompt_for FIREDASH_TLS_KEY_PATH "TLS private key path"
 # --- validate ---
 FIREDASH_BASE_URL=$(normalize_base_url "$FIREDASH_BASE_URL")
 FIREDASH_HOST=$(hostname_from_url "$FIREDASH_BASE_URL")
-[[ -f $FIREDASH_TLS_CERT_PATH ]] || die "TLS certificate not found: $FIREDASH_TLS_CERT_PATH"
-[[ -f $FIREDASH_TLS_KEY_PATH ]] || die "TLS private key not found: $FIREDASH_TLS_KEY_PATH"
+[[ -f $FIREDASH_TLS_CERT_PATH ]] || die "FIREDASH_TLS_CERT_PATH: certificate not found"
+[[ -f $FIREDASH_TLS_KEY_PATH ]] || die "FIREDASH_TLS_KEY_PATH: private key not found"
 
 FIREDASH_RESOLVED_SHA=${FIREDASH_RESOLVED_SHA:-}
 [[ -n $FIREDASH_RESOLVED_SHA ]] || die "FIREDASH_RESOLVED_SHA is not set (run via deploy/install.sh)"
@@ -123,57 +135,90 @@ export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY
 export FIREDASH_RESOLVED_SHA FIREDASH_REQUESTED_REF FIREDASH_RELEASE
 export FIREDASH_INITIAL_ADMIN_EMAIL FIREDASH_INITIAL_ADMIN_DISPLAY_NAME
 
-# --- persist non-secret configuration (before any destructive work) ---
+# --- stage non-secret configuration; preserve successful history until completion ---
 persist_install_conf() {
     local tmp sha
     install -d -m 0750 -o root -g root /etc/fire-backend
     tmp=$(mktemp)
     cat > "$tmp" <<EOF
-FIREDASH_INSTALL_SCHEMA_VERSION=1
+FIREDASH_INSTALL_SCHEMA_VERSION=2
 FIREDASH_BASE_URL=$FIREDASH_BASE_URL
 FIREDASH_TLS_CERT_PATH=$FIREDASH_TLS_CERT_PATH
 FIREDASH_TLS_KEY_PATH=$FIREDASH_TLS_KEY_PATH
 FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY:-}
 FIREDASH_REQUESTED_REF=$FIREDASH_REQUESTED_REF
 EOF
-    sha=$(env_value "$INSTALL_CONF" FIREDASH_LAST_SUCCESSFUL_SHA 2>/dev/null || true)
+    sha=$(env_value "$CONFIG_SOURCE" FIREDASH_LAST_SUCCESSFUL_SHA 2>/dev/null || true)
     if [[ -n $sha ]]; then
         printf 'FIREDASH_LAST_SUCCESSFUL_SHA=%s\n' "$sha" >> "$tmp"
     fi
-    install_file_atomic "$tmp" "$INSTALL_CONF" 0640 root:root
+    install_file_atomic "$tmp" "${INSTALL_CONF}.pending" 0640 root:root
     rm -f "$tmp"
 }
-persist_install_conf
+# Validate the candidate before maintenance or replacing any live configuration.
+validate_tls "$FIREDASH_TLS_CERT_PATH" "$FIREDASH_TLS_KEY_PATH" "$FIREDASH_HOST"
+python3 "$SELF_DIR/lib/configuration.py" prepare
+previous_sha=$(env_value "$CONFIG_SOURCE" FIREDASH_LAST_SUCCESSFUL_SHA 2>/dev/null || true)
+if [[ $previous_sha == "$FIREDASH_RESOLVED_SHA" ]]; then
+    log_complete "No newer release available; converging configuration for resolved SHA $FIREDASH_RESOLVED_SHA."
+fi
+log_verbose "configuration validated; protected selectors and managed secrets preserved"
 
 # ============================== phases ==============================
 
 FIREDASH_PHASE=bootstrap
-"$ROOT/deploy/bootstrap-lxc.sh"
+log "phase: bootstrap"
+run_step "$ROOT/deploy/bootstrap-lxc.sh"
 
 FIREDASH_PHASE=release-build
-"$ROOT/deploy/deploy-release.sh" build
+log "phase: release-build"
+run_step "$ROOT/deploy/deploy-release.sh" build
 
 # Close all report writers before proving missing-key initial enablement safe.
+# Validate mail transport using the built release before stopping writers.
+python3 "$SELF_DIR/lib/configuration.py" prepare
+source "$SELF_DIR/lib/secrets.sh"
+validate_outbound_mail_https_proxy "$FIREDASH_RELEASE" "$(effective_outbound_mail_https_proxy)" \
+    || die "OUTBOUND_MAIL_HTTPS_PROXY is invalid"
+if [[ $FIREDASH_STATE == ESTABLISHED ]]; then
+    validate_premaintenance_secrets "$FIREDASH_RELEASE"
+fi
+persist_install_conf
 FIREDASH_PHASE=quiesce
+log "phase: quiesce"
 FIREDASH_MAINTENANCE=1
-quiesce
+run_step quiesce
 
 FIREDASH_PHASE=secrets
-"$ROOT/deploy/initialize-firedash.sh" secrets
+log "phase: secrets"
+run_step "$ROOT/deploy/initialize-firedash.sh" secrets
+if [[ ! -e $FIREDASH_ETC/overrides.env ]]; then
+    overrides_tmp=$(mktemp)
+    printf '# Optional allowlisted application tuning. Edit, then rerun the installer.\n' > "$overrides_tmp"
+    install_file_atomic "$overrides_tmp" "$FIREDASH_ETC/overrides.env" 0640 root:root
+    rm -f "$overrides_tmp"
+fi
+install_file_atomic "${INSTALL_CONF}.pending" "$INSTALL_CONF" 0640 root:root
+rm -f "${INSTALL_CONF}.pending"
 
 FIREDASH_PHASE=postgres-bootstrap
-postgres_bootstrap "$ROOT/deploy/postgresql/bootstrap-production.sql"
+log "phase: postgres-bootstrap"
+run_step postgres_bootstrap "$ROOT/deploy/postgresql/bootstrap-production.sql"
 
 FIREDASH_PHASE=nginx
-install_nginx
+log "phase: nginx"
+run_step install_nginx
 
 FIREDASH_PHASE=activate
-"$ROOT/deploy/deploy-release.sh" activate
+log "phase: activate"
+run_step "$ROOT/deploy/deploy-release.sh" activate
 
 FIREDASH_PHASE=start-socket
-activate_socket
+log "phase: start-socket"
+run_step activate_socket
 
 FIREDASH_PHASE=health
+log "phase: health"
 health_probe() {
     local host=$FIREDASH_HOST i
     log "waiting for application liveness"
@@ -184,7 +229,7 @@ health_probe() {
         sleep 2
     done
     curl -fsS --resolve "$host:443:127.0.0.1" "https://$host/health/live" >/dev/null \
-        || die "application liveness check failed for https://$host/health/live"
+        || die "application liveness check failed"
     log "application is live; verifying readiness"
     for i in $(seq 1 15); do
         if curl -fsS --resolve "$host:443:127.0.0.1" "https://$host/health/ready" >/dev/null 2>&1; then
@@ -193,20 +238,24 @@ health_probe() {
         fi
         sleep 2
     done
-    die "application readiness check failed for https://$host/health/ready"
+    die "application readiness check failed"
 }
 health_probe
 
 FIREDASH_PHASE=timers
-activate_timers
+log "phase: timers"
+run_step activate_timers
 
 FIREDASH_PHASE=admin
-"$ROOT/deploy/initialize-firedash.sh" admin
+log "phase: admin"
+run_step "$ROOT/deploy/initialize-firedash.sh" admin
 
 FIREDASH_PHASE=verify
-"$ROOT/deploy/verify-deployment.sh"
+log "phase: verify"
+run_step "$ROOT/deploy/verify-deployment.sh"
 
 FIREDASH_PHASE=finalize
+log "phase: finalize"
 record_success() {
     local tmp sha=$FIREDASH_RESOLVED_SHA
     tmp=$(mktemp)
@@ -222,6 +271,6 @@ record_success() {
 }
 record_success
 
-log "FireDash installation complete."
+log_complete "FireDash installation complete. Resolved SHA: $FIREDASH_RESOLVED_SHA; successfully deployed SHA: $FIREDASH_RESOLVED_SHA."
 
 display_admin_setup_url

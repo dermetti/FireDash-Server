@@ -13,6 +13,7 @@ from apps.organizations.models import Station
 
 
 def default_quota():
+    """Temporary migration-only callable for historical 0001/0008/0009 replay."""
     return settings.FILE_LIBRARY_QUOTA_BYTES
 
 

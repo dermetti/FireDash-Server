@@ -72,9 +72,8 @@ validate_report_transfer_keyring "$RELEASE" "$credential" release-2
 cp "$credential" "$TMP/original"
 ensure_report_transfer_keyring "$RELEASE"
 cmp "$credential" "$TMP/original"
-# Preserve active environment selection on upgrade, rather than resetting to 1.
-render_env fixture-password fixture-secret firedash.example.test
-grep -qx 'REPORT_TRANSFER_ACTIVE_KEY=release-2' "$ENV_FILE"
+# Runtime selector preservation is covered by test_configuration.py.
+printf 'FIREDASH_PUBLIC_ORIGIN=https://firedash.example.test\nREPORT_TRANSFER_ROOT=/var/spool/firedash-reports\n' >> "$ENV_FILE"
 
 # Keep historical key versions. Real runtime parser must accept all entries.
 "$RELEASE/venv/bin/python" - "$credential" <<'PY'

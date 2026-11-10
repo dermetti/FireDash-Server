@@ -1,4 +1,3 @@
-from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -7,17 +6,14 @@ from django.contrib.gis.geos import Point
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
-from django.utils import timezone
 
 from apps.audit.services import record_event
 from apps.authorization.services import require_department_admin
 from apps.organizations.models import Station
 from apps.publications.services import mark_dirty
-from apps.reference_data.hydrants import NormalizedHydrant, parse_feature_collection
 from apps.reference_data.models import (
     FirePlan,
     Hydrant,
-    HydrantImportPreview,
     KlgvPlan,
     PhonebookDuplicateDecision,
     PhonebookEntry,
@@ -221,71 +217,6 @@ def create_hydrant(
     )
     mark_dirty(department=department, dataset_type_code="department_hydrants", actor=actor)
     return hydrant
-
-
-def create_hydrant_preview(*, actor, department, raw_geojson: bytes) -> HydrantImportPreview:
-    require_department_admin(actor, department)
-    features = parse_feature_collection(raw_geojson)
-    duplicates = _probable_duplicate_count(department=department, features=features)
-    return HydrantImportPreview.objects.create(
-        department=department,
-        created_by=actor,
-        normalized_features=[feature.as_json() for feature in features],
-        duplicate_count=duplicates,
-        expires_at=timezone.now() + timedelta(minutes=15),
-    )
-
-
-@transaction.atomic
-def confirm_hydrant_preview(*, actor, department, preview_id) -> tuple[int, int, int]:
-    require_department_admin(actor, department)
-    preview = HydrantImportPreview.objects.select_for_update().filter(pk=preview_id).first()
-    if (
-        preview is None
-        or preview.department_id != department.id
-        or preview.created_by_id != actor.id
-        or preview.expires_at <= timezone.now()
-    ):
-        raise PermissionDenied("Hydrant import preview is unavailable.")
-    features = [NormalizedHydrant(**feature) for feature in preview.normalized_features]
-    created = updated = 0
-    for feature in features:
-        values = {
-            "geometry": Point(feature.longitude, feature.latitude, srid=4326),
-            "street": feature.street,
-            "house_number": feature.house_number,
-            "location": feature.location,
-            "hydrant_type": feature.hydrant_type,
-            "diameter_mm": feature.diameter_mm,
-            "status": feature.status
-            if feature.status in {"ACTIVE", "INACTIVE", "UNKNOWN"}
-            else "ACTIVE",
-            "source_metadata": feature.source_metadata,
-        }
-        if feature.external_identifier:
-            hydrant, was_created = Hydrant.objects.update_or_create(
-                department=department,
-                external_identifier=feature.external_identifier,
-                defaults=values,
-            )
-        else:
-            Hydrant.objects.create(department=department, external_identifier="", **values)
-            was_created = True
-        if was_created:
-            created += 1
-        else:
-            updated += 1
-    duplicate_count = preview.duplicate_count
-    preview.delete()
-    record_event(
-        action="reference_data.hydrants_imported",
-        actor_user=actor,
-        department=department,
-        target_type="hydrant_import",
-        metadata={"created": created, "updated": updated, "duplicates": duplicate_count},
-    )
-    mark_dirty(department=department, dataset_type_code="department_hydrants", actor=actor)
-    return created, updated, duplicate_count
 
 
 @transaction.atomic
@@ -609,25 +540,3 @@ def delete_klgv_plan(*, actor, klgv_plan: KlgvPlan) -> None:
     mark_dirty(department=department, dataset_type_code="department_klgv_plans", actor=actor)
     accepted_path = settings.REFERENCE_DATA_ACCEPTED_ROOT / document_key
     transaction.on_commit(lambda: accepted_path.unlink(missing_ok=True))
-
-
-def _probable_duplicate_count(*, department, features: list[NormalizedHydrant]) -> int:
-    count = 0
-    known = set(
-        Hydrant.objects.filter(department=department).values_list(
-            "location", "hydrant_type", "status"
-        )
-    )
-    seen: set[tuple[float, float, str, str]] = set()
-    for feature in features:
-        key = (feature.longitude, feature.latitude, feature.hydrant_type, feature.status)
-        if key in seen or any(
-            cast(Point, location).x == feature.longitude
-            and cast(Point, location).y == feature.latitude
-            and hydrant_type == feature.hydrant_type
-            and status == feature.status
-            for location, hydrant_type, status in known
-        ):
-            count += 1
-        seen.add(key)
-    return count

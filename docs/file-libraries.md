@@ -41,9 +41,9 @@ document's sanitized content size; historical/unreferenced content is excluded.
 - `FILE_LIBRARY_DEPARTMENT_QUOTA_BYTES`: default 5,000,000,000 bytes (5 GB).
 - `FILE_LIBRARY_STATION_QUOTA_BYTES`: default 2,000,000,000 bytes (2 GB per station).
   All stations in a department use its one shared station policy.
-- `FILE_LIBRARY_QUOTA_BYTES` remains the historical default (1 GiB) for old
-  migration callables. If explicitly configured, it is also the fallback for
-  either new setting unless that setting is explicitly configured.
+- `FILE_LIBRARY_QUOTA_BYTES` is a temporary internal 1 GiB constant for historical
+  migration replay only; it is no longer read from the environment.
+  Department/station defaults do not rewrite persisted department quota policies.
   Department administrators configure the department-files limit and shared
   per-station-library limit in System Settings.
 - `FILE_LIBRARY_MAX_QUOTA_BYTES`: default 1 TiB, the server-side upper bound for

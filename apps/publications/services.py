@@ -814,13 +814,12 @@ def _build_is_still_running(*, job_id) -> bool:
 
 
 def _queue_follow_up_if_stale(*, job: PublicationJob) -> None:
-    """Queue a debounced DATA_CHANGE follow-up if the scope moved past this job.
+    """Queue a nightly DATA_CHANGE follow-up if the scope moved past this job.
 
     When a RUNNING job leaves active state and the scope has since advanced to a
     newer source revision, the newer revision must not be stranded without a
-    follow-up build. Reuse the scope's existing dirty-window start so the
-    follow-up honours the original trailing-debounce/maximum-deferral timing
-    rather than starting a fresh, independent window.
+    follow-up build. Preserve the original dirty timestamp for job coalescing;
+    ordinary changes become eligible at the next 00:05 UTC build window.
     """
     scope = _locked_scope(
         department=job.department, station=job.station, dataset_type_code=job.dataset_type_code
