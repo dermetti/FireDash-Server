@@ -215,6 +215,159 @@ def test_invalid_file_metadata_fails_before_read(monkeypatch, mode, uid, gid, ki
         c.validate_files(ProtectedPath())
 
 
+@pytest.fixture
+def credential_tree(monkeypatch):
+    """Metadata-only filesystem model: no credential contents or host ownership."""
+    monkeypatch.setitem(sys.modules, "grp", SimpleNamespace())
+    metadata = {
+        "": (stat.S_IFDIR | 0o750, 0, 0),
+        "credentials": (stat.S_IFDIR | 0o700, 0, 0),
+        "credentials/publication-signing-key": (stat.S_IFREG | 0o600, 0, 0),
+    }
+
+    class MetadataPath:
+        def __init__(self, path=""):
+            self.path = path
+            self.name = path.rsplit("/", 1)[-1]
+
+        def __truediv__(self, name):
+            return MetadataPath(f"{self.path}/{name}".lstrip("/"))
+
+        def exists(self):
+            return self.path in metadata
+
+        def is_symlink(self):
+            return self.exists() and stat.S_ISLNK(self.lstat().st_mode)
+
+        def lstat(self):
+            mode, uid, gid = metadata[self.path]
+            return SimpleNamespace(st_mode=mode, st_uid=uid, st_gid=gid)
+
+        stat = lstat
+
+        def iterdir(self):
+            prefix = self.path + "/"
+            return (
+                MetadataPath(path)
+                for path in metadata
+                if path.startswith(prefix) and "/" not in path[len(prefix) :]
+            )
+
+    return MetadataPath(), metadata
+
+
+STAGING = "credentials/publication-signing-key-staging"
+
+
+def add_staged_version(metadata, version="2"):
+    metadata[STAGING] = (stat.S_IFDIR | 0o700, 0, 0)
+    metadata[f"{STAGING}/{version}"] = (stat.S_IFDIR | 0o700, 0, 0)
+    for name in ("private", "public"):
+        metadata[f"{STAGING}/{version}/{name}"] = (stat.S_IFREG | 0o600, 0, 0)
+
+
+def test_existing_credential_files_and_empty_staging_pass(credential_tree):
+    directory, metadata = credential_tree
+    for name in c.CREDENTIAL_FILES:
+        metadata[f"credentials/{name}"] = (stat.S_IFREG | 0o600, 0, 0)
+    c.validate_files(directory)
+    metadata[STAGING] = (stat.S_IFDIR | 0o700, 0, 0)
+    c.validate_files(directory)
+
+
+@pytest.mark.parametrize("versions", [[], ["2"], ["2", "9" * 64]])
+def test_retained_staging_preflight_and_schema1_migration(
+    credential_tree, legacy, install, versions
+):
+    directory, metadata = credential_tree
+    for version in versions:
+        add_staged_version(metadata, version)
+    c.validate_files(directory)
+    legacy["PUBLICATION_SIGNING_KEY_VERSION"] = "2"
+    runtime = c.prepare(legacy, install, {})
+    assert runtime["PUBLICATION_SIGNING_KEY_VERSION"] == "2"
+    assert c.prepare(runtime, install, {}) == runtime
+
+
+@pytest.mark.parametrize(
+    "version", ["0", "01", "-1", "1.0", "signing-2", "9" * 65, ".prepare.abcdef"]
+)
+def test_unrecognized_staging_versions_fail(credential_tree, version):
+    directory, metadata = credential_tree
+    add_staged_version(metadata, version)
+    with pytest.raises(c.ConfigurationError, match="credentials") as error:
+        c.validate_files(directory)
+    assert version not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "path,kind,mode",
+    [
+        ("credentials/unexpected", stat.S_IFDIR, 0o700),
+        ("credentials/unexpected-file", stat.S_IFREG, 0o600),
+        (f"{STAGING}/unexpected-file", stat.S_IFREG, 0o600),
+        (f"{STAGING}/2/unexpected", stat.S_IFREG, 0o600),
+        (f"{STAGING}/2/nested", stat.S_IFDIR, 0o700),
+    ],
+)
+def test_unrecognized_credential_structures_fail(credential_tree, path, kind, mode):
+    directory, metadata = credential_tree
+    add_staged_version(metadata)
+    metadata[path] = (kind | mode, 0, 0)
+    with pytest.raises(c.ConfigurationError, match="credentials"):
+        c.validate_files(directory)
+
+
+@pytest.mark.parametrize("name", ["private", "public"])
+def test_incomplete_staging_fails(credential_tree, name):
+    directory, metadata = credential_tree
+    add_staged_version(metadata)
+    del metadata[f"{STAGING}/2/{name}"]
+    with pytest.raises(c.ConfigurationError, match="credentials"):
+        c.validate_files(directory)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "credentials",
+        "credentials/publication-signing-key",
+        STAGING,
+        f"{STAGING}/2",
+        f"{STAGING}/2/private",
+        f"{STAGING}/2/public",
+    ],
+)
+@pytest.mark.parametrize(
+    "defect", ["symlink", "type", "owner", "group", "permissions", "special-bits"]
+)
+def test_credential_metadata_rejected_before_configuration_read(
+    credential_tree, monkeypatch, path, defect
+):
+    directory, metadata = credential_tree
+    add_staged_version(metadata)
+    mode, uid, gid = metadata[path]
+    if defect == "symlink":
+        mode = stat.S_IFLNK | stat.S_IMODE(mode)
+    elif defect == "type":
+        mode = (stat.S_IFREG if stat.S_ISDIR(mode) else stat.S_IFDIR) | stat.S_IMODE(mode)
+    elif defect == "owner":
+        uid = 1
+    elif defect == "group":
+        gid = 1
+    elif defect == "permissions":
+        mode |= 0o040
+    else:
+        mode |= stat.S_ISUID
+    metadata[path] = (mode, uid, gid)
+    monkeypatch.setattr(c, "Path", lambda _: directory)
+    monkeypatch.setattr(
+        c, "read", lambda _: pytest.fail("configuration read before metadata validation")
+    )
+    with pytest.raises(c.ConfigurationError, match="credentials"):
+        c.main()
+
+
 def bash(script, *args):
     return subprocess.run([BASH, script, *args], cwd=ROOT, capture_output=True, text=True)
 
@@ -469,6 +622,60 @@ def test_invalid_configuration_stops_before_maintenance_or_replacement(
     for name, original in before.items():
         assert (etc / name).read_bytes() == original
     assert "undisclosed" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+def test_staging_validation_precedes_installer_maintenance(installer_harness, unexpected):
+    run, etc, _ = installer_harness
+    staged = etc / STAGING / "2"
+    staged.mkdir(parents=True)
+    for name in ("private", "public"):
+        (staged / name).touch()  # Empty placeholders; validation must not read key bytes.
+    if unexpected:
+        (staged / "unexpected").touch()
+    driver = etc.parent / "driver.py"
+    driver.write_text(
+        driver.read_text().replace(
+            "c.validate_files = lambda directory: None  # OS metadata separately tested.",
+            """import stat
+from pathlib import Path
+from types import SimpleNamespace
+# Model Unix ownership/modes only; real validation traverses the disposable tree.
+# Unsafe metadata itself is covered by the metadata-only negative tests.
+original_stat = Path.stat
+def metadata(path, *args, **kwargs):
+    info = original_stat(path, follow_symlinks=False)
+    mode = 0o700 if stat.S_ISDIR(info.st_mode) else 0o600
+    group = 0
+    if path.name in {"install.conf", "install.conf.pending", "overrides.env", "fire-backend.env"}:
+        mode = 0o640
+        group = 2 if path.name == "fire-backend.env" else 0
+    return SimpleNamespace(st_mode=stat.S_IFMT(info.st_mode) | mode, st_uid=0, st_gid=group)
+Path.lstat = metadata
+Path.stat = metadata
+sys.modules["grp"] = SimpleNamespace(getgrnam=lambda _: SimpleNamespace(gr_gid=2))
+""",
+        ),
+        newline="\n",
+    )
+    before = {name: (etc / name).read_bytes() for name in ("install.conf", "fire-backend.env")}
+    result = run()
+    if unexpected:
+        assert result.returncode != 0
+        assert "credentials" in result.stderr
+        assert "phase: quiesce" not in result.stdout
+        assert "phase: bootstrap" not in result.stdout
+        assert not (etc / "install.conf.pending").exists()
+        for name, original in before.items():
+            assert (etc / name).read_bytes() == original
+    else:
+        assert result.returncode == 0, result.stderr
+        assert (
+            c.read(etc / "fire-backend.env")["PUBLICATION_SIGNING_KEY_VERSION"]
+            == "signing-previous"
+        )
+    assert (staged / "private").read_bytes() == b""
+    assert (staged / "public").read_bytes() == b""
 
 
 def test_related_overrides_validate_as_a_set_and_can_be_removed(legacy, install):

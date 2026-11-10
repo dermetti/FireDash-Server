@@ -56,6 +56,19 @@ INSTALL_KEYS = {
 }
 KEY = re.compile(r"[A-Z][A-Z0-9_]*")
 VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+# Persistent files provisioned by secrets.sh or loaded by backup/restore units.
+CREDENTIAL_FILES = {
+    "database-owner-password",
+    "backup-role-password",
+    "publication-kek",
+    "publication-signing-key",
+    "publication-signing-public-key",
+    "publication-signing-public-key-ring.json",
+    "application-secret-kek-ring.json",
+    "report-transfer-keyring.json",
+    "backup-pgpass",
+    "restic-password",
+}
 
 
 class ConfigurationError(ValueError):
@@ -113,6 +126,38 @@ def validate_overrides(values):
         fail("OUTBOUND_MAIL_HTTP_CONNECT_TIMEOUT_SECONDS", "must not exceed read timeout")
 
 
+def validate_credential_metadata(path, *, directory=False):
+    info = path.lstat()
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    mode = 0o700 if directory else 0o600
+    if (
+        not expected_type(info.st_mode)
+        or info.st_uid != 0
+        or info.st_gid != 0
+        or stat.S_IMODE(info.st_mode) != mode
+    ):
+        requirement = (
+            "a real root:root 0700 directory" if directory else "regular root:root 0600 files"
+        )
+        fail("credentials", "requires " + requirement)
+
+
+def validate_signing_key_staging(staging):
+    validate_credential_metadata(staging, directory=True)
+    for version in staging.iterdir():
+        # rotate-publication-signing-key::valid_version accepts positive decimal
+        # integers of at most 64 digits. Temporary .prepare trees are not retained
+        # version directories and must be reviewed before installer preflight.
+        if not re.fullmatch(r"[1-9][0-9]{0,63}", version.name):
+            fail("credentials", "unrecognized signing-key staging version")
+        validate_credential_metadata(version, directory=True)
+        children = list(version.iterdir())
+        if {child.name for child in children} != {"private", "public"}:
+            fail("credentials", "signing-key staging requires only private and public files")
+        for child in children:
+            validate_credential_metadata(child)
+
+
 def validate_files(directory):
     import grp
 
@@ -134,23 +179,14 @@ def validate_files(directory):
             fail(name, "requires configured owner/group and mode 0640")
     credentials = directory / "credentials"
     if credentials.exists() or credentials.is_symlink():
-        info = credentials.lstat()
-        if (
-            not stat.S_ISDIR(info.st_mode)
-            or info.st_uid != 0
-            or info.st_gid != 0
-            or stat.S_IMODE(info.st_mode) != 0o700
-        ):
-            fail("credentials", "requires a real root:root 0700 directory")
+        validate_credential_metadata(credentials, directory=True)
         for path in credentials.iterdir():
-            info = path.lstat()
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_uid != 0
-                or info.st_gid != 0
-                or stat.S_IMODE(info.st_mode) != 0o600
-            ):
-                fail("credentials", "requires regular root:root 0600 files")
+            if path.name == "publication-signing-key-staging":
+                validate_signing_key_staging(path)
+            elif path.name in CREDENTIAL_FILES:
+                validate_credential_metadata(path)
+            else:
+                fail("credentials", "unrecognized credential entry; review before retrying")
 
 
 def validate_install(values):
