@@ -11,7 +11,9 @@ from uuid import uuid4
 import pytest
 from django.db import close_old_connections
 from django.test import Client
+from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
 from PIL import Image
 
 from apps.audit.models import AuditEvent
@@ -238,6 +240,8 @@ def test_pdf_jpeg_preview_and_retention(submitted, mail):
     browser, _, _ = browser_login(url)
     row, payload = submitted[3:]
     root = f"/reports/{row.report_id}/"
+    overview = browser.get("/reports/")
+    report = overview.context["reports"][0]
     assert browser.get(root).context["document"]["report_type"] == "arbitrary.future-report"
     photo = payload["attachments"][0]["id"]
     preview = browser.get(root + f"photos/{photo}/preview/")
@@ -246,7 +250,7 @@ def test_pdf_jpeg_preview_and_retention(submitted, mail):
         assert image.width <= 640 and image.height <= 480
     row.refresh_from_db()
     assert row.first_download_at is None
-    response = browser.get(root + "pdf/")
+    response = browser.get(report["pdf_url"])
     row.refresh_from_db()
     assert row.first_download_at is None
     pdf = b"".join(response.streaming_content)
@@ -255,8 +259,10 @@ def test_pdf_jpeg_preview_and_retention(submitted, mail):
     row.refresh_from_db()
     first, expiry = row.first_download_at, row.expires_at
     assert first and expiry <= first + timedelta(hours=48)
-    jpeg = browser.get(root + f"photos/{photo}/")
-    assert b"".join(jpeg.streaming_content).startswith(b"\xff\xd8")
+    jpeg = browser.get(report["photos"][0]["download_url"])
+    from apps.report_transfer.contract import decode
+
+    assert b"".join(jpeg.streaming_content) == decode(payload["attachments"][0]["data"])
     jpeg.close()
     row.refresh_from_db()
     assert row.first_download_at == first and row.expires_at == expiry
@@ -304,13 +310,16 @@ def test_tablet_revoke_and_anonymous_foreign_uuid_denied(submitted, mail):
     browser, _, _ = browser_login(url)
     _, _, tablet, row, payload = submitted
     root = f"/reports/{row.report_id}/"
+    photo_url = root + f"photos/{payload['attachments'][0]['id']}/"
     assert Client().get(root + "pdf/").status_code == 403
+    assert Client().get(photo_url).status_code == 403
     assert browser.get(f"/reports/{uuid4()}/pdf/").status_code == 404
     assert browser.get(root + f"photos/{uuid4()}/").status_code == 404
     assert tablet.post(f"{API}/{uuid4()}/revoke").status_code == 404
     revoked = tablet.post(f"{API}/{response.json()['transfer_id']}/revoke")
     assert revoked.status_code == 200 and revoked.json()["status"] == "REVOKED"
     assert browser.get(root + "pdf/").status_code == 403
+    assert browser.get(photo_url).status_code == 403
     assert row.payload_key
 
 
@@ -456,7 +465,14 @@ def test_parallel_issue_replay_only_one_mail(submitted, mail):
     assert AuditEvent.objects.filter(action="report_transfer.link_issued").count() == 1
 
 
-def add_submission(submitted, report_key, *, recipient=None, full_document=False):  # noqa: F811
+def add_submission(
+    submitted,
+    report_key,  # noqa: F811
+    *,
+    recipient=None,
+    full_document=False,
+    jpeg=True,
+):
     installation, person, client, _, _ = submitted
     header = {
         "typ": "firedash-report+jwe",
@@ -472,12 +488,16 @@ def add_submission(submitted, report_key, *, recipient=None, full_document=False
         "department_id": str(installation.tablet.department_id),
         "station_id": str(submitted[3].station_id),
     }
-    payload = package(header)
+    payload = package(header, jpeg=jpeg)
     if full_document:
         from apps.report_transfer.contract import decode
 
         document = json.loads(decode(payload["report"]["data"]))
         document["title"] = 'Beliebiger Typ & "Zitat"'
+        document["header"][0]["label"] = "Test-Einsatznummer"
+        document["header"][0]["value"]["value"] = "TEST / SIMULATED"
+        document["attachments"][0]["title"] = '&lt;Foto&gt; & "Original"'
+        document["sections"][0]["blocks"][0]["text"] = "Fiktiver Einsatzort TEST / SIMULATED"
         document["sections"][0]["blocks"].extend(
             [
                 {
@@ -524,6 +544,111 @@ def test_multiple_reports_all_blocks_safe_html_and_conflicting_replay(submitted,
     assert "Beliebiger Typ &amp; &quot;Zitat&quot;" in html
 
 
+@pytest.mark.parametrize(
+    ("zone", "finalized"),
+    [("UTC", "28.10.2026 13:30 UTC"), ("Europe/Berlin", "28.10.2026 14:30 CET")],
+)
+def test_compact_overview_links_escaping_and_timezone(
+    submitted,
+    mail,
+    report_key,  # noqa: F811
+    monkeypatch,
+    zone,
+    finalized,
+):
+    from apps.report_transfer import portal
+
+    custom = add_submission(submitted, report_key, full_document=True)
+    no_photos = add_submission(submitted, report_key, jpeg=False)
+    add_submission(submitted, report_key)
+    add_submission(submitted, report_key)
+    _, url = issue(submitted, mail)
+    browser, _, _ = browser_login(url)
+    pdf_renderer = Mock(side_effect=AssertionError("Overview must not generate PDFs"))
+    jpeg_decoder = Mock(side_effect=AssertionError("Overview must not decode JPEGs"))
+    monkeypatch.setattr(portal, "render_pdf", pdf_renderer)
+    monkeypatch.setattr(portal, "decode", jpeg_decoder)
+    with timezone.override(zone):
+        response = browser.get("/reports/")
+    assert response.status_code == 200
+    html = response.content.decode()
+    reports = response.context["reports"]
+    cards = re.findall(r'<article class="card report-card">(.*?)</article>', html, re.S)
+    assert len(cards) == len(reports) == 5
+    assert reports == sorted(reports, key=lambda item: (item["finalized_at"], item["report_id"]))
+    for report, card in zip(reports, cards, strict=True):
+        report_id = report["report_id"]
+        assert f"<h2>{escape(report['title'])}</h2>" in card
+        assert f'href="{reverse("report-portal-pdf", args=[report_id])}"' in card
+        assert f'href="{reverse("report-portal-detail", args=[report_id])}"' in card
+        assert finalized in card
+        assert "Verfügbar bis:" in card
+        if report_id == str(no_photos.report_id):
+            assert report["photos"] == [] and report["photo_count"] == 0
+            assert "<details" not in card and "Fotos herunterladen" not in card
+        else:
+            assert '<details class="report-files">' in card
+            assert "Fotos herunterladen (1)" in card
+            for photo in report["photos"]:
+                assert f'href="{photo["download_url"]}"' in card
+                assert escape(photo["title"]) in card
+        if report_id == str(custom.report_id):
+            assert "&amp;lt;Foto&amp;gt; &amp; &quot;Original&quot;" in card
+        assert "<img" not in card and "<dl" not in card
+        assert " open" not in card
+    for removed in (
+        "BERICHTSTRANSFER",
+        "SyBOS",
+        "arbitrary.future-report",
+        "Test-Einsatznummer",
+        "Report narrative",
+        "Dokumentprüfsumme",
+        "Serverannahme",
+        "eyebrow",
+    ):
+        assert removed not in html
+    pdf_renderer.assert_not_called()
+    jpeg_decoder.assert_not_called()
+    assert not ReportSubmission.objects.exclude(first_download_at=None).exists()
+    assert not AuditEvent.objects.filter(action="report_transfer.download_completed").exists()
+
+
+def test_detail_preserves_original_content_and_downloads(submitted, mail, report_key):  # noqa: F811
+    row = add_submission(submitted, report_key, full_document=True)
+    _, url = issue(submitted, mail)
+    browser, _, _ = browser_login(url)
+    response = browser.get(reverse("report-portal-detail", args=[row.report_id]))
+    assert response.status_code == 200
+    html = response.content.decode()
+    document = response.context["document"]
+    for text in (
+        document["title"],
+        "Test-Einsatznummer",
+        "TEST / SIMULATED",
+        "Fiktiver Einsatzort TEST / SIMULATED",
+        "Summary",
+        "Bestätigt",
+        "Ja",
+        "Spalte",
+        "Test Author",
+        "client-author-1",
+        str(row.report_id),
+        row.document_digest,
+        "Serverannahme",
+        "48 Stunden",
+        "7 Tage",
+    ):
+        assert escape(text) in html
+    for photo in response.context["photos"]:
+        assert f'src="{photo["preview_url"]}"' in html
+        assert f'href="{photo["download_url"]}"' in html
+        assert escape(photo["title"]) in html and escape(photo["caption"]) in html
+    assert f'href="{reverse("report-portal-pdf", args=[row.report_id])}"' in html
+    assert 'href="/reports/"' in html
+    assert "SyBOS" not in html and "arbitrary.future-report" not in html
+    assert "eyebrow" not in html
+
+
 def test_distinct_recipients_isolated_and_mixed_request_rejected(submitted, mail, report_key):  # noqa: F811
     from apps.personnel.models import Person
 
@@ -544,6 +669,9 @@ def test_distinct_recipients_isolated_and_mixed_request_rejected(submitted, mail
     second_browser, _, _ = browser_login(second_url)
     assert first_browser.get("/reports/").status_code == 200
     assert first_browser.get(f"/reports/{second.report_id}/pdf/").status_code == 404
+    second_detail = second_browser.get(f"/reports/{second.report_id}/")
+    assert second_detail.status_code == 200
+    assert first_browser.get(second_detail.context["photos"][0]["download_url"]).status_code == 404
     assert second_browser.get(f"/reports/{submitted[3].report_id}/").status_code == 404
 
 

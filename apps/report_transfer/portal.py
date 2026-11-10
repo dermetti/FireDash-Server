@@ -117,9 +117,6 @@ def report_list(request):
         reports.append(
             {
                 "title": document["title"],
-                "report_type": document["report_type"],
-                "received_at": current.created_at,
-                "header_fields": display_fields(document["header"]),
                 "finalized_at": datetime.fromisoformat(
                     document["finalization"]["finalized_at"].replace("Z", "+00:00")
                 ),
@@ -127,6 +124,16 @@ def report_list(request):
                 "report_id": str(row.report_id),
                 "expires_at": effective_expiry(current),
                 "detail_url": reverse("report-portal-detail", args=[row.report_id]),
+                "pdf_url": reverse("report-portal-pdf", args=[row.report_id]),
+                "photos": [
+                    {
+                        "title": photo["title"],
+                        "download_url": reverse(
+                            "report-portal-jpeg", args=[row.report_id, photo["id"]]
+                        ),
+                    }
+                    for photo in document["attachments"]
+                ],
             }
         )
     reports.sort(key=lambda item: (item["finalized_at"], item["report_id"]))
