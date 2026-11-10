@@ -364,7 +364,11 @@ jobs:
 
       - name: Run root-only signing-key rotation integration test
         # Preserve setup-python's dependency environment; exit 77 is a failure.
-        run: sudo env PATH="$PATH" bash deploy/tests/test_rotate_publication_signing_key.sh
+        run: |
+          if ! getent group fire_backend >/dev/null; then
+              sudo groupadd --system fire_backend
+          fi
+          sudo env PATH="$PATH" bash deploy/tests/test_rotate_publication_signing_key.sh
 
       - name: Validate native Linux credential metadata as root
         # Standalone, disposable filesystem test; no Django or database setup.
