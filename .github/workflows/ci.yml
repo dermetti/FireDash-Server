@@ -362,6 +362,14 @@ jobs:
           TEST_POSTGRES_USER=firedash_test TEST_POSTGRES_PASSWORD=firedash_test_ci \
             python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_configuration.py -q
 
+      - name: Run root-only signing-key rotation integration test
+        # Preserve setup-python's dependency environment; exit 77 is a failure.
+        run: sudo env PATH="$PATH" bash deploy/tests/test_rotate_publication_signing_key.sh
+
+      - name: Validate native Linux credential metadata as root
+        # Standalone, disposable filesystem test; no Django or database setup.
+        run: sudo env PATH="$PATH" python deploy/tests/test_credential_metadata_linux.py
+
       - name: Check migrations
         # Django catches connection errors as RuntimeWarning; fail closed on those.
         env:
