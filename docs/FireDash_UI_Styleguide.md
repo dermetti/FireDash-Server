@@ -1,5 +1,3 @@
-> Historical guide: tablet capacity review controls described below are retired. See [current file-library documentation](file-libraries.md#device-storage-is-managed-locally).
-
 # FireDash UI Styleguide
 
 **Purpose:** A practical design and implementation guide for future FireDash Server UI additions, especially new Data Hub modules and administration pages.
@@ -219,7 +217,7 @@ Typical modules:
 - Personnel
 - Fire Plans
 - KLGV Plans
-- future distributed datasets
+- Dangerous Goods (SYSTEM-published encrypted JSON)
 
 ## 7.1 Card anatomy
 
@@ -312,7 +310,7 @@ Department module IDs, in card order, are `file_management`,
 `department_phonebook`, `department_hydrants`, `station_personnel`,
 `department_fire_plans` and `department_klgv_plans`. File Management uses the shared `_data_hub_module.html` and `_data_hub_card.html`
 renderer, with Total size and Publication metrics. The System Data Hub
-module ID is `system_vehicle_rescue_guides`; Outbound Email belongs in System
+module IDs are `dangerous_goods` and `system_vehicle_rescue_guides`; Outbound Email belongs in System
 Settings, not either Data Hub. Inherited rescue
 configuration uses the same `system_vehicle_rescue_guides` ID in a read-only
 article, with its department-specific description owned by the template.
@@ -339,11 +337,14 @@ system card may link to a dedicated configuration page; that page owns the
 single focused form. Do not place multi-field CRUD controls inside the gateway
 card.
 
-Department Data Hub shows inherited system configuration in a separate
-**System-provided configuration** section. These cards are static/read-only:
-they show the effective values and no activation, editing, publication, build,
-or rollback control. Use explicit labels such as **Enabled**, **Web**, and
-**System managed**.
+Department Data Hub currently uses a **System-provided configuration** section
+for both inherited configuration and read-only SYSTEM publication status. These
+articles contain no activation, editing, build or rollback controls. Configuration
+cards show effective values with labels such as **Enabled**, **Web**, and
+**System managed**. Dangerous Goods is a publication-status article in that same
+section: show **Published**/**Not published**, authoritative version and secondary
+update state. Its placement does not make it configuration or remove its global
+publication lifecycle.
 
 Vehicle Rescue Guides is the current example: System Data Hub may edit only
 the Euro RESCUE web application URL. Provider and delivery mode are displayed,
@@ -1111,8 +1112,9 @@ A new page or module is FireDash-consistent when:
 Publication ownership is explicit and must be shown independently from delivery and licensing.
 `SYSTEM` publications are authored and published once by system administration and appear to eligible departments as read-only **System managed** content. `DEPARTMENT` publications are **Department managed**. `STATION` publications are department-managed and labelled **Station scoped**. “Web” and future “Offline” describe delivery, not ownership; eligibility/entitlement is a separate authorization decision.
 
-System-managed configuration is global configuration inherited by departments, but is not publication data. Vehicle Rescue Guides is implemented as one system-managed Euro RESCUE **Web** URL: system administrators edit it from System Data Hub and departments see it read-only as **System managed**. It has no publication lifecycle or department-specific copy. CBRN/ADR is intended to be the first SYSTEM publication, but is not part of this stage. No premium licensing model exists in this stage.
-
+System-managed configuration is global configuration inherited by departments, but is not publication data. Vehicle Rescue Guides is implemented as one system-managed Euro RESCUE **Web** URL: system administrators edit it from System Data Hub and departments see it read-only as **System managed**. It has no publication lifecycle or department-specific copy. Dangerous Goods (`dangerous_goods`) is an implemented SYSTEM publication with
+its own lifecycle and explicit distribution authorization, not inherited
+configuration. No premium licensing model is implemented.
 
 ## File Management and File Explorer
 
@@ -1126,37 +1128,60 @@ unbounded destination selectors. Tables remain in normal document flow so row
 menus are not clipped by overflow containers. Narrow layouts hide secondary
 columns while retaining names and accessible action menus.
 
-Department administrators manage their own department library; publication
-controls and history live in Publications, while the Data Hub card keeps a
-read-only publication summary. Normal station administrators publish only from
-the station parent, since they have no department Publications access. The
-parent's department-wide approval queue and station requester-review links are
-separate authorized workflows. Capacity reviews authorize one publication candidate;
-accepted source PDFs never require a second upload. Unknown capacity uses warning
-styling; measured projected free storage below 20% uses danger styling, while
-retaining any unknown-device diagnostics.
+Department administrators manage their own department library; department and
+station publication administration/history live in Publications, while Data Hub
+cards retain a read-only publication summary. Publication authority never grants
+station source-file authoring. Normal Station administrators publish only from
+their station File Management parent because they lack department Publications
+access. The Explorer contains no publication controls. The parent supports
+library renaming, current source usage/quota and the role-specific access or
+station publication controls, not a second file table.
 
-Temporary station grants use the same explorer in browse/download/single-delete
-mode, with an explicit station/expiry/release banner and no normal mutation or
-publication controls. One searchable station-access dialog on the department
-parent uses a bounded, accessible combobox with arrow/Enter/Escape/Tab and
-pointer support; changing the query invalidates the prior selection. An ordinary
-search/select form remains available without JavaScript. All permissions and
-posted IDs are checked server-side; hiding controls never grants authority.
+Temporary station grants use the same Explorer in browse/download/single-delete
+mode. Show station, absolute expiry and Release access prominently. Omit upload,
+folder creation, rename, move, replace and publication controls; the server still
+rejects direct unauthorized requests. One successful deletion consumes access,
+then redirects to an authorized location. Expired grants permit no continued
+browsing. Scope and persisted access mode, not station membership alone,
+determine actions.
 
-### File publication capacity controls
+The department parent's station chooser uses a bounded combobox (20 active
+same-department search results), Arrow/Enter/Escape/Tab and pointer behavior,
+selection announcements and valid ARIA relationships. Typing clears the previous
+UUID and confirmation; ignore stale results. Standalone search and native select
+remain available without JavaScript. Activation requires explicit confirmation
+and recent reauthentication; after returning, submit deliberately again.
 
-Department File Management owns the single pending capacity-review queue for
-both department and station libraries; System Settings has no approval table.
-Publication pages link to the relevant File Management queue page and row, and
-the detailed risk/decision page returns there. Department Publications includes
-station file scopes, with station identity visible independently from publication
-state. This grants publication administration, not station source authoring.
+Explorer action anchors open one focused HTMX dialog or a standalone GET form.
+Use ordinary CSRF POSTs, associated errors, retained input and per-file upload
+outcomes. Recursive delete explains scope and grant consumption and requires
+confirmation. Move uses bounded destination browsing; preserve UUIDs on rename,
+move and replacement. Search is library-wide; show containing paths and preserve
+folder/search/sort in pagination. Names are escaped; folder/file links and action
+menus remain separate semantic controls. No nested forms or whole-row click
+handlers. Keep keyboard focus return, visible labels, live status, current
+breadcrumbs, real URLs and accessible narrow-screen action menus. Verify opened
+menus against clipping, not just their closed markup. See
+[File Libraries](file-libraries.md#shared-explorer-routes-and-permissions) for
+routes and the authorization/operation contract.
 
-File scope details keep one Build now control in Actions, with concise capacity
-status and a File Management link. File list actions lead to that fresh assessment;
-list rendering remains page-first and batched. Station File Management retains
-Publish Now, disabled with an explanation and review-status link when capacity
-approval or lifecycle state prevents proceeding. Unknown capacity uses warning
-styling and measured below-20% capacity uses danger styling. Valid approval or
-safe reassessment enables the normal workflow without reuploading accepted PDFs.
+### Publication detail conventions
+
+Use shared status and Publication actions cards, responsive paginated history,
+conditional danger zone and existing polling during active work. Identify System,
+Department or Station ownership independently of state/delivery. Always display
+the active publication version; a candidate is secondary. Show blocked restore
+reasons and delivery compatibility rather than treating READY as proof of usable
+delivery. Keep Rebuild visible with an explanation when disabled; confirmation
+uses the scoped POST and `confirm_rebuild=yes`. Stale requests can still fail
+service validation. Destructive active deletion must explain safe-predecessor
+requirements. Follow existing scoped permissions rather than a new UI policy.
+
+### Source quotas and retired capacity UI
+
+Source-library usage and quota feedback remain current. Over-quota guidance must
+explain that growth is blocked while deletion, metadata edits and non-growing
+replacement remain possible. Do not add tablet capacity warning panels, 20%
+thresholds, approval screens/queues, review actions or publication capacity gates.
+Those workflows/routes are retired; retained historical database models do not
+represent supported user actions. Local device storage is managed by the iPad.

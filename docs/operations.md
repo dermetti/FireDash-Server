@@ -235,3 +235,108 @@ retention still needs an explicit privacy policy; schedule `clearsessions`
 separately from report cleanup. Review swap/core dumps/APM and token-path logging
 at every ingress. Native filesystem, systemd credentials and real timer execution
 require [target acceptance](acceptance.md#report-transfer-beta-acceptance).
+
+## Publication retention policy and audit
+
+The application default is `PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED=False`:
+protect the newest two superseded READY-metadata rows per scope, even if not
+strictly restorable. `True` selects up to the configured number of newest strictly
+restorable predecessors; invalid generations do not consume slots. Both policies
+protect the current publication and serialize against live lifecycle work. The
+repository does not establish the deployed flag value.
+
+Owner-controlled read-only inventory in the normal deployed environment:
+
+```console
+python manage.py audit_publication_retention
+python manage.py audit_publication_retention --json
+```
+
+This independent command performs SELECTs without lifecycle write locks or audit
+writes; it does not invoke maintenance, cleanup or workers. It compares READY-rank
+and strict selection, reports candidate reasons/newly unprotected versions,
+potential retirements and active-job/current/attempt protection. Output includes
+the flag and predecessor limit; the text's CURRENT/PROPOSED labels name the two
+policies even when strict mode is enabled. Save output privately. It excludes
+payloads, tokens and wrapping material. It reads no artifact files or private keys;
+restore eligibility is metadata-level, not proof of physical integrity or a new
+cryptographic signature verification. Repeat during quiet operation if concurrent
+changes invalidate the inventory. Long invalid histories can require many bounded
+inspections, including the locked recheck; assess maintenance duration from the
+inventory before activation rather than imposing a history cutoff.
+
+Before enabling strict selection, separately review every affected scope and
+candidate, shared references, storage ownership and recoverable backups; obtain
+separate owner approval. The next scheduled maintenance pass after activation can
+retire previously protected invalid generations. To withdraw approval before that
+pass, prevent maintenance from running, set the flag false through the reviewed
+configuration/restart procedure, and re-audit. Once retirement has released
+references or deleted ciphertext, toggling false cannot recover it: separately
+reviewed backup recovery is required. Never rewrite signed generations in place.
+
+Retention rechecks candidates under scope -> job -> publication locks and skips
+current/live work and newly protected predecessors. Retirement preserves database
+identity/version/timestamps/signed metadata and audit evidence, marks successful
+rows OBSOLETE, revokes delivery grants and releases terminal content/artifact
+references. Failed/cancelled snapshots expire after the configured 30-day default
+without changing their status. Physical deletion follows commit and final-reference
+checks. Generic deletion failures remain in the durable `DocumentArtifactCleanup`
+queue; concurrent workers skip locked queue work and retries remain observable.
+
+Maintenance counters distinguish `files_deleted`, `files_already_missing`,
+`cleanup_deferred`, `cleanup_failed`, `temporary_entries_removed`,
+`document_cleanup_records_processed`, `document_orphan_records_removed` and
+`document_cleanup_pending_records`. They count attempts, not unique paths; an
+already-missing file is not a failure. Failed deletion remains deferred; inspect
+permissions/I/O/path failures without weakening root containment or symlink checks.
+Never infer historical untracked ciphertext is disposable from age or delete the
+artifact root. Review journal parsers that assume an old combined removal total.
+
+## File publication logical-revert reconciliation
+
+The supported command uses an exact persisted department UUID and the normal
+deployed application environment (not test settings):
+
+```console
+python manage.py reconcile_file_publications --department <department-uuid>
+```
+
+The default is read-only, including no audit writes, though it takes source/scope
+locks while assessing. It includes only department/station file scopes in that
+department. Review every scope before separately authorizing mutation:
+
+```console
+python manage.py reconcile_file_publications --department <department-uuid> --apply
+python manage.py reconcile_file_publications --department <department-uuid>
+```
+
+Apply rechecks source under department-source -> scope -> library locking,
+clears dirty state and cancels redundant ordinary pending jobs/STAGED attempts
+that match the active generation. Their version IDs/snapshots and historical
+review/audit records remain; source revisions are not reset. Explicit force
+rebuilds are preserved. Running jobs are deferred: let the normal worker finish
+or recover, then repeat. Changed/incomplete-history scopes stay under normal
+publication policy. Rerunning an already reconciled scope is safe. Do not infer
+that any production reconciliation or migration has occurred from source code.
+
+## Historical document ciphertext and recovery
+
+Before schema-removal upgrades, follow the private database/artifact inventory
+and backup prerequisites in
+[Deployment](deployment.md#publication-policy-and-document-schema-upgrades).
+Migration presence does not establish any host's applied state. Historical files
+without generic database records are deliberately not inferred disposable.
+A crash between file promotion and compensation can also leave untracked bytes.
+Ordinary generic cleanup handles known orphan records, durable queue entries and
+its own failed-build allocations, not an arbitrary historical directory sweep.
+
+For separately owner-authorized physical cleanup, compare the pre-migration
+inventory with current generic artifact/reference/cleanup records. Review the
+exact proposed path list; every generated path must remain canonical under the
+private artifact root and have no live generic artifact/reference. Preserve
+current ciphertext and all pending durable cleanup work. Never glob-delete the
+shared `documents/{artifact_id}/artifact.bin` tree or infer ownership from its
+layout or age. Unknown ownership requires investigation. Recovery of retired or
+legacy payloads requires a reviewed compatible database/storage/key backup;
+signed manifests and immutable historical rows must never be rewritten to fake
+readiness.

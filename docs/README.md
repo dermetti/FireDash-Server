@@ -20,5 +20,9 @@ artifacts are authoritative.
 
 Versioned [format specifications](formats/) retain their named format contracts;
 use the Tablet API for the current beta interface and document-generation v2.
-UI guides, publication hardening reports and Document Generation v2 historical
-acceptance/rollout guides are retained for the next consolidation pass.
+The [UI style guide](FireDash_UI_Styleguide.md) defines current administration
+conventions. Publication lifecycle behavior belongs in the Administrator guide
+and Architecture; audits/reconciliation belong in Operations. Document v2 wire
+requirements belong in the Tablet API, migration safeguards in Deployment, and
+human/Fake iPad verification in Acceptance.
+`pdf-bundle-v1` is a historical compatibility specification, not current delivery.

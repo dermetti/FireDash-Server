@@ -17,7 +17,10 @@ assets, and migrations. Re-running it must repair the intended state without
 depending on a prior partial run. Run the deployment verifier after every
 installation or upgrade.
 
-TLS certificates must be supplied through the supported installer configuration.
+The installer is Bash (`deploy/install-local.sh` and shared `deploy/lib/`
+helpers). Current manual TLS takes operator-supplied certificate/key paths
+(`--tls-cert`, `--tls-key`). Existing logging prints `firedash:` progress to stdout
+and warnings/errors to stderr; retain relevant sanitized output and service journals.
 Automatic Let's Encrypt issuance and verbose/quiet installer modes are planned
 improvements, not current installer capabilities.
 
@@ -61,12 +64,17 @@ signing key. `fire_publication` owns the hardened publication workers:
   from the web process for eligible manual work.
 - `fire-publication-maintenance.service` and timer perform retention and
   cleanup without the KEK or private signing key. Maintenance protects the
-  current publication and two usable rollback predecessors, obsoletes older
-  successful versions, and purges only aged source snapshots from failed or
-  cancelled attempts.
+  current publication and live lifecycle operations. By default it protects two
+  READY-metadata superseded predecessors, which need not be restorable; strict
+  selection requires `PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED=True`. It
+  obsoletes older successful versions and purges only aged source snapshots
+  from failed/cancelled attempts. See the owner-controlled
+  [policy audit and activation gate](operations.md#publication-retention-policy-and-audit).
 - `fire-import-staging-maintenance.service` runs as `fire_backend` daily to
-  expire private import staging. Its only writable filesystem exception is
-  `/var/lib/fire-backend/import-staging`.
+  expire private import staging and reconcile aged File Library storage. Its
+  writable exceptions are `/var/lib/fire-backend/import-staging` and the narrow
+  accepted-source root `/var/lib/fire-backend/fire-plans`; publication workers
+  retain read-only accepted-source access.
 
 The build socket is `/run/fire-backend/publication-build.sock`, group-owned
 for the web service with mode `0660`. Connecting carries no job data and gives
@@ -205,7 +213,7 @@ non-writable release code, credential separation, and the existing service
 isolation directives were retained. They still require verification on Linux;
 local command fixtures do not establish actual service permissions or isolation.
 
-Confirmed failures and focused regressions:
+Guarded failure scenarios and regression references:
 
 | Invariant / failure scenario | Correction and regression |
 | --- | --- |
@@ -217,29 +225,18 @@ Confirmed failures and focused regressions:
 | A lexical restore prefix accepted `restore-tests/../outside` and symlink escapes. | Resolve the target before containment checks; `test_restore_target.sh` checks traversal, root/nonempty rejection and native symlink escapes. |
 | Activation reran the account helper, changing the mutable parent from tmpfiles' `root:root 0711` to application-owned `0710`, allowing sibling trees to be renamed by the web identity. | Match the existing root-owned tmpfiles contract in `create-service-users.sh`; a deployment-lane regression checks both definitions. Linux negative rename checks remain required. |
 
-Executed locally on Windows: 19 deployment helper scripts passed using isolated
-fixtures/static assertions (including four new scripts); the existing root-only
-rotation integration script skipped. Focused broker/client and publication-unit
-tests passed (48 tests), with six Linux filesystem cases skipped. Bash syntax,
-Python lint/format and diff checks were also performed. Git Bash could not run
-native symlink activation/restore checks or positive Unix-mode restore handling;
-WSL was inaccessible. No live upgrade, rollback, restart or key rotation was run.
-
-Package 4 adds the four portable helper scripts to ordinary CI and keeps the
-privileged rotation helper excluded. The full serial regression, locale-contract
-correction and per-environment skip accounting are documented in
-[development.md](development.md#ci-postgresql-locale-contract). Supplying the
-missing locale spelling is confined to the disposable CI PostgreSQL container;
-production SQL and compatibility checks remain unchanged. Linux CI should run
-the native filesystem/symlink branches, but does not replace the installed-host
-checks below. No Package 4 result authorizes a testserver installation or rollback
-drill.
+Portable helper fixtures verify orchestration control flow, not installed-host
+systemd, credentials or sandbox behavior. Native filesystem/symlink branches and
+privileged rotation require their supported Linux environments; Windows results
+cannot certify them. The current mandatory CI jobs and environment limits are in
+[Development](development.md#quality-checks). Candidate CI and the installed-host
+checks below remain required; historical local results do not authorize rollout.
 
 Perform these checks later on the controlled Debian 13 testserver:
 
 1. In an isolated checkout with the test PostgreSQL settings configured, run
    `DJANGO_SETTINGS_MODULE=config.settings.test .venv/bin/python -m pytest -p no:cacheprovider apps/reference_data/tests/test_pdf_sanitizer_broker.py apps/reference_data/tests/test_pdf_sandbox.py apps/publications/tests/test_deployment_lanes.py`.
-   All six native filesystem cases must execute. Run the four new
+   All six native filesystem cases must execute. Run the four
    `deploy/tests/test_{release_activation,systemd_quiesce,verify_django_checks,restore_target}.sh`
    scripts with Bash; native activation and restore branches must execute.
    The fixtures model systemctl calls; they are not systemd integration tests.
@@ -283,7 +280,6 @@ Perform these checks later on the controlled Debian 13 testserver:
    helper regression belongs in an isolated root-capable Linux fixture, not
    against active credentials. Neither this audit nor a symlink switch certifies
    schema rollback compatibility for a future release.
-
 
 ## Tablet storage telemetry disabled
 
@@ -457,7 +453,6 @@ Required Linux and real-email evidence is tracked in
 [acceptance.md](acceptance.md#report-transfer-beta-acceptance). Portable helper
 success does not establish native systemd/LXC isolation.
 
-
 ### Debian systemd property rendering
 
 Report Transfer verification does not require printable complex `systemctl show`
@@ -520,3 +515,58 @@ Always record the scan mode and incomplete results.
 
 See [historical unresolved dependency findings](security.md#historical-unresolved-dependency-findings-2026-11-02)
 for the dated local-environment observations and outstanding advisory review.
+
+## Publication policy and document-schema upgrades
+
+Repository migration files establish compatibility requirements, not deployment
+state. Verify the target's recorded migration state through the approved release
+process; no statement here establishes that any production database has applied
+`publications.0029`, `0030`, `0032` or `0033`.
+
+`0029_publicationjob_allow_clean_rebuild` persists clean-rebuild intent.
+`0030_correct_legacy_bulk_rebuild_intent` corrects 0029's legacy bulk-job
+classification, including running jobs, without changing worker state, snapshot
+or version. It records `publication.legacy_bulk_intent_corrected` events and
+preserves evidenced explicit rebuilds. Legacy direct internal force requests
+without a matching rebuild audit event cannot be perfectly reconstructed;
+review corrections and conservatively protected ambiguous jobs. New job flags
+remain authoritative. Neither migration approves historical capacity reviews.
+Running work finishes or recovers normally before clean-source reconciliation;
+[the reconciliation command](operations.md#file-publication-logical-revert-reconciliation)
+requires a reviewed dry run and separate authorization for `--apply`.
+
+Before an owner-controlled document-v2 upgrade, back up the database and private
+artifact storage. Before schema removal, privately inventory obsolete Fire Plan
+publications, publication artifact paths, old per-document artifact IDs/paths,
+signed generations and current scope pointers. Decide which disposable data
+requires controlled disposition or fresh builds; older snapshots with ZIP `path`
+metadata are not accepted by current adapters. Never convert or rewrite a signed
+generation in place. Preserve existing ACTIVE Fake iPad/tablet installations,
+assignments, P-256 keys, credentials, state roots and verification history.
+
+Coordinate server/client versions, worker/activation-source shutdown, code,
+normal forward migration chain and worker restart in a separately authorized
+maintenance window. `0032_remove_legacy_fire_plan_delivery` drops five legacy
+model tables and their exclusive guards using restrictive table drops, renames
+the durable cleanup queue in place, and removes the old scope delivery selector.
+Unexpected dependencies fail closed. `0033_strict_document_generation_metadata`
+strengthens typed metadata/canonical-snapshot readiness checks; generic guards
+remain mandatory. Neither migration deletes physical ciphertext or changes tablet
+identity/keys. Their data/schema operations are not an automatic reversible
+rollback path: an old-release symlink switch cannot reconstruct dropped tables
+or discarded metadata. Review database/storage backup restoration and migration
+compatibility before rollback; never downgrade migrations experimentally.
+
+After a controlled upgrade, confirm generic tables/guards and build fresh complete
+schema-2 generations through normal workers. Confirm all four document datasets
+advertise `document-manifest-v2`, generic URLs and READY installation-bound
+grants. Perform [human and Fake iPad acceptance](acceptance.md#document-generation-v2-acceptance)
+without resetting existing identities. Repository tests or verifier text do not
+prove live migration, Swift or deployment success.
+
+`PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED` defaults to false and is not
+activated by these migrations. Enabling strict selection separately requires
+owner approval after the read-only policy audit and review of candidates,
+references and backups. Next scheduled maintenance can retire previously
+protected invalid generations; disabling afterward cannot recover deleted
+ciphertext or references. See [Operations](operations.md#publication-retention-policy-and-audit).

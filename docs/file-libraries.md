@@ -1,4 +1,4 @@
-# File libraries (Stages 1–5)
+# File libraries
 
 `apps.file_library` owns department and station source libraries. The existing
 persisted authorization scopes apply; department roles do not inherit station
@@ -69,7 +69,7 @@ replacements that preserve or reduce usage remain available.
 `department_files` and `station_files` are required, schema-2
 `document-manifest-v2` datasets. The existing build worker discovers active
 departments/stations lacking scopes, including libraries never opened in the
-portal. Initial empty libraries publish normally. Existing Stage 1 revisions
+portal. Initial empty libraries publish normally. Existing source revisions
 are preserved when their publication scopes are initialized. Source edits queue
 the normal next nightly build window; Publish Now expedites the same intent.
 Neither UI state nor a published generation confirms tablet receipt.
@@ -90,9 +90,16 @@ frozen references, ready-generation completeness and immutable source/crypto
 metadata. No monolithic archive is created. The wire contract is specified in
 `docs/tablet-api.md`.
 
-Normal publication retention keeps the current generation and the two most recent
-successful predecessors (`PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS=2`). Terminal
-unsuccessful attempts do not count. Retiring a generation releases its content
+Publication retention always protects the current generation. With default
+`PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED=False`, it protects the newest two
+superseded READY-metadata rows (`PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS=2`),
+even if strict restore validation would reject them. With separately approved
+`True`, only genuinely restorable predecessors consume protected slots; fewer
+than two can qualify. Terminal unsuccessful attempts do not count. Enabling
+the flag can retire previously protected invalid generations at the next
+maintenance run. Disabling it cannot recover removed ciphertext or references.
+Review the [read-only audit and backups](operations.md#publication-retention-policy-and-audit)
+before separate owner approval; repository defaults do not prove deployed values. Retiring a generation releases its content
 pins and standard encrypted-artifact references; the existing artifact cleanup
 infrastructure handles final-reference removal. Historical file-library downloads
 and grants remain usable while retained, but every request rechecks the current
@@ -112,7 +119,7 @@ database foreign keys; physical removal happens only after commit. Publication
 content pins reference `Content` with `on_delete=PROTECT`. Current document
 references use this same rule. Do not delete files independently of that lifecycle.
 Content may be shared by multiple documents within a library; quota counts logical
-current content, not unique physical bytes. Stage 1 does not deduplicate uploads.
+current content, not unique physical bytes. Uploads are not deduplicated.
 
 ## Accepted-storage reconciliation
 
@@ -203,7 +210,7 @@ the isolated broker, configured UID/GID boundaries and accepted-storage modes:
    station publications proceed without device measurements, and that source quota
    limits still reject storage-increasing writes when over quota.
 
-No iPad browser is implemented. The future tablet client must
+No iPad browser is implemented. The tablet client must
 support these required types before activating a complete manifest containing
 them, and render the department library with ` (global)` appended for display.
 The suffix is never stored in the configurable name or signed source metadata.
@@ -257,7 +264,7 @@ checks remain deployment prerequisites until verified on that host.
 
 ### Final server-to-iPad handoff inventory
 
-The subsequent iPad PRD must cover storage-free check-ins and current
+The iPad client must cover storage-free check-ins and current
 installation identity; explicit department/station scopes and both required schema-2
 file datasets; configured root names and the display-only department ` (global)`
 suffix; complete/generation Ed25519 verification, exact HPKE info, AES-KW and GCM;
@@ -266,28 +273,6 @@ integrity, authoritative empty generations and atomic complete-manifest activati
 lease/offline monotonic time, stale recovery, revocation/replacement/reassignment
 and purge; and local capacity/staging failures without receipts or false delivery
 claims. Device capacity never grants tablet privileges.
-
-### Fake-tablet contract regression disposition
-
-The two formerly failing optional/required-dataset tests exposed an obsolete
-string-scope verifier and a fixture advertising KLGV as a ZIP. The verifier now
-validates the server's explicit `SYSTEM`/`DEPARTMENT`/`STATION` scope objects against
-current configuration, recognizes generic v2 descriptor URLs, and reconstructs
-the current JSON artifact-signature scope (including `type`) separately from the
-unchanged HPKE scope. The KLGV fixture now advertises the intentional schema-2
-`document-manifest-v2` contract. Both tests still enforce their original intent:
-an unsupported optional type is ignored after complete-manifest verification;
-an unsupported required type prevents activation. Neither test is skipped or
-removed. Negative cross-tenant/missing-ID scope and signature tests supplement them.
-
-The fake tool remains a protocol harness, not the iPad PDF browser: recognizing a
-v2 descriptor does not advertise support for activating required PDF libraries.
-Publication API tests independently open real generic-v2 grants, decrypt individual
-department/station PDFs, verify signed frozen metadata and hashes, and enforce
-current entitlement for retained URLs. Performance fixtures now declare STATION
-ownership explicitly and retain a fixed six-query bound including the existing
-separate SYSTEM panel; no production constraint was relaxed to accommodate them.
-
 
 ## Department quota policies
 
@@ -336,19 +321,11 @@ publication jobs or audit rows, and does not backfill customized values. Its dat
 conversion is not reversed automatically: doing so could undo later administrator
 intent. Schema rollback restores the old callable defaults only.
 
-The Explorer read model lives in `apps.file_library.explorer`: each read
-checks persisted library access, validates its folder using existing services,
-and provides a bounded database-sorted page with complete containing-folder paths.
-Search covers the authorized library recursively; sort keys are `name`, `modified`
-and `size`, always folders first with UUID tie-breaking. Page sizes are 1 to 100;
-invalid page numbers raise Django paginator errors. These operation hints never
-replace service authorization. The shared Explorer UI consumes this read model; no independent folder-query implementation exists in its views.
-
-`publications-department-files-publish` remains a POST-only department-admin compatibility endpoint
-using the authoritative `publish_now` service. It
-requires recent reauthentication and CSRF, coalesces existing jobs through the
-normal publication queue, and redirects to department Publications (HTMX receives
-`HX-Redirect`). The obsolete department File Management publish POST is denied; station publication remains on the station parent page.
+`publications-department-files-publish` remains a POST-only Department-admin
+compatibility endpoint using `publish_now`, recent reauthentication and CSRF.
+It coalesces normal jobs and redirects to Publications (`HX-Redirect` for HTMX).
+It is not an extra button on scope detail. Legacy authorized file-mutation POSTs
+on the parent remain supported; the obsolete department publish action is denied.
 
 ## Shared File Management and File Explorer
 
@@ -360,34 +337,11 @@ Department and station file-publication administration and history live in
 Publications. File scope details use the normal Build now action; they
 do not render the compatibility Publish Now endpoint as an additional control.
 
-`file-library-explorer` (`/files/<library UUID>/explorer/`) uses the same template,
-read model, toolbar, rows and dialogs for both normal roles. Search covers the
-whole authorized library and displays complete containing-folder paths. Sorting
-and pagination execute in the database; pages default to 25 with a hard limit of
-100. File operations remain authoritative service calls, preserving source
-revisions, quota locks, sanitization, document identity, audit and publication
-scheduling. Focused action GETs have standalone forms as well as HTMX dialogs;
-POSTs recheck persisted scope and explicit deletion confirmation. GETs never
-perform file mutations. Existing legacy file-mutation POSTs remain authorized
-for compatibility; the old department publish action is explicitly denied.
-
-Temporary station grants use these same pages in restricted mode, with scope,
-expiry and release shown prominently. They allow browsing, search, preview,
-download and one confirmed deletion. Successful deletion consumes the grant and
-redirects to `/files/`; failed deletion preserves it. Upload, folder creation,
-rename, move, replace, publication remain denied by services.
-No department membership implies normal station management authority.
-
-Station selection opens one reusable dialog with a server-filtered, keyboard-
-and pointer-operated combobox. Results contain at most 20 active stations from
-the authorized department; typing clears any prior UUID and confirmation.
-Out-of-order suggestions are ignored. A standalone GET search and bounded native
-select provide the no-JavaScript fallback (25 results plus a validated current
-selection). Both modes POST through `TemporaryStationAccessForm`, preserving
-recent reauthentication, six-hour expiry, grant replacement and audit. The chosen
-station survives the reauthentication return; activation still requires a fresh,
-explicit POST confirmation. Existing station sidebar and Station Data Hub routes
-continue to enter the shared parent.
+The shared Explorer, route and permission details are specified
+[below](#shared-explorer-routes-and-permissions). The department station selector
+has keyboard/pointer behavior, stale-result protection and a no-JavaScript search
+with up to 25 options plus the validated current selection. Selection survives
+reauthentication return, but activation still requires a fresh explicit POST.
 
 ### Manual publication controls
 
@@ -399,3 +353,71 @@ is available for an eligible staged candidate. Station administrators retain
 **Publish Now** on their own File Management page; running builds still disable
 that control. Services enforce authorization and lifecycle checks independently
 of HTML controls. No capacity review pages, queues, warnings or decisions remain.
+
+## Logical reverts and clean rebuild intent
+
+Logical comparison ignores source revision counters and internal content-row
+IDs, while stable library/folder/document identities, names, hierarchy, sanitized
+hashes and sizes remain significant. Frozen snapshots retain content IDs for
+pinning and worker checks. Only a match with the active publication is redundant;
+a match with superseded history requires a new generation and tablet update.
+Unchanged document/hash pairs may reuse ciphertext without reusing generation
+identity. Missing/incomplete historical snapshots fail conservatively dirty.
+No immutable publication fingerprint backfill is required.
+
+Explicit confirmed Rebuild persists `allow_clean_rebuild=True`; ordinary bulk
+requests and Build Now do not acquire that intent. Timeout recovery and replacement
+of changed-source attempts preserve it. Running builds finish/recover normally;
+terminal obsolete attempts require a new explicit Rebuild. See the
+[reconciliation runbook](operations.md#file-publication-logical-revert-reconciliation)
+for read-only inspection and separately authorized repair.
+
+## Shared Explorer routes and permissions
+
+| Route | Purpose |
+| --- | --- |
+| `GET /files/` | Authorized-library dispatcher: redirect for one library, picker for multiple. |
+| `GET /files/<library_id>/` | Scope/usage, library-name management, Open Explorer and role-specific controls. |
+| `GET /files/<library_id>/explorer/` | Shared folder/search/list view in all three access modes. |
+| `GET/POST /files/<library_id>/explorer/actions/<action>/` | Action form or scoped mutation: `upload`, `new-folder`, `rename`, `move`, `replace`, `delete`. |
+| `GET /files/<library_id>/<entry_id>/pdf/` | Authorized preview; `?download=1` downloads the validated PDF. |
+| `GET /files/<library_id>/station-access/` | Department-library temporary station chooser, including no-JavaScript fallback. |
+| `GET /files/station-search/<department_id>/` | Authorized active-station name/short-code search, at most 20 results. |
+| `POST /files/station-access/activate/` | Validated station selection, confirmation and recent reauthentication. |
+| `POST /files/station-access/<station_id>/activate/` | Explicit scoped grant activation. |
+| `POST /files/station-access/release/` | Release grant. |
+| `GET /stations/<station_id>/data/` | Station Data Hub entry point. |
+
+The shared `explorer.html` and read model serve normal Department admins, normal
+Station admins and temporary Department-admin station access. Normal roles can
+manage their authorized library; temporary mode permits only browsing, PDF
+preview/download and one successful recursive deletion. Department membership
+or a station assignment never substitutes for the service's persisted access
+mode. System/unrelated administrators gain no source access. Department
+Publications manages department files and authorized station publication scopes;
+Station admins publish only from their own parent page. Temporary grants cannot
+publish, and legacy department `action=publish` on File Management is denied.
+
+Every list, dialog GET, mutation POST, preview and download independently checks
+current user/library/entry scope. Posted UUIDs and display operation hints are
+untrusted. Denials must not reveal foreign names or paths. Mutation POSTs require
+CSRF; GET action forms do not mutate files. Malformed nonempty folder IDs never
+silently select root. Grant-expiry revocation commits even if the requested
+mutation rolls back. A consumed grant redirects to an authorized destination.
+
+Explorer query parameters are `folder`, `q`, `sort` (`name`, `modified`, `size`),
+`direction` (`asc`, `desc`), `page`, and `page_size` (default 25, range 1-100).
+Search is trimmed/capped at 255 characters and spans the entire library; ordinary
+browsing lists direct children. Results are folder-first with UUID tie-breaking;
+search results include ancestor paths. Invalid folder/page values fail explicitly.
+Pagination preserves search/sort/folder; new searches reset page. Move dialogs
+browse a bounded page of destinations, never all folders per row. Services reject
+cross-library moves, cycles, excessive depth, duplicate sibling names and unsafe
+paths. Replacement preserves document UUID and name with new immutable content.
+
+HTMX enhances real navigation/form URLs. Without JavaScript, standalone action
+forms and station search/select remain usable. Errors remain visible without
+closing/replacing the selected action; upload results remain per-file. Recursive
+delete requires confirmation and warns about grant consumption. Keep labels,
+keyboard access, focus return, current breadcrumbs, live selection/error messages
+and non-color status text; see [UI conventions](FireDash_UI_Styleguide.md#file-management-and-file-explorer).

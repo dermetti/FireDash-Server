@@ -830,14 +830,48 @@ dataset, schema, or `minimum_app_version` blocks activation of the candidate
 manifest. An unsupported optional dataset may be ignored only when the server
 marks that entry `required:false`; retain existing verified data rather than
 activating an unverified replacement. The current production datasets
-`department_hydrants`, `department_fire_plans`, and `station_personnel` are all
-`required:true`, schema version 1, with no minimum app version.
+`department_hydrants` and `station_personnel` are `required:true`, schema 1,
+with no minimum app version. All four document datasets use schema 2 and
+`document-manifest-v2`; Fire Plans has no schema-1 delivery fallback.
 `department_klgv_plans` is a department-scoped schema-2
 `document-manifest-v2` dataset. It is `required:true` whenever its department
 feature is enabled and the authoritative current publication is discoverable.
 The feature is disabled by default, so a department without an enabled KLGV
 rollout does not advertise the dataset. The internal test-only dataset is not a
 production client contract.
+
+### Document snapshot caching and supported dataset inventory
+
+All generation signatures must use the exact advertised retained signing-key
+version; never substitute the active key. Use the shared v2 synchronization
+engine for all four document datasets, with adapters only for metadata validation
+and rendering. Cache by immutable artifact identity and verify its binding to
+each new signed generation. Equal hashes/names across different logical documents
+or scopes do not establish identity, reuse rights or access. Stage complete
+snapshots independently, activate atomically only after required metadata and
+bytes verify, and remove absent members only after activation. Preserve the
+last verified complete snapshot on failure, including local space failures.
+Complete empty snapshots are valid. Retained File Library generations still
+require current installation/scope authorization; cached URLs, grants and ETags
+cannot bypass revocation, lease, assignment or compatibility checks.
+
+| Dataset | Ownership | Schema | Delivery format | Required |
+| --- | --- | --- | --- | --- |
+| `dangerous_goods` | SYSTEM | 1 | `json` | Yes |
+| `department_hydrants` | DEPARTMENT | 1 | `geojson` | Yes |
+| `department_fire_plans` | DEPARTMENT | 2 | `document-manifest-v2` | Yes |
+| `department_klgv_plans` | DEPARTMENT | 2 | `document-manifest-v2` | Yes when enabled/discoverable |
+| `department_files` | DEPARTMENT | 2 | `document-manifest-v2` | Yes |
+| `station_files` | STATION | 2 | `document-manifest-v2` | Yes |
+| `station_personnel` | STATION | 1 | `json` | Yes |
+| `department_phonebook` | DEPARTMENT | 1 | `json` | No |
+| `station_phonebook` | STATION | 1 | `json` | No |
+
+KLGV rollout defaults disabled per department. Internal test datasets are not a
+production contract. Required flags do not waive publication discoverability or
+authorization. Administrator upload format versions are independent of these
+generated schemas. Historical monolithic PDF bundles are not v2 delivery and
+have no fallback/redirect/cutover protocol in the supported beta interface.
 
 ### `department_hydrants` (`artifact_format: geojson`)
 
@@ -1033,9 +1067,10 @@ required content verifies, preserving the existing complete-manifest sync
 contract. Never merge current source metadata or a partially downloaded
 candidate into the active generation.
 
-The current successful generation plus the last two obsolete successful
-generations retain their immutable payloads, keys and content references until
-normal retention retires them. While retained, historical file-library URLs
+The current generation and policy-protected superseded generations retain their
+immutable payloads, keys and content references until normal retention retires
+them. The default protects two READY-metadata predecessors; opt-in strict
+selection may protect fewer. See [retention configuration](configuration.md#publications). While retained, historical file-library URLs
 remain authorized only within the installation's **current** scope. Discovery
 still advertises only the current generation. A retained historical manifest
 is not permission for a client to roll back the version advertised by the

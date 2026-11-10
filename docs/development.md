@@ -139,15 +139,6 @@ the verifier rejects other encodings or locale spellings. Existing databases
 are never converted or recreated by bootstrap. Owner, runtime, backup and
 disposable test roles remain separate.
 
-[Actions run 39220619434](https://github.com/dermetti/FireDash-Server/actions/runs/39220619434)
-failed before migrations and all subsequent gates at `CREATE DATABASE` with
-`invalid LC_COLLATE locale name: "C.utf8"`. Its `postgis/postgis:17-3.5`
-image digest was
-`sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6`.
-The image history identifies Debian Bullseye and generation of `en_US.utf8`;
-inspection of its exact Debian base layer found compiled locale files under
-`/usr/lib/locale/C.UTF-8`, without `/usr/lib/locale/C.utf8`.
-
 CI now logs the container's available locales, supplies the missing `C.utf8`
 symlink to that existing compiled locale when necessary, and requires both
 the exact name and UTF-8 character map before running the unchanged SQL.
@@ -163,73 +154,16 @@ PostgreSQL acceptance, production role/audit denials and backup readability.
 Read-only image inspection and Bash/static assertions alone do not establish
 that integration result.
 
-## Regression stabilization notes
+## Verification boundaries
 
-The full CI type gate includes tests and tools. Dynamic JSON/template context
-annotations must describe their heterogeneous contents; typed model IDs or
-validated state may be narrowed at their existing invariant boundaries.
-Keep explicit `None` assertions for idle workers and explicit required-state
-assertions for successful worker jobs. Negative and cross-tenant assertions
-must remain intact. Deliberately malformed test inputs and partial test
-doubles need narrowly scoped typing explanations rather than gate exclusions.
-
-Crypto tamper tests must guarantee a byte changes: XOR one bit instead of
-replacing a random ciphertext byte with a constant. The old suffix `b"x"`
-could equal the original byte and cause an intermittent `InvalidTag` assertion
-failure. Both Fire Plan and KLGV delivery tests now retain that assertion with
-guaranteed corruption.
-
-The 2026-10-19 dependency audit of both requirements files reported nine
-advisories. Only the three affected runtime pins were raised to reported fixed
-versions; no advisory was ignored:
-
-| Dependency | Previous pin | Corrected pin | Reported advisories |
-| --- | --- | --- | --- |
-| Django | 5.2.16 | [5.2.17](https://pypi.org/project/Django/5.2.17/) | PYSEC-2026-3717, PYSEC-2026-4035 |
-| pypdf | 6.18.0 | [6.19.0](https://pypi.org/project/pypdf/6.19.0/) | PYSEC-2026-4154, PYSEC-2026-4160, PYSEC-2026-4159, PYSEC-2026-4156, PYSEC-2026-4155, PYSEC-2026-4157 |
-| requests | 2.32.5 | [2.33.0](https://pypi.org/project/requests/2.33.0/) | PYSEC-2026-2275 |
-
-Bandit annotations are restricted to reviewed false positives: empty/cleared
-credentials and empty-value database constraints, an encryption-context label,
-internal query/form assertions, and best-effort connection close after a failed
-SMTP probe. They do not disable scan rules globally or suppress real credentials.
-Formatting includes existing migration files; their parsed Python ASTs were
-verified unchanged, and migration drift is checked separately.
-
-Local validation used Windows Python 3.13.5 and the configured disposable test
-database on PostgreSQL 16.14 / PostGIS 3.4. Its encoding/locale is exactly
-`UTF8|C.utf8|C.utf8`; the test role has CREATEDB and no superuser, CREATEROLE,
-replication or BYPASSRLS privileges. CI's PostgreSQL 17 / PostGIS 3.5 production
-bootstrap/grants/audit-denial/backup checks remain a separate required result.
-No role, encoding, existing database or host configuration was changed locally.
-
-Both final requirements files were audited with full dependency resolution and
-reported no known vulnerabilities. Windows auditing used an isolated temporary
-pip/audit cache and explicit `https://pypi.org/simple` access after the default
-host cache was inaccessible; no ACL or TLS verification was relaxed. Ordinary
-CI retains its existing audit commands. Ruff formatting/lint, `mypy .` (native
-Windows and Linux platform selection), Bandit, Django system/migration checks,
-OpenAPI validation, `pip check`, 39 Bash syntax checks, broker compilation and
-all 17 CI Bash run-block syntax checks passed locally. The 19 portable helper
-scripts passed; their individual unsupported branches are listed below.
-
-The final complete serial command was
-`python -m pytest --ds=config.settings.test -p no:cacheprovider -ra --durations=25`:
-**1,262 passed, seven skipped, 611.84 seconds (10:11)**, 1,269 collected,
-with no marker/path exclusion. This includes both `slow` cases (50,000-feature
-GeoJSON acceptance and the 50,000-hydrant summary) and both fake-iPad modules
-under `tools/`. The summary's call took 11.66 seconds. These dated baseline
-results included tests for direct PDF-mail admission, since retired along with
-its tests;
-they do not describe the supported beta workflow.
-The idle-worker `None` assertion remains unchanged. Earlier failed/intermediate
-runs do not count as the final baseline.
-
-These are local working-tree results. GitHub Actions must still pass against the
-published candidate SHA, including the real container locale probe and Linux-only
-branches. A result for an older SHA cannot certify these changes. Repository Git
-instructions require explicit authorization before committing/pushing; no commit
-or clean-working-tree claim is implied by local test success.
+The full type gate includes tests and tools. Preserve negative authorization,
+real commit/visibility guarantees and scoped malformed-input typing explanations.
+Crypto tamper tests must guarantee corruption (for example XOR one bit).
+Bandit exceptions must remain narrow and must not suppress credentials or rules
+globally. The dated dependency-advisory record and its uncertainty remain in
+[security.md](security.md); old local results do not certify the current candidate.
+Candidate CI must establish Linux-only behavior and actual PostgreSQL locale,
+role-denial and backup integration. Local Windows checks cannot do so.
 
 ### Skip accounting
 
@@ -255,7 +189,7 @@ and `tools/test_fake_ipad.py::test_secure_write_is_owner_only`.
 
 Portable systemctl fixtures check orchestration control flow only. Neither
 passing those helpers nor native broker filesystem tests proves the real
-systemd/LXC isolation. Package 4 does not install a release or run those host
+systemd/LXC isolation. These checks do not install a release or exercise host
 lifecycle operations.
 
 ## Windows pytest scratch space

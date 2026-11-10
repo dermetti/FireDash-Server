@@ -45,11 +45,11 @@ publication pipeline subsequently coalesces and publishes the affected scope.
 
 Every data page provides **Add one** and **Import many**. Both create the same
 one- or many-record `ImportBatch`; neither form writes a canonical record
-directly. Hydrants accept a manual record or UTF-8 CSV, JSON, and GeoJSON
+directly. Hydrants accept a manual record or UTF-8 CSV and GeoJSON
 Point data in EPSG:4326 (`longitude`, then `latitude`). GeoJSON is preferred
-for exchange. Merge leaves absent hydrants unchanged; **authoritative snapshot**
-is batch-only, prominently shows its deactivation count, and affects only its
-own department.
+for exchange. Merge leaves absent hydrants unchanged. Deactivation requires an explicit
+`status=INACTIVE` for the stable department-scoped External ID; no administrator
+authoritative-snapshot import mode is offered.
 
 Personnel accepts a manual person or UTF-8 CSV batch. It is add/update
 only: absence never offboards a person or ends an assignment. A new manual or
@@ -74,7 +74,8 @@ The upload page links directly to the exact UTF-8 schemas: `hydrants-v1.geojson`
 place the Fire Plan manifest (`fire-plans-manifest-v1.csv`) or KLGV manifest
 (`manifest.csv`) and every declared PDF at the root of one ZIP. Fire Plan
 columns are `external_identifier`, `filename`, `object_name`, `address`,
-`postal_code`, `city`, `longitude`, `latitude`, and `action`; KLGV uses
+`postal_code`, `city`, `longitude`, `latitude`, `fsd_location`, `bmz_location`,
+`rwa_info`, and `action`; KLGV uses
 `external_identifier`, `filename`, `object_name`, `address`, `postal_code`,
 `city`, `longitude`, `latitude`, and `action`. `action` is
 `upsert` or explicit `deactivate`; absence from a ZIP never deactivates a
@@ -131,13 +132,80 @@ operation ambiguous. Deleting a successful historical version makes it
 **Obsolete** rather than removing its permanent attempt identity. Artifact
 cleanup is scheduled only after the transaction commits.
 
-Maintenance keeps the current publication and the two newest usable rollback
-predecessors in every scope. Older successful superseded publications become
+Maintenance always protects the current publication. With the default
+`PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED=False`, it also protects the two
+newest superseded publications with READY artifact metadata, which need not be
+restorable. With separately approved `True`, it selects up to two strictly
+restorable predecessors instead (the count is configurable). Selection is
+metadata-based, not a physical ciphertext audit. Enabling the policy can expose
+previously protected invalid generations to the next cleanup; turning it off
+cannot recover removed payloads or references. Operators must review the
+[read-only retention audit](operations.md#publication-retention-policy-and-audit)
+and backups before separate owner approval. Deployed flag values are unknown
+from the repository. Older successful superseded publications become
 **Obsolete** and their operational payloads can be removed. After the terminal
 snapshot retention period, **Failed** and **Cancelled** attempts have only
 their retained source snapshot purged; their terminal status and immutable
 attempt identity do not change. Do not treat a retained history row as proof
 that its artifact or source snapshot remains available.
+
+## Publication detail and explicit Rebuild
+
+Scope detail presents ownership/status, a persistent Publication actions card,
+paginated history (25 rows per page), and a conditional danger zone. Active work
+polls for status. History distinguishes delivery availability from a stored READY
+flag and explains blocked rollback. System, Department and Station ownership are
+shown independently of delivery mode; current version always means the
+scope's authoritative active version, not the newest attempt.
+
+**Rebuild publication** requires explicit confirmation and a scoped CSRF POST.
+It creates a new attempt from accepted current source even when unchanged.
+It is available for eligible current, unpublished or failed scopes; queued,
+staged, running or review-ready attempts disable it with an explanation. The
+service rechecks under locks and rejects stale/duplicate requests. A source
+error is a controlled failure; existing published content remains authoritative
+until success. **Build & publish now** expedites ordinary pending work; it does
+not independently grant clean-rebuild intent.
+
+Rollback requires a supported-schema superseded publication in the exact same
+scope with READY metadata. Documents additionally require a complete signed/keyed
+generic generation with valid frozen membership and encryption metadata. A legacy
+ZIP/path or incomplete generation cannot be activated, even if marked READY.
+Complete empty generations are valid. Historical validation uses frozen metadata
+and pinned references rather than mutable accepted-PDF hashes. The UI check is
+only a preflight; locked service validation remains authoritative. Active deletion
+chooses the newest strictly eligible predecessor below the current version,
+skipping incompatible ones, and refuses when none exists or newer live work
+conflicts. Deleting historical successful versions does not require that they
+be restorable; it retires their payload, preserving identity and audit history.
+
+## Shared File Explorer
+
+Open **File Management** from the role-specific sidebar or Station Data Hub,
+then **Open File Explorer**. Department admins manage their own department
+library; normal Station admins manage only their own station library. Both use
+the same Explorer. Department publication controls/history live in Publications
+(including authorized station publication scopes); normal Station admins use the
+compact **Station file publication** panel on their File Management parent.
+The Explorer has no publication controls. Publication administration does not
+confer station source-file authoring rights.
+
+Browse folders with breadcrumbs, search the whole authorized library (results
+show ancestor paths), sort, and paginate. Normal management supports PDF upload,
+new folder, rename, move, replacement preserving logical identity, and explicitly
+confirmed recursive deletion. Each upload has its own outcome; source quotas and
+sanitizer checks apply. File Management also supports renaming the library.
+Neither accepted upload nor published state proves tablet receipt.
+
+A Department admin needs an explicitly confirmed, recently reauthenticated
+six-hour temporary grant to inspect a station library. The same Explorer then
+permits browse/preview/download and one successful deletion only. No upload,
+rename, move, replace, folder creation or publication is permitted. The banner
+shows station, expiry and Release access. Expiry/release/consumption stops all
+further access; failed deletion does not consume a valid grant. See
+[File Libraries](file-libraries.md#shared-explorer-routes-and-permissions) for
+route, permission and revocation details. Capacity-review screens and tablet
+storage gates are retired; source-library quota feedback remains active.
 
 ## Overview and attention
 
@@ -266,7 +334,6 @@ It uses the supported locale and IANA timezone choices for Department pages;
 Station Administrators inherit the policy of their Department. It does not
 change stored timestamps, audit timestamps, signatures, API timestamps, lease
 calculation, or any other protocol/security meaning: those remain UTC.
-
 
 ## Tablet storage telemetry disabled
 

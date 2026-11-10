@@ -34,7 +34,9 @@ and do not replace the HOME assignment.
 
 Publication scopes are first-class persisted identity: `SYSTEM` has no department or station, `DEPARTMENT` has a department only, and `STATION` has both a department and station. A SYSTEM publication has one global lifecycle and is never copied per department. Scope ownership is deliberately separate from tablet exposure: a usable publication still requires the dataset exposure policy and installation/department authorization before it enters a manifest.
 
-SYSTEM-managed configuration is distinct from SYSTEM-published datasets. Vehicle Rescue Guides is the first such configuration: one system-administered Euro RESCUE HTTPS web URL is delivered as a signed tablet capability to every authorized installation. It has no publication, artifact, build, or per-department copy. SYSTEM datasets retain their own globally authored publication lifecycle; CBRN/Dangerous Goods is planned separately. Licensing and offline rescue artifacts are not implemented.
+SYSTEM-managed configuration is distinct from SYSTEM-published datasets. Vehicle Rescue Guides is the first such configuration: one system-administered Euro RESCUE HTTPS web URL is delivered as a signed tablet capability to every authorized installation. It has no publication, artifact, build, or per-department copy. SYSTEM datasets retain their own globally authored publication lifecycle; Dangerous Goods is an implemented SYSTEM dataset (`dangerous_goods`, schema 1,
+encrypted JSON) with explicit system exposure; SYSTEM ownership alone grants no
+distribution authorization. Licensing and offline rescue artifacts are not implemented.
 
 Publication work is split into three operational lanes:
 
@@ -59,10 +61,14 @@ versions may contain gaps. Scheduled, manual, and bulk-expedited origins are
 recorded separately. `DatasetScopeState.current_published_publication` is the
 one authoritative active version. Rollback is an audited, atomic recovery
 action to a usable superseded version; active deletion first activates a safe
-predecessor and otherwise fails closed. Retention protects the current version
-and two usable rollback predecessors, marks older successful versions
-`OBSOLETE`, and only purges aged source snapshots for `FAILED`/`CANCELLED`
-attempts without changing their terminal status or permanent attempt identity.
+predecessor and otherwise fails closed. Retention always protects the current
+version and live operations. Its default policy protects two newest
+READY-metadata superseded rows, not necessarily restorable generations. Opt-in
+strict selection uses `PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED=True`; see
+[configuration](configuration.md#publications) and the
+[approval/audit runbook](operations.md#publication-retention-policy-and-audit).
+Retirement marks older successful versions `OBSOLETE`, while failed/cancelled
+attempts only lose aged snapshots. Historical database identities remain intact.
 
 All four PDF datasets (`department_fire_plans`, `department_klgv_plans`,
 `department_files`, `station_files`) use the generic Document Generation v2
@@ -82,6 +88,38 @@ are deleted/gc'd only after activation, and any failed download/decrypt/import
 retains the previous complete generation. Deterministic keys/nonces are never
 derived for deduplication; deduplication reuses already-built immutable artifacts
 when sanitized content is unchanged.
+
+## Source fingerprints, frozen identity and restore
+
+Logical source fingerprints are distinct from revision counters and immutable
+publication identities. For File Libraries, equality excludes `source_revision`
+and internal `content_id`, but includes stable library/folder/document UUIDs,
+names, hierarchy, sanitized PDF hashes and sizes. Frozen snapshots retain the
+internal fields needed by pinning/worker validation. Only equality with the
+**active** publication cancels redundant ordinary work. Reverting to a
+superseded snapshot still requires a new generation; eligible artifacts may be
+reused without reusing its generation identity.
+
+Compatibility comparisons derive logical fingerprints from retained active
+snapshots, retaining the active publication's original fingerprint as a scope
+alias where needed. Missing/incomplete historical snapshots remain conservatively
+dirty; counts or revisions cannot establish equality. Immutable publications
+are not backfilled. A confirmed Rebuild persists `allow_clean_rebuild=True` on
+the existing job model. Ordinary Build Now/bulk requests do not acquire it.
+Timeout recovery and source-change replacement retain that intent; successful
+activation supersedes normally. Terminal obsolete attempts are not resurrected.
+
+File Library workers freeze complete source under the source/scope/library locks
+and pin immutable content before BUILDING commits. Current source mutation cannot
+mix revisions into a frozen build. Restore uses exact scope/dataset/owner/schema,
+READY state and, for documents, frozen membership, manifest/key/reference and
+cryptographic metadata validation. Direct rollback and active-delete predecessor
+selection validate strictly under lifecycle locks; UI metadata checks do not
+replace them. Historical Fire Plan/KLGV validation does not depend on mutable
+accepted files retaining old hashes; complete empty generations remain valid.
+Neither strict restore eligibility nor retention selection reads physical
+ciphertext or freshly verifies signatures, so storage recovery still requires
+independent integrity/backup evidence.
 
 ## Canonical data ingestion
 

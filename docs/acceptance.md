@@ -21,7 +21,7 @@ production-ready. A source implementation is not itself acceptance evidence.
 | Administrator lifecycle | Suspend, reinstate, and revoke both administrator scopes; prove suspended/revoked accounts lose access and the last effective Department Administrator cannot be removed. |
 | Imports and canonical publication state | Exercise Station/Vehicle and Personnel import review, ambiguous/missing station rejection, atomic failure, and one dirty/publication scope per affected canonical scope. |
 | Vehicle retirement recovery | Retire a Vehicle with an assigned Tablet; confirm explicit unassigned attention, preserved Tablet/install history, revoked former distribution, and supported reassignment to an active same-department Vehicle. |
-| Publication recovery | Verify rollback, active deletion with a safe predecessor, rejection without one or during conflicting live work, protected two-predecessor retention, terminal snapshot purge, and post-commit artifact cleanup. |
+| Publication recovery | Verify rollback, active deletion with a safe predecessor, rejection without one or during conflicting live work, retention protection under the configured READY-rank or strict policy, terminal snapshot purge, and post-commit artifact cleanup. |
 | Backup/restore | Verify a backup and complete an isolated restore drill. |
 | Swift interoperability | Perform the required iOS/Swift HPKE, signature, manifest, and artifact interoperability test. |
 
@@ -29,19 +29,19 @@ Automated tests and the deployment verifier support these checks; they do not
 replace environment-specific operator evidence. Record results in the release
 process rather than retroactively marking this checklist complete.
 
-## Alpha exact-SHA gate
+## Beta exact-SHA gate
 
 Create and push the final candidate commit, deploy that exact SHA with the
 release entrypoint, and record the SHA alongside the verifier output. Do not
-perform Alpha acceptance from an uncommitted tree. Complete the role-based
+perform beta acceptance from an uncommitted tree. Complete the role-based
 administration checks above for a Department Administrator, Station
 Administrator, and System Administrator, then complete the Tablet lifecycle
-exercise (including the deferred refactor-plan acceptance) with a real or
+exercise (including stale recovery and terminal-state denial) with a real or
 fake-iPad client as appropriate.
 
 ## Fake-iPad beta exercises
 
-Run these only against the intended alpha/LXC environment. The fake client is
+Run these only against the intended authorized beta/LXC environment. The fake client is
 an independent verifier: it never changes compatibility policy, tablet state,
 invitations, or signing keys. In Windows PowerShell, set the server and the
 human-created invitation token(s), then use a dedicated local state directory:
@@ -114,8 +114,7 @@ the live canonicalisation and Ed25519 verification paths.
 This is required human/environment evidence, not a completed checklist. Existing
 functional tests cover the scenarios linked in the
 [feature guide](report-transfer.md#compatibility-and-focused-verification).
-Earlier phase runs reported passing focused tests, but do not certify this
-candidate SHA; one historical broad run was not green. No tests or operational
+Historical test results do not certify this candidate SHA. No tests or operational
 acceptance were executed during this documentation consolidation. Record the
 candidate SHA, environment, operator, time and outcome for each release check.
 
@@ -168,3 +167,73 @@ recovery, `status`, exact `retry`, saved transfer request UUIDs and explicit
 `revoke`, see [Fake iPad usage](report-transfer.md#compatibility-and-focused-verification).
 Run cleanup acceptance only in the authorized isolated environment; no live
 cleanup is part of this documentation task.
+
+## Document Generation v2 acceptance
+
+These checks require human-controlled deployment/live evidence for the exact
+candidate, not historical local test counts. Actual applied migration state is
+unknown from the repository. Review server/client release order and the
+[upgrade inventory and rollback precautions](deployment.md#publication-policy-and-document-schema-upgrades)
+before separately authorizing any upgrade or cleanup. Preserve the existing
+ACTIVE Fake iPad installation, P-256 key, credentials and verification history;
+do not adopt again, reset or delete its private state root for this exercise.
+
+- [ ] In the approved maintenance window, verify forward migration state, generic
+  tables/readiness guards, quiesced/restarted workers and the exact-SHA deployment
+  verifier. Backups and private pre-removal legacy-artifact inventory are reviewed.
+- [ ] Build fresh complete schema-2 Fire Plans, KLGV (when enabled), Department
+  Files and Station Files. Verify `document-manifest-v2`, generic generation URLs,
+  complete frozen metadata and READY installation-specific grants. Empty complete
+  snapshots also activate correctly; no schema-1 document fallback is used.
+- [ ] Run `python -m tools.fake_ipad verify --state-dir <existing-private-state-root>`
+  from the canonical workspace only after authorizing live verification. Verify
+  complete/generation Ed25519 signatures with exact retained key versions, HPKE
+  binding/unwrap, AES-KW, ciphertext lengths/hashes, AES-GCM and sanitized PDF
+  hashes/membership. Counts come from current signed data; no fixed historical
+  Fire Plan count is contractual.
+- [ ] Exercise metadata-only reuse, retained ciphertext identity checks, missing
+  or tampered bytes, unsupported optional/required datasets and schema handling,
+  empty generations, local space failure and atomic activation. Preserve prior
+  complete data on failure. Cached/reused snapshots are reported separately from
+  new downloads. Document plaintext stays in memory; `--save-plaintext` applies
+  only to the tool's JSON/GeoJSON behavior.
+- [ ] Verify complete tablet manifest 202 problem JSON versus empty generation
+  202 with `Retry-After: 5`; generation manifests have no 304 contract. Ciphertext
+  304 reuse requires bytes verified for size/hash during that run. Test current
+  scope authorization for retained URLs and denial after revoke, lease expiry,
+  station reassignment and cross-tenant identity substitution.
+- [ ] Real Swift/tablet independently verifies the same protocol, cache binding,
+  complete snapshot activation, original PDF rendering and recovery. Fake iPad
+  success is not Swift interoperability or a complete iPad UI acceptance result.
+
+## Publication and Explorer beta acceptance
+
+- [ ] As authorized System/Department admins, inspect shared detail
+  status/actions/history, Rebuild confirmation, disabled/conflicting work and
+  stale duplicate refusal. Rebuild only one chosen scope; old content stays
+  authoritative until success. Check the Station-admin parent publication panel
+  without granting access to department Publications. Keep incomplete legacy history non-restorable
+  without rewriting or deleting it merely for acceptance.
+- [ ] In disposable owner-approved data, exercise complete/empty restore, strict
+  rejection of incomplete generations, active deletion with a safe predecessor
+  and refusal without one. Review both retention policies with the read-only
+  audit; actual flag activation/destructive cleanup requires separate approval.
+- [ ] Exercise the same Explorer for normal Department/Station admins and temporary
+  station access: search paths, sort/page, upload/replace/delete, folder mutations,
+  source quotas and per-file failure feedback. Prove unauthorized direct GET/POST
+  and PDF requests fail. Temporary grants expire/release and allow one successful
+  delete only. Publication controls remain in their scope-specific destinations.
+- [ ] Manually verify keyboard/mobile dialogs, focus return, station combobox
+  stale-choice protection, readable errors/labels and no-JavaScript fallbacks.
+  Capacity approval queues, warnings and tablet storage gates must be absent.
+
+## Remaining beta preparation
+
+Environment evidence remains required for real Swift/tablet, mailbox/browser,
+native Debian/LXC systemd/credential/sandbox boundaries, backup restoration and
+production-like acceptance. Record candidate SHA and evidence; do not infer
+production success from repository tests or migration files. Complete an
+independent security assessment, EULA/privacy/legal review and installer polishing.
+The Bash installer currently uses manual TLS and existing logging; automatic
+Let's Encrypt and verbose/quiet modes remain planned improvements. These are
+remaining preparation tasks, not completed features or new implementation specs.

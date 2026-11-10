@@ -80,6 +80,7 @@ The broker socket is a local service boundary, not a public API.
 | `PUBLICATION_ARTIFACT_MAX_BYTES` | 600 MiB (per encrypted artifact; document datasets encrypt individual PDFs) |
 | `PUBLICATION_ARTIFACT_STALE_SECONDS` | `3600` |
 | `PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS` | `2` |
+| `PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED` | `False` |
 | `PUBLICATION_TERMINAL_SNAPSHOT_RETENTION_DAYS` | `30` |
 | `PUBLICATION_RETENTION_BATCH_SIZE` | `100` |
 | `PUBLICATION_KEK_VERSION` | `1` |
@@ -89,12 +90,31 @@ The artifact temporary root must be a strict descendant of the artifact root
 so final promotion is an atomic same-filesystem rename. Normal source edits
 coalesce for the nightly build rather than a sliding debounce.
 
-Retention is lifecycle-safe and bounded. The current publication and the two
-newest usable rollback predecessors are protected. Older successful
-superseded publications become `OBSOLETE`; aged `FAILED` and `CANCELLED`
-attempts retain their terminal status while only their source snapshots are
-purged. Do not lower the protected predecessor setting below the approved
-operational policy without a separately approved lifecycle change.
+Retention protects the current publication and serializes with live lifecycle
+operations. `PUBLICATION_RETENTION_RESTORE_AWARE_ENABLED=False` is the application
+default: protect the newest `PUBLICATION_RETAINED_ROLLBACK_PREDECESSORS`
+(default two) superseded rows with READY artifact metadata (`artifact_status=READY`
+and `artifact_ready=True`). These rows need not be strictly restorable.
+With the flag `True`, protect up to that many newest genuinely restorable
+superseded publications using the same strict metadata validator as rollback;
+invalid generations consume no protected slot, so zero or one may be protected.
+This is not a physical ciphertext integrity/availability audit or fresh signature
+verification; selection reads no artifact files and unwraps no private keys.
+
+Older successful superseded publications become `OBSOLETE`; aged `FAILED` and
+`CANCELLED` attempts retain their status while their source snapshots are purged.
+Retirement preserves historical database identities, versions, timestamps and
+signed metadata while releasing operational references/payloads after commit.
+Do not lower the predecessor limit without separate lifecycle-policy approval.
+
+The independent `audit_publication_retention` command compares both policies
+read-only. Enabling restore-aware selection requires separate owner approval,
+review of affected candidates, shared references and backups. The next scheduled
+maintenance run can retire previously protected invalid generations. Disabling
+the flag later changes future selection only; it cannot recover deleted
+ciphertext, snapshots or released references. See the
+[retention runbook](operations.md#publication-retention-policy-and-audit).
+Repository defaults do not establish the value in any deployed environment.
 
 Publication credentials are normally resolved from systemd's per-service
 `CREDENTIALS_DIRECTORY`; do not configure a unit-name-specific credential path.
