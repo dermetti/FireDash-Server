@@ -491,10 +491,11 @@ Timeouts, resolution/service errors and skipped dependencies are reported as
 vulnerabilities. Tool-installation failures are also reported in the job summary.
 Raw resolver logs and environment values are not published.
 
-The independent quality job retains mandatory deployment tests, Django checks,
-migration drift, Ruff, mypy, Bandit, the full PostgreSQL/PostGIS regression suite
-and OpenAPI validation. Its success does not mean the advisory scan is clean or
-that dependencies are secure. No blanket advisory ignores are applied.
+The independent mandatory jobs `static-checks`, `server-tests` and
+`deployment-security` retain deployment tests, Django checks, migration drift,
+Ruff, mypy, Bandit, the full PostgreSQL/PostGIS regression suite and OpenAPI
+validation. Their success does not mean the advisory scan is clean or that
+dependencies are secure. No blanket advisory ignores are applied.
 
 Review each advisory for severity (unknown severity is not harmless), affected
 functionality used by FireDash, reachability from untrusted inputs, patched-version

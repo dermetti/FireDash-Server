@@ -90,8 +90,8 @@ establish the current deployed dependency state or provide release approval.
 The resolved base/dev scans in that historical run timed out and were
 **INCOMPLETE**; direct-pin scans did not cover transitives. Neither result
 clears the installed-environment findings. Use the existing
-[`dependency-audit` CI job](../.github/workflows/ci.yml#L237) and its
+[`dependency-audit` CI job](../.github/workflows/ci.yml) and its
 `dependency-advisories` artifacts and summary as ongoing evidence. Review the
-actual scan status and candidate environment; quality-job success alone does
+actual scan status and candidate environment; mandatory CI job success alone does
 not establish dependency security. See the
 [release advisory review policy](deployment.md#dependency-advisory-review-and-release-approval).

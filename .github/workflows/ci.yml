@@ -8,7 +8,64 @@ permissions:
   contents: read
 
 jobs:
-  quality:
+  static-checks:
+    runs-on: ubuntu-latest
+
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      DJANGO_SECRET_KEY: ci-test-secret-not-for-production
+      DJANGO_ALLOWED_HOSTS: ci.invalid
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://ci.invalid
+      FIREDASH_PUBLIC_ORIGIN: https://ci.invalid
+      TEST_POSTGRES_DB: test_firedash
+      TEST_POSTGRES_USER: firedash_test
+      TEST_POSTGRES_PASSWORD: firedash_test_ci
+      TEST_POSTGRES_HOST: 127.0.0.1
+      TEST_POSTGRES_PORT: "5432"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements/base.txt
+            requirements/dev.txt
+
+      - name: Install GeoDjango runtime libraries
+        # Django checks and schema generation import GIS models and load GDAL/GEOS.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/dev.txt
+
+      - name: Check formatting
+        run: ruff format --check .
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy .
+
+      - name: Security scan
+        run: bandit -r apps config manage.py --exclude "*/tests/*,*/migrations/*"
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Validate OpenAPI schema
+        run: python manage.py spectacular --validate
+
+  server-tests:
     runs-on: ubuntu-latest
 
     services:
@@ -53,6 +110,10 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements/base.txt
+            requirements/dev.txt
 
       - name: Install GeoDjango system dependencies
         run: |
@@ -84,6 +145,8 @@ jobs:
             locale -a | grep -Fx C.utf8
           '
 
+      # The test bootstrap requires the production roles and fire_backend database.
+      # Production migrations, hardening and privilege/backup checks run separately.
       - name: Provision PostgreSQL production and test databases
         env:
           PGPASSWORD: postgres_ci
@@ -104,6 +167,104 @@ jobs:
             -v application_runtime_password=application_runtime_ci \
             -v firedash_test_password=firedash_test_ci \
             -f deploy/postgresql/bootstrap-test.sql
+
+      - name: Prepare publication artifact test group
+        run: |
+          sudo groupadd --system --force fire_nginx
+          sudo usermod --append --groups fire_nginx "$(id -un)"
+
+      - name: Run PostgreSQL/PostGIS test suite
+        # Release gate: all retained server/functional tests, including slow workloads.
+        # Appearance/browser-DOM assertions are outside the Python test policy.
+        # Activate the new group in this process; pytest still runs as the runner.
+        run: sg fire_nginx -c 'python -m pytest --ds=config.settings.test -p no:cacheprovider -ra --durations=25'
+
+  deployment-security:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DJANGO_SECRET_KEY: ci-test-secret-not-for-production
+
+      POSTGRES_DB: fire_backend
+      POSTGRES_USER: database_owner
+      POSTGRES_PASSWORD: database_owner_ci
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      DJANGO_ALLOWED_HOSTS: ci.invalid
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://ci.invalid
+      FIREDASH_PUBLIC_ORIGIN: https://ci.invalid
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements/base.txt
+            requirements/dev.txt
+
+      - name: Install GeoDjango system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gdal-bin \
+            libgdal-dev \
+            libgeos-dev \
+            libproj-dev
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/dev.txt
+
+      - name: Supply and verify the FireDash PostgreSQL locale
+        run: |
+          # This Bullseye image ships C.UTF-8 on disk, without the C.utf8 alias
+          # required by the production bootstrap. Change only this disposable
+          # container; never fall back to its en_US.utf8 cluster default.
+          postgres_container="${{ job.services.postgres.id }}"
+          docker exec "$postgres_container" sh -eu -c '
+            locale -a
+            if ! locale -a | grep -Fxq C.utf8; then
+              test -d /usr/lib/locale/C.UTF-8
+              ln -s C.UTF-8 /usr/lib/locale/C.utf8
+            fi
+            test "$(LC_ALL=C.utf8 locale charmap)" = UTF-8
+            locale -a | grep -Fx C.utf8
+          '
+
+      - name: Provision PostgreSQL production database
+        env:
+          PGPASSWORD: postgres_ci
+          FIREDASH_DATABASE_OWNER_PASSWORD: database_owner_ci
+          FIREDASH_APPLICATION_RUNTIME_PASSWORD: application_runtime_ci
+          FIREDASH_BACKUP_ROLE_PASSWORD: backup_role_ci
+        run: |
+          psql -v ON_ERROR_STOP=1 \
+            -h 127.0.0.1 \
+            -U postgres \
+            -d postgres \
+            -f deploy/postgresql/bootstrap-production.sql
 
       - name: Migrate and harden PostgreSQL production database
         env:
@@ -203,36 +364,10 @@ jobs:
           bash deploy/tests/test_pub_artifact_ceiling.sh
 
       - name: Check migrations
+        # Django catches connection errors as RuntimeWarning; fail closed on those.
+        env:
+          PYTHONWARNINGS: error::RuntimeWarning
         run: python manage.py makemigrations --check --dry-run
-
-      - name: Django system check
-        run: python manage.py check
-
-      - name: Check formatting
-        run: ruff format --check .
-
-      - name: Lint
-        run: ruff check .
-
-      - name: Type check
-        run: mypy .
-
-      - name: Security scan
-        run: bandit -r apps config manage.py --exclude "*/tests/*,*/migrations/*"
-
-      - name: Prepare publication artifact test group
-        run: |
-          sudo groupadd --system --force fire_nginx
-          sudo usermod --append --groups fire_nginx "$(id -un)"
-
-      - name: Run PostgreSQL/PostGIS test suite
-        # Release gate: all retained server/functional tests, including slow workloads.
-        # Appearance/browser-DOM assertions are outside the Python test policy.
-        # Activate the new group in this process; pytest still runs as the runner.
-        run: sg fire_nginx -c 'python -m pytest --ds=config.settings.test -p no:cacheprovider -ra --durations=25'
-
-      - name: Validate OpenAPI schema
-        run: python manage.py spectacular --validate
 
   dependency-audit:
     # Independent advisory reporting must not gate mandatory engineering checks.

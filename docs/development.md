@@ -46,6 +46,17 @@ suite. Publication changes normally need publication, tablet manifest/API, and
 portal tests. API changes should also run `python manage.py spectacular
 --validate`.
 
+CI runs three mandatory jobs independently: `static-checks` runs Ruff, mypy,
+Bandit, Django system checks and OpenAPI validation; `server-tests` runs the
+complete serial PostgreSQL/PostGIS suite, including Linux filesystem/security
+tests; `deployment-security` runs production bootstrap, migrations, grants,
+privilege-denial/backup verification and deployment helper checks. Migration
+drift is checked against that job's initialized database, with connection
+warnings treated as errors. Both database jobs provision their own disposable
+PostGIS service and verify the required locale. All three jobs must pass.
+The independent `dependency-audit` job remains advisory; its successful
+completion does not establish that all vulnerabilities are resolved.
+
 ## Test selections
 
 Python tests verify server behavior, persisted state, protocols and security.
