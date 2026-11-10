@@ -33,3 +33,36 @@ FAIL=0
 source "$TMP/checks"
 [[ $FAIL -gt 0 ]]
 echo 'ok: deployment and migration check failures propagate to the verifier summary'
+
+# Exercise the actual negative deletion probe with input available to its caller.
+# The fixture fails immediately if rm could prompt or consume that input.
+awk '/^    if runuser -u fire_publication -- test -w / { copy=1 } copy { print } copy && /^    fi$/ { exit }' \
+    "$ROOT/deploy/verify-deployment.sh" > "$TMP/deletion-check"
+[[ -s "$TMP/deletion-check" ]]
+accepted_probe="$TMP/accepted"
+runuser() {
+    [[ $1 == -u && $2 == fire_publication && $3 == -- ]] || exit 1
+    shift 3
+    if [[ $1 == test ]]; then
+        [[ $# -eq 3 && $2 == -w && $3 == "$accepted_probe/new.pdf" ]] || exit 1
+        return 1
+    fi
+    [[ $# -eq 4 && $1 == rm && $2 == -f && $3 == -- && $4 == "$accepted_probe/new.pdf" ]] || exit 1
+    if IFS= read -r unexpected_input; then
+        exit 1
+    fi
+    printf 'deletion attempted\n' >> "$TRACE"
+    return "$DELETION_STATUS"
+}
+for DELETION_STATUS in 1 0; do
+    FAIL=0
+    : > "$TRACE"
+    source "$TMP/deletion-check" <<< 'input must never reach the deletion probe'
+    [[ $(cat "$TRACE") == 'deletion attempted' ]]
+    if [[ $DELETION_STATUS -eq 0 ]]; then
+        [[ $FAIL -eq 1 ]]
+    else
+        [[ $FAIL -eq 0 ]]
+    fi
+done
+echo 'ok: accepted-source deletion probe is non-interactive and successful deletion fails verification'

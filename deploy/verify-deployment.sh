@@ -502,7 +502,7 @@ if runuser -u fire_backend -- sh -c '
         && ok "fire_publication can read accepted source" \
         || fail "fire_publication cannot read accepted source"
     if runuser -u fire_publication -- test -w "$accepted_probe/new.pdf" 2>/dev/null \
-        || runuser -u fire_publication -- rm "$accepted_probe/new.pdf" 2>/dev/null; then
+        || runuser -u fire_publication -- rm -f -- "$accepted_probe/new.pdf" </dev/null 2>/dev/null; then
         fail "fire_publication can modify accepted source"
     else
         ok "fire_publication cannot modify/delete accepted source"
