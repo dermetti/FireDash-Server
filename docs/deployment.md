@@ -462,8 +462,21 @@ privately checks the effective unit fragment and drop-ins, requires
 `NeedDaemonReload=no`, and retains the running web-process credential probe.
 Missing/conflicting declarations, unknown configuration or a failed probe still
 stop verification. Do not dump credential contents when troubleshooting.
-See [Phase 3.6.2 validation](ci-type-deployment-compatibility.md) for modeled
-representations and the outstanding native Debian/LXC acceptance boundary.
+The effective-unit parser must honor ordered drop-ins, list resets,
+continuation lines, quoted arguments and final scalar overrides. Unsupported
+escaping/specifiers fail closed. Require the canonical credential mapping;
+reject missing, duplicate, conflicting or inappropriately imported report
+credentials, including worker leakage. Verify spool write paths, exact expiry
+command/environment and five-minute timer configuration. Scalar runtime
+properties must be readable (plain or `Property=value`); missing/opaque values
+fail verification. Never print unit contents or credential values.
+
+The running web-process mount-namespace probe must derive the advertised active
+public key from the systemd-delivered keyring without tablet tokens, reports or
+email. Portable fixtures for printable, empty or `[unprintable]` properties do
+not certify native symlink, root/service-identity ownership/access or real
+systemd credential isolation. Require isolated native Debian/LXC acceptance
+before operational approval; Windows/Git Bash cannot establish those guarantees.
 
 ### Dependency advisory review and release approval
 
@@ -500,5 +513,5 @@ but is not proof of a fresh requirements resolution. A supplementary
 only; scan dev separately, since this mode does not include its nested base file.
 Always record the scan mode and incomplete results.
 
-See [Phase 3.6.4 dependency remediation](dependency-remediation-phase3-6-4.md)
-for selected versions, local results and outstanding advisory review.
+See [historical unresolved dependency findings](security.md#historical-unresolved-dependency-findings-2026-11-02)
+for the dated local-environment observations and outstanding advisory review.

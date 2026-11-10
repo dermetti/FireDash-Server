@@ -594,24 +594,28 @@ def test_compact_overview_links_escaping_and_timezone(
         assert f"<h2>{escape(report['title'])}</h2>" in card
         pdf_link = f'href="{reverse("report-portal-pdf", args=[report_id])}"'
         detail_action = f'action="{reverse("report-portal-detail", args=[report_id])}"'
-        content = re.search(
+        content_match = re.search(
             r'<div class="report-card-content">(.*?)</details>\s*</div>', card, re.S
         )
-        assert content is not None
-        content = content.group(1) + "</details>"
+        assert content_match is not None
+        content_html = content_match.group(1) + "</details>"
         assert card.count("<details") == 1
-        downloads = re.search(r'<details class="report-files">(.*?)</details>', content, re.S)
-        assert downloads is not None
-        downloads = downloads.group(1)
-        summary = re.search(r"<summary>(.*?)</summary>", downloads, re.S).group(1)
+        downloads_match = re.search(
+            r'<details class="report-files">(.*?)</details>', content_html, re.S
+        )
+        assert downloads_match is not None
+        downloads_html = downloads_match.group(1)
+        summary_match = re.search(r"<summary>(.*?)</summary>", downloads_html, re.S)
+        assert summary_match is not None
+        summary = summary_match.group(1)
         assert "Dateien herunterladen (PDF" in summary
         assert "<a" not in summary and "<button" not in summary
-        assert card.count(pdf_link) == downloads.count(pdf_link) == 1
+        assert card.count(pdf_link) == downloads_html.count(pdf_link) == 1
         assert card.count(detail_action) == 1
-        assert "<form" not in content and "<button" not in downloads
+        assert "<form" not in content_html and "<button" not in downloads_html
         assert re.search(
             r'<div class="report-meta">.*?</div>\s*<details class="report-files">',
-            content,
+            content_html,
             re.S,
         )
         assert re.search(
@@ -627,16 +631,16 @@ def test_compact_overview_links_escaping_and_timezone(
         assert "Verfügbar bis:" in card
         if report_id == str(no_photos.report_id):
             assert report["photos"] == [] and report["photo_count"] == 0
-            assert "JPEG" not in downloads
-            assert downloads.count("<li>") == 1
+            assert "JPEG" not in downloads_html
+            assert downloads_html.count("<li>") == 1
             assert "Dateien herunterladen (PDF)" in summary
         else:
             assert "+ 1 Fotos" in summary
-            assert downloads.count("<li>") == 1 + len(report["photos"])
+            assert downloads_html.count("<li>") == 1 + len(report["photos"])
             for photo in report["photos"]:
                 link = f'href="{photo["download_url"]}"'
-                assert card.count(link) == downloads.count(link) == 1
-                assert escape(photo["title"]) in downloads
+                assert card.count(link) == downloads_html.count(link) == 1
+                assert escape(photo["title"]) in downloads_html
         if report_id == str(custom.report_id):
             assert "&amp;lt;Foto&amp;gt; &amp; &quot;Original&quot;" in card
         assert "<img" not in card and "<dl" not in card

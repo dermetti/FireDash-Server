@@ -6,6 +6,7 @@
 import io
 import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -150,7 +151,10 @@ def test_fixed_five_snapshot_later_upload_replay_consumed_token_and_replacement(
     assert cards.status_code == 200
     assert len(cards.context["reports"]) == 5
     assert all(
-        len(row["header_fields"]) >= 3 and row["photo_count"] == 3
+        row["title"]
+        and row["finalized_at"]
+        and row["expires_at"]
+        and row["photo_count"] == len(row["photos"]) == 3
         for row in cards.context["reports"]
     )
     assert [row["report_id"] for row in cards.context["reports"]] == [
@@ -162,7 +166,17 @@ def test_fixed_five_snapshot_later_upload_replay_consumed_token_and_replacement(
             runner.load(str(row.submission_id))["envelope"],
             inspect_envelope(runner.load(str(row.submission_id))["envelope"]),
         )
-        assert browser.get(f"/reports/{row.report_id}/").status_code == 200
+        detail = browser.get(f"/reports/{row.report_id}/")
+        assert detail.status_code == 200
+        assert len(document["header"]) >= 3
+        assert detail.context["document"]["header"] == document["header"]
+        overview = next(
+            item for item in cards.context["reports"] if item["report_id"] == str(row.report_id)
+        )
+        assert overview["title"] == document["title"]
+        assert overview["finalized_at"] == datetime.fromisoformat(
+            document["finalization"]["finalized_at"].replace("Z", "+00:00")
+        )
         pdf = browser.get(f"/reports/{row.report_id}/pdf/")
         pdf_name = pdf["Content-Disposition"]
         incident = document["header"][0]["value"]["value"].lower()
@@ -369,9 +383,11 @@ def test_transfer_filtering_limits_historical_scope_and_no_silent_truncation(
 @pytest.mark.django_db
 def test_chronological_portal_uses_timestamps_not_upload_or_header_keys(context, runner, mail):
     config = runner.client.get_configuration()
+    expected_ids = {}
     for index in (4, 0, 3, 1, 2):
         _, document, photos = synthetic(index)
-        # Arbitrary report types/keys, timezone offsets, tied times have stable UUID ordering.
+        expected_ids[index] = document["report_id"]
+        # Sorting must be independent of upload order, report types and header keys.
         document["report_type"] = "new.product.type"
         document["header"][0]["key"] = "arbitrary-key"
         submission_id = str(uuid4())
@@ -382,9 +398,7 @@ def test_chronological_portal_uses_timestamps_not_upload_or_header_keys(context,
     )
     browser, _, _ = browser_login(url)
     reports = browser.get("/reports/").context["reports"]
-    assert [r["header_fields"][0]["display_value"] for r in reports] == [
-        f"TEST-{i:03d}" for i in range(1, 6)
-    ]
+    assert [r["report_id"] for r in reports] == [expected_ids[i] for i in range(5)]
 
 
 @pytest.mark.parametrize(

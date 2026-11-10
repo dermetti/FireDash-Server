@@ -70,3 +70,28 @@ counts, timestamps, and error summaries, never the secret/payload material.
 
 Do not treat a repository history rewrite as containment, and do not claim a
 formal certification based on these controls.
+
+## Historical unresolved dependency findings (2026-11-02)
+
+The local installed-environment `pip-audit --local` observation recorded 22
+advisory entries across five packages (105 packages scanned, no skips). These
+findings remain open pending severity, reachability and remediation review;
+unknown severity must not be treated as harmless. The observations do not
+establish the current deployed dependency state or provide release approval.
+
+| Observed package | Observed version | Unresolved advisory identifiers |
+| --- | --- | --- |
+| certifi | 2026.7.22 | PYSEC-2026-4320 |
+| filelock | 3.32.2 | GHSA-v4x8-3wr5-3wq8, GHSA-9vhv-jxww-xfm5, GHSA-567q-5qvw-pf92, GHSA-m462-7rxw-wvpg, GHSA-j8f7-rjxc-mr56, GHSA-8mx5-7m5m-r77g, GHSA-69hj-f68j-2879, GHSA-9c4x-gm8v-wgc4, GHSA-rfpc-qcw5-3pc4, GHSA-cwqr-hh33-gh44, GHSA-fq56-3cx3-fjxp, GHSA-6627-m3xw-93mp |
+| msgpack | 1.2.1 | GHSA-j586-36cw-2gc2 |
+| sqlparse | 0.5.5 | PYSEC-2026-3698, PYSEC-2026-3697, PYSEC-2026-3699, PYSEC-2026-3696, PYSEC-2026-3923 |
+| urllib3 | 2.7.0 | PYSEC-2026-4177, PYSEC-2026-4176, PYSEC-2026-4175 |
+
+The resolved base/dev scans in that historical run timed out and were
+**INCOMPLETE**; direct-pin scans did not cover transitives. Neither result
+clears the installed-environment findings. Use the existing
+[`dependency-audit` CI job](../.github/workflows/ci.yml#L237) and its
+`dependency-advisories` artifacts and summary as ongoing evidence. Review the
+actual scan status and candidate environment; quality-job success alone does
+not establish dependency security. See the
+[release advisory review policy](deployment.md#dependency-advisory-review-and-release-approval).

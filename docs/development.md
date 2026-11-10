@@ -53,8 +53,8 @@ Do not add assertions for CSS, wording, buttons, navigation, DOM structure,
 template fragments or browser appearance. Use response context/form errors for
 filtering and validation; keep rendered-output assertions only where they protect
 escaping, tenant isolation or secret non-disclosure. Visual and browser interaction
-acceptance is manual, outside pytest. See [test-suite optimization](test-suite-optimization.md)
-for the Phase 3.5 inventory, failure analysis and bounded measurements.
+acceptance is manual, outside pytest. Retain functional HTTP/HTMX protocol,
+CSRF, privacy/cache-header, CLI diagnostic and redaction coverage.
 
 Use `config.settings.test` and the local `.env` `TEST_POSTGRES_*` values.
 The complete PostgreSQL/PostGIS suite is the authoritative regression gate;
@@ -85,7 +85,10 @@ separate connections, lock interleavings, flush and migration checks. Do not
 replace a commit guarantee with callback capture. Test registry restoration and
 immutable audit protections in `config/settings/test.py` must remain intact.
 Run pytest serially: root scratch cleanup and PostgreSQL isolation have not
-been assessed for parallel workers.
+been assessed for parallel workers. Historical migration tests must upgrade
+forward in the shared disposable PostGIS-template fixture; do not downgrade
+through irreversible migrations. Preserve real commit/visibility guarantees
+and negative authorization coverage when consolidating tests.
 
 CI also runs these portable deployment helper checks in its existing Bash step:
 
@@ -210,6 +213,7 @@ Report these as unsupported or unverified, never as passing integration tests:
 
 | Check | Windows reason | Required environment |
 | --- | --- | --- |
+| Publication artifact group ownership | Windows cannot verify Unix group ownership | Native Unix with the configured artifact group |
 | Five broker path/special-file attacks and directory replacement (six pytest cases) | Linux `dir_fd`, `O_NOFOLLOW`, ownership and FIFO semantics | Native Linux; these must execute in ordinary Linux CI |
 | Fake-iPad owner-only state-file mode (one pytest case) | POSIX modes are not Windows ACLs | Native Linux; must execute in Linux CI |
 | Release activation atomic-symlink success branch | Git Bash lacks native Unix symlinks | Native Linux portable helper |
