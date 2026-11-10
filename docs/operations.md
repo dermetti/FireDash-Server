@@ -27,6 +27,7 @@ Confirm these units have the intended state:
 - `fire-import-staging-maintenance.timer` — expiration of private import staging;
 - `fire-stale-installation.timer` — expiration/stale processing;
 - `fire-temporary-assignment-expiry.timer` — assignment expiry;
+- `fire-report-expiry.timer` - five-minute report ciphertext expiry and receipt recovery;
 - `fire-backup.timer` — backup schedule.
 
 Use `systemctl list-timers` and targeted `journalctl` queries. A manifest
@@ -172,3 +173,65 @@ maintenance migration. Do not use the normal installer as a repair tool:
 Keep the old database and logical dump until the replacement is accepted. Do
 not rewrite audit/history rows, publication metadata, or historical signatures
 as part of this repair.
+
+## Report Transfer expiry and recovery
+
+`fire-report-expiry.timer` is persistent, starts about five minutes after boot
+and repeats five minutes after the service last activated. The oneshot runs
+`expire_report_submissions` as `fire_backend` with production settings/runtime
+database access, a 120-second timeout and only the report spool writable under
+`ProtectSystem=strict`. It has no report RSA credential. Web and cleanup must use
+the same canonical `/var/spool/firedash-reports`. Access/status enforce expiry
+immediately, even before the next timer run. See [retention](report-transfer.md#retention-and-cleanup).
+
+Start troubleshooting with read-only metadata checks:
+
+```sh
+systemctl status fire-report-expiry.timer fire-report-expiry.service
+systemctl list-timers fire-report-expiry.timer --all
+journalctl -u fire-report-expiry.service -u fire-backend --since '30 minutes ago'
+stat -c '%U:%G:%a %n' /var/spool/firedash-reports
+```
+
+Cleanup prints `expired`, `orphans` and `failed` counts; deletion failures return
+nonzero and preserve references for retry. Inspect disk capacity, directory access,
+database health and the timer's last result before an authorized rerun through
+the canonical service. Missing ciphertext is tolerated during purge. Durable
+completion receipts are reconciled before expiry and preserve the earliest
+48-hour deadline even when the original database update failed. Do not delete
+receipts, edit expiry timestamps or manually mark downloads successful to clear
+an alert. Preserve files on failed deletion; the command is retryable.
+
+The report spool must remain a real private `fire_backend:fire_backend` 0700
+directory with 0600 files, outside media/publication/import/accepted-source roots.
+Nginx and publication workers must have no direct read access. Do not serve it
+as a static alias or recursively change modes/ownership. Monitor capacity and
+cleanup failures without dumping JWE, decrypted JSON/JPEG, keys or receipts.
+Use safe UUIDs/timestamps/fixed audit outcome codes for diagnosis. Relevant audit
+actions use `report_transfer.`: acceptance, grant creation/link outcome, bounded
+login failures, login success, revocation, PDF generation, completed download and
+content purge. PDF generation alone does not prove download completion.
+
+A FAILED/UNKNOWN/PROCESSING send must not be replayed by a worker or manually
+resent from stored internals. An authorized tablet can recover the same request
+outcome, then intentionally request a fresh generation. A changed mailbox/domain
+policy or explicit security revocation can explain denial; ordinary lease expiry
+or reassignment alone does not invalidate an already issued portal grant.
+
+For deployment failures use the existing
+[read-only troubleshooting and redeployment procedure](deployment.md#read-only-troubleshooting).
+Restore missing/invalid report credentials from protected matching backups;
+never regenerate to bypass the initialized marker or historical report records.
+Keep every required key version. An interrupted installer may leave writers
+stopped: reconcile the recorded failure and rerun the same approved exact SHA.
+
+Normal file backups exclude spool/receipts but include protected credential
+backups; external snapshot operators must enforce the same exclusion. A database
+restore cannot recover excluded report contents, recreate used tokens or prove
+missing download events. Do not fabricate packages or extend deadlines. Revoke
+unusable grants and let retained metadata/content follow their existing expiry;
+new reports require the normal tablet workflow. Metadata tombstone/transfer/session
+retention still needs an explicit privacy policy; schedule `clearsessions`
+separately from report cleanup. Review swap/core dumps/APM and token-path logging
+at every ingress. Native filesystem, systemd credentials and real timer execution
+require [target acceptance](acceptance.md#report-transfer-beta-acceptance).

@@ -120,6 +120,18 @@ cryptography dependencies available. It is not part of ordinary CI. Exit 77
 means the environment is unsupported, not successful verification; report that
 check as unverified. Do not elevate ordinary CI to run it.
 
+## Report Transfer development
+
+Read [Report Transfer](report-transfer.md) and the
+[tablet contract](tablet-api.md#encrypted-report-transfer). Current focused
+coverage lives in `apps/report_transfer/tests/`,
+`apps/outbound_mail/tests/test_recipients.py`, `tools/fake_ipad/test_reports.py`
+and `tools/test_report_transfer_deployment.py`. Removed PDF-mail admission and
+delivery test modules are obsolete. Real tablet/mailbox/browser and native
+Debian evidence belongs in [acceptance](acceptance.md#report-transfer-beta-acceptance).
+Markdown-only edits normally need link/contract review and `git diff --check`,
+not pytest, migrations, Ruff or the full CI command set.
+
 ## CI PostgreSQL locale contract
 
 Production and test bootstrap both require exactly `UTF8|C.utf8|C.utf8`;
@@ -206,9 +218,10 @@ The final complete serial command was
 **1,262 passed, seven skipped, 611.84 seconds (10:11)**, 1,269 collected,
 with no marker/path exclusion. This includes both `slow` cases (50,000-feature
 GeoJSON acceptance and the 50,000-hydrant summary) and both fake-iPad modules
-under `tools/`. The summary's call took 11.66 seconds. The focused encryption
-admission contract also passed all six tests after updating its exact-version
-assertion to pypdf 6.19.0; spoofed/incomplete encryption rejection remains tested.
+under `tools/`. The summary's call took 11.66 seconds. These dated baseline
+results included tests for direct PDF-mail admission, since retired along with
+its tests;
+they do not describe the supported beta workflow.
 The idle-worker `None` assertion remains unchanged. Earlier failed/intermediate
 runs do not count as the final baseline.
 

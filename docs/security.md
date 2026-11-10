@@ -95,3 +95,55 @@ clears the installed-environment findings. Use the existing
 actual scan status and candidate environment; mandatory CI job success alone does
 not establish dependency security. See the
 [release advisory review policy](deployment.md#dependency-advisory-review-and-release-approval).
+
+## Report Transfer trust boundary
+
+[Report Transfer](report-transfer.md) is separate from publication/reference-data
+ingestion. The authenticated installation uploads flattened JWE using dedicated
+RSA-OAEP-256/A256GCM keys. Scope, hashes, ReportDocument structure and actual JPEG
+content are validated before ciphertext persistence. The web process decrypts in
+memory for validation/rendering; this is not encryption that hides reports from
+the authorized server. Report keys never substitute for publication or application
+keys, and publication workers receive no report RSA credential. The encrypted
+private spool and database metadata remain separate; PDFs/previews are generated
+in memory. Claimed author/finalization/signature metadata does not authenticate
+a person; the app is responsible for its operator login.
+
+Recipient authority comes from current persisted same-department active personnel,
+incident-commander eligibility, verified valid email and exact approved-domain
+policy when enabled. Requests cannot supply a mailbox or arbitrary report list.
+A mailbox HMAC binds each immutable grant snapshot; mailbox/policy changes deny
+access. Transfer/request/submission identities are scoped to their installation.
+New generations revoke the previous installation/recipient grant and its sessions.
+Issued portal grants survive ordinary lease expiry/reassignment, but explicit
+installation/tablet/department revocation and recipient-policy failures still deny.
+
+Magic Links contain 256 random bits, store only token hashes, expire after 60
+minutes and allow one CSRF-protected login. GET is scanner-safe confirmation.
+Session and CSRF identities rotate; database sessions have 30-minute inactivity
+limits and grant-bound session hashes, with no administrative authority. Used
+tokens can revoke only their own generation through explicit two-step POST
+within their original lifetime. Each page/preview/download checks current grant,
+session, recipient, historical encrypted scope, membership and expiry. UUID
+knowledge grants no access. Streams recheck authorization before each chunk;
+revocation cannot recall bytes already handed to the transport.
+
+Portal responses are private/no-store with `Referrer-Policy: strict-origin`, a
+local-only CSP, frame denial, nosniff and noindex. Secure/SameSite=Lax cookies
+and HttpOnly session cookies also apply locally; preserve HTTPS/CSRF/Origin checks.
+Templates escape client text. Original JPEG downloads retain original bytes and
+may retain metadata; preview thumbnails strip EXIF. Token-path redaction and
+proxy logging suppression must extend to ingress/WAF/APM/tracing and mail systems;
+never log URLs, bodies, mail contents, token/session hashes or decrypted locals.
+Audit metadata contains only necessary safe IDs, times, file types and fixed
+outcomes, not personal mailbox/content data. Unknown-token login audit is bounded
+globally per minute; known-generation failures are recorded at most once.
+
+Content lives at most seven days from server acceptance, shortened to at most
+48 hours after the earliest complete explicit PDF/JPEG server handoff. Previews
+and interrupted streams do not count. Receipts preserve observed completions for
+retry; no browser-save guarantee is claimed. Scheduled cleanup removes ciphertext
+and orphans while retaining idempotency metadata. Keep spool/receipts out of
+backups and snapshots, preserve protected key backups and old versions needed by
+live reports, and review process dumps/swap/telemetry. Metadata deletion horizons
+remain an explicit privacy decision. See the [operational recovery boundaries](operations.md#report-transfer-expiry-and-recovery).

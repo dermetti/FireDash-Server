@@ -222,3 +222,52 @@ refresh explicitly tops up an eligible active installation.
 Backup and restore location, scheduling, and role credentials are deployment
 concerns. See [deployment.md](deployment.md) and the operational procedures in
 [operations.md](operations.md).
+
+## Report Transfer
+
+These application defaults come from `config/settings/base.py`; integer limits
+are checked in `apps/report_transfer/apps.py` and `security.py`. MiB means
+1,048,576 bytes. The canonical [feature guide](report-transfer.md) describes the
+format/lifecycle; these settings do not enable direct PDF-mail.
+
+| Setting | Application default | Allowed bound / handling |
+| --- | --- | --- |
+| `REPORT_TRANSFER_KEYRING_PATH` | `$CREDENTIALS_DIRECTORY/report-transfer-keyring` when credentials are available | Explicit development/test override; outside systemd resolves to `/run/credentials/report-transfer-keyring`, with no embedded key fallback |
+| `REPORT_TRANSFER_ACTIVE_KEY` | `1` | Must exist in dedicated keyring; identifier matches `[A-Za-z0-9._-]{1,64}` |
+| `REPORT_TRANSFER_ROOT` | `/var/spool/firedash-reports` | Private spool; cannot overlap publication, media, import staging or accepted-source storage |
+| `REPORT_TRANSFER_MAX_REQUEST_BYTES` | 96 MiB (100663296) | Integer 1 to 128 MiB; whole encoded request plus separate canonical envelope check |
+| `REPORT_TRANSFER_MAX_JSON_BYTES` | 1 MiB (1048576) | Integer 1 to 1 MiB decoded report; canonical document independently capped at 1 MiB |
+| `REPORT_TRANSFER_MAX_JPEG_BYTES` | 4 MiB (4194304) | Integer 1 to 8 MiB per decoded JPEG |
+| `REPORT_TRANSFER_MAX_ATTACHMENTS` | 12 | Integer 0 to 32 |
+| `REPORT_TRANSFER_MAX_IMAGE_PIXELS` | 16000000 | Integer 1 to 32000000 per JPEG |
+| `REPORT_TRANSFER_RETENTION_HOURS` | 168 | Integer 1 to 168; seven-day hard ceiling and fixed 48-hour post-download ceiling |
+| `REPORT_TRANSFER_MAILS_PER_MINUTE` | 3 | Integer 1 to 10 per installation/recipient, rolling minute |
+| `REPORT_TRANSFER_MAILS_PER_HOUR` | 10 | Integer 1 to 60 per installation, rolling hour |
+| `REPORT_TRANSFER_MAX_REPORTS` | 20 | Runtime clamps effective selection limit to 1 to 100; no silent truncation |
+
+The installer explicitly persists `REPORT_TRANSFER_ACTIVE_KEY` and canonical
+`REPORT_TRANSFER_ROOT` in the runtime environment. It preserves the active
+version and every existing valid key; it does not persist each size/rate/retention
+default as a separate installer choice. Those values come from application
+defaults unless explicitly configured. Standard convergence rejects custom spool
+paths/direct keyring overrides until reconciled; see
+[deployment](deployment.md#automatic-report-transfer-infrastructure-phase-36).
+
+The durable root-owned `0600` credential is
+`/etc/fire-backend/credentials/report-transfer-keyring.json`, delivered to web as
+`report-transfer-keyring` with systemd `LoadCredential`. Its format is
+`{"keys":{"VERSION":"PKCS8_PRIVATE_PEM_STRING"}}`; keys must be RSA, at least
+3072 bits, with no duplicate JSON members. No private material belongs in env
+files, logs or source. This keyring is separate from publication HPKE/KEK/signing
+and application-secret encryption. Add new immutable versions for rotation;
+retain historical private keys while any live report requires decryption. Exact
+validated replay needs the stored digest, but exports need the private key.
+
+Missing/malformed credentials advertise only `{"version":1,"enabled":false}`.
+The standard deployment verifier treats disabled/insecure configuration as failure.
+`FIREDASH_PUBLIC_ORIGIN` must be a valid HTTPS origin for link issuance; mail
+provider/domain verification remains required. Portal sessions require database
+Django sessions; link validity (60 minutes), inactivity (30 minutes), download
+interval (48 hours) and transfer-request parser limit (4096 bytes) are fixed
+behavior, not additional `REPORT_TRANSFER_*` environment settings. Request
+limits still require upstream timeout/concurrency and spool-capacity planning.

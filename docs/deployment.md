@@ -17,6 +17,10 @@ assets, and migrations. Re-running it must repair the intended state without
 depending on a prior partial run. Run the deployment verifier after every
 installation or upgrade.
 
+TLS certificates must be supplied through the supported installer configuration.
+Automatic Let's Encrypt issuance and verbose/quiet installer modes are planned
+improvements, not current installer capabilities.
+
 ## PostgreSQL and PostGIS
 
 Provision PostGIS before migrations. Use separate roles:
@@ -87,10 +91,9 @@ timer, and maintenance timer. It also installs the PDF sanitizer broker and
 per-job sandbox units. Preserve the unit hardening directives rather than
 copying commands into a less restricted service.
 
-Outbound report admission uses the pinned `pypdf` package installed in the
-normal FireDash virtual environment to inspect parsed encryption metadata. It
-does not require an outbound-mail qpdf binary, vendor installation, or
-deployment setting. The separate reference-data sanitizer remains qpdf-based.
+Report Transfer accepts encrypted JSON/JPEG packages and generates portal PDFs.
+Direct tablet PDF-mail admission is retired. The separate reference-data PDF
+sanitizer remains qpdf-based. See [Report Transfer](report-transfer.md).
 
 ## Optional outbound-mail HTTPS egress proxy
 
@@ -450,8 +453,9 @@ are reviewed and released at a committed, pushed exact SHA, an operator should:
    acceptance may later exercise real email/report downloads; it is not performed
    by the deployment verifier.
 
-Local validation, changed-file inventory and Linux acceptance limitations are
-recorded in [report-transfer-phase3-6.md](report-transfer-phase3-6.md).
+Required Linux and real-email evidence is tracked in
+[acceptance.md](acceptance.md#report-transfer-beta-acceptance). Portable helper
+success does not establish native systemd/LXC isolation.
 
 
 ### Debian systemd property rendering

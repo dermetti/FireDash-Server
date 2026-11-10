@@ -62,16 +62,21 @@ Each attachment contains `id`, `report_id`, `media_type: "image/jpeg"`,
 `size`, `sha256`, and Base64url `data`; attachment IDs must match the document.
 The implementation validates JSON, document structure, hashes, JPEG content,
 pixel count and all advertised limits before accepting the encrypted package.
-See `apps/report_transfer/documents.py` and `contract.py` for the document schema
-and exact validation rules; existing Report Transfer phase documents retain
-historical implementation detail.
+See [ReportDocument v1](report-transfer.md#reportdocument-v1) and
+[JWE and content integrity](report-transfer.md#jwe-and-content-integrity) for
+the canonical format guide. `documents.py` and `contract.py` under
+`apps/report_transfer/` implement validation.
 
 A new accepted submission returns HTTP 201; an identical encrypted-envelope
 replay for the same installation and submission UUID returns HTTP 200.
 Both return `{submission_id, report_id, state, expires_at}`. A reused submission
 or report identity with different content returns 409 `idempotency_conflict`.
-Retain and replay the same envelope after a lost response. Storage contains the
-encrypted envelope, never a tablet-uploaded PDF.
+Persist both IDs and the exact JWE before sending; replay it after a lost
+response. Re-encryption conflicts even when plaintext is identical. Outer JSON
+whitespace/member order may change, but its five string values must stay identical.
+Expired exact replay returns EXPIRED without recreating content or extending
+retention; current scope and recipient authorization still apply. Storage contains
+the encrypted envelope, never a tablet-uploaded PDF.
 
 ### `GET /api/v1/tablet/report-submissions/<submission_id>/status`
 
@@ -79,10 +84,15 @@ Returns HTTP 200 `{submission_id, report_id, state, expires_at}` for the owning
 installation. State is `READY` or `EXPIRED`; effective expiry includes the
 seven-day maximum and the 48-hour deadline after a completed explicit download.
 Foreign or unknown submission IDs return 404 `submission_not_found`.
+Current operational authorization is required, but historical submissions remain
+queryable within the same installation/department after station reassignment.
+Upload/replay still requires the original encrypted station scope.
 
 ### `POST /api/v1/tablet/report-transfers`
 
-Send exactly `{"transfer_request_id":"<UUID>","recipient_personnel_id":"<UUID>"}`.
+Send exactly `{"transfer_request_id":"<UUID>","recipient_personnel_id":"<UUID>"}`
+within 4096 bytes. `submission_ids`, email addresses and extra members are rejected.
+The default report limit is 20 (operator range 1 to 100).
 The server snapshots available, unexpired submissions belonging to this
 installation and recipient. It verifies their stored payloads, enforces report
 count and mail-rate limits, revokes prior grants for that installation/recipient,
@@ -104,6 +114,11 @@ does not consume it. Portal access continually checks authorization, recipient
 policy, mailbox identity, report expiry and revocation. Recipients can view
 report overview/detail pages and download generated PDFs and original JPEGs.
 Only completed explicit downloads start the 48-hour retention deadline.
+Before a fresh access request, synchronize locally finalized reports for the
+app-authenticated commander and confirm READY. Pending/failed/unconfirmed records
+block issuance; confirmed EXPIRED history may remain local. Finalization, upload
+and access issuance are separate states. Later uploads require an intentional
+new request UUID to join a new snapshot.
 
 ### `POST /api/v1/tablet/report-transfers/<transfer_id>/revoke`
 
@@ -114,9 +129,15 @@ invalidates access through the grant, including existing portal sessions.
 
 Report Transfer service errors return JSON `{code}` with the applicable HTTP
 status (400 malformed package, 403 authorization, 404 missing resource,
-409 conflict/availability, 410 expiry, 413 size limit, 429 throttling,
-503 storage unavailable). Shared authentication and app-version failures use
-the standard tablet problem response below. The four routes require a current,
+409 conflict/availability, 413 size limit, 429 throttling,
+503 unavailable keys/storage/portal). Status represents expiry as EXPIRED;
+410 `submission_expired` belongs to export/portal processing. Submission errors
+include `invalid_package`, `unknown_report_key`, `scope_not_authorized`,
+`installation_not_authorized`, `recipient_not_authorized`, `package_too_large`,
+`report_keys_unavailable` and `report_storage_unavailable`. Transfer parsing
+uses `request_too_large` (413); invalid HTTPS origin uses `portal_unavailable` (503).
+Shared authentication and app-version failures use the standard tablet problem
+response below. The four routes require a current,
 active, assigned installation and retain normal app compatibility checks.
 
 Errors have this RFC 9457 shape:
@@ -141,7 +162,7 @@ routes/resources are 404; a queued manifest is 202; conditional matches are
 | `GET /api/v1/tablet/status` | Bearer | None | 200 status JSON | 403 | Any recognized credential, including REPLACED |
 | `POST /api/v1/tablet/report-submissions` | Bearer | Flattened JWE JSON | 201 new / 200 replay submission | 400, 403, 409, 413, 426, 503 | Active assigned installation; authorized recipient |
 | `GET /api/v1/tablet/report-submissions/<submission_id>/status` | Bearer | None | 200 submission status | 403, 404, 426, 503 | Owning active assigned installation |
-| `POST /api/v1/tablet/report-transfers` | Bearer | UUID `transfer_request_id`, UUID `recipient_personnel_id` | 201 new / 200 replay `{transfer_id,status}` | 400, 403, 409, 426, 429, 503 | Active assigned installation; authorized recipient and available reports |
+| `POST /api/v1/tablet/report-transfers` | Bearer | UUID `transfer_request_id`, UUID `recipient_personnel_id` | 201 new / 200 replay `{transfer_id,status}` | 400, 403, 409, 413, 426, 429, 503 | Active assigned installation; authorized recipient and available reports |
 | `POST /api/v1/tablet/report-transfers/<transfer_id>/revoke` | Bearer | None | 200 `{transfer_id,status:"REVOKED"}` | 403, 404, 426, 503 | Owning active assigned installation |
 | `GET /api/v1/tablet/configuration` | Bearer | None | 200 configuration JSON | 403, 426 | ACTIVE or INACTIVE current installation with a valid assignment |
 | `GET /api/v1/tablet/signing-keys/{version}` | Bearer | None | 200 public key JSON | 403, 404, 426 | ACTIVE or INACTIVE current installation; exact configured public key version |
@@ -419,7 +440,12 @@ This is the currently authorised vehicle assignment. `report_transfer` is always
 present. When unavailable it is `{"version":1,"enabled":false}`; when enabled it
 includes `kid`, `alg`, `enc`, `public_key_pem`, `max_request_bytes`, `max_json_bytes`,
 `max_jpeg_bytes`, `max_attachments`, `max_image_pixels`, `document_schema_versions`,
-`retention_max_hours` and `retention_after_download_hours`. Use these current limits
+`retention_max_hours` and `retention_after_download_hours`. The key is SPKI PEM
+RSA (at least 3072 bits); schema versions are `[1]`, maximum retention is capped
+at 168 hours and the download interval is 48 hours. This same object is included
+in signed manifests and affects their state hash/ETag. Disabled configuration
+has no fallback key. See [Report Transfer](report-transfer.md) and
+[operator settings](configuration.md#report-transfer). Use these current limits
 when building encrypted JSON/JPEG packages. `department_id` scopes
 department datasets; `station_id` scopes station datasets; `vehicle_id` is the
 assignment identity. Refresh configuration before processing changed
@@ -1071,7 +1097,7 @@ or minimum app version must block activation.
 
 For Report Transfer, also prove encrypted JSON/JPEG submission and identical
 replay, all four routes, persisted recipient authorization, domain restrictions,
-Magic-Link creation/redemption/revocation, unchanged portal overview/detail,
+Magic-Link creation/redemption/revocation, current portal overview/detail,
 PDF/JPEG downloads, and retention/expiry. Confirm that configuration and signed
 manifests expose only the supported `report_transfer` object for reporting.
 

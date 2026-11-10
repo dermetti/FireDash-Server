@@ -3,9 +3,11 @@
 ## Product and tenancy boundary
 
 FireDash Server provisions reference data for fire departments and their
-stations. It deliberately has no endpoint or storage model for incident,
-intervention, or generic tablet-upload data. Department and station scope are
-enforced in application queries, permissions, and database constraints.
+stations. It also accepts encrypted, structured report submissions from
+authenticated tablets. Report Transfer temporarily stores encrypted packages
+and provides controlled recipient access through the report portal. It is
+separate from publication and reference-data ingestion. Department and station
+scope are enforced in application queries, permissions, and database constraints.
 
 The primary domain records are departments, stations, vehicles, personnel,
 historical assignments, tablets and installations, hydrants, accepted fire
@@ -106,6 +108,9 @@ is in [tablet-api.md](tablet-api.md); security rationale is in
 [security.md](security.md).
 
 ## Encrypted Report Transfer
+
+See the authoritative [Report Transfer guide](report-transfer.md) and
+[tablet wire contract](tablet-api.md#encrypted-report-transfer).
 
 Tablets upload a bounded flattened JWE package containing ReportDocument JSON
 and JPEG attachments. The server validates scope, document structure and content
