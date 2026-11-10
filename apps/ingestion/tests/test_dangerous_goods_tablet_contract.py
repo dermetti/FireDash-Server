@@ -321,9 +321,7 @@ def test_system_goods_end_to_end_across_departments(settings, tmp_path, monkeypa
         )
         assert configuration.status_code == 200
         assert body["configuration"] == configuration.json()
-        assert body["configuration"]["report_delivery_max_attachment_bytes"] == (
-            settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES
-        )
+        assert "report_delivery_max_attachment_bytes" not in body["configuration"]
         public_key.verify(
             base64.b64decode(body["signature"]),
             canonical_manifest_payload({k: v for k, v in body.items() if k != "signature"}),

@@ -18,10 +18,10 @@ from PIL import Image
 
 from apps.audit.models import AuditEvent
 from apps.outbound_mail.runtime import MailAddress, MailSendResult, MessageRejectedError
-from apps.outbound_mail.tests.test_report_delivery_requests import request_context  # noqa: F401
 from apps.report_transfer import transfers
 from apps.report_transfer.contract import TransferError
 from apps.report_transfer.models import ReportPortalSession, ReportSubmission, ReportTransfer
+from apps.report_transfer.tests.fixtures import request_context  # noqa: F401
 from apps.report_transfer.tests.test_submissions import (  # noqa: F401
     content,
     context,

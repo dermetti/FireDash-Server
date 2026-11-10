@@ -388,7 +388,7 @@ jobs:
         run: echo 'Dependency audit could not complete; vulnerability totals are UNKNOWN. Review this job before release approval.' >> "$GITHUB_STEP_SUMMARY"
       - name: Publish dependency advisory report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dependency-advisories
           path: dependency-audit/

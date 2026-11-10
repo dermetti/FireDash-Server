@@ -4,12 +4,11 @@ import hmac
 import json
 import uuid
 from datetime import timedelta
-from pathlib import Path
 
 import pytest
 import yaml
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
@@ -137,9 +136,23 @@ def _storage(free=800_000_000, total=1_000_000_000):
     return {"free_storage_bytes": free, "total_storage_bytes": total}
 
 
+@pytest.fixture
+def report_transfer_keyring(tmp_path, settings):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("ascii")
+    path = tmp_path / "report-keys.json"
+    path.write_text(json.dumps({"keys": {"test-1": pem}}), encoding="utf-8")
+    settings.REPORT_TRANSFER_KEYRING_PATH = path
+    settings.REPORT_TRANSFER_ACTIVE_KEY = "test-1"
+
+
 @pytest.mark.parametrize("scope", ["assigned", "unassigned", "inactive"])
-def test_attachment_limit_keeps_configuration_and_signed_manifest_current(
-    api_context, tmp_path, settings, scope
+def test_report_transfer_limit_keeps_configuration_and_signed_manifest_current(
+    api_context, tmp_path, settings, scope, report_transfer_keyring
 ):
     client, installation, credential, _ = api_context
     if scope == "unassigned":
@@ -157,10 +170,10 @@ def test_attachment_limit_keeps_configuration_and_signed_manifest_current(
     previous_manifest = None
 
     for limit in (20 * 1024 * 1024, 7 * 1024 * 1024):
-        settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES = limit
+        settings.REPORT_TRANSFER_MAX_JPEG_BYTES = limit
         configuration = client.get("/api/v1/tablet/configuration", **headers)
         assert configuration.status_code == 200
-        assert configuration.json()["report_delivery_max_attachment_bytes"] == limit
+        assert configuration.json()["report_transfer"]["max_jpeg_bytes"] == limit
         conditional: dict[str, str] = {"HTTP_IF_NONE_MATCH": previous["ETag"]} if previous else {}
         assert client.get("/api/v1/tablet/manifest", **headers, **conditional).status_code == 202
         built = process_next_signed_manifest()
@@ -175,7 +188,6 @@ def test_attachment_limit_keeps_configuration_and_signed_manifest_current(
             "department_id",
             "station_id",
             "vehicle_id",
-            "report_delivery_max_attachment_bytes",
             "report_transfer",
         }
         unsigned = {key: value for key, value in payload.items() if key != "signature"}
@@ -198,10 +210,12 @@ def test_attachment_limit_keeps_configuration_and_signed_manifest_current(
         previous, previous_manifest = response, built
 
 
-def test_attachment_limit_change_obsoletes_queued_manifest(api_context, settings):
+def test_report_transfer_limit_change_obsoletes_queued_manifest(
+    api_context, settings, report_transfer_keyring
+):
     _, installation, _, _ = api_context
     pending = request_manifest(installation=installation)
-    settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES += 1
+    settings.REPORT_TRANSFER_MAX_JPEG_BYTES += 1
     obsolete = process_next_signed_manifest()
     assert obsolete is not None and obsolete.pk == pending.request_id
     assert obsolete.status == SignedManifest.Status.OBSOLETE
@@ -220,10 +234,7 @@ def test_configuration_and_manifest_use_bearer_installation_scope(api_context, t
     configuration = client.get("/api/v1/tablet/configuration", **_authorization(credential))
     assert configuration.status_code == 200
     assert configuration.json()["installation_id"] == str(installation.id)
-    assert (
-        configuration.json()["report_delivery_max_attachment_bytes"]
-        == settings.OUTBOUND_MAIL_REPORT_ATTACHMENT_MAX_BYTES
-    )
+    assert "report_delivery_max_attachment_bytes" not in configuration.json()
 
     manifest = client.get("/api/v1/tablet/manifest", **_authorization(credential))
     assert manifest.status_code == 200
@@ -1100,58 +1111,32 @@ def test_document_generation_openapi_matches_json_binary_and_pending_contracts()
     assert "exact requested Ed25519" in signing_key["description"]
 
 
-def test_report_delivery_openapi_and_tablet_contract_are_multipart_and_idempotent():
-    schema = yaml.safe_load(Client().get("/api/v1/schema/").content)
-    operation = schema["paths"]["/api/v1/tablet/report-delivery"]["post"]
-    request_content = operation["requestBody"]["content"]
-    request_schema = schema["components"]["schemas"]["ReportDelivery"]
-    response_schema = schema["components"]["schemas"]["ReportDeliveryResponse"]
-    configuration_schema = schema["components"]["schemas"]["ConfigurationResponse"]
+def test_retired_report_delivery_is_unregistered_and_absent_from_schema(api_context):
+    from django.urls import NoReverseMatch, Resolver404, resolve, reverse
 
-    assert set(request_content) == {"multipart/form-data"}
-    assert operation["security"] == [{"InstallationBearer": []}]
-    assert request_schema["required"] == ["delivery_request_id", "pdf", "recipient_personnel_id"]
-    assert request_schema["properties"]["delivery_request_id"]["format"] == "uuid"
-    assert request_schema["properties"]["recipient_personnel_id"]["format"] == "uuid"
-    assert request_schema["properties"]["pdf"] == {
-        "type": "string",
-        "format": "binary",
-        "description": request_schema["properties"]["pdf"]["description"],
-    }
-    assert set(operation["responses"]) == {"200", "400", "403", "426"}
-    assert configuration_schema["properties"]["report_delivery_max_attachment_bytes"] == {
-        "type": "integer",
-        "minimum": 1,
-    }
-
-    state_schema_name = response_schema["properties"]["state"]["$ref"].rsplit("/", 1)[-1]
-    code_schema_name = response_schema["properties"]["code"]["$ref"].rsplit("/", 1)[-1]
-    state_enum = schema["components"]["schemas"][state_schema_name]["enum"]
-    code_enum = schema["components"]["schemas"][code_schema_name]["enum"]
-    assert state_enum == ["SUCCESS", "FAILED", "UNKNOWN", "CONFLICT"]
-    assert {
-        "delivered",
-        "delivery_indeterminate",
-        "idempotency_conflict",
-        "provider_unavailable",
-    } <= set(code_enum)
-
-    contract = (Path(__file__).resolve().parents[3] / "docs" / "tablet-api.md").read_text(
-        encoding="utf-8"
+    client, _, credential, _ = api_context
+    path = "/api/v1/tablet/report-delivery"
+    with pytest.raises(Resolver404):
+        resolve(path)
+    with pytest.raises(NoReverseMatch):
+        reverse("api-tablet-report-delivery")
+    header_sets: tuple[dict[str, str], ...] = ({}, _authorization(credential))
+    for headers in header_sets:
+        assert client.post(path, **headers).status_code == 404
+    schema = yaml.safe_load(client.get("/api/v1/schema/").content)
+    assert path not in schema["paths"]
+    assert not any("ReportDelivery" in name for name in schema["components"]["schemas"])
+    assert (
+        "report_delivery_max_attachment_bytes"
+        not in schema["components"]["schemas"]["ConfigurationResponse"]["properties"]
     )
-    assert "POST /api/v1/tablet/report-delivery" in contract
-    assert "multipart/form-data" in contract
-    assert "station_personnel" in contract
-    assert "report_delivery_max_attachment_bytes" in contract
-    assert "For any automatic recovery after a timeout" in contract
-    assert "with the already persisted UUID and the same recipient ID" in contract
-    assert "does not use HTTP 409" in contract
-    assert "exactly 12" in contract
-    assert "cryptographically random characters from the Base58 alphabet" in contract
-    assert "Never generate a new\nUUID automatically." in contract
-    assert "it may use the same encrypted PDF if it remains valid" in contract
-    assert "Report delivery is the exception" in contract
-    assert "Report-delivery admission, idempotency, and endpoint contract" in contract
+    for route in (
+        "/api/v1/tablet/report-submissions",
+        "/api/v1/tablet/report-submissions/{submission_id}/status",
+        "/api/v1/tablet/report-transfers",
+        "/api/v1/tablet/report-transfers/{transfer_id}/revoke",
+    ):
+        assert route in schema["paths"]
 
 
 def test_download_openapi_contract_has_no_drf_format_query_parameter():

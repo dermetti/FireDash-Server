@@ -105,20 +105,27 @@ key needed to publish verification information. The detailed tablet contract
 is in [tablet-api.md](tablet-api.md); security rationale is in
 [security.md](security.md).
 
-## Outbound report admission
+## Encrypted Report Transfer
 
-Before any future report-delivery operation, the outbound-mail admission
-boundary resolves the recipient from the authenticated tablet's department and
-current persisted personnel record.  The tablet supplies only a personnel ID,
-never an email address.  A recipient must be active, commander-eligible, have
-a verified valid commander email, and satisfy the department's exact recipient
-domain policy.  Cross-department and ineligible identifiers have the same
-sanitized rejection.
+Tablets upload a bounded flattened JWE package containing ReportDocument JSON
+and JPEG attachments. The server validates scope, document structure and content
+and stores the encrypted submission separately from publications. Transfer
+requests snapshot available reports and email a one-use, 60-minute Magic Link;
+PDFs are generated on the server for portal downloads.
 
-Admission accepts only a bounded, password-protected AES-256 revision-6 PDF.
-Its in-process pypdf inspection reads parsed encryption metadata from bounded
-bytes, never raw PDF marker strings. It performs no password handling,
-content extraction, persistence, provider resolution, or network activity.
-The resulting in-memory value is intentionally redacted in normal
-representations; delivery must recheck recipient policy immediately before
-sending because policy and personnel state can change after admission.
+`apps/outbound_mail/recipients.py` resolves recipients afresh from the authenticated
+installation's department and persisted personnel state. Recipients must be
+active and commander-eligible, have a verified valid commander email, and satisfy
+the department's exact recipient-domain policy. Foreign and ineligible IDs have
+the same sanitized rejection. Address construction lives in `addresses.py`;
+provider configuration, transport, throttling and audit infrastructure remain shared.
+Authorization is rechecked before sending and on portal access, including mailbox
+identity and revocation. Overview/detail rendering, generated PDF and JPEG downloads
+remain part of the report portal. Retention is at most seven days and shortens
+to 48 hours after a completed explicit download.
+
+The pre-beta direct PDF-mail endpoint and its admission/idempotency services
+have been removed. `TabletReportDeliveryRequest` remains only as historical
+storage to preserve its existing table, records and migration compatibility.
+No active service reads or writes it. Removing that model/table is technical
+debt requiring separate owner authorization; this retirement creates no migration.

@@ -18,10 +18,10 @@ from django.utils import timezone
 from apps.assignments.models import TabletVehicleAssignment
 from apps.audit.models import AuditEvent
 from apps.organizations.models import Station, Vehicle
-from apps.outbound_mail.tests.test_report_delivery_requests import request_context  # noqa: F401
 from apps.report_transfer import storage
 from apps.report_transfer.models import ReportTransfer
 from apps.report_transfer.services import cleanup
+from apps.report_transfer.tests.fixtures import request_context  # noqa: F401
 from apps.report_transfer.tests.test_portal import (  # noqa: F401
     browser_login,
     issue,

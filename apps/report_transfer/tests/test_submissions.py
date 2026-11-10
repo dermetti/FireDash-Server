@@ -26,13 +26,13 @@ from PIL import Image
 from apps.assignments.models import TabletVehicleAssignment
 from apps.organizations.models import Department, Station, Vehicle
 from apps.outbound_mail.models import DepartmentRecipientPolicy
-from apps.outbound_mail.tests.test_report_delivery_requests import request_context  # noqa: F401
 from apps.publications.manifests import canonical_manifest_payload
 from apps.publications.worker_grants import process_next_signed_manifest
 from apps.report_transfer import storage
 from apps.report_transfer.contract import configuration
 from apps.report_transfer.models import ReportSubmission
 from apps.report_transfer.services import cleanup
+from apps.report_transfer.tests.fixtures import request_context  # noqa: F401
 from apps.tablets.models import AppInstallation, Tablet
 
 URL = "/api/v1/tablet/report-submissions"

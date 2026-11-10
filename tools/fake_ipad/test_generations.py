@@ -44,7 +44,7 @@ class Delivery:
             k: uid()
             for k in ("installation_id", "tablet_id", "department_id", "station_id", "vehicle_id")
         }
-        self.config["report_delivery_max_attachment_bytes"] = 20971520
+        self.config["report_transfer"] = {"version": 1, "enabled": False}
         self.state.store_installation(
             installation_id=self.config["installation_id"],
             tablet_id=self.config["tablet_id"],

@@ -251,7 +251,11 @@ class DepartmentRecipientDomain(models.Model):
 
 
 class TabletReportDeliveryRequest(models.Model):
-    """Minimal durable idempotency state; report content is never stored."""
+    """Historical PDF-mail idempotency metadata; never used by active services."""
+
+    # Historical pre-beta PDF-mail idempotency metadata only. No active service
+    # reads or writes this model. Retain the table and migrations until a future,
+    # separately owner-authorized historical-storage cleanup.
 
     class State(models.TextChoices):
         PROCESSING = "PROCESSING", "Processing"

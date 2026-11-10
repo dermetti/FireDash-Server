@@ -13,8 +13,8 @@ from django.views.decorators.debug import sensitive_variables
 
 from apps.audit.models import AuditEvent
 from apps.audit.services import record_event
-from apps.outbound_mail.report_admission import ReportAdmissionError, resolve_report_recipient
-from apps.outbound_mail.report_delivery import recipient_to_mail_address
+from apps.outbound_mail.addresses import recipient_to_mail_address
+from apps.outbound_mail.recipients import ReportRecipientError, resolve_report_recipient
 from apps.outbound_mail.resolution import resolve_department_mail_provider
 from apps.outbound_mail.runtime import MailSendResult, MessageRejectedError, OutboundMessage
 from apps.report_transfer.contract import TransferError, canonical, require
@@ -43,7 +43,7 @@ def recipient_for(installation, person_id):
         return resolve_report_recipient(
             department=installation.tablet.department, recipient_personnel_id=person_id
         )
-    except ReportAdmissionError:
+    except ReportRecipientError:
         raise TransferError("recipient_not_authorized", 403) from None
 
 

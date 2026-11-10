@@ -11,7 +11,7 @@ from django.views.decorators.debug import sensitive_variables
 
 from apps.audit.models import AuditEvent
 from apps.audit.services import record_event
-from apps.outbound_mail.report_admission import ReportAdmissionError, resolve_report_recipient
+from apps.outbound_mail.recipients import ReportRecipientError, resolve_report_recipient
 from apps.publications.manifests import ManifestError, control_plane_context
 from apps.report_transfer import storage
 from apps.report_transfer.contract import (
@@ -67,7 +67,7 @@ def submit(*, installation, envelope):
                     department=installation.tablet.department,
                     recipient_personnel_id=header["recipient_personnel_id"],
                 )
-            except ReportAdmissionError:
+            except ReportRecipientError:
                 raise TransferError("recipient_not_authorized", 403) from None
             existing = (
                 ReportSubmission.objects.filter(installation=installation)
