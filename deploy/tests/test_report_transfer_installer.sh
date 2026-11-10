@@ -17,22 +17,36 @@ done
 awk '/^# ============================== phases/ { copying=1; next }
      copying && /^FIREDASH_PHASE=start-socket/ { exit }
      copying { print }' "$ROOT/deploy/install-local.sh" > "$TMP/phases"
+# Use the production logging/run_step helpers, stubbing only host-side effects.
+mkdir -p "$TMP/repo/deploy/lib" "$TMP/etc"
+cat > "$TMP/repo/deploy/lib/secrets.sh" <<'EOF'
+effective_outbound_mail_https_proxy() { :; }
+validate_outbound_mail_https_proxy() { [[ $REJECT != proxy ]]; }
+validate_premaintenance_secrets() { [[ $REJECT != premaintenance ]]; }
+EOF
+cat > "$TMP/attempt" <<'EOF'
+set -Eeuo pipefail
+source "$HELPERS"
+SELF_DIR="$ROOT/deploy"
+FIREDASH_STATE=ESTABLISHED
+FIREDASH_RELEASE="$ROOT/release"
+python3() { [[ $REJECT != configuration ]]; }
+persist_install_conf() { : > "${INSTALL_CONF}.pending"; }
+install_file_atomic() { cp -- "$1" "$2"; }
 quiesce() { echo quiesce >> "$TRACE"; [[ $REJECT != quiesce ]]; }
 postgres_bootstrap() { echo postgres >> "$TRACE"; }
 install_nginx() { echo nginx >> "$TRACE"; }
-attempt() (
-    set -Eeuo pipefail
-    ROOT="$TMP/repo"
-    source "$TMP/phases"
-)
+source "$PHASES"
+EOF
+export HELPERS="$ROOT/deploy/lib/common.sh" PHASES="$TMP/phases"
+export FIREDASH_ETC="$TMP/etc"
 : > "$TRACE"
-attempt
+ROOT="$TMP/repo" bash "$TMP/attempt"
 [[ $(cat "$TRACE") == $'bootstrap-lxc.sh \ndeploy-release.sh build\nquiesce\ninitialize-firedash.sh secrets\npostgres\nnginx\ndeploy-release.sh activate' ]]
-for REJECT in quiesce secrets; do
+for REJECT in configuration proxy premaintenance quiesce secrets; do
     : > "$TRACE"
     # A new bash retains errexit even when observed by a parent failure check.
-    export -f quiesce postgres_bootstrap install_nginx
-    if ROOT="$TMP/repo" bash -Eeuo pipefail "$TMP/phases"; then
+    if ROOT="$TMP/repo" bash "$TMP/attempt"; then
         echo "FAIL: installer ignored $REJECT" >&2; exit 1
     fi
     ! grep -q '^postgres\|^nginx\|activate$' "$TRACE"

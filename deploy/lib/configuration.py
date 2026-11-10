@@ -36,7 +36,7 @@ MANAGED = {
     "REPORT_TRANSFER_ROOT",
 } | SELECTORS
 # Upper bounds keep tuning inside the existing upload/expansion/sandbox envelope.
-OVERRIDES = {
+OVERRIDES: dict[str, tuple[int | Decimal, int, int]] = {
     "MAX_INGEST_UPLOAD_BYTES": (1, 536870912, 268435456),
     "MAX_PDF_PACKAGE_DOCUMENTS": (1, 1000, 250),
     "FILE_LIBRARY_MAX_FILE_BYTES": (1, 104857600, 26214400),

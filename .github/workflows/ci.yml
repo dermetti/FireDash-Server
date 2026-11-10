@@ -359,9 +359,8 @@ jobs:
           bash deploy/tests/test_hba_verify.sh
           bash deploy/tests/test_nginx_etag.sh
           bash deploy/tests/test_nginx_body_size.sh
-          bash deploy/tests/test_deprecated_env.sh
-          bash deploy/tests/test_pub_summary_ceiling.sh
-          bash deploy/tests/test_pub_artifact_ceiling.sh
+          TEST_POSTGRES_USER=firedash_test TEST_POSTGRES_PASSWORD=firedash_test_ci \
+            python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_configuration.py -q
 
       - name: Check migrations
         # Django catches connection errors as RuntimeWarning; fail closed on those.

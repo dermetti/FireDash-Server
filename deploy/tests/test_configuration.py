@@ -16,9 +16,14 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location(
     "installer_configuration", ROOT / "deploy/lib/configuration.py"
 )
+if spec is None or spec.loader is None:
+    raise RuntimeError("Cannot load installer configuration module")
 c = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(c)
-BASH = shutil.which("bash") if os.name != "nt" else "C:/Program Files/Git/bin/bash.exe"
+bash_path = shutil.which("bash") if os.name != "nt" else "C:/Program Files/Git/bin/bash.exe"
+if bash_path is None or not Path(bash_path).is_file():
+    raise RuntimeError("Installer configuration tests require Bash")
+BASH: str = bash_path
 
 
 @pytest.fixture
@@ -323,6 +328,8 @@ import sys
 spec = importlib.util.spec_from_file_location(
     "configuration", os.environ["TEST_CONFIGURATION_MODULE"]
 )
+if spec is None or spec.loader is None:
+    raise RuntimeError("Cannot load installer configuration module")
 c = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(c)
 c.validate_files = lambda directory: None  # OS metadata separately tested.
