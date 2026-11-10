@@ -4,7 +4,6 @@ import uuid
 import pytest
 from django.core.exceptions import PermissionDenied
 from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
 from django.urls import reverse
 from django.utils import timezone
 
@@ -25,6 +24,7 @@ from apps.file_library.tests.test_publication import crypto, publish  # noqa: F4
 from apps.organizations.models import Station
 from apps.portal.forms import FileLibraryQuotaForm
 from apps.publications.models import DatasetPublication, DatasetScopeState
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 pytestmark = pytest.mark.django_db
 

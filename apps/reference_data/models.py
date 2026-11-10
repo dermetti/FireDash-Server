@@ -219,15 +219,3 @@ class KlgvPlan(models.Model):
         for field in ("object_name", "address", "postal_code", "city"):
             if not getattr(self, field):
                 raise ValidationError({field: "This field is required."})
-
-
-class HydrantImportPreview(models.Model):
-    """Short-lived normalized import state; raw GeoJSON is intentionally not retained."""
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    department = models.ForeignKey(Department, on_delete=models.CASCADE)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    normalized_features = models.JSONField()
-    duplicate_count = models.PositiveIntegerField(default=0)
-    expires_at = models.DateTimeField()
-    created_at = models.DateTimeField(auto_now_add=True)

@@ -4,7 +4,8 @@ import uuid
 
 import pytest
 from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
+
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 
 @pytest.mark.django_db(transaction=True)

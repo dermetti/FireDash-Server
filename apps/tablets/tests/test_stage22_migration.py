@@ -4,12 +4,12 @@ from datetime import timedelta
 
 import pytest
 from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
 from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.organizations.models import Department, Station, Vehicle
 from apps.tablets.models import AdoptionInvitation, Tablet
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 
 @pytest.mark.django_db(transaction=True)

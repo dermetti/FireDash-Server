@@ -9,8 +9,9 @@ from pathlib import Path
 
 import pytest
 from django.db import connections
-from django.db.migrations.executor import MigrationExecutor
 from psycopg import sql
+
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 TEST_TEMP_PREFIXES = (".test-tmp", ".pytest-cache-", ".pytest-ws4")

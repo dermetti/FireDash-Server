@@ -3,13 +3,13 @@
 import pytest
 from django.contrib.gis.geos import Point
 from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
 
 from apps.accounts.models import User
 from apps.organizations.models import Department
 from apps.publications.builders import build_source_payload
 from apps.publications.registry import get_dataset_definition
 from apps.reference_data.models import Hydrant
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 
 @pytest.mark.django_db(transaction=True)

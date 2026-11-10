@@ -5,7 +5,6 @@ import uuid
 
 import pytest
 from django.db import DatabaseError, connection
-from django.db.migrations.executor import MigrationExecutor
 from django.test import override_settings
 
 from apps.accounts.models import User
@@ -16,6 +15,7 @@ from apps.publications.models import (
     LegacyArtifactScopeSignatureUpgrade,
 )
 from apps.publications.paths import publication_artifact_relative_path
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 
 @pytest.mark.django_db(transaction=True)

@@ -11,7 +11,6 @@ import pytest
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DatabaseError, close_old_connections, connection, transaction
-from django.db.migrations.executor import MigrationExecutor
 from django.urls import reverse
 
 from apps.accounts.models import User
@@ -22,6 +21,7 @@ from apps.file_library.models import Content, Entry, Library
 from apps.organizations.models import Department, Station
 from apps.reference_data.pdf_sandbox import PdfSanitizerError
 from apps.reference_data.pdf_validation import PdfValidationError
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 pytestmark = pytest.mark.django_db
 

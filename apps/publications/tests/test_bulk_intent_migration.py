@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 from django.apps import apps
 from django.db import connection, transaction
-from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.recorder import MigrationRecorder
 from django.utils import timezone
 
@@ -16,6 +15,7 @@ from apps.audit.models import AuditEvent
 from apps.audit.services import record_event
 from apps.organizations.models import Department
 from apps.publications.models import PublicationJob
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 CORRECTION = "0030_correct_legacy_bulk_rebuild_intent"
 

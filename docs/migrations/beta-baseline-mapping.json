@@ -1,0 +1,138 @@
+{
+  "accounts.0001_squashed_0002_beta": [
+    "accounts.0001_initial",
+    "accounts.0002_alter_user_groups_accountsetuptoken_and_more"
+  ],
+  "assignments.0001_squashed_0002_beta": [
+    "assignments.0001_initial",
+    "assignments.0002_tablet_assignment_end_reason"
+  ],
+  "audit.0001_squashed_0004_beta": [
+    "audit.0001_initial",
+    "audit.0002_immutable_audit_event",
+    "audit.0003_allow_test_database_flush",
+    "audit.0004_restore_audit_truncate_immutability"
+  ],
+  "authorization.0001_squashed_0007_beta": [
+    "authorization.0001_initial",
+    "authorization.0002_single_department_admin_constraint",
+    "authorization.0003_api_version_compatibility_policy",
+    "authorization.0004_authority_lifecycle_status",
+    "authorization.0005_reconcile_lifecycle_provenance_constraint_state",
+    "authorization.0006_vehicle_rescue_guides_configuration",
+    "authorization.0007_department_managed_mail_eligibility"
+  ],
+  "file_library.0001_squashed_0010_beta": [
+    "file_library.0001_initial",
+    "file_library.0002_integrity_guards",
+    "file_library.0003_publicationcontent",
+    "file_library.0004_publication_guards",
+    "file_library.0005_temporarystationaccess",
+    "file_library.0006_remove_library_capacity",
+    "file_library.0007_storageimpact_capacityreview",
+    "file_library.0008_department_quota_policy",
+    "file_library.0009_decimal_quota_defaults",
+    "file_library.0010_publication_capacity_reviews"
+  ],
+  "ingestion.0001_squashed_0006_beta": [
+    "ingestion.0001_workstream4_canonical_ingestion",
+    "ingestion.0002_alter_importbatch_domain",
+    "ingestion.0003_alter_importbatch_domain",
+    "ingestion.0004_dangerous_goods_import_domain",
+    "ingestion.0005_system_dangerous_goods",
+    "ingestion.0006_clear_obsolete_goods_manifests"
+  ],
+  "organizations.0001_squashed_0007_beta": [
+    "organizations.0001_initial",
+    "organizations.0002_vehicle",
+    "organizations.0003_structured_station_address",
+    "organizations.0004_remove_station_address",
+    "organizations.0005_department_tablet_lease_days",
+    "organizations.0006_department_tablet_asset_number_policy",
+    "organizations.0007_department_locale_and_timezone"
+  ],
+  "outbound_mail.0001_squashed_0006_beta": [
+    "outbound_mail.0001_initial",
+    "outbound_mail.0002_systemmailconfiguration_last_verification_code_and_more",
+    "outbound_mail.0003_departmentrecipientpolicy_and_more",
+    "outbound_mail.0004_departmentmailconfiguration_last_smtp_verification_code_and_more",
+    "outbound_mail.0005_tabletreportdeliveryrequest",
+    "outbound_mail.0006_systemmailconfiguration_outbound_mail_https_proxy"
+  ],
+  "personnel.0001_squashed_0002_beta": [
+    "personnel.0001_initial",
+    "personnel.0002_personnelretentionpolicy_person_anonymized_at_and_more"
+  ],
+  "publications.0001_squashed_0011_beta": [
+    "publications.0001_initial",
+    "publications.0002_phase6_registry_features",
+    "publications.0003_phase7_artifacts",
+    "publications.0004_phase7_closeout_integrity",
+    "publications.0005_dataset_key_grant",
+    "publications.0006_signed_manifest",
+    "publications.0007_datasetpublication_artifact_signing_key_version",
+    "publications.0008_publication_job_debounce",
+    "publications.0010_publicationjob_bulk_trigger",
+    "publications.0011_department_klgv_plans_registry"
+  ],
+  "publications.0012_squashed_0030_beta": [
+    "publications.0012_publication_lifecycle_states",
+    "publications.0013_datasetpublication_source_fingerprint",
+    "publications.0014_datasetpublication_source_snapshot",
+    "publications.0015_current_source_fingerprint",
+    "publications.0016_publication_retention",
+    "publications.0017_fire_plan_document_artifacts",
+    "publications.0018_fire_plan_v2_delivery",
+    "publications.0019_fire_plan_document_artifact_cleanup",
+    "publications.0020_fire_plan_document_manifest_cutover",
+    "publications.0021_klgv_document_manifest_v2",
+    "publications.0022_klgv_document_v2_ready_guard",
+    "publications.0023_phonebook_dataset_scope_registry",
+    "publications.0024_dangerous_goods_source_revisions",
+    "publications.0025_promote_klgv_document_v2_registry",
+    "publications.0026_rename_publications_scope_s_631ca6_idx_pub_src_scope_rev_idx",
+    "publications.0027_publication_scope_types",
+    "publications.0028_file_library_registry",
+    "publications.0029_publicationjob_allow_clean_rebuild",
+    "publications.0030_correct_legacy_bulk_rebuild_intent"
+  ],
+  "publications.0031_squashed_0033_beta": [
+    "publications.0031_unified_document_generation",
+    "publications.0032_remove_legacy_fire_plan_delivery",
+    "publications.0033_strict_document_generation_metadata"
+  ],
+  "reference_data.0001_squashed_0015_beta": [
+    "reference_data.0001_initial",
+    "reference_data.0002_rename_reference_d_departm_3ca664_idx_reference_d_departm_f01f3d_idx_and_more",
+    "reference_data.0004_hydrant_enum_diameter",
+    "reference_data.0005_remove_hydrant_reference_d_departm_8bffe7_idx_and_more",
+    "reference_data.0006_workstream4_canonical_ingestion",
+    "reference_data.0007_fire_plan_location_metadata",
+    "reference_data.0008_align_fire_plan_identity",
+    "reference_data.0009_fire_plan_operational_locations",
+    "reference_data.0010_phase2_hydrant_address",
+    "reference_data.0011_phase2_klgv_canonical_metadata",
+    "reference_data.0012_finalize_klgv_required_metadata",
+    "reference_data.0013_hydrant_descriptive_location",
+    "reference_data.0014_phonebook_entries",
+    "reference_data.0015_remove_retired_hydrant_preview"
+  ],
+  "report_transfer.0001_squashed_0003_beta": [
+    "report_transfer.0001_initial",
+    "report_transfer.0002_report_document_integrity",
+    "report_transfer.0003_portal_transfers"
+  ],
+  "tablets.0001_squashed_0002_beta": [
+    "tablets.0001_initial",
+    "tablets.0002_tablet_asset_number_tablet_created_by_and_more"
+  ],
+  "tablets.0003_squashed_0009_beta": [
+    "tablets.0003_app_version_tracking_and_completion_recovery",
+    "tablets.0004_tabletapiactivity_alter_tablet_display_name_and_more",
+    "tablets.0005_alter_tablet_status",
+    "tablets.0006_remove_removed_tablet_data",
+    "tablets.0007_enforce_current_tablet_asset_states",
+    "tablets.0008_remove_obsolete_reactivation_flow",
+    "tablets.0009_appinstallation_storage_telemetry"
+  ]
+}

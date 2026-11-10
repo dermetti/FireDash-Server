@@ -1,0 +1,216 @@
+{
+  "server_version": "16.15",
+  "qualification": "Disposable original-history reference; PostgreSQL 17 validation outstanding.",
+  "catalog_counts": {
+    "columns": 679,
+    "constraints": 341,
+    "indexes": 296,
+    "functions": 16,
+    "triggers": 20,
+    "ownership": 89
+  },
+  "functions": [
+    {
+      "name": "file_library_content_guard",
+      "arguments": "",
+      "definition_sha256": "89271a051178672e3e58ca2a3c6bf3bd2ed71246a487fa62d6033cb6b4f6ac64"
+    },
+    {
+      "name": "file_library_entry_guard",
+      "arguments": "",
+      "definition_sha256": "9f5d01d5ec2f42627f362fdde6f8f90138f5c65677a71aae11fc2346fdb709ee"
+    },
+    {
+      "name": "file_library_guard_artifact_reference",
+      "arguments": "",
+      "definition_sha256": "dbf340c557289ccc007a27463ee28d0596fbf5835a123e6e2cd5b56e0ec45aef"
+    },
+    {
+      "name": "file_library_guard_crypto_metadata",
+      "arguments": "",
+      "definition_sha256": "1b1a64e9f74473070ae8be552eb66e0440c2849126d0ea4e804e5e376e56179b"
+    },
+    {
+      "name": "file_library_guard_generation",
+      "arguments": "",
+      "definition_sha256": "91e0e7d735803f2e0dabf6f32c60dba83c2f29b60858917008b110f41ef8200e"
+    },
+    {
+      "name": "file_library_guard_publication_content",
+      "arguments": "",
+      "definition_sha256": "9d26a0b20f7feea35144bd0c9eedf6dc134f25e8f07bc13fa123ab80c66e7034"
+    },
+    {
+      "name": "file_library_scope_guard",
+      "arguments": "",
+      "definition_sha256": "9972623d0ba941c59b6550c8bad412eda5ea9d210ca08e5090bd55e0d863bb4e"
+    },
+    {
+      "name": "publications_document_generation_complete",
+      "arguments": "pub publications_datasetpublication",
+      "definition_sha256": "f7f2c110596cfaa0d59d1311043d753675684e258a586f083bdf6e3c1d3aa237"
+    },
+    {
+      "name": "publications_guard_artifact",
+      "arguments": "",
+      "definition_sha256": "3ff88865d87eebb2e4c960641ee24a10619db280763e40a51652e9b277d3827e"
+    },
+    {
+      "name": "publications_guard_document_crypto_delete",
+      "arguments": "",
+      "definition_sha256": "d5c1d0e0e038d73773b51fc969c5e3dc2a0664c7e09f6954d2eae4d8d703984b"
+    },
+    {
+      "name": "publications_guard_document_generation",
+      "arguments": "",
+      "definition_sha256": "7d0886e29752021edd5146b0e707e45b8005eb8838f59764c62c42a33cc18ace"
+    },
+    {
+      "name": "publications_guard_document_reference",
+      "arguments": "",
+      "definition_sha256": "46a904f30e5a0f8cf6310da819375f32143e54120421bf5259f419e2b3575255"
+    },
+    {
+      "name": "publications_guard_phase7_closeout",
+      "arguments": "",
+      "definition_sha256": "028927be46de58fa98839abaa26564a7479a03bf34b2cb53c8cc9e6328b18588"
+    },
+    {
+      "name": "publications_prevent_activation_mutation",
+      "arguments": "",
+      "definition_sha256": "c57d043c98d8fee1f21e2096bba19e49b63f45e3993a0a158776df7cb0febf39"
+    },
+    {
+      "name": "publications_validate_dataset_scope",
+      "arguments": "",
+      "definition_sha256": "093edf7ef46dc7f357678fdb33766c2daa88628b2e9f165f316d1d5ff83336cc"
+    },
+    {
+      "name": "reject_audit_event_mutation",
+      "arguments": "",
+      "definition_sha256": "9c40bfd08bdb638a033972bb6ff63dcbf39b49bbdc7c1f4eb939f8cb184bab68"
+    }
+  ],
+  "triggers": [
+    {
+      "table": "audit_event",
+      "name": "audit_event_immutable",
+      "definition": "CREATE TRIGGER audit_event_immutable BEFORE DELETE OR UPDATE OR TRUNCATE ON public.audit_event FOR EACH STATEMENT EXECUTE FUNCTION reject_audit_event_mutation()",
+      "enabled": "O"
+    },
+    {
+      "table": "file_library_content",
+      "name": "file_library_content_immutable",
+      "definition": "CREATE TRIGGER file_library_content_immutable BEFORE UPDATE ON public.file_library_content FOR EACH ROW EXECUTE FUNCTION file_library_content_guard()",
+      "enabled": "O"
+    },
+    {
+      "table": "file_library_entry",
+      "name": "file_library_entry_integrity",
+      "definition": "CREATE TRIGGER file_library_entry_integrity BEFORE INSERT OR UPDATE ON public.file_library_entry FOR EACH ROW EXECUTE FUNCTION file_library_entry_guard()",
+      "enabled": "O"
+    },
+    {
+      "table": "file_library_library",
+      "name": "file_library_scope_immutable",
+      "definition": "CREATE TRIGGER file_library_scope_immutable BEFORE UPDATE ON public.file_library_library FOR EACH ROW EXECUTE FUNCTION file_library_scope_guard()",
+      "enabled": "O"
+    },
+    {
+      "table": "file_library_publicationcontent",
+      "name": "file_library_publication_content_guard",
+      "definition": "CREATE TRIGGER file_library_publication_content_guard BEFORE INSERT OR DELETE OR UPDATE ON public.file_library_publicationcontent FOR EACH ROW EXECUTE FUNCTION file_library_guard_publication_content()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_datasetpublication",
+      "name": "file_library_generation_guard",
+      "definition": "CREATE TRIGGER file_library_generation_guard BEFORE INSERT OR UPDATE ON public.publications_datasetpublication FOR EACH ROW EXECUTE FUNCTION file_library_guard_generation()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_datasetpublication",
+      "name": "publications_datasetpublication_artifact_guard",
+      "definition": "CREATE TRIGGER publications_datasetpublication_artifact_guard BEFORE UPDATE ON public.publications_datasetpublication FOR EACH ROW EXECUTE FUNCTION publications_guard_artifact()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_datasetpublication",
+      "name": "publications_datasetpublication_dataset_scope",
+      "definition": "CREATE TRIGGER publications_datasetpublication_dataset_scope BEFORE INSERT OR UPDATE ON public.publications_datasetpublication FOR EACH ROW EXECUTE FUNCTION publications_validate_dataset_scope()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_datasetpublication",
+      "name": "publications_datasetpublication_safe_artifact_path_guard",
+      "definition": "CREATE TRIGGER publications_datasetpublication_safe_artifact_path_guard BEFORE INSERT OR UPDATE ON public.publications_datasetpublication FOR EACH ROW EXECUTE FUNCTION publications_guard_phase7_closeout()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_datasetpublication",
+      "name": "publications_document_generation_guard",
+      "definition": "CREATE TRIGGER publications_document_generation_guard BEFORE INSERT OR UPDATE ON public.publications_datasetpublication FOR EACH ROW EXECUTE FUNCTION publications_guard_document_generation()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_datasetscopestate",
+      "name": "publications_datasetscopestate_dataset_scope",
+      "definition": "CREATE TRIGGER publications_datasetscopestate_dataset_scope BEFORE INSERT OR UPDATE ON public.publications_datasetscopestate FOR EACH ROW EXECUTE FUNCTION publications_validate_dataset_scope()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_documentartifact",
+      "name": "file_library_artifact_immutable",
+      "definition": "CREATE TRIGGER file_library_artifact_immutable BEFORE UPDATE ON public.publications_documentartifact FOR EACH ROW EXECUTE FUNCTION file_library_guard_crypto_metadata()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_documentgenerationkey",
+      "name": "file_library_key_immutable",
+      "definition": "CREATE TRIGGER file_library_key_immutable BEFORE UPDATE ON public.publications_documentgenerationkey FOR EACH ROW EXECUTE FUNCTION file_library_guard_crypto_metadata()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_documentgenerationkey",
+      "name": "publications_document_key_delete_guard",
+      "definition": "CREATE TRIGGER publications_document_key_delete_guard BEFORE DELETE ON public.publications_documentgenerationkey FOR EACH ROW EXECUTE FUNCTION publications_guard_document_crypto_delete()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_documentgenerationmanifest",
+      "name": "file_library_manifest_immutable",
+      "definition": "CREATE TRIGGER file_library_manifest_immutable BEFORE UPDATE ON public.publications_documentgenerationmanifest FOR EACH ROW EXECUTE FUNCTION file_library_guard_crypto_metadata()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_documentgenerationmanifest",
+      "name": "publications_document_manifest_delete_guard",
+      "definition": "CREATE TRIGGER publications_document_manifest_delete_guard BEFORE DELETE ON public.publications_documentgenerationmanifest FOR EACH ROW EXECUTE FUNCTION publications_guard_document_crypto_delete()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_publicationactivation",
+      "name": "publications_publicationactivation_immutable_guard",
+      "definition": "CREATE TRIGGER publications_publicationactivation_immutable_guard BEFORE DELETE OR UPDATE ON public.publications_publicationactivation FOR EACH ROW EXECUTE FUNCTION publications_prevent_activation_mutation()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_publicationdocumentartifactreference",
+      "name": "file_library_artifact_reference_guard",
+      "definition": "CREATE TRIGGER file_library_artifact_reference_guard BEFORE INSERT OR DELETE OR UPDATE ON public.publications_publicationdocumentartifactreference FOR EACH ROW EXECUTE FUNCTION file_library_guard_artifact_reference()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_publicationdocumentartifactreference",
+      "name": "publications_document_reference_guard",
+      "definition": "CREATE TRIGGER publications_document_reference_guard BEFORE INSERT OR DELETE OR UPDATE ON public.publications_publicationdocumentartifactreference FOR EACH ROW EXECUTE FUNCTION publications_guard_document_reference()",
+      "enabled": "O"
+    },
+    {
+      "table": "publications_publicationjob",
+      "name": "publications_publicationjob_dataset_scope",
+      "definition": "CREATE TRIGGER publications_publicationjob_dataset_scope BEFORE INSERT OR UPDATE ON public.publications_publicationjob FOR EACH ROW EXECUTE FUNCTION publications_validate_dataset_scope()",
+      "enabled": "O"
+    }
+  ]
+}

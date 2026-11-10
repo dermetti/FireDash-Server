@@ -2,14 +2,19 @@ import uuid
 
 import pytest
 from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
 
 from apps.accounts.models import User
 from apps.organizations.models import Department
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 
 @pytest.mark.django_db(transaction=True)
-def test_system_goods_migration_removes_only_legacy_data():
+@pytest.mark.parametrize(
+    "disposable_migration_database",
+    [("ingestion", "0004_dangerous_goods_import_domain")],
+    indirect=True,
+)
+def test_system_goods_migration_removes_only_legacy_data(disposable_migration_database):
     executor = MigrationExecutor(connection)
     latest = executor.loader.graph.leaf_nodes()
     before = [

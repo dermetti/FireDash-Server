@@ -1,10 +1,16 @@
 import pytest
 from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
+
+from tools.migration_catalog import historical_executor as MigrationExecutor
 
 
 @pytest.mark.django_db(transaction=True)
-def test_storage_telemetry_migration_reverses_and_reapplies():
+@pytest.mark.parametrize(
+    "disposable_migration_database",
+    [("tablets", "0008_remove_obsolete_reactivation_flow")],
+    indirect=True,
+)
+def test_storage_telemetry_migration_applies_forward(disposable_migration_database):
     executor = MigrationExecutor(connection)
     latest = executor.loader.graph.leaf_nodes()
     try:
