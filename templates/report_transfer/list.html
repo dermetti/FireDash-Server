@@ -12,8 +12,6 @@
         <span>{{ report.photo_count }} Foto{{ report.photo_count|pluralize:"s" }}</span>
         <span class="expiry">Verfügbar bis: {{ report.expires_at|date:"d.m.Y H:i T" }}</span>
       </div>
-    </div>
-    <div class="report-card-footer">
       <details class="report-files">
         <summary>Dateien herunterladen (PDF{% if report.photos %} + {{ report.photo_count }} Fotos{% endif %})</summary>
         <ul class="report-file-list">
@@ -23,8 +21,10 @@
           {% endfor %}
         </ul>
       </details>
-      <a class="btn btn-secondary report-detail-button" href="{{ report.detail_url }}">Details ansehen</a>
     </div>
+    <form method="get" action="{{ report.detail_url }}" class="report-detail-action">
+      <button type="submit" class="btn btn-primary">Details ansehen</button>
+    </form>
   </article>
 {% empty %}
   <div class="card report-empty"><h2>Keine Berichte verfügbar</h2><p class="muted">Aktuell stehen keine Berichte zum Abruf bereit.</p></div>

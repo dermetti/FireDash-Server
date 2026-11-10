@@ -593,25 +593,36 @@ def test_compact_overview_links_escaping_and_timezone(
         report_id = report["report_id"]
         assert f"<h2>{escape(report['title'])}</h2>" in card
         pdf_link = f'href="{reverse("report-portal-pdf", args=[report_id])}"'
-        detail_link = f'href="{reverse("report-portal-detail", args=[report_id])}"'
-        footer = card.split('<div class="report-card-footer">', 1)[1]
+        detail_action = f'action="{reverse("report-portal-detail", args=[report_id])}"'
+        content = re.search(
+            r'<div class="report-card-content">(.*?)</details>\s*</div>', card, re.S
+        )
+        assert content is not None
+        content = content.group(1) + "</details>"
         assert card.count("<details") == 1
-        downloads = re.search(r'<details class="report-files">(.*?)</details>', footer, re.S)
+        downloads = re.search(r'<details class="report-files">(.*?)</details>', content, re.S)
         assert downloads is not None
         downloads = downloads.group(1)
         summary = re.search(r"<summary>(.*?)</summary>", downloads, re.S).group(1)
         assert "Dateien herunterladen (PDF" in summary
         assert "<a" not in summary and "<button" not in summary
         assert card.count(pdf_link) == downloads.count(pdf_link) == 1
-        assert card.count(detail_link) == 1
-        assert detail_link not in downloads
+        assert card.count(detail_action) == 1
+        assert "<form" not in content and "<button" not in downloads
         assert re.search(
-            r'</details>\s*<a class="btn btn-secondary report-detail-button" '
-            + re.escape(detail_link)
-            + r">Details ansehen</a>\s*</div>",
-            footer,
+            r'<div class="report-meta">.*?</div>\s*<details class="report-files">',
+            content,
+            re.S,
         )
-        assert card.count(">Details ansehen</a>") == 1
+        assert re.search(
+            r'</details>\s*</div>\s*<form method="get" '
+            + re.escape(detail_action)
+            + r' class="report-detail-action">\s*'
+            r'<button type="submit" class="btn btn-primary">Details ansehen</button>\s*</form>',
+            card,
+        )
+        assert card.count(">Details ansehen</button>") == 1
+        assert 'class="report-card-footer"' not in card
         assert finalized in card
         assert "Verfügbar bis:" in card
         if report_id == str(no_photos.report_id):
