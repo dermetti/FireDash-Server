@@ -5,30 +5,26 @@
 <section class="report-list" aria-label="Verfügbare Berichte">
 {% for report in reports %}
   <article class="card report-card">
-    <div class="report-card-top">
-      <div class="report-card-content">
-        <h2>{{ report.title }}</h2>
-        <div class="report-meta">
-          <span>Finalisiert laut App: {{ report.finalized_at|date:"d.m.Y H:i T" }}</span>
-          <span>{{ report.photo_count }} Foto{{ report.photo_count|pluralize:"s" }}</span>
-          <span class="expiry">Verfügbar bis: {{ report.expires_at|date:"d.m.Y H:i T" }}</span>
-        </div>
-      </div>
-      <div class="report-actions">
-        <a class="btn btn-primary" href="{{ report.pdf_url }}">PDF herunterladen</a>
-        <a class="btn btn-secondary" href="{{ report.detail_url }}">Details ansehen</a>
+    <div class="report-card-content">
+      <h2>{{ report.title }}</h2>
+      <div class="report-meta">
+        <span>Finalisiert laut App: {{ report.finalized_at|date:"d.m.Y H:i T" }}</span>
+        <span>{{ report.photo_count }} Foto{{ report.photo_count|pluralize:"s" }}</span>
+        <span class="expiry">Verfügbar bis: {{ report.expires_at|date:"d.m.Y H:i T" }}</span>
       </div>
     </div>
-    {% if report.photos %}
-    <details class="report-files">
-      <summary>Fotos herunterladen ({{ report.photo_count }})</summary>
-      <ul class="report-file-list">
-        {% for photo in report.photos %}
-        <li><a href="{{ photo.download_url }}">{{ photo.title|default:"Foto" }}</a> <span class="muted small">JPEG</span></li>
-        {% endfor %}
-      </ul>
-    </details>
-    {% endif %}
+    <div class="report-card-footer">
+      <details class="report-files">
+        <summary>Dateien herunterladen (PDF{% if report.photos %} + {{ report.photo_count }} Fotos{% endif %})</summary>
+        <ul class="report-file-list">
+          <li><a class="report-download-link" href="{{ report.pdf_url }}">PDF herunterladen</a><span class="report-file-type">PDF</span></li>
+          {% for photo in report.photos %}
+          <li><a class="report-download-link" href="{{ photo.download_url }}">{{ photo.title|default:"Foto" }}</a><span class="report-file-type">JPEG</span></li>
+          {% endfor %}
+        </ul>
+      </details>
+      <a class="btn btn-secondary report-detail-button" href="{{ report.detail_url }}">Details ansehen</a>
+    </div>
   </article>
 {% empty %}
   <div class="card report-empty"><h2>Keine Berichte verfügbar</h2><p class="muted">Aktuell stehen keine Berichte zum Abruf bereit.</p></div>

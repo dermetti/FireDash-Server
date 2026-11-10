@@ -169,7 +169,13 @@ def detail(request, report_id):
                 "download_url": reverse("report-portal-jpeg", args=[report_id, photo["id"]]),
             }
         )
-    photo_by_id = {p["id"]: p for p in photos}
+    # Attachment downloads are presented once, in the gallery. Filter only the
+    # copied display sections; the submitted document remains unchanged.
+    for section in sections:
+        section["blocks"] = [
+            block for block in section["blocks"] if block["kind"] != "attachment_refs"
+        ]
+    sections = [section for section in sections if section["blocks"]]
     for section in sections:
         for block in section["blocks"]:
             if block["kind"] == "fields":
@@ -178,8 +184,6 @@ def detail(request, report_id):
                 block["display_rows"] = [
                     [display_value(cell) for cell in cells] for cells in block["rows"]
                 ]
-            elif block["kind"] == "attachment_refs":
-                block["photos"] = [photo_by_id[i] for i in block["attachment_ids"]]
     return render(
         request,
         "report_transfer/detail.html",

@@ -524,6 +524,19 @@ def add_submission(
                 },
             ]
         )
+        document["sections"].append(
+            {
+                "key": "photos_only",
+                "title": "Original attachment references",
+                "blocks": [
+                    {
+                        "kind": "attachment_refs",
+                        "key": "photos",
+                        "attachment_ids": [payload["attachments"][0]["id"]],
+                    }
+                ],
+            }
+        )
         payload["report"].update(content(json.dumps(document).encode()))
     assert post(client, encrypt(report_key, header, payload)).status_code == 201
     return ReportSubmission.objects.get(submission_id=str(header["submission_id"]))
@@ -579,19 +592,40 @@ def test_compact_overview_links_escaping_and_timezone(
     for report, card in zip(reports, cards, strict=True):
         report_id = report["report_id"]
         assert f"<h2>{escape(report['title'])}</h2>" in card
-        assert f'href="{reverse("report-portal-pdf", args=[report_id])}"' in card
-        assert f'href="{reverse("report-portal-detail", args=[report_id])}"' in card
+        pdf_link = f'href="{reverse("report-portal-pdf", args=[report_id])}"'
+        detail_link = f'href="{reverse("report-portal-detail", args=[report_id])}"'
+        footer = card.split('<div class="report-card-footer">', 1)[1]
+        assert card.count("<details") == 1
+        downloads = re.search(r'<details class="report-files">(.*?)</details>', footer, re.S)
+        assert downloads is not None
+        downloads = downloads.group(1)
+        summary = re.search(r"<summary>(.*?)</summary>", downloads, re.S).group(1)
+        assert "Dateien herunterladen (PDF" in summary
+        assert "<a" not in summary and "<button" not in summary
+        assert card.count(pdf_link) == downloads.count(pdf_link) == 1
+        assert card.count(detail_link) == 1
+        assert detail_link not in downloads
+        assert re.search(
+            r'</details>\s*<a class="btn btn-secondary report-detail-button" '
+            + re.escape(detail_link)
+            + r">Details ansehen</a>\s*</div>",
+            footer,
+        )
+        assert card.count(">Details ansehen</a>") == 1
         assert finalized in card
         assert "Verfügbar bis:" in card
         if report_id == str(no_photos.report_id):
             assert report["photos"] == [] and report["photo_count"] == 0
-            assert "<details" not in card and "Fotos herunterladen" not in card
+            assert "JPEG" not in downloads
+            assert downloads.count("<li>") == 1
+            assert "Dateien herunterladen (PDF)" in summary
         else:
-            assert '<details class="report-files">' in card
-            assert "Fotos herunterladen (1)" in card
+            assert "+ 1 Fotos" in summary
+            assert downloads.count("<li>") == 1 + len(report["photos"])
             for photo in report["photos"]:
-                assert f'href="{photo["download_url"]}"' in card
-                assert escape(photo["title"]) in card
+                link = f'href="{photo["download_url"]}"'
+                assert card.count(link) == downloads.count(link) == 1
+                assert escape(photo["title"]) in downloads
         if report_id == str(custom.report_id):
             assert "&amp;lt;Foto&amp;gt; &amp; &quot;Original&quot;" in card
         assert "<img" not in card and "<dl" not in card
@@ -635,18 +669,49 @@ def test_detail_preserves_original_content_and_downloads(submitted, mail, report
         str(row.report_id),
         row.document_digest,
         "Serverannahme",
+        "Verfügbar bis:",
         "48 Stunden",
-        "7 Tage",
+        "insgesamt höchstens 7 Tage ab Bereitstellung.",
     ):
         assert escape(text) in html
+    assert "<aside" not in html and 'class="layout"' not in html
+    assert "&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;" in html
+    assert '<div class="report-detail">' in html
+    download_position = html.index('<section class="card download-card">')
+    gallery_position = html.index('<section class="card photo-card">')
+    assert html.index(">Berichtsdaten</h2>") < html.index(">Summary</h2>") < download_position
+    assert download_position < gallery_position
+    assert '</section>\n  <section class="card photo-card">' in html
+    gallery = html[gallery_position:]
+    assert "Original attachment references" not in html
+    assert document["sections"][-1]["blocks"][0]["kind"] == "attachment_refs"
+    assert document["sections"][-1]["title"] == "Original attachment references"
+    assert all(
+        section["blocks"] and all(block["kind"] != "attachment_refs" for block in section["blocks"])
+        for section in response.context["sections"]
+    )
     for photo in response.context["photos"]:
         assert f'src="{photo["preview_url"]}"' in html
-        assert f'href="{photo["download_url"]}"' in html
+        assert html.count(f'href="{photo["download_url"]}"') == 1
+        assert f'href="{photo["download_url"]}"' in gallery
         assert escape(photo["title"]) in html and escape(photo["caption"]) in html
-    assert f'href="{reverse("report-portal-pdf", args=[row.report_id])}"' in html
+    assert html.count(f'href="{reverse("report-portal-pdf", args=[row.report_id])}"') == 1
     assert 'href="/reports/"' in html
     assert "SyBOS" not in html and "arbitrary.future-report" not in html
     assert "eyebrow" not in html
+
+
+def test_detail_without_photos_keeps_pdf_card(submitted, mail, report_key):  # noqa: F811
+    row = add_submission(submitted, report_key, jpeg=False)
+    _, url = issue(submitted, mail)
+    browser, _, _ = browser_login(url)
+    response = browser.get(reverse("report-portal-detail", args=[row.report_id]))
+    assert response.status_code == 200
+    html = response.content.decode()
+    assert html.count(f'href="{reverse("report-portal-pdf", args=[row.report_id])}"') == 1
+    assert html.index('class="card download-card"') < html.index('class="card photo-card"')
+    assert "Bilder (0)" in html and "Keine Bilder vorhanden." in html
+    assert "JPEG herunterladen" not in html and "<img" not in html
 
 
 def test_distinct_recipients_isolated_and_mixed_request_rejected(submitted, mail, report_key):  # noqa: F811
