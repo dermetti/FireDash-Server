@@ -19,7 +19,7 @@ installation or upgrade.
 
 The installer is Bash (`deploy/install-local.sh` and shared `deploy/lib/`
 helpers). Installer B supports `manual`, `letsencrypt-http01` (fresh public VPS
-default) and `letsencrypt-dns01` (Netcup, including explicit existing-lineage
+default) and `letsencrypt-dns01` (provider-independent, including explicit existing-lineage
 adoption behind CGNAT). Manual paths remain supported. See the
 [TLS installation and renewal workflow](installer-b-tls.md) before selecting a
 mode. Existing logging prints `firedash:` progress to stdout and warnings/errors
@@ -604,3 +604,16 @@ owner approval after the read-only policy audit and review of candidates,
 references and backups. Next scheduled maintenance can retire previously
 protected invalid generations; disabling afterward cannot recover deleted
 ciphertext or references. See [Operations](operations.md#publication-retention-policy-and-audit).
+
+## Installer B.1 environment selection
+
+Use the unchanged exact-SHA entrypoint. Choose [workflow A](installer-b-tls.md)
+for a public VPS (HTTP-01, no DNS credentials), workflow B for a fresh CGNAT/private
+host (reviewed isolated dns-multi environment), or workflow C for explicit adoption
+of an existing Certbot DNS lineage. The Proxmox Netcup lineage stays DNS-01;
+no public-IP comparison or inbound-ACME requirement applies. Review privileged
+plugin provenance before approval. No DNS plugin is silently installed on upgrade.
+
+Native Debian/systemd and actual staging issuance/renewal evidence, full CI after
+separate commit/push approval, and encrypted TLS backup/restore coverage remain
+release gates; see [B.1 validation](installer-b-validation.md).

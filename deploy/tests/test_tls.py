@@ -33,6 +33,7 @@ assert spec and spec.loader
 tls = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tls)
 CHECK_SCHEDULES = tls.check_schedules
+PROTECT_DNS_CREDENTIALS = tls.protected_dns_credentials
 LINUX = pytest.mark.skipif(sys.platform != "linux", reason="native Linux symlinks/permissions")
 
 
@@ -51,6 +52,7 @@ def tree(tmp_path, monkeypatch):
     }.items():
         monkeypatch.setattr(tls, name, value)
     tls.ETC.mkdir()
+    monkeypatch.setattr(tls, "protected_acme_file", lambda path: None)
     monkeypatch.setattr(tls, "SERVER", "https://acme-staging-v02.api.letsencrypt.org/directory")
     executable = tmp_path / "certbot"
     executable.touch(mode=0o755)
@@ -442,6 +444,9 @@ def test_timed_out_certbot_kills_hook_session_before_unlock(monkeypatch):
 
     def spawn(args, **kwargs):
         assert kwargs["start_new_session"] is True
+        assert set(kwargs["env"]) == {"PATH", "HOME", "LANG", "LC_ALL"}
+        assert "PYTHONPATH" not in kwargs["env"]
+        assert "NETCUP_API_PASSWORD" not in kwargs["env"]
         return Process()
 
     monkeypatch.setattr(tls.subprocess, "Popen", spawn)
@@ -522,10 +527,274 @@ def dns_lineage(values, pair, *, links=False, version=1):
     renewal = tls.acme_root(values) / "renewal"
     renewal.mkdir(parents=True, exist_ok=True)
     (renewal / (tls.cert_name(values) + ".conf")).write_text(
-        f"[renewalparams]\nauthenticator = dns-netcup\nserver = {tls.SERVER}\n"
-        f"dns_netcup_credentials = {values['FIREDASH_TLS_DNS_CREDENTIALS']}\n"
+        f"[renewalparams]\nauthenticator = {tls.dns_auth.authenticator(values)}\n"
+        f"server = {tls.SERVER}\n"
+        f"{tls.dns_auth.credential_parameter(values)} = {values['FIREDASH_TLS_DNS_CREDENTIALS']}\n"
         "dns_netcup_propagation_seconds = 900\n"
     )
+
+
+def configure_multi(values, monkeypatch, provider="cloudflare"):
+    values.update(
+        FIREDASH_TLS_DNS_BACKEND="certbot-multi",
+        FIREDASH_TLS_DNS_PROVIDER=provider,
+        FIREDASH_TLS_DNS_PLUGIN_APPROVED="yes",
+    )
+    credentials = Path(values["FIREDASH_TLS_DNS_CREDENTIALS"])
+    credentials.write_text(
+        f"dns_multi_provider = {provider}\n{provider.upper()}_API_TOKEN = synthetic-secret\n"
+    )
+    monkeypatch.setattr(
+        tls,
+        "protected_dns_credentials",
+        lambda path: tls.require(path == credentials, "credential changed"),
+    )
+    Path(tls.CERTBOT).with_name("python").touch()
+
+
+@pytest.mark.parametrize("provider", ["netcup", "cloudflare"])
+@pytest.mark.parametrize("failure", [None, "authentication", "propagation", "acme"])
+def test_multi_fresh_issuance_retry_and_no_inbound_checks(
+    dns_tree, certificate, openssl, monkeypatch, provider, failure, capsys
+):
+    dns_tree["FIREDASH_TLS_ADOPT_DNS01"] = "no"
+    dns_tree["FIREDASH_TLS_CERT_PATH"], dns_tree["FIREDASH_TLS_KEY_PATH"] = map(str, tls.paths())
+    configure_multi(dns_tree, monkeypatch, provider)
+    pair = certificate()
+    original = tls.run
+    calls = []
+
+    def fake(args, **kwargs):
+        if args[0] == "openssl":
+            return original(args, **kwargs)
+        if "plugins" in args:
+            return b"* dns-multi\n"
+        if "-I" in args:
+            return b"5.7.0\n5.6.0\n"
+        calls.append(args)
+        assert "certonly" in args and "dns-multi" in args
+        assert (
+            args[args.index("--dns-multi-credentials") + 1]
+            == dns_tree["FIREDASH_TLS_DNS_CREDENTIALS"]
+        )
+        assert "synthetic-secret" not in " ".join(args)
+        if failure:
+            raise tls.TLSError("sanitized " + failure + " failure")
+        dns_lineage(dns_tree, pair)
+        return b""
+
+    def deploy(values, **kwargs):
+        tls.paths()[0].parent.mkdir(parents=True, exist_ok=True)
+        for target, source in zip(tls.paths(), pair, strict=True):
+            target.write_bytes(source.read_bytes())
+
+    monkeypatch.setattr(tls, "run", fake)
+    monkeypatch.setattr(tls, "deploy", deploy)
+    if failure:
+        with pytest.raises(tls.TLSError, match="sanitized"):
+            tls.prepare(dns_tree)
+        assert not tls.paths()[0].exists()
+        failure = None
+    tls.prepare(dns_tree)
+    assert tls.paths()[0].read_bytes() == pair[0].read_bytes()
+    assert not tls.WEBROOT.exists()
+    assert len(calls) in {1, 2}
+    output = capsys.readouterr()
+    assert "synthetic-secret" not in output.out + output.err
+
+
+@pytest.mark.parametrize("auth", ["dns-netcup", "dns-cloudflare", "dns-multi"])
+def test_generic_existing_adoption_preserves_lineage_and_unrelated_files(
+    dns_tree, certificate, openssl, monkeypatch, auth
+):
+    if auth == "dns-multi":
+        configure_multi(dns_tree, monkeypatch)
+    dns_tree.update(
+        FIREDASH_TLS_DNS_BACKEND="certbot-existing",
+        FIREDASH_TLS_DNS_AUTHENTICATOR=auth,
+        FIREDASH_TLS_DNS_PLUGIN_APPROVED="yes",
+    )
+    dns_lineage(dns_tree, certificate())
+    unrelated = tls.acme_root(dns_tree) / "renewal/other.example.conf"
+    unrelated.write_text("untouched foreign certificate bookkeeping")
+    before = {
+        p: (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in tls.acme_root(dns_tree).rglob("*")
+        if p.is_file()
+    }
+    original = tls.run
+
+    def fake(args, **kwargs):
+        if args[0] == "openssl":
+            return original(args, **kwargs)
+        if "-I" in args:
+            return b"5.7.0\n5.6.0\n"
+        assert "plugins" in args, "healthy adoption must never issue or renew"
+        return auth.encode()
+
+    monkeypatch.setattr(tls, "run", fake)
+    tls.prepare(dns_tree)
+    tls.prepare(dns_tree)
+    assert all((p.read_bytes(), p.stat().st_mtime_ns) == value for p, value in before.items())
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"FIREDASH_TLS_DNS_PROVIDER": "exec"},
+        {"FIREDASH_TLS_DNS_PROVIDER": "httpreq"},
+        {"FIREDASH_TLS_DNS_PROVIDER": "manual"},
+        {"FIREDASH_TLS_DNS_PROVIDER": "cloudflare;exec"},
+        {"FIREDASH_TLS_DNS_PROVIDER": "unreviewedprovider"},
+        {"FIREDASH_TLS_DNS_PLUGIN_APPROVED": "no"},
+        {"FIREDASH_TLS_DNS_PROPAGATION_SECONDS": "0"},
+        {"FIREDASH_TLS_DNS_PROPAGATION_SECONDS": "1801"},
+        {"FIREDASH_TLS_DNS_BACKEND": "certbot-native"},
+    ],
+)
+def test_multi_rejects_invalid_or_unsafe_adapter_settings(dns_tree, monkeypatch, changes):
+    configure_multi(dns_tree, monkeypatch)
+    dns_tree["FIREDASH_TLS_ADOPT_DNS01"] = "no"
+    dns_tree.update(changes)
+    with pytest.raises(tls.TLSError):
+        tls.dns_auth.validate(dns_tree, tls.require)
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "dns_multi_provider = netcup\nNETCUP_API_KEY = secret\n",
+        "dns_multi_provider = cloudflare\nEXEC_PATH = /evil\n",
+        "dns_multi_provider = cloudflare\nCLOUDFLARE_API_TOKEN_FILE = /private\n",
+        "dns_multi_provider = cloudflare\nCLOUDFLARE_API_TOKEN = a\nCLOUDFLARE_API_TOKEN = b\n",
+        "dns_multi_provider = cloudflare\n",
+    ],
+)
+def test_multi_rejects_credential_indirection_and_provider_mismatch(
+    dns_tree, monkeypatch, contents
+):
+    configure_multi(dns_tree, monkeypatch)
+    path = Path(dns_tree["FIREDASH_TLS_DNS_CREDENTIALS"])
+    path.write_text(contents)
+    with pytest.raises(tls.TLSError):
+        tls.dns_auth.multi_credentials(path, dns_tree, tls.require)
+
+
+@pytest.mark.parametrize(
+    "output", [b"dns-multi-evil", b"dns-netcup", b"", b"description mentions dns-multi only"]
+)
+def test_multi_plugin_exact_match(dns_tree, monkeypatch, output):
+    configure_multi(dns_tree, monkeypatch)
+    dns_tree["FIREDASH_TLS_ADOPT_DNS01"] = "no"
+    with pytest.raises(tls.TLSError, match="plugin missing"):
+        tls.dns_auth.check_plugin(dns_tree, [tls.CERTBOT], lambda args: output, tls.require)
+
+
+@pytest.mark.parametrize("versions", [b"5.8.0\n5.6.0\n", b"5.7.0\n5.5.0\n"])
+def test_multi_version_mismatch_fails_before_issuance(dns_tree, monkeypatch, versions):
+    configure_multi(dns_tree, monkeypatch)
+    dns_tree["FIREDASH_TLS_ADOPT_DNS01"] = "no"
+    with pytest.raises(tls.TLSError, match="version mismatch"):
+        tls.dns_auth.check_plugin(
+            dns_tree,
+            [tls.CERTBOT],
+            lambda args: b"dns-multi" if "plugins" in args else versions,
+            tls.require,
+        )
+
+
+def test_legacy_backend_cannot_authorize_new_issuance(dns_tree):
+    with pytest.raises(tls.TLSError, match="explicit DNS backend"):
+        tls.prepare(dns_tree)
+
+
+@pytest.mark.parametrize(
+    "defect", ["hook", "authenticator", "server", "approval", "adoption", "missing-plugin"]
+)
+def test_generic_adoption_rejects_unapproved_lineage_before_mutation(
+    dns_tree, certificate, monkeypatch, defect
+):
+    dns_tree.update(
+        FIREDASH_TLS_DNS_BACKEND="certbot-existing",
+        FIREDASH_TLS_DNS_AUTHENTICATOR="dns-cloudflare",
+        FIREDASH_TLS_DNS_PLUGIN_APPROVED="yes",
+    )
+    dns_lineage(dns_tree, certificate())
+    path = tls.acme_root(dns_tree) / "renewal" / (tls.cert_name(dns_tree) + ".conf")
+    if defect == "hook":
+        path.write_text(path.read_text() + "manual_auth_hook = /unreviewed/program\n")
+    elif defect == "authenticator":
+        path.write_text(path.read_text().replace("dns-cloudflare", "manual"))
+    elif defect == "server":
+        path.write_text(path.read_text().replace(tls.SERVER, "https://unreviewed.invalid"))
+    elif defect == "approval":
+        dns_tree["FIREDASH_TLS_DNS_PLUGIN_APPROVED"] = "no"
+    elif defect == "adoption":
+        dns_tree["FIREDASH_TLS_ADOPT_DNS01"] = "no"
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        tls, "run", lambda args: b"" if defect == "missing-plugin" else b"dns-cloudflare"
+    )
+    with pytest.raises(tls.TLSError):
+        tls.prepare(dns_tree)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_multi_requires_private_credentials_before_issuance(dns_tree, monkeypatch, missing):
+    configure_multi(dns_tree, monkeypatch)
+    monkeypatch.setattr(tls, "protected_dns_credentials", PROTECT_DNS_CREDENTIALS)
+    path = Path(dns_tree["FIREDASH_TLS_DNS_CREDENTIALS"])
+    if missing:
+        path.unlink()
+    else:
+        path.chmod(0o666)
+    with pytest.raises((OSError, tls.TLSError)):
+        tls.dns_auth.issuance_args(dns_tree, tls.protected_dns_credentials, tls.require)
+
+
+@pytest.mark.parametrize("uid,permissions", [(1, 0o644), (0, 0o666)])
+def test_acme_executable_and_ini_reject_unprotected_metadata(uid, permissions):
+    class MetadataPath:
+        parents = ()
+
+        def resolve(self, **kwargs):
+            return self
+
+        def stat(self):
+            return SimpleNamespace(st_mode=stat.S_IFREG | permissions, st_uid=uid)
+
+    with pytest.raises(tls.TLSError, match="protected root-owned"):
+        tls.protected_acme_file(MetadataPath())
+
+
+@pytest.mark.parametrize(
+    "diagnostic,category",
+    [
+        (b"authentication failed synthetic-secret", "DNS provider authentication"),
+        (b"incorrect TXT record synthetic-secret", "DNS propagation/validation"),
+        (b"HTTP forbidden synthetic-secret", "ACME issuance/renewal"),
+        (b"permission denied synthetic-secret", "ACME issuance/renewal"),
+    ],
+)
+def test_sanitized_acme_failure_categories(monkeypatch, capsys, diagnostic, category):
+    class Process:
+        returncode = 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def communicate(self, **kwargs):
+            return b"", diagnostic
+
+    monkeypatch.setattr(tls.subprocess, "Popen", lambda *a, **k: Process())
+    with pytest.raises(tls.TLSError, match=category) as error:
+        tls.run(["certbot", "renew", "--cert-name", "fixture"])
+    output = capsys.readouterr()
+    assert "synthetic-secret" not in str(error.value) + output.out + output.err
 
 
 def test_cgnat_adoption_preserves_all_certificate_account_and_credential_bytes(
@@ -591,6 +860,8 @@ def test_repeated_dns_renewal_not_due_never_reloads_or_changes_files(
     def fake(args, **kwargs):
         if args[0] == "openssl":
             return original(args, **kwargs)
+        if "plugins" in args:
+            return b"dns-netcup"
         calls.append(args)
         assert "renew" in args
         return b""
@@ -690,6 +961,8 @@ def test_dns01_renewal_and_rollback_preserve_authentication(
         if args[0] == "openssl":
             return original(args, **kwargs)
         calls.append(args)
+        if "plugins" in args:
+            return b"dns-netcup"
         if "renew" in args:
             assert args[args.index("--cert-name") + 1] == "firedash.example.org"
             assert "--webroot-path" not in args and "--authenticator" not in args
@@ -721,10 +994,12 @@ def test_dns01_renewal_and_rollback_preserve_authentication(
 
 
 @LINUX
+@pytest.mark.parametrize("provider", ["netcup", "cloudflare"])
 def test_fresh_dns01_uses_no_public_address_or_inbound_probe(
-    dns_tree, certificate, openssl, monkeypatch
+    dns_tree, certificate, openssl, monkeypatch, provider
 ):
     dns_tree["FIREDASH_TLS_ADOPT_DNS01"] = "no"
+    configure_multi(dns_tree, monkeypatch, provider)
     dns_tree["FIREDASH_TLS_CERT_PATH"], dns_tree["FIREDASH_TLS_KEY_PATH"] = map(str, tls.paths())
     pair = certificate()
     original = tls.run
@@ -733,8 +1008,10 @@ def test_fresh_dns01_uses_no_public_address_or_inbound_probe(
         if args[0] == "openssl":
             return original(args, **kwargs)
         if "plugins" in args:
-            return b"dns-netcup"
-        assert "certonly" in args and "dns-netcup" in args
+            return b"dns-multi"
+        if "-I" in args:
+            return b"5.7.0\n5.6.0\n"
+        assert "certonly" in args and "dns-multi" in args
         assert "--webroot" not in args
         dns_lineage(dns_tree, pair)
         return b""

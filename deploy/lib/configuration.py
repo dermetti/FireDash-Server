@@ -61,6 +61,11 @@ INSTALL_KEYS = {
     "FIREDASH_TLS_LINEAGE",
     "FIREDASH_TLS_ADOPT_DNS01",
     "FIREDASH_TLS_DNS_CREDENTIALS",
+    "FIREDASH_TLS_DNS_BACKEND",
+    "FIREDASH_TLS_DNS_PROVIDER",
+    "FIREDASH_TLS_DNS_AUTHENTICATOR",
+    "FIREDASH_TLS_DNS_PLUGIN_APPROVED",
+    "FIREDASH_TLS_DNS_PROPAGATION_SECONDS",
 }
 KEY = re.compile(r"[A-Z][A-Z0-9_]*")
 VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -216,6 +221,35 @@ def validate_install(values):
         and values.get("FIREDASH_TLS_MODE") != "letsencrypt-dns01"
     ):
         fail("FIREDASH_TLS_ADOPT_DNS01", "adoption requires DNS-01 mode")
+    backend = values.get("FIREDASH_TLS_DNS_BACKEND", "")
+    if backend not in {"", "certbot-multi", "certbot-existing"}:
+        fail("FIREDASH_TLS_DNS_BACKEND", "expected certbot-multi or certbot-existing")
+    if values.get("FIREDASH_TLS_DNS_PLUGIN_APPROVED", "no") not in {"yes", "no"}:
+        fail("FIREDASH_TLS_DNS_PLUGIN_APPROVED", "expected yes or no")
+    if backend:
+        if values.get("FIREDASH_TLS_MODE") != "letsencrypt-dns01":
+            fail("FIREDASH_TLS_DNS_BACKEND", "requires DNS-01 mode")
+        if values.get("FIREDASH_TLS_DNS_PLUGIN_APPROVED") != "yes":
+            fail(
+                "FIREDASH_TLS_DNS_PLUGIN_APPROVED",
+                "explicit privileged plugin/provenance approval required",
+            )
+        if (backend == "certbot-existing") != (values.get("FIREDASH_TLS_ADOPT_DNS01") == "yes"):
+            fail(
+                "FIREDASH_TLS_DNS_BACKEND",
+                "existing requires adoption; multi requires fresh ownership",
+            )
+        auth = values.get("FIREDASH_TLS_DNS_AUTHENTICATOR", "")
+        if backend == "certbot-existing" and not re.fullmatch(r"dns-[a-z][a-z0-9-]{0,48}", auth):
+            fail("FIREDASH_TLS_DNS_AUTHENTICATOR", "explicit saved DNS authenticator required")
+        provider = values.get("FIREDASH_TLS_DNS_PROVIDER", "")
+        if (backend == "certbot-multi" or auth == "dns-multi") and not re.fullmatch(
+            r"[a-z][a-z0-9]{0,31}", provider
+        ):
+            fail("FIREDASH_TLS_DNS_PROVIDER", "lowercase DNS provider identifier required")
+    propagation = values.get("FIREDASH_TLS_DNS_PROPAGATION_SECONDS", "900")
+    if not re.fullmatch(r"[0-9]{1,4}", propagation) or not 30 <= int(propagation) <= 1800:
+        fail("FIREDASH_TLS_DNS_PROPAGATION_SECONDS", "expected 30 through 1800")
     if "FIREDASH_TLS_LINEAGE" in values and not re.fullmatch(
         r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}", values["FIREDASH_TLS_LINEAGE"]
     ):
@@ -401,6 +435,11 @@ def main():
         "FIREDASH_TLS_LINEAGE",
         "FIREDASH_TLS_ADOPT_DNS01",
         "FIREDASH_TLS_DNS_CREDENTIALS",
+        "FIREDASH_TLS_DNS_BACKEND",
+        "FIREDASH_TLS_DNS_PROVIDER",
+        "FIREDASH_TLS_DNS_AUTHENTICATOR",
+        "FIREDASH_TLS_DNS_PLUGIN_APPROVED",
+        "FIREDASH_TLS_DNS_PROPAGATION_SECONDS",
     ):
         if key in os.environ:
             candidate_install[key] = os.environ[key]

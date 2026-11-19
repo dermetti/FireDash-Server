@@ -361,3 +361,20 @@ manual mode reports external renewal responsibility. The existing CGNAT Netcup
 installation retains DNS-01 and its original certificate/account/credential paths.
 No public inbound access is needed for its ACME validation. Never run an
 unrestricted host renewal job alongside an adopted FireDash scheduler.
+
+## Provider-independent TLS operations (Installer B.1)
+
+Both DNS backends use the existing `fire-tls-renew.service`/timer and installer
+lock. Renewal remains limited to the selected lineage; adoption preserves the
+saved authenticator and native credential format. See [TLS operations and
+encrypted backup/restore manifest](installer-b-tls.md) before changing providers,
+restoring onto a new host or provisioning plugin dependencies. Backend/plugin
+changes require transition review. The current backup script does not establish
+TLS recovery coverage; an encrypted snapshot schedule and isolated restore drill
+are explicit beta gates. Do not add report spools or prune backups for this task.
+
+Sanitized lifecycle failures distinguish provider authentication, DNS propagation,
+missing plugins, lineage mismatch and certificate validation where command output
+permits classification; ambiguous errors remain generic. Inspect protected logs
+privately, correct the cause and retry the existing renewal unit. Do not include
+plugin logs, credential contents or raw exception output in support artifacts.

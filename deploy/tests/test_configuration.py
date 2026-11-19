@@ -432,6 +432,14 @@ def installer_harness(tmp_path, legacy, install):
         "/run/lock/firedash-install.lock", (tmp_path / "lock").as_posix()
     )
     orchestrator = orchestrator.replace("install -d -m 0750 -o root -g root /etc/fire-backend", ":")
+    helper_target = tmp_path / "installed-helpers"
+    helper_target.mkdir()
+    orchestrator = orchestrator.replace(
+        "install -d -m 0755 -o root -g root /usr/local/lib/fire-backend",
+        ":",
+    ).replace("/usr/local/lib/fire-backend/", helper_target.as_posix() + "/")
+    for filename in ("tls.py", "dns_auth.py", "configuration.py", "legacy-schema-1.json"):
+        shutil.copyfile(ROOT / "deploy/lib" / filename, lib / filename)
     (deploy / "install-local.sh").write_text(orchestrator, newline="\n")
     common = (
         (ROOT / "deploy/lib/common.sh").read_text()
@@ -440,6 +448,7 @@ require_root() { :; }
 is_debian_13() { :; }; is_amd64() { :; }; is_systemd() { :; }
 install_file_atomic() { cp "$1" "$2"; }
 flock() { :; }
+systemctl() { :; }
 curl() { :; }
 python3() { python "$TEST_CONFIG_DRIVER" "$@"; }
 export -f python3
@@ -740,3 +749,76 @@ def test_tls_failure_precedes_quiesce_and_preserves_history(installer_harness):
     assert "phase: quiesce" not in result.stdout
     assert "maintenance/quiesce had begun" not in result.stderr
     assert before == {p.name: p.read_bytes() for p in etc.iterdir() if p.is_file()}
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("--tls-dns-backend", "certbot-multi"),
+        ("--tls-dns-provider", "cloudflare"),
+        ("--tls-dns-authenticator", "dns-cloudflare"),
+        ("--tls-certbot", "/opt/other/bin/certbot"),
+        ("--tls-lineage", "other.example.org"),
+        ("--tls-dns-credentials", "/private/changed.ini"),
+    ],
+)
+def test_existing_legacy_dns_binding_changes_fail_before_quiesce(installer_harness, flag, value):
+    run, etc, _ = installer_harness
+    with (etc / "install.conf").open("a", newline="\n") as stream:
+        stream.write("FIREDASH_TLS_MODE=letsencrypt-dns01\nFIREDASH_TLS_ADOPT_DNS01=yes\n")
+    before = {p.name: p.read_bytes() for p in etc.iterdir() if p.is_file()}
+    result = run(extra_args=(flag, value))
+    assert result.returncode != 0
+    assert "separately reviewed transition" in result.stderr
+    assert "phase: quiesce" not in result.stdout
+    assert before == {p.name: p.read_bytes() for p in etc.iterdir() if p.is_file()}
+
+
+def test_generic_dns_adoption_cli_persists_only_nonsecret_metadata(installer_harness):
+    run, etc, _ = installer_harness
+    result = run(
+        extra_args=(
+            "--tls-mode",
+            "letsencrypt-dns01",
+            "--tls-adopt-dns01",
+            "--tls-dns-backend",
+            "certbot-existing",
+            "--tls-dns-authenticator",
+            "dns-cloudflare",
+            "--tls-dns-plugin-approved",
+            "--tls-lineage",
+            "firedash.test",
+        )
+    )
+    assert result.returncode == 0, result.stderr
+    persisted = c.read(etc / "install.conf")
+    assert persisted["FIREDASH_TLS_DNS_BACKEND"] == "certbot-existing"
+    assert persisted["FIREDASH_TLS_DNS_AUTHENTICATOR"] == "dns-cloudflare"
+    assert persisted["FIREDASH_TLS_DNS_PLUGIN_APPROVED"] == "yes"
+    assert "FIREDASH_TLS_DNS" not in (etc / "fire-backend.env").read_text()
+    before = (etc / "install.conf").read_bytes()
+    assert run().returncode == 0
+    assert (etc / "install.conf").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"FIREDASH_TLS_DNS_BACKEND": "exec"},
+        {"FIREDASH_TLS_DNS_PLUGIN_APPROVED": "no"},
+        {"FIREDASH_TLS_DNS_PROVIDER": "cloudflare;exec"},
+        {"FIREDASH_TLS_DNS_PROPAGATION_SECONDS": "9999"},
+    ],
+)
+def test_dns_configuration_rejects_invalid_settings(install, changes):
+    install.update(
+        FIREDASH_TLS_MODE="letsencrypt-dns01",
+        FIREDASH_TLS_DNS_BACKEND="certbot-multi",
+        FIREDASH_TLS_DNS_PROVIDER="cloudflare",
+        FIREDASH_TLS_DNS_PLUGIN_APPROVED="yes",
+        FIREDASH_ACME_EMAIL="acme@example.org",
+        FIREDASH_ACME_AGREE_TOS="yes",
+    )
+    install.update(changes)
+    with pytest.raises(c.ConfigurationError):
+        c.validate_install(install)

@@ -2,7 +2,7 @@
 
 The installer already holds firedash-install.lock; the scheduled entrypoint takes
 the same lock. Fresh issuance uses a separate Certbot namespace and verified
-copies. Explicit DNS-Netcup adoption retains the original live/archive lineage.
+copies. Explicit DNS lineage adoption retains the original live/archive lineage.
 """
 
 import contextlib
@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import configuration as config
+import dns_auth
 
 ETC = Path("/etc/fire-backend")
 WEBROOT = Path("/var/lib/fire-backend/acme-webroot")
@@ -57,9 +58,19 @@ def run(args, *, input=None):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=os.name == "posix",
+        # Do not let ambient DNS credentials, Python/loader overrides or shell
+        # startup settings become a second privileged plugin configuration path.
+        env={
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOME": "/root",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+        }
+        if os.name == "posix"
+        else None,
     ) as process:
         try:
-            output, _ = process.communicate(
+            output, diagnostic = process.communicate(
                 input=input, timeout=2400 if "certbot" in Path(args[0]).name else 300
             )
         except BaseException:
@@ -71,10 +82,31 @@ def run(args, *, input=None):
                 process.kill()
             process.wait()
             raise
-    require(
-        process.returncode == 0,
-        "TLS command failed; inspect protected ACME logs / Nginx configuration",
-    )
+    category = "TLS command failed; inspect protected ACME logs / Nginx configuration"
+    if process.returncode and "certbot" in Path(args[0]).name:
+        # Classify only; plugin diagnostics can include secrets and are never relayed.
+        evidence = (output + diagnostic).lower()
+        if any(
+            word in evidence
+            for word in (
+                b"invalid api",
+                b"authentication failed",
+                b"invalid credentials",
+                b"api request forbidden",
+                b"provider authentication",
+            )
+        ):
+            category = "DNS provider authentication failed; inspect protected provider credentials"
+        elif any(
+            word in evidence
+            for word in (b"propagation", b"incorrect txt", b"nxdomain", b"dns problem")
+        ):
+            category = (
+                "DNS propagation/validation failed; inspect authoritative DNS and propagation wait"
+            )
+        else:
+            category = "ACME issuance/renewal failed; inspect protected ACME logs and retry safely"
+    require(process.returncode == 0, category)
     return output
 
 
@@ -161,12 +193,30 @@ def cert_name(values=None):
     return values.get("FIREDASH_TLS_LINEAGE", "firedash") if values else "firedash"
 
 
+def protected_acme_file(path):
+    """Read/execute only root-controlled ACME configuration and programs."""
+    for candidate in {path, path.resolve(strict=True)}:
+        info = candidate.stat()
+        require(
+            stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_mode & 0o022 == 0,
+            "ACME executable/configuration must be a protected root-owned regular file",
+        )
+        for parent in candidate.parents:
+            info = parent.stat()
+            require(
+                info.st_uid == 0 and info.st_mode & 0o022 == 0,
+                "ACME executable/configuration parents must be root-controlled",
+            )
+
+
 def certbot_args(values=None):
     binary = values.get("FIREDASH_TLS_CERTBOT_PATH", CERTBOT) if values else CERTBOT
     require(
         Path(binary).is_file() and os.access(binary, os.X_OK),
         "Certbot missing; install the configured Certbot executable and required authenticator",
     )
+    require(Path(binary).name in {"certbot", "certbot.exe"}, "expected approved Certbot executable")
+    protected_acme_file(Path(binary))
     work = Path("/var/lib/letsencrypt") if adopted(values) else WORK
     logs = Path("/var/log/letsencrypt") if adopted(values) else LOGS
     return [
@@ -198,6 +248,7 @@ def check_lineage(values=None):
     require(
         path.is_file(), "managed TLS renewal configuration missing; restore its private ACME backup"
     )
+    protected_acme_file(path)
     text = path.read_text()
     params = {}
     section = ""
@@ -209,10 +260,13 @@ def check_lineage(values=None):
             key, value = line.split("=", 1)
             require(key.strip() not in params, "duplicate managed renewal parameter")
             params[key.strip()] = value.strip()
+    expected_auth = (
+        dns_auth.authenticator(values)
+        if values and mode(values) == "letsencrypt-dns01"
+        else "webroot"
+    )
     require(
-        params.get("authenticator")
-        == ("dns-netcup" if values and mode(values) == "letsencrypt-dns01" else "webroot")
-        and params.get("server") == SERVER,
+        params.get("authenticator") == expected_auth and params.get("server") == SERVER,
         "managed TLS authenticator/server differs; explicit operator review required",
     )
     require(
@@ -221,18 +275,17 @@ def check_lineage(values=None):
     )
     expected_hook = f"/usr/bin/python3 {HELPER} hook"
     require(
-        not any(params.get(k) for k in ("pre_hook", "post_hook"))
+        not any(
+            v
+            for k, v in params.items()
+            if ("hook" in k and k not in {"renew_hook", "deploy_hook"}) or k.endswith("_command")
+        )
         and all(params.get(k, "") in {"", expected_hook} for k in ("renew_hook", "deploy_hook")),
         "unexpected stored ACME hooks; review before renewal",
     )
     if values and mode(values) == "letsencrypt-dns01":
-        credentials = Path(params.get("dns_netcup_credentials", ""))
-        protected_dns_credentials(credentials)
-        if values.get("FIREDASH_TLS_DNS_CREDENTIALS"):
-            require(
-                str(credentials) == values["FIREDASH_TLS_DNS_CREDENTIALS"],
-                "DNS credential path differs from approved configuration",
-            )
+        dns_auth.validate(values, require)
+        dns_auth.credentials(values, params, protected_dns_credentials, require)
     else:
         require(
             params.get("webroot_path", "").rstrip(",").strip() == str(WEBROOT),
@@ -541,6 +594,10 @@ def recover_dns(values):
 
 def renew(values, *, use_hook=True):
     check_lineage(values)
+    if mode(values) == "letsencrypt-dns01":
+        dns_auth.check_plugin(
+            values, certbot_args(values), run, require, protect=protected_acme_file
+        )
     check_schedules(values)
     if adopted(values):
         recover_dns(values)
@@ -591,6 +648,10 @@ def renew(values, *, use_hook=True):
 def dry_run(values):
     """Certbot's staging validation, without deploy hooks or application changes."""
     check_lineage(values)
+    if mode(values) == "letsencrypt-dns01":
+        dns_auth.check_plugin(
+            values, certbot_args(values), run, require, protect=protected_acme_file
+        )
     check_schedules(values)
     run(certbot_args(values) + ["renew", "--cert-name", cert_name(values), "--dry-run"])
 
@@ -613,10 +674,14 @@ def prepare_dns(values):
     if not adopted(values):
         for directory in (ETC / "acme", WORK, LOGS):
             secure_directory(directory, 0o700)
-    require(
-        b"dns-netcup" in run(certbot_args(values) + ["plugins", "--authenticators", "--text"]),
-        "configured Certbot lacks dns-netcup; install the plugin in that Certbot environment",
-    )
+    # Missing backend is compatible only with an already recorded Installer B
+    # Netcup lineage; it must never authorize fresh legacy issuance.
+    if dns_auth.backend(values) == "legacy-netcup":
+        require(
+            (acme_root(values) / "renewal" / (cert_name(values) + ".conf")).is_file(),
+            "new DNS installations require an explicit DNS backend and plugin approval",
+        )
+    dns_auth.check_plugin(values, certbot_args(values), run, require, protect=protected_acme_file)
     if adopted(values):
         expected = lineage(values)
         require(
@@ -639,9 +704,7 @@ def prepare_dns(values):
         else:
             atomic(ETC / "tls/dns-deployed", certificate_identity(values).encode(), 0o600)
         validate(expected / "fullchain.pem", expected / "privkey.pem", host)
-        print(
-            "firedash: DNS-Netcup lineage adopted; certificate paths and authentication preserved"
-        )
+        print("firedash: DNS lineage adopted; certificate paths and authentication preserved")
         return
     require(
         tuple(map(str, paths()))
@@ -663,12 +726,7 @@ def prepare_dns(values):
             certbot_args(values)
             + [
                 "certonly",
-                "--authenticator",
-                "dns-netcup",
-                "--dns-netcup-credentials",
-                values["FIREDASH_TLS_DNS_CREDENTIALS"],
-                "--dns-netcup-propagation-seconds",
-                "900",
+                *dns_auth.issuance_args(values, protected_dns_credentials, require),
                 "--cert-name",
                 cert_name(values),
                 "-d",
@@ -812,12 +870,16 @@ def verify(values):
     certbot_args(values)
     check_lineage(values)
     check_schedules(values)
-    require(
-        ("dns-netcup" if mode(values) == "letsencrypt-dns01" else "webroot").encode()
-        in run(certbot_args(values) + ["plugins", "--authenticators", "--text"]),
-        "configured Certbot authenticator unavailable",
-    )
-    for filename in ("tls.py", "configuration.py", "legacy-schema-1.json"):
+    if mode(values) == "letsencrypt-dns01":
+        dns_auth.check_plugin(
+            values, certbot_args(values), run, require, protect=protected_acme_file
+        )
+    else:
+        require(
+            b"webroot" in run(certbot_args(values) + ["plugins", "--authenticators", "--text"]),
+            "configured Certbot authenticator unavailable",
+        )
+    for filename in ("tls.py", "dns_auth.py", "configuration.py", "legacy-schema-1.json"):
         path = HELPER.parent / filename
         verify_owned_file(path, Path(__file__).with_name(filename).read_bytes())
     for unit in ("fire-tls-renew.service", TIMER):

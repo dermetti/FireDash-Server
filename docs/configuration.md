@@ -356,3 +356,22 @@ CLI names are `--tls-mode`, `--tls-cert`, `--tls-key`, `--acme-email`,
 adoption requires the explicit CLI adoption flag and passes full lineage checks;
 other mode changes stop for review. Neither DNS API values nor private key bytes
 belong in these files, command arguments, environment dumps or application settings.
+
+## Installer B.1 DNS adapter configuration
+
+TLS mode names are unchanged. Root-only install.conf now also supports
+`FIREDASH_TLS_DNS_BACKEND` (`certbot-multi` for new issuance, `certbot-existing`
+for explicit adoption), `FIREDASH_TLS_DNS_PROVIDER` (reviewed dns-multi provider),
+`FIREDASH_TLS_DNS_AUTHENTICATOR` (exact saved plugin for adoption),
+`FIREDASH_TLS_DNS_PLUGIN_APPROVED=yes` (privileged dependency/provenance approval),
+and `FIREDASH_TLS_DNS_PROPAGATION_SECONDS` (30..1800; new issuance default 900).
+The shared credential **path** remains `FIREDASH_TLS_DNS_CREDENTIALS`. These
+settings are not Django/Gunicorn settings; never add secret contents to them.
+CLI equivalents are `--tls-dns-backend`, `--tls-dns-provider`,
+`--tls-dns-authenticator`, `--tls-dns-plugin-approved`,
+`--tls-dns-propagation-seconds`, `--tls-dns-credentials`.
+
+Existing Installer B missing backend keys keep their Netcup renewal binding;
+missing pre-B certificate mode remains manual. Existing backend/authenticator
+changes are refused for separate transition review. See the [three workflows,
+versioned dependency process and credential rules](installer-b-tls.md).

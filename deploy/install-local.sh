@@ -54,6 +54,17 @@ while (($#)); do
         --wait) WAIT=1; shift ;;
         --base-url) (($# >= 2)) || die "--base-url requires a value"; FIREDASH_BASE_URL=$2; shift 2 ;;
         --base-url=*) FIREDASH_BASE_URL=${1#--base-url=}; shift ;;
+        --tls-dns-backend) (($# >= 2)) || die "--tls-dns-backend requires a value"; FIREDASH_TLS_DNS_BACKEND=$2; shift 2 ;;
+        --tls-dns-backend=*) FIREDASH_TLS_DNS_BACKEND=${1#--tls-dns-backend=}; shift ;;
+        --tls-dns-provider) (($# >= 2)) || die "--tls-dns-provider requires a value"; FIREDASH_TLS_DNS_PROVIDER=$2; shift 2 ;;
+        --tls-dns-provider=*) FIREDASH_TLS_DNS_PROVIDER=${1#--tls-dns-provider=}; shift ;;
+        --tls-dns-authenticator) (($# >= 2)) || die "--tls-dns-authenticator requires a value"; FIREDASH_TLS_DNS_AUTHENTICATOR=$2; shift 2 ;;
+        --tls-dns-authenticator=*) FIREDASH_TLS_DNS_AUTHENTICATOR=${1#--tls-dns-authenticator=}; shift ;;
+        --tls-dns-propagation-seconds) (($# >= 2)) || die "--tls-dns-propagation-seconds requires a value"; FIREDASH_TLS_DNS_PROPAGATION_SECONDS=$2; shift 2 ;;
+        --tls-dns-propagation-seconds=*) FIREDASH_TLS_DNS_PROPAGATION_SECONDS=${1#--tls-dns-propagation-seconds=}; shift ;;
+        --tls-dns-credentials) (($# >= 2)) || die "--tls-dns-credentials requires a value"; FIREDASH_TLS_DNS_CREDENTIALS=$2; shift 2 ;;
+        --tls-dns-credentials=*) FIREDASH_TLS_DNS_CREDENTIALS=${1#--tls-dns-credentials=}; shift ;;
+        --tls-dns-plugin-approved) FIREDASH_TLS_DNS_PLUGIN_APPROVED=yes; shift ;;
         --tls-adopt-dns01) FIREDASH_TLS_ADOPT_DNS01=yes; TLS_ADOPTION_REQUESTED=1; shift ;;
         --tls-certbot) (($# >= 2)) || die "--tls-certbot requires a value"; FIREDASH_TLS_CERTBOT_PATH=$2; shift 2 ;;
         --tls-certbot=*) FIREDASH_TLS_CERTBOT_PATH=${1#--tls-certbot=}; shift ;;
@@ -108,7 +119,7 @@ if [[ -f $CONFIG_SOURCE ]]; then
             FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY)
                 [[ ! ${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY+x} ]] && export "$k=$v"
                 ;;
-            FIREDASH_BASE_URL|FIREDASH_TLS_CERT_PATH|FIREDASH_TLS_KEY_PATH|FIREDASH_REQUESTED_REF|FIREDASH_TLS_MODE|FIREDASH_ACME_EMAIL|FIREDASH_ACME_AGREE_TOS|FIREDASH_TLS_WARNING_DAYS|FIREDASH_TLS_CERTBOT_PATH|FIREDASH_TLS_LINEAGE|FIREDASH_TLS_ADOPT_DNS01|FIREDASH_TLS_DNS_CREDENTIALS)
+            FIREDASH_BASE_URL|FIREDASH_TLS_CERT_PATH|FIREDASH_TLS_KEY_PATH|FIREDASH_REQUESTED_REF|FIREDASH_TLS_MODE|FIREDASH_ACME_EMAIL|FIREDASH_ACME_AGREE_TOS|FIREDASH_TLS_WARNING_DAYS|FIREDASH_TLS_CERTBOT_PATH|FIREDASH_TLS_LINEAGE|FIREDASH_TLS_ADOPT_DNS01|FIREDASH_TLS_DNS_CREDENTIALS|FIREDASH_TLS_DNS_BACKEND|FIREDASH_TLS_DNS_PROVIDER|FIREDASH_TLS_DNS_AUTHENTICATOR|FIREDASH_TLS_DNS_PLUGIN_APPROVED|FIREDASH_TLS_DNS_PROPAGATION_SECONDS)
                 [[ -z ${!k:-} ]] && export "$k=$v"
                 ;;
         esac
@@ -144,6 +155,15 @@ else
         FIREDASH_TLS_MODE=${FIREDASH_TLS_MODE:-letsencrypt-http01}
     fi
 fi
+# An existing DNS owner may not silently change backend, provider, plugin,
+# executable, lineage, adoption or credential binding. Legacy missing keys stay
+# missing; their Netcup compatibility path is renewal-only.
+if [[ -f $CONFIG_SOURCE && $previous_tls_mode == letsencrypt-dns01 ]]; then
+    for binding in FIREDASH_TLS_DNS_BACKEND FIREDASH_TLS_DNS_PROVIDER FIREDASH_TLS_DNS_AUTHENTICATOR FIREDASH_TLS_DNS_PLUGIN_APPROVED FIREDASH_TLS_DNS_PROPAGATION_SECONDS FIREDASH_TLS_CERTBOT_PATH FIREDASH_TLS_LINEAGE FIREDASH_TLS_ADOPT_DNS01 FIREDASH_TLS_DNS_CREDENTIALS; do
+        previous_binding=$(env_value "$CONFIG_SOURCE" "$binding" 2>/dev/null || true)
+        [[ ${!binding:-} == "$previous_binding" ]] || die "DNS backend/authentication change requires a separately reviewed transition"
+    done
+fi
 case "$FIREDASH_TLS_MODE" in
     manual)
         prompt_for FIREDASH_TLS_CERT_PATH "TLS full-chain certificate path"
@@ -157,7 +177,22 @@ case "$FIREDASH_TLS_MODE" in
         ;;
     letsencrypt-dns01)
         FIREDASH_TLS_ADOPT_DNS01=${FIREDASH_TLS_ADOPT_DNS01:-no}
-        FIREDASH_TLS_CERTBOT_PATH=${FIREDASH_TLS_CERTBOT_PATH:-/usr/local/bin/certbot}
+        if [[ ! -f $CONFIG_SOURCE || $previous_tls_mode != letsencrypt-dns01 ]]; then
+            if [[ $FIREDASH_TLS_ADOPT_DNS01 == yes ]]; then
+                FIREDASH_TLS_DNS_BACKEND=${FIREDASH_TLS_DNS_BACKEND:-certbot-existing}
+                prompt_for FIREDASH_TLS_DNS_AUTHENTICATOR "Exact saved DNS authenticator (e.g. dns-netcup)"
+            fi
+            FIREDASH_TLS_DNS_BACKEND=${FIREDASH_TLS_DNS_BACKEND:-certbot-multi}
+            if [[ $FIREDASH_TLS_DNS_BACKEND == certbot-multi || ${FIREDASH_TLS_DNS_AUTHENTICATOR:-} == dns-multi ]]; then
+                prompt_for FIREDASH_TLS_DNS_PROVIDER "Reviewed dns-multi provider identifier"
+            fi
+            prompt_for FIREDASH_TLS_DNS_PLUGIN_APPROVED "Approve selected Certbot DNS plugin provenance and root execution (yes/no)"
+        fi
+        if [[ ${FIREDASH_TLS_DNS_BACKEND:-} == certbot-multi ]]; then
+            FIREDASH_TLS_CERTBOT_PATH=${FIREDASH_TLS_CERTBOT_PATH:-/opt/fire-backend-acme/bin/certbot}
+        else
+            FIREDASH_TLS_CERTBOT_PATH=${FIREDASH_TLS_CERTBOT_PATH:-/usr/local/bin/certbot}
+        fi
         if [[ $FIREDASH_TLS_ADOPT_DNS01 == yes ]]; then
             # Existing paths are deliberately not inferred or replaced.
             prompt_for FIREDASH_TLS_CERT_PATH "Existing Certbot full-chain certificate path"
@@ -166,7 +201,7 @@ case "$FIREDASH_TLS_MODE" in
         else
             FIREDASH_TLS_CERT_PATH=${FIREDASH_TLS_CERT_PATH:-/etc/fire-backend/tls/current/fullchain.pem}
             FIREDASH_TLS_KEY_PATH=${FIREDASH_TLS_KEY_PATH:-/etc/fire-backend/tls/current/privkey.pem}
-            prompt_for FIREDASH_TLS_DNS_CREDENTIALS "Existing root:root 0600 Netcup DNS credentials file path"
+            prompt_for FIREDASH_TLS_DNS_CREDENTIALS "Existing root:root 0600 DNS plugin credentials file path"
             prompt_for FIREDASH_ACME_EMAIL "Let's Encrypt ACME contact email"
             prompt_for FIREDASH_ACME_AGREE_TOS "Read https://letsencrypt.org/repository/ and accept the applicable subscriber agreement (yes/no)"
         fi
@@ -178,6 +213,11 @@ FIREDASH_TLS_CERTBOT_PATH=${FIREDASH_TLS_CERTBOT_PATH:-/usr/bin/certbot}
 FIREDASH_TLS_LINEAGE=${FIREDASH_TLS_LINEAGE:-firedash}
 FIREDASH_TLS_ADOPT_DNS01=${FIREDASH_TLS_ADOPT_DNS01:-no}
 FIREDASH_TLS_DNS_CREDENTIALS=${FIREDASH_TLS_DNS_CREDENTIALS:-}
+FIREDASH_TLS_DNS_BACKEND=${FIREDASH_TLS_DNS_BACKEND:-}
+FIREDASH_TLS_DNS_PROVIDER=${FIREDASH_TLS_DNS_PROVIDER:-}
+FIREDASH_TLS_DNS_AUTHENTICATOR=${FIREDASH_TLS_DNS_AUTHENTICATOR:-}
+FIREDASH_TLS_DNS_PLUGIN_APPROVED=${FIREDASH_TLS_DNS_PLUGIN_APPROVED:-no}
+FIREDASH_TLS_DNS_PROPAGATION_SECONDS=${FIREDASH_TLS_DNS_PROPAGATION_SECONDS:-900}
 FIREDASH_ACME_EMAIL=${FIREDASH_ACME_EMAIL:-}
 FIREDASH_ACME_AGREE_TOS=${FIREDASH_ACME_AGREE_TOS:-no}
 
@@ -197,6 +237,7 @@ FIREDASH_RELEASE=/srv/firedash/releases/$FIREDASH_RESOLVED_SHA
 export FIREDASH_BASE_URL FIREDASH_HOST FIREDASH_TLS_CERT_PATH FIREDASH_TLS_KEY_PATH
 export FIREDASH_TLS_MODE FIREDASH_ACME_EMAIL FIREDASH_ACME_AGREE_TOS FIREDASH_TLS_WARNING_DAYS
 export FIREDASH_TLS_CERTBOT_PATH FIREDASH_TLS_LINEAGE FIREDASH_TLS_ADOPT_DNS01 FIREDASH_TLS_DNS_CREDENTIALS
+export FIREDASH_TLS_DNS_BACKEND FIREDASH_TLS_DNS_PROVIDER FIREDASH_TLS_DNS_AUTHENTICATOR FIREDASH_TLS_DNS_PLUGIN_APPROVED FIREDASH_TLS_DNS_PROPAGATION_SECONDS
 export FIREDASH_INSTALL_SCHEMA_VERSION=2
 export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY
 export FIREDASH_RESOLVED_SHA FIREDASH_REQUESTED_REF FIREDASH_RELEASE
@@ -220,6 +261,11 @@ FIREDASH_TLS_CERTBOT_PATH=$FIREDASH_TLS_CERTBOT_PATH
 FIREDASH_TLS_LINEAGE=$FIREDASH_TLS_LINEAGE
 FIREDASH_TLS_ADOPT_DNS01=$FIREDASH_TLS_ADOPT_DNS01
 FIREDASH_TLS_DNS_CREDENTIALS=$FIREDASH_TLS_DNS_CREDENTIALS
+FIREDASH_TLS_DNS_BACKEND=$FIREDASH_TLS_DNS_BACKEND
+FIREDASH_TLS_DNS_PROVIDER=$FIREDASH_TLS_DNS_PROVIDER
+FIREDASH_TLS_DNS_AUTHENTICATOR=$FIREDASH_TLS_DNS_AUTHENTICATOR
+FIREDASH_TLS_DNS_PLUGIN_APPROVED=$FIREDASH_TLS_DNS_PLUGIN_APPROVED
+FIREDASH_TLS_DNS_PROPAGATION_SECONDS=$FIREDASH_TLS_DNS_PROPAGATION_SECONDS
 FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY:-}
 FIREDASH_REQUESTED_REF=$FIREDASH_REQUESTED_REF
 EOF
@@ -243,7 +289,7 @@ if [[ $FIREDASH_TLS_MODE == letsencrypt-http01 ]]; then
 fi
 if [[ $FIREDASH_TLS_MODE != manual ]]; then
     install -d -m 0755 -o root -g root /usr/local/lib/fire-backend
-    for helper in tls.py configuration.py legacy-schema-1.json; do
+    for helper in tls.py dns_auth.py configuration.py legacy-schema-1.json; do
         install_file_atomic "$SELF_DIR/lib/$helper" "/usr/local/lib/fire-backend/$helper" 0644 root:root
     done
 fi

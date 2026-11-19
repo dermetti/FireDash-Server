@@ -234,7 +234,7 @@ native Debian/LXC systemd/credential/sandbox boundaries, backup restoration and
 production-like acceptance. Record candidate SHA and evidence; do not infer
 production success from repository tests or migration files. Complete an
 independent security assessment, EULA/privacy/legal review and installer polishing.
-Installer B implements managed HTTP-01 and DNS-Netcup lifecycle paths and retains
+Installer B.1 implements managed HTTP-01 and provider-independent DNS lifecycle paths and retains
 manual TLS. Source implementation and mocked tests do not establish operational
 acceptance. Logging modes are implemented; remaining TLS evidence is below.
 
@@ -245,7 +245,7 @@ acceptance. Logging modes are implemented; remaining TLS evidence is below.
   including retained deploy security tests and native Nginx routing tests.
 - [ ] Disposable Debian 13/systemd: fresh public HTTP-01 bootstrap, real staging
   issuance and unattended staging renewal with correct A/AAAA and firewall rules.
-- [ ] Disposable CGNAT/no-inbound environment: fresh DNS-Netcup staging issuance,
+- [ ] Disposable CGNAT/no-inbound environment: fresh dns-multi staging issuance with disposable Netcup/provider credentials,
   adoption of an existing staging lineage, unattended renewal and convergence.
 - [ ] Validate actual Certbot/plugin version, standard live/archive symlinks,
   sandbox access to private credentials, scheduler conflict checks and shared lock.
@@ -259,3 +259,18 @@ acceptance. Logging modes are implemented; remaining TLS evidence is below.
 Follow the [Installer B workflow](installer-b-tls.md); never use production ACME
 or live Netcup credentials in automated tests. A security audit follows successful
 separately authorized Installer B deployment and DNS-01 validation.
+
+## Installer B.1 acceptance gates
+
+Local mock success is not ACME acceptance. Before beta release, require reviewed
+full GitHub CI, native Debian 13 ownership/symlink/locking/Nginx/systemd tests,
+pinned Certbot/dns-multi installation, actual staging issuance and unattended
+systemd renewal with disposable DNS credentials, failure/retry, native Netcup
+adoption without production material changes, and a second real staging provider
+when credentials are available. Record any unavailable credential cases as pending.
+
+Require a narrowly scoped encrypted TLS/ACME/account/credential snapshot and an
+isolated restore drill. Existing automated backups do not include all this state;
+recovery is beta-blocked until this evidence exists. Preserve all earlier
+deployment-security gates and application data/cryptographic selectors. See
+[B.1 report](installer-b-validation.md) and [operator workflows](installer-b-tls.md).
