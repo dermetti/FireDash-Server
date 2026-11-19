@@ -8,16 +8,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("tablets", "0003_app_version_tracking_and_completion_recovery"),
-        ("tablets", "0004_tabletapiactivity_alter_tablet_display_name_and_more"),
-        ("tablets", "0005_alter_tablet_status"),
-        ("tablets", "0006_remove_removed_tablet_data"),
-        ("tablets", "0007_enforce_current_tablet_asset_states"),
-        ("tablets", "0008_remove_obsolete_reactivation_flow"),
-        ("tablets", "0009_appinstallation_storage_telemetry"),
-    ]
-
     dependencies = [
         ("assignments", "0001_squashed_0002_beta"),
         ("organizations", "0001_squashed_0007_beta"),

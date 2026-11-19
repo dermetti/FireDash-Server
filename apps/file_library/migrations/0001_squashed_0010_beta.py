@@ -13,19 +13,6 @@ import apps.file_library.models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("file_library", "0001_initial"),
-        ("file_library", "0002_integrity_guards"),
-        ("file_library", "0003_publicationcontent"),
-        ("file_library", "0004_publication_guards"),
-        ("file_library", "0005_temporarystationaccess"),
-        ("file_library", "0006_remove_library_capacity"),
-        ("file_library", "0007_storageimpact_capacityreview"),
-        ("file_library", "0008_department_quota_policy"),
-        ("file_library", "0009_decimal_quota_defaults"),
-        ("file_library", "0010_publication_capacity_reviews"),
-    ]
-
     initial = True
 
     dependencies = [

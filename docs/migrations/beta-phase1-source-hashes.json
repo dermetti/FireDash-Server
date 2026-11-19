@@ -1,0 +1,18 @@
+{
+  "accounts.0001_squashed_0002_beta": "ae95b6df6fd53b8d7e838d4d0f1929406abb0c104e5f2f13affa5e4bb087a80b",
+  "assignments.0001_squashed_0002_beta": "ac0be23643a5cc822c4617dedd508e3558e67906781540bf9626168072334025",
+  "audit.0001_squashed_0004_beta": "2b73a04ca5ce776053534443281290b01b986903ec0dca0a5de4d1e0c400f37e",
+  "authorization.0001_squashed_0007_beta": "4bdd28a02bca74e6afb6982f1b6d0090a2290655224f043827738ac1dea5cee6",
+  "file_library.0001_squashed_0010_beta": "1105df338ed3cbbb6aa93c97842fd1c9eb128361f8cf9522683a7bdf344b1d58",
+  "ingestion.0001_squashed_0006_beta": "3bd2d6ee355a5c8587abaf19e0037a9d84ba40215e5fc07a037d6510a4e13e53",
+  "organizations.0001_squashed_0007_beta": "9c578de70776b7c2f40e12b10abcbeb0a6ff1c28ddc3feaa66d8e2cb6dcca6a2",
+  "outbound_mail.0001_squashed_0006_beta": "99fa78f764df2e046fde05b7890ba8a573ae011131a83105e3466cccfd4acee4",
+  "personnel.0001_squashed_0002_beta": "f782e1264eee5dd027be7f3589482c8f80cdf8c6286f556adcb6c1edceaef454",
+  "publications.0001_squashed_0011_beta": "19f1b959cf0bc2c4c65a55ea64aa37424e450fa2308c9e625741fc5f57cd6109",
+  "publications.0012_squashed_0030_beta": "68b23a5444e5cbcd4a2475ccf2b4b3379fc841fed5315bd6b2cecfc4f7b45e4e",
+  "publications.0031_squashed_0033_beta": "cfb522664b02ed0dc53525752525a3a411c59814427a4d0fd1fc207f5a9a5031",
+  "reference_data.0001_squashed_0015_beta": "d089ef1fb38704080c2f4c8092d4a157deb381d2bde2d38be643a45ecb34b925",
+  "report_transfer.0001_squashed_0003_beta": "d53c531977e584bf650f3ee49f8194fe721eee104e1a80fb09e58d46ab9feea1",
+  "tablets.0001_squashed_0002_beta": "9d3d631aadf0cfdd398363082fd6a8e60a2a236d83d13593ffaf0008ae59dc79",
+  "tablets.0003_squashed_0009_beta": "f48498f899de2db12e2c17a0c9d68decf5e7e9fa195321e408c70f9ae9b6ff1c"
+}

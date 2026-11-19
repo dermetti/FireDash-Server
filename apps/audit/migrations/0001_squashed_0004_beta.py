@@ -8,13 +8,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("audit", "0001_initial"),
-        ("audit", "0002_immutable_audit_event"),
-        ("audit", "0003_allow_test_database_flush"),
-        ("audit", "0004_restore_audit_truncate_immutability"),
-    ]
-
     initial = True
 
     dependencies = [

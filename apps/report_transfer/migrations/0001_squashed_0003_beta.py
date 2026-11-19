@@ -7,12 +7,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("report_transfer", "0001_initial"),
-        ("report_transfer", "0002_report_document_integrity"),
-        ("report_transfer", "0003_portal_transfers"),
-    ]
-
     initial = True
 
     dependencies = [

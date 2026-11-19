@@ -8,28 +8,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("publications", "0012_publication_lifecycle_states"),
-        ("publications", "0013_datasetpublication_source_fingerprint"),
-        ("publications", "0014_datasetpublication_source_snapshot"),
-        ("publications", "0015_current_source_fingerprint"),
-        ("publications", "0016_publication_retention"),
-        ("publications", "0017_fire_plan_document_artifacts"),
-        ("publications", "0018_fire_plan_v2_delivery"),
-        ("publications", "0019_fire_plan_document_artifact_cleanup"),
-        ("publications", "0020_fire_plan_document_manifest_cutover"),
-        ("publications", "0021_klgv_document_manifest_v2"),
-        ("publications", "0022_klgv_document_v2_ready_guard"),
-        ("publications", "0023_phonebook_dataset_scope_registry"),
-        ("publications", "0024_dangerous_goods_source_revisions"),
-        ("publications", "0025_promote_klgv_document_v2_registry"),
-        ("publications", "0026_rename_publications_scope_s_631ca6_idx_pub_src_scope_rev_idx"),
-        ("publications", "0027_publication_scope_types"),
-        ("publications", "0028_file_library_registry"),
-        ("publications", "0029_publicationjob_allow_clean_rebuild"),
-        ("publications", "0030_correct_legacy_bulk_rebuild_intent"),
-    ]
-
     dependencies = [
         ("audit", "0001_squashed_0004_beta"),
         ("publications", "0001_squashed_0011_beta"),

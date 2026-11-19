@@ -24,16 +24,6 @@ def initialize_rescue_guides(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("authorization", "0001_initial"),
-        ("authorization", "0002_single_department_admin_constraint"),
-        ("authorization", "0003_api_version_compatibility_policy"),
-        ("authorization", "0004_authority_lifecycle_status"),
-        ("authorization", "0005_reconcile_lifecycle_provenance_constraint_state"),
-        ("authorization", "0006_vehicle_rescue_guides_configuration"),
-        ("authorization", "0007_department_managed_mail_eligibility"),
-    ]
-
     initial = True
 
     dependencies = [

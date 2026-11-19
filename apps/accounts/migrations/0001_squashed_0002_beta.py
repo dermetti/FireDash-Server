@@ -10,11 +10,6 @@ import apps.accounts.managers
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("accounts", "0001_initial"),
-        ("accounts", "0002_alter_user_groups_accountsetuptoken_and_more"),
-    ]
-
     initial = True
 
     dependencies = [

@@ -1,65 +1,61 @@
-"""Migration coverage for Hydrant's geometry/descriptive-location split."""
+"""Permanent canonical geometry and descriptive hydrant location."""
 
 import pytest
 from django.contrib.gis.geos import Point
-from django.db import connection
+from django.db import DatabaseError, transaction
 
 from apps.accounts.models import User
 from apps.organizations.models import Department
 from apps.publications.builders import build_source_payload
 from apps.publications.registry import get_dataset_definition
-from apps.reference_data.models import Hydrant
-from tools.migration_catalog import historical_executor as MigrationExecutor
+from apps.reference_data.models import Hydrant, KlgvPlan
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(
-    "disposable_migration_database",
-    [("reference_data", "0012_finalize_klgv_required_metadata")],
-    indirect=True,
-)
-def test_hydrant_location_migration_preserves_point_and_leaves_text_location_null(
-    disposable_migration_database,
-):
-    executor = MigrationExecutor(connection)
-    latest_targets = executor.loader.graph.leaf_nodes()
-    try:
-        # Latest app targets depend on the geometry rename. Use the state
-        # actually applied after rollback rather than reintroducing those leaves.
-        rolled_back = MigrationExecutor(connection)
-        old_apps = rolled_back.loader.project_state(
-            list(rolled_back.loader.applied_migrations)
-        ).apps
-        OldHydrant = old_apps.get_model("reference_data", "Hydrant")
-        user = User.objects.create_user("migration@example.test", "Migration", "safe-password")
-        department = Department.objects.create(name="Migration", short_code="MIG", created_by=user)
-        original_point = Point(8.682127, 50.110924, srid=4326)
-        old_hydrant = OldHydrant.objects.create(
-            department_id=department.id,
-            external_identifier="H-MIG-1",
-            location=original_point,
-            status="ACTIVE",
-            source_metadata={},
-        )
-        original_ewkb = old_hydrant.location.ewkb
-
-        connection.commit()
-        executor = MigrationExecutor(connection)
-        executor.migrate(latest_targets)
-
-        hydrant = Hydrant.objects.get(pk=old_hydrant.pk)
-        assert hydrant.location is None
-        assert hydrant.geometry.ewkb == original_ewkb
-        payload = build_source_payload(
-            definition=get_dataset_definition("department_hydrants"),
-            department=department,
-            station=None,
-        )
-        assert payload["features"][0]["geometry"] == {
-            "type": "Point",
-            "coordinates": [8.682127, 50.110924],
-        }
-    finally:
-        connection.commit()
-        executor = MigrationExecutor(connection)
-        executor.migrate(latest_targets)
+@pytest.mark.django_db
+def test_baseline_hydrant_geometry_and_descriptive_location_are_independent():
+    user = User.objects.create_user("geometry@example.test", "Geometry", "password")
+    department = Department.objects.create(name="Canonical", short_code="CAN", created_by=user)
+    point = Point(8.682127, 50.110924, srid=4326)
+    hydrant = Hydrant.objects.create(
+        department=department, external_identifier="H-1", geometry=point, status="ACTIVE"
+    )
+    hydrant.refresh_from_db()
+    assert hydrant.location is None and hydrant.geometry.ewkb == point.ewkb
+    hydrant.location = "Beside the gate"
+    hydrant.save(update_fields=["location"])
+    payload = build_source_payload(
+        definition=get_dataset_definition("department_hydrants"),
+        department=department,
+        station=None,
+    )
+    assert payload["features"][0]["geometry"] == {
+        "type": "Point",
+        "coordinates": [8.682127, 50.110924],
+    }
+    with pytest.raises(DatabaseError), transaction.atomic():
+        Hydrant.objects.create(department=department, external_identifier="H-1", geometry=point)
+    plan = KlgvPlan.objects.create(
+        department=department,
+        external_identifier="K-1",
+        object_name="Hall",
+        address="Street 1",
+        postal_code="12345",
+        city="Town",
+        location=point,
+        path="test/canonical.pdf",
+        original_filename="canonical.pdf",
+        file_size=12,
+        page_count=1,
+        sha256="a" * 64,
+        source_pdf_sha256="b" * 64,
+        uploaded_by=user,
+    )
+    plan.refresh_from_db()
+    assert plan.location is not None
+    assert plan.location.ewkb == point.ewkb
+    assert (plan.object_name, plan.address, plan.postal_code, plan.city) == (
+        "Hall",
+        "Street 1",
+        "12345",
+        "Town",
+    )

@@ -6,12 +6,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("publications", "0031_unified_document_generation"),
-        ("publications", "0032_remove_legacy_fire_plan_delivery"),
-        ("publications", "0033_strict_document_generation_metadata"),
-    ]
-
     dependencies = [
         ("file_library", "0001_squashed_0010_beta"),
         ("publications", "0012_squashed_0030_beta"),

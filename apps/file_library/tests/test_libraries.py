@@ -21,7 +21,6 @@ from apps.file_library.models import Content, Entry, Library
 from apps.organizations.models import Department, Station
 from apps.reference_data.pdf_sandbox import PdfSanitizerError
 from apps.reference_data.pdf_validation import PdfValidationError
-from tools.migration_catalog import historical_executor as MigrationExecutor
 
 pytestmark = pytest.mark.django_db
 
@@ -546,25 +545,3 @@ def test_concurrent_capacity_changes(scope, pdf_pipeline, monkeypatch, race):
     )
     assert library.usage_bytes == actual <= library.quota_bytes
     assert library.source_revision == (3 if race == "replacements" else 4)
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(
-    "disposable_migration_database",
-    [("publications", "0027_publication_scope_types")],
-    indirect=True,
-)
-def test_migrations_forward_install_guards(disposable_migration_database):
-    executor = MigrationExecutor(connection)
-    target = executor.loader.graph.leaf_nodes()
-    assert "file_library_library" not in connection.introspection.table_names()
-    from apps.publications.models import DatasetTypeRegistry
-
-    assert not DatasetTypeRegistry.objects.filter(
-        code__in=("department_files", "station_files")
-    ).exists()
-    executor.migrate(target)
-    assert "file_library_library" in connection.introspection.table_names()
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'file_library_%'")
-        assert cursor.fetchone()[0] >= 6

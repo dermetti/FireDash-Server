@@ -8,15 +8,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("ingestion", "0001_workstream4_canonical_ingestion"),
-        ("ingestion", "0002_alter_importbatch_domain"),
-        ("ingestion", "0003_alter_importbatch_domain"),
-        ("ingestion", "0004_dangerous_goods_import_domain"),
-        ("ingestion", "0005_system_dangerous_goods"),
-        ("ingestion", "0006_clear_obsolete_goods_manifests"),
-    ]
-
     initial = True
 
     dependencies = [

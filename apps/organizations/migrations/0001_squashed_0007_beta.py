@@ -9,16 +9,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("organizations", "0001_initial"),
-        ("organizations", "0002_vehicle"),
-        ("organizations", "0003_structured_station_address"),
-        ("organizations", "0004_remove_station_address"),
-        ("organizations", "0005_department_tablet_lease_days"),
-        ("organizations", "0006_department_tablet_asset_number_policy"),
-        ("organizations", "0007_department_locale_and_timezone"),
-    ]
-
     initial = True
 
     dependencies = [

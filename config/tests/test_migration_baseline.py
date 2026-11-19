@@ -1,10 +1,11 @@
-"""Exercise real replacement bookkeeping against isolated PostGIS schemas."""
+"""Permanent beta schema and accepted Phase 1 upgrade compatibility."""
 
+import hashlib
 import importlib
 import io
+import json
 import re
-from collections import Counter
-from itertools import product
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -15,12 +16,10 @@ from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
 from django.test.utils import CaptureQueriesContext
-from django.utils import timezone
 
 from tools.migration_catalog import (
     catalog,
     disposable_database,
-    historical_executor,
     normalized_schema_dump,
     schema_dump,
     schema_dump_available,
@@ -32,15 +31,48 @@ def test_normalized_postgresql_schema_dumps_match():
     if not schema_dump_available():
         pytest.skip("pg_dump unavailable locally; CI uses the PostgreSQL 17 service client")
     dumps = []
-    for historical in (True, False):
+    for phase_one in (True, False):
         with disposable_database() as db:
-            migrate_all(db, historical=historical)
-            dumps.append(normalized_schema_dump(schema_dump(db), catalog(db)))
+            migrate_all(db, phase_one=phase_one)
+            dumps.append(normalized_schema_dump(schema_dump(db)))
     assert dumps[0] == dumps[1]
 
 
-def migrate_all(db, *, historical=False):
-    executor = historical_executor(db) if historical else MigrationExecutor(db)
+HISTORY_DIR = Path(__file__).resolve().parents[2] / "docs" / "migrations"
+PHASE1_MAPPING = json.loads(
+    (HISTORY_DIR / "beta-baseline-mapping.json").read_text(encoding="utf-8")
+)
+
+
+class AcceptedPhaseOneLoader(MigrationLoader):
+    """Reconstruct accepted replacement metadata for simulation only.
+
+    Source hashes pin every operation, initializer and dependency to the accepted
+    release. Django itself creates all recorder entries through normal migrate.
+    No historical migration modules or manual recorder writes are needed.
+    """
+
+    def load_disk(self):
+        super().load_disk()
+        for key, migration in list(self.disk_migrations.items()):
+            names = PHASE1_MAPPING.get(".".join(key))
+            if names is not None:
+                accepted_class = type(
+                    "AcceptedPhaseOneMigration",
+                    (migration.__class__,),
+                    {"replaces": [tuple(name.split(".", 1)) for name in names]},
+                )
+                self.disk_migrations[key] = accepted_class(migration.name, migration.app_label)
+
+
+def phase_one_executor(db):
+    executor = MigrationExecutor(db)
+    executor.loader = AcceptedPhaseOneLoader(db)
+    return executor
+
+
+def migrate_all(db, *, phase_one=False):
+    executor = phase_one_executor(db) if phase_one else MigrationExecutor(db)
     targets = executor.loader.graph.leaf_nodes()
     executor.migrate(targets)
     return executor.loader.project_state(targets).apps
@@ -82,50 +114,6 @@ def assert_seeds(state):
         "web",
         "https://rescue.euroncap.com/",
     )
-
-
-def assert_semantic_catalogs(reference, fresh, db):
-    for key in ("columns", "functions", "triggers", "ownership"):
-        assert reference[key] == fresh[key], key
-
-    # PostgreSQL keeps automatic names across RenameField/RenameModel. Compare
-    # index definitions independently of those names, retaining multiplicity.
-    def indexes(rows):
-        return Counter(
-            (table, re.sub(r"INDEX \S+ ON", "INDEX <name> ON", definition))
-            for table, _name, definition in rows
-        )
-
-    assert indexes(reference["indexes"]) == indexes(fresh["indexes"])
-    old = {(row[0], row[1]): row for row in reference["constraints"]}
-    new = {(row[0], row[1]): row for row in fresh["constraints"]}
-    lifecycle = {
-        ("authorization_departmentmembership", "department_membership_lifecycle_provenance"),
-        ("authorization_stationadminassignment", "station_assignment_lifecycle_provenance"),
-    }
-    # Check every lifecycle combination, including unrecognized statuses and NULL.
-    for lifecycle_key in lifecycle:
-        left, right = old.pop(lifecycle_key), new.pop(lifecycle_key)
-        assert left[:3] == right[:3] and left[4:] == right[4:]
-        with db.cursor() as cursor:
-            for status, revoked_at, revoked_by in product(
-                ["ACTIVE", "SUSPENDED", "REVOKED", "invalid", None],
-                [None, timezone.now()],
-                [None, uuid4()],
-            ):
-                cursor.execute(
-                    f"SELECT {left[3][6:]}, {right[3][6:]} FROM "
-                    "(SELECT %s::varchar AS status, %s::timestamptz AS revoked_at, "
-                    "%s::uuid AS revoked_by_id) v",
-                    [status, revoked_at, revoked_by],
-                )
-                assert len(set(cursor.fetchone())) == 1
-
-    # Unique/PK constraint names inherit table and column renames as well.
-    def constraints(rows):
-        return Counter((row[0], *row[2:]) for row in rows.values())
-
-    assert constraints(old) == constraints(new)
 
 
 def make_records(state):
@@ -191,38 +179,43 @@ def business_fingerprints(db):
     return result
 
 
-def test_replacement_graph_and_user_root():
+def test_permanent_graph_and_accepted_source_are_unchanged():
     loader = MigrationLoader(None)
     loader.graph.ensure_not_cyclic()
-    replacements = loader.replacements
-    assert len(replacements) == 16
-    all_replaced = [key for migration in replacements.values() for key in migration.replaces]
-    assert len(all_replaced) == len(set(all_replaced)) == 104
-    original = historical_executor(None).loader
+    assert not loader.replacements
     app_labels = {
         config.label for config in apps.get_app_configs() if config.name.startswith("apps.")
     }
-    assert set(all_replaced) == {key for key in original.disk_migrations if key[0] in app_labels}
+    own = {key for key in loader.disk_migrations if key[0] in app_labels}
+    assert {".".join(key) for key in own} == set(PHASE1_MAPPING)
+    assert len(own) == 16
+    hashes = json.loads((HISTORY_DIR / "beta-phase1-source-hashes.json").read_text())
+    for app, name in own:
+        path = HISTORY_DIR.parents[1] / "apps" / app / "migrations" / f"{name}.py"
+        source = path.read_text(encoding="utf-8")
+        assert hashlib.sha256(source.encode()).hexdigest() == hashes[f"{app}.{name}"]
+        assert "replaces =" not in source
+    files = list((HISTORY_DIR.parents[1] / "apps").glob("*/migrations/[0-9]*.py"))
+    assert len(files) == 16
     root = loader.graph.root_nodes("accounts")
     assert root == [("accounts", "0001_squashed_0002_beta")]
     assert any(
         op.__class__.__name__ == "CreateModel" and op.name == "User"
         for op in loader.graph.nodes[root[0]].operations
     )
-    assert not any(key in loader.graph.nodes for key in all_replaced)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_fresh_baseline_matches_historical_final_schema():
+def test_fresh_baseline_matches_accepted_phase_one_schema():
     with disposable_database() as db:
-        state = migrate_all(db, historical=True)
+        state = migrate_all(db, phase_one=True)
         assert_seeds(state)
         reference = catalog(db)
     with disposable_database() as db:
         state = migrate_all(db)
         assert_seeds(state)
         fresh = catalog(db)
-        assert_semantic_catalogs(reference, fresh, db)
+        assert fresh == reference
         tables = set(db.introspection.table_names())
         assert "reference_data_hydrantimportpreview" not in tables
         assert not any("fireplan" in t for t in tables if t.startswith("publications_"))
@@ -231,109 +224,66 @@ def test_fresh_baseline_matches_historical_final_schema():
             "file_library_storageimpact",
             "outbound_mail_tabletreportdeliveryrequest",
         } <= tables
+        for model in state.get_models():
+            if model._meta.managed and not model._meta.proxy:
+                assert model._meta.db_table in tables
+                with db.cursor() as cursor:
+                    columns = {
+                        column.name
+                        for column in db.introspection.get_table_description(
+                            cursor, model._meta.db_table
+                        )
+                    }
+                assert {field.column for field in model._meta.local_fields} <= columns
         call_command("makemigrations", check=True, dry_run=True, stdout=io.StringIO())
         call_command("migrate", check_unapplied=True, verbosity=0)
         executor = MigrationExecutor(db)
         assert not executor.migration_plan(executor.loader.graph.leaf_nodes())
         recorded = MigrationRecorder(db).applied_migrations()
-        assert set(executor.loader.replacements) <= recorded.keys()
-        # Django records both the replacement and its original names even when
-        # only replacement operations ran. These are normal framework records.
-        assert all(
-            key in recorded
-            for migration in executor.loader.replacements.values()
-            for key in migration.replaces
-        )
+        assert {tuple(name.split(".", 1)) for name in PHASE1_MAPPING} <= recorded.keys()
+        originals = {
+            tuple(name.split(".", 1)) for names in PHASE1_MAPPING.values() for name in names
+        }
+        assert not originals.intersection(recorded)
+        # Independent evidence from the original-history reference pins security SQL.
+        evidence = json.loads((HISTORY_DIR / "beta-postgresql16-reference.json").read_text())
+        assert {key: len(rows) for key, rows in fresh.items()} == evidence["catalog_counts"]
+        assert [
+            (name, args, hashlib.sha256(definition.encode()).hexdigest())
+            for name, args, definition, *_ in fresh["functions"]
+        ] == [
+            (row["name"], row["arguments"], row["definition_sha256"])
+            for row in evidence["functions"]
+        ]
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("pending_cleanup", [False, True])
-def test_established_server_preserves_records_and_records_replacements(pending_cleanup):
+def test_established_phase_one_upgrade_is_noop_and_preserves_history():
     with disposable_database() as db:
-        executor = historical_executor(db)
-        targets = executor.loader.graph.leaf_nodes()
-        if pending_cleanup:
-            targets = [
-                (app, "0014_phonebook_entries") if app == "reference_data" else (app, name)
-                for app, name in targets
-            ]
-        executor.migrate(targets)
-        state = executor.loader.project_state(targets).apps
+        state = migrate_all(db, phase_one=True)
         make_records(state)
         before = business_fingerprints(db)
         schema = catalog(db)
-        executor = MigrationExecutor(db)
-        executor.loader.check_consistent_history(db)
-        plan = executor.migration_plan(executor.loader.graph.leaf_nodes())
-        assert [(m.app_label, m.name, backwards) for m, backwards in plan] == (
-            [("reference_data", "0015_remove_retired_hydrant_preview", False)]
-            if pending_cleanup
-            else []
+        records = MigrationRecorder(db).applied_migrations()
+        expected = {tuple(name.split(".", 1)) for name in PHASE1_MAPPING}
+        expected.update(
+            tuple(name.split(".", 1)) for names in PHASE1_MAPPING.values() for name in names
         )
-        with CaptureQueriesContext(db) as queries:
-            executor.migrate(executor.loader.graph.leaf_nodes())
-        assert not any(re.match(r"\s*(CREATE|ALTER)\s", q["sql"], re.I) for q in queries)
-        assert business_fingerprints(db) == before
-        after_schema = catalog(db)
-        if pending_cleanup:
-            for key in ("columns", "constraints", "indexes", "ownership"):
-                schema[key] = [
-                    row for row in schema[key] if row[0] != "reference_data_hydrantimportpreview"
-                ]
-        assert after_schema == schema
-        executor = MigrationExecutor(db)
-        assert (
-            set(executor.loader.replacements) <= MigrationRecorder(db).applied_migrations().keys()
-        )
-        executor.loader.check_consistent_history(db)
-        assert not executor.migration_plan(executor.loader.graph.leaf_nodes())
-        executor.migrate(executor.loader.graph.leaf_nodes())
-        assert business_fingerprints(db) == before
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("blocker", ["rows", "dependent_view"])
-def test_preview_cleanup_fails_closed(blocker):
-    with disposable_database() as db:
-        executor = historical_executor(db)
-        targets = [
-            (app, "0014_phonebook_entries") if app == "reference_data" else (app, name)
-            for app, name in executor.loader.graph.leaf_nodes()
-        ]
-        executor.migrate(targets)
-        state = executor.loader.project_state(targets).apps
-        user, department, _publication = make_records(state)
-        preview = state.get_model("reference_data", "HydrantImportPreview")
-        if blocker == "rows":
-            preview.objects.create(
-                department_id=department.pk,
-                created_by_id=user.pk,
-                normalized_features=[{"synthetic": True}],
-                expires_at=timezone.now(),
+        assert expected <= records.keys()
+        for _ in range(2):
+            executor = MigrationExecutor(db)
+            executor.loader.check_consistent_history(db)
+            targets = executor.loader.graph.leaf_nodes()
+            assert not executor.migration_plan(targets)
+            with CaptureQueriesContext(db) as queries:
+                executor.migrate(targets)
+            assert not any(
+                re.match(r"\s*(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|TRUNCATE)\s", q["sql"], re.I)
+                for q in queries
             )
-        else:
-            with db.cursor() as cursor:
-                cursor.execute(
-                    "CREATE VIEW test_preview_dependency AS SELECT id FROM "
-                    "reference_data_hydrantimportpreview"
-                )
-        before = business_fingerprints(db)
-        schema = catalog(db)
-        executor = MigrationExecutor(db)
-        error = RuntimeError if blocker == "rows" else DatabaseError
-        with pytest.raises(error) as caught:
-            executor.migrate(executor.loader.graph.leaf_nodes())
-        if blocker == "rows":
-            assert str(caught.value) == (
-                "Refusing to drop reference_data_hydrantimportpreview: "
-                "1 rows require explicit disposition."
-            )
-            assert preview.objects.count() == 1
-        assert catalog(db) == schema
-        assert business_fingerprints(db) == before
-        assert ("reference_data", "0015_remove_retired_hydrant_preview") not in (
-            MigrationRecorder(db).applied_migrations()
-        )
+            assert business_fingerprints(db) == before
+            assert catalog(db) == schema
+            assert MigrationRecorder(db).applied_migrations() == records
 
 
 @pytest.mark.django_db(transaction=True)

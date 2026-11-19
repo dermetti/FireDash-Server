@@ -2,7 +2,6 @@
 """Logical reverts and rebuilds retain immutable publication attempts."""
 
 import hashlib
-import importlib
 import json
 from copy import deepcopy
 from datetime import timedelta
@@ -680,24 +679,6 @@ def test_clean_revert_preserves_historical_reviews(scope, pdf_pipeline, crypto):
     services.delete_entry(**common, entry_id=extra.id)
     assert before == list(CapacityReview.objects.filter(pk__in=ids).order_by("id").values())
     assert publication_state(library)["publication_current"]
-
-
-@pytest.mark.parametrize("debounced", [False, True])
-def test_force_flag_migration_preserves_legacy_explicit_intent(scope, debounced):
-    from django.apps import apps
-
-    library = library_for(scope)
-    state = DatasetScopeState.objects.get(**scope_kwargs(library))
-    job = PublicationJob.objects.get(scope_state=state)
-    job.trigger_type = "USER_REQUEST"
-    job.debounce_started_at = timezone.now() if debounced else None
-    job.save(update_fields=("trigger_type", "debounce_started_at"))
-    migration = importlib.import_module(
-        "apps.publications.migrations.0029_publicationjob_allow_clean_rebuild"
-    )
-    migration.preserve_explicit_requests(apps, None)
-    job.refresh_from_db()
-    assert job.allow_clean_rebuild is not debounced
 
 
 @pytest.mark.parametrize("station", [False, True])

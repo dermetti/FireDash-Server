@@ -1,6 +1,8 @@
 # Beta migration consolidation, phase 1
 
-Local implementation only. PostgreSQL 17 validation and GitHub CI results remain outstanding: the available test service is PostgreSQL 16.15. No deployment or Git mutation was performed.
+Historical Phase 1 implementation evidence, retained as recorded at that time. The user has since accepted deployment of commit `4ce840e376c5e0ac29f293f82f1168d3a27ab05a` on Debian 13 / PostgreSQL 17: all 16 replacement entries recorded, preview table removed, deployment verification passed, no failed units, and database/audit/permissions/cryptographic credentials/Report Transfer/HTTPS readiness passed. These server results are user-provided acceptance evidence; this local task does not access that server.
+
+The active migration layout is now the [permanent Phase 2 baseline](beta-baseline-phase2.md). Statements below about retained historical files, replacements and local validation limits describe Phase 1. The old-to-new mapping is historical documentation and a read-only accepted-release test fixture; it is not an active migration instruction.
 
 ## Replacement mapping and dependencies
 

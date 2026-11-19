@@ -8,11 +8,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("assignments", "0001_initial"),
-        ("assignments", "0002_tablet_assignment_end_reason"),
-    ]
-
     initial = True
 
     dependencies = [

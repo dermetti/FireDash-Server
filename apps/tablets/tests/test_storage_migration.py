@@ -1,28 +1,20 @@
+"""Permanent tablet telemetry constraints and lifecycle schema."""
+
 import pytest
 from django.db import connection
 
-from tools.migration_catalog import historical_executor as MigrationExecutor
+from apps.tablets.models import Tablet
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(
-    "disposable_migration_database",
-    [("tablets", "0008_remove_obsolete_reactivation_flow")],
-    indirect=True,
-)
-def test_storage_telemetry_migration_applies_forward(disposable_migration_database):
-    executor = MigrationExecutor(connection)
-    latest = executor.loader.graph.leaf_nodes()
-    try:
-        executor.migrate([("tablets", "0008_remove_obsolete_reactivation_flow")])
-        with connection.cursor() as cursor:
-            columns = connection.introspection.get_table_description(
-                cursor, "tablets_appinstallation"
-            )
-        assert "free_storage_bytes" not in {column.name for column in columns}
-    finally:
-        MigrationExecutor(connection).migrate(latest)
+@pytest.mark.django_db
+def test_storage_baseline_has_complete_telemetry_and_current_lifecycle():
     with connection.cursor() as cursor:
+        columns = connection.introspection.get_table_description(cursor, "tablets_appinstallation")
         constraints = connection.introspection.get_constraints(cursor, "tablets_appinstallation")
+    assert {"free_storage_bytes", "total_storage_bytes", "storage_observed_at"} <= {
+        column.name for column in columns
+    }
     assert constraints["installation_storage_complete"]["check"]
     assert constraints["installation_storage_free_lte_total"]["check"]
+    assert set(Tablet.Status.values) == {"ACTIVE", "INACTIVE", "LOST", "RETIRED"}
+    assert not any("reactivation" in table for table in connection.introspection.table_names())

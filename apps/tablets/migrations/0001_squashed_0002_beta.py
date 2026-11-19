@@ -10,11 +10,6 @@ import apps.tablets.versions
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("tablets", "0001_initial"),
-        ("tablets", "0002_tablet_asset_number_tablet_created_by_and_more"),
-    ]
-
     initial = True
 
     dependencies = [

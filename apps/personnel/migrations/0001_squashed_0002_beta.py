@@ -9,11 +9,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("personnel", "0001_initial"),
-        ("personnel", "0002_personnelretentionpolicy_person_anonymized_at_and_more"),
-    ]
-
     initial = True
 
     dependencies = [

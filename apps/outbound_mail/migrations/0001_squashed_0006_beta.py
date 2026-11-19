@@ -15,15 +15,6 @@ def initialize_system_mail(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("outbound_mail", "0001_initial"),
-        ("outbound_mail", "0002_systemmailconfiguration_last_verification_code_and_more"),
-        ("outbound_mail", "0003_departmentrecipientpolicy_and_more"),
-        ("outbound_mail", "0004_departmentmailconfiguration_last_smtp_verification_code_and_more"),
-        ("outbound_mail", "0005_tabletreportdeliveryrequest"),
-        ("outbound_mail", "0006_systemmailconfiguration_outbound_mail_https_proxy"),
-    ]
-
     initial = True
 
     dependencies = [

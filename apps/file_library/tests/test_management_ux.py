@@ -3,7 +3,6 @@ import uuid
 
 import pytest
 from django.core.exceptions import PermissionDenied
-from django.db import connection
 from django.urls import reverse
 from django.utils import timezone
 
@@ -24,7 +23,6 @@ from apps.file_library.tests.test_publication import crypto, publish  # noqa: F4
 from apps.organizations.models import Station
 from apps.portal.forms import FileLibraryQuotaForm
 from apps.publications.models import DatasetPublication, DatasetScopeState
-from tools.migration_catalog import historical_executor as MigrationExecutor
 
 pytestmark = pytest.mark.django_db
 
@@ -314,37 +312,3 @@ def test_historical_audit_context_allowlist_never_renders_raw_metadata(client, s
     assert "not-an-id" not in content and "&lt;script&gt;secret" not in content
     event.refresh_from_db()
     assert event.metadata["token"] == "sensitive-token"
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(
-    "disposable_migration_database",
-    [("file_library", "0007_storageimpact_capacityreview")],
-    indirect=True,
-)
-def test_quota_backfill_preserves_department_uses_minimum_and_reports(
-    disposable_migration_database, scope, capsys
-):
-    admin, _station_admin, _other, department, _outside, station, second = scope
-    executor = MigrationExecutor(connection)
-    latest = executor.loader.graph.leaf_nodes()
-    old_target = [("file_library", "0007_storageimpact_capacityreview")]
-    try:
-        executor.migrate(old_target)
-        old_apps = executor.loader.project_state(old_target).apps
-        OldLibrary = old_apps.get_model("file_library", "Library")
-        OldLibrary.objects.create(department_id=department.id, quota_bytes=1234567)
-        OldLibrary.objects.create(station_id=station.id, quota_bytes=9876543)
-        OldLibrary.objects.create(station_id=second.id, quota_bytes=2345678)
-        MigrationExecutor(connection).migrate(latest)
-        policy = DepartmentQuotaPolicy.objects.get(department=department)
-        assert (policy.department_files_bytes, policy.station_files_bytes) == (1234567, 2345678)
-        assert set(
-            Library.objects.filter(station__department=department).values_list(
-                "source_revision", flat=True
-            )
-        ) == {0}
-        output = capsys.readouterr().out
-        assert str(department.id) in output and "2345678" in output and "9876543" in output
-    finally:
-        MigrationExecutor(connection).migrate(latest)

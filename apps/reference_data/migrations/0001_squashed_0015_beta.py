@@ -9,26 +9,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("reference_data", "0001_initial"),
-        (
-            "reference_data",
-            "0002_rename_reference_d_departm_3ca664_idx_reference_d_departm_f01f3d_idx_and_more",
-        ),
-        ("reference_data", "0004_hydrant_enum_diameter"),
-        ("reference_data", "0005_remove_hydrant_reference_d_departm_8bffe7_idx_and_more"),
-        ("reference_data", "0006_workstream4_canonical_ingestion"),
-        ("reference_data", "0007_fire_plan_location_metadata"),
-        ("reference_data", "0008_align_fire_plan_identity"),
-        ("reference_data", "0009_fire_plan_operational_locations"),
-        ("reference_data", "0010_phase2_hydrant_address"),
-        ("reference_data", "0011_phase2_klgv_canonical_metadata"),
-        ("reference_data", "0012_finalize_klgv_required_metadata"),
-        ("reference_data", "0013_hydrant_descriptive_location"),
-        ("reference_data", "0014_phonebook_entries"),
-        ("reference_data", "0015_remove_retired_hydrant_preview"),
-    ]
-
     initial = True
 
     dependencies = [

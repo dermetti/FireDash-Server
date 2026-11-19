@@ -40,19 +40,6 @@ def initialize_beta_registry(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("publications", "0001_initial"),
-        ("publications", "0002_phase6_registry_features"),
-        ("publications", "0003_phase7_artifacts"),
-        ("publications", "0004_phase7_closeout_integrity"),
-        ("publications", "0005_dataset_key_grant"),
-        ("publications", "0006_signed_manifest"),
-        ("publications", "0007_datasetpublication_artifact_signing_key_version"),
-        ("publications", "0008_publication_job_debounce"),
-        ("publications", "0010_publicationjob_bulk_trigger"),
-        ("publications", "0011_department_klgv_plans_registry"),
-    ]
-
     initial = True
 
     dependencies = [

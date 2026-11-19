@@ -1,6 +1,5 @@
 """Non-sensitive PostgreSQL catalog snapshots for migration transition tests."""
 
-import hashlib
 import os
 import re
 import shutil
@@ -11,8 +10,6 @@ from uuid import uuid4
 
 import sqlparse
 from django.db import connections
-from django.db.migrations.executor import MigrationExecutor
-from django.db.migrations.loader import MigrationLoader
 from psycopg import sql
 
 
@@ -57,46 +54,16 @@ def schema_dump(connection):
     return result.stdout
 
 
-def normalized_schema_dump(dump, snapshot):
-    """Keep all DDL, normalizing only names, column order and AND operand order."""
-    names = {}
-    for _table, name, definition in snapshot["indexes"]:
-        semantic = re.sub(r"INDEX \S+ ON", "INDEX <name> ON", definition)
-        names[name] = "idx_" + hashlib.sha256(semantic.encode()).hexdigest()[:24]
-    for table, name, kind, definition, *_rest in snapshot["constraints"]:
-        if name in names:
-            continue
-        if name in {
-            "department_membership_lifecycle_provenance",
-            "station_assignment_lifecycle_provenance",
-        }:
-            # These two equivalent expressions have different AND ordering in
-            # historical SQL and model state. The catalog test checks all values.
-            dump = dump.replace(definition, "CHECK (<validated_lifecycle_provenance>)")
-        else:
-            names[name] = (
-                "con_" + hashlib.sha256((table + kind + definition).encode()).hexdigest()[:24]
-            )
-    for name in sorted(names, key=len, reverse=True):
-        dump = re.sub(
-            r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", names[name], dump
-        )
+def normalized_schema_dump(dump):
+    """Ignore comments, statement ordering and PG17 random restriction tokens.
+
+    Phase 2 retains names, column order, expressions, SQL bodies and privileges.
+    """
     dump = re.sub(r"(?m)^\\(?:un)?restrict .*\n?", "", dump)
-    statements = []
-    for statement in sqlparse.split(sqlparse.format(dump, strip_comments=True)):
-        statement = statement.strip()
-        if statement.startswith("CREATE TABLE "):
-            head, body = statement.split("(\n", 1)
-            columns, tail = body.rsplit("\n)", 1)
-            statement = (
-                head
-                + "(\n"
-                + "\n".join(sorted(line.strip().rstrip(",") for line in columns.splitlines()))
-                + "\n)"
-                + tail
-            )
-        statements.append(statement)
-    return sorted(statements)
+    return sorted(
+        statement.strip()
+        for statement in sqlparse.split(sqlparse.format(dump, strip_comments=True))
+    )
 
 
 @contextmanager
@@ -126,24 +93,6 @@ def disposable_database():
         assert name.startswith("test_baseline_") and len(name) == 46
         with original.cursor() as cursor:
             cursor.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
-
-
-class HistoricalMigrationLoader(MigrationLoader):
-    """Keep replacement files out of tests that explicitly target original nodes."""
-
-    def load_disk(self):
-        super().load_disk()
-        self.disk_migrations = {
-            key: migration
-            for key, migration in self.disk_migrations.items()
-            if not migration.replaces
-        }
-
-
-def historical_executor(connection):
-    executor = MigrationExecutor(connection)
-    executor.loader = HistoricalMigrationLoader(connection, replace_migrations=False)
-    return executor
 
 
 def catalog(connection):

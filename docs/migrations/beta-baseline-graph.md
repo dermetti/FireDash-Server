@@ -1,3 +1,7 @@
+# Historical Phase 1 mapping and accepted dependency graph
+
+The ranges below document retired files. See [Phase 2](beta-baseline-phase2.md) for the permanent graph. All dependency edges remain the same; replacement declarations have been removed.
+
 | Replacement | Original range (inclusive, existing files only) |
 | --- | --- |
 | `accounts.0001_squashed_0002_beta` | `0001_initial` through `0002_alter_user_groups_accountsetuptoken_and_more` |
