@@ -615,6 +615,13 @@ else
     ok "fire-backend.env has no forbidden secret variable names"
 fi
 
+# -------- certificate lifecycle (no application or database mutations) --------
+if python3 "$SELF_DIR/lib/tls.py" verify; then
+    ok "TLS certificate lifecycle"
+else
+    fail "TLS certificate lifecycle; renew through the configured certificate owner"
+fi
+
 # -------- HTTP (local --resolve) --------
 log "=== HTTP ==="
 if curl -fsS --resolve "$HOST:443:127.0.0.1" "https://$HOST/health/live" >/dev/null 2>&1; then

@@ -4,7 +4,7 @@ Production uses three files; systemd loads only the generated runtime file:
 
 | File | Owner / mode | Purpose |
 | --- | --- | --- |
-| `/etc/fire-backend/install.conf` | `root:root 0640` | Installer URL, manual TLS paths, mail proxy, requested release and successful SHA |
+| `/etc/fire-backend/install.conf` | `root:root 0640` | Installer URL, TLS mode/paths and lifecycle settings, mail proxy, requested release and successful SHA |
 | `/etc/fire-backend/overrides.env` | `root:root 0640` | Optional operator tuning; empty commented file on fresh installs |
 | `/etc/fire-backend/fire-backend.env` | `root:fire_backend 0640` | Installer-generated runtime configuration, including managed database/Django secrets |
 
@@ -329,3 +329,30 @@ Django sessions; link validity (60 minutes), inactivity (30 minutes), download
 interval (48 hours) and transfer-request parser limit (4096 bytes) are fixed
 behavior, not additional `REPORT_TRANSFER_*` environment settings. Request
 limits still require upstream timeout/concurrency and spool-capacity planning.
+
+
+## Installer B TLS settings
+
+These literal root-only `install.conf` settings are installer configuration,
+never application overrides or runtime credentials. Missing mode on an established
+installation means `manual`. See [TLS workflows](installer-b-tls.md) for commands,
+CGNAT adoption, prerequisites and recovery.
+
+| Setting | Meaning / default |
+| --- | --- |
+| `FIREDASH_TLS_MODE` | `manual`, `letsencrypt-http01`, `letsencrypt-dns01` |
+| `FIREDASH_TLS_CERT_PATH`, `FIREDASH_TLS_KEY_PATH` | Manual/adopted existing paths, or managed verified-copy paths |
+| `FIREDASH_ACME_EMAIL` | Contact email for fresh issuance |
+| `FIREDASH_ACME_AGREE_TOS` | Explicit `yes` for fresh issuance; `no` otherwise |
+| `FIREDASH_TLS_WARNING_DAYS` | Expiry warning threshold, default 30, accepted 1..60 |
+| `FIREDASH_TLS_CERTBOT_PATH` | Absolute Certbot executable; HTTP default `/usr/bin/certbot`, DNS default `/usr/local/bin/certbot` |
+| `FIREDASH_TLS_LINEAGE` | Fresh default `firedash`; exact selected host lineage for adoption |
+| `FIREDASH_TLS_ADOPT_DNS01` | `yes` for explicitly adopted host DNS lineage; default `no` |
+| `FIREDASH_TLS_DNS_CREDENTIALS` | Fresh DNS credential file path only; adoption can read the path from the existing renewal INI |
+
+CLI names are `--tls-mode`, `--tls-cert`, `--tls-key`, `--acme-email`,
+`--acme-agree-tos`, `--tls-warning-days`, `--tls-certbot`, `--tls-lineage`,
+`--tls-adopt-dns01`, and `--dns-netcup-credentials`. Existing manual-to-DNS
+adoption requires the explicit CLI adoption flag and passes full lineage checks;
+other mode changes stop for review. Neither DNS API values nor private key bytes
+belong in these files, command arguments, environment dumps or application settings.

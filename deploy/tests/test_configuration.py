@@ -437,6 +437,7 @@ def installer_harness(tmp_path, legacy, install):
         (ROOT / "deploy/lib/common.sh").read_text()
         + """
 require_root() { :; }
+is_debian_13() { :; }; is_amd64() { :; }; is_systemd() { :; }
 install_file_atomic() { cp "$1" "$2"; }
 flock() { :; }
 curl() { :; }
@@ -486,6 +487,8 @@ if spec is None or spec.loader is None:
 c = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(c)
 c.validate_files = lambda directory: None  # OS metadata separately tested.
+if sys.argv[1].endswith("tls.py"):
+    sys.exit(0)  # TLS lifecycle exercised separately with real synthetic certificates.
 sys.argv = sys.argv[1:]
 c.main()
 """)
@@ -496,13 +499,14 @@ c.main()
         TEST_CONFIGURATION_MODULE=(ROOT / "deploy/lib/configuration.py").as_posix(),
         FIREDASH_RESOLVED_SHA="b" * 40,
         FIREDASH_REQUESTED_REF="main",
+        MSYS2_ENV_CONV_EXCL="FIREDASH_TLS_CERTBOT_PATH",
     )
 
-    def run(mode="default", sha="b" * 40):
+    def run(mode="default", sha="b" * 40, extra_args=()):
         env["FIREDASH_RESOLVED_SHA"] = sha
         args = [] if mode == "default" else [f"--{mode}"]
         return subprocess.run(
-            [BASH, (deploy / "install-local.sh").as_posix(), *args],
+            [BASH, (deploy / "install-local.sh").as_posix(), *args, *extra_args],
             env=env,
             capture_output=True,
             text=True,
@@ -704,3 +708,35 @@ run_step phase
     )
     assert result.returncode != 0
     assert "should-not-run" not in result.stdout + result.stderr
+
+
+def test_external_to_managed_mode_change_fails_before_maintenance(installer_harness):
+    run, etc, _ = installer_harness
+    before = {p.name: p.read_bytes() for p in etc.iterdir() if p.is_file()}
+    result = run(
+        extra_args=(
+            "--tls-mode",
+            "letsencrypt-http01",
+            "--acme-email",
+            "acme@example.org",
+            "--acme-agree-tos",
+        )
+    )
+    assert result.returncode != 0
+    assert "separately reviewed transition" in result.stderr
+    assert "phase: quiesce" not in result.stdout
+    assert before == {p.name: p.read_bytes() for p in etc.iterdir() if p.is_file()}
+
+
+def test_tls_failure_precedes_quiesce_and_preserves_history(installer_harness):
+    run, etc, _ = installer_harness
+    driver = etc.parent / "driver.py"
+    driver.write_text(
+        driver.read_text().replace("sys.exit(0)  # TLS lifecycle", "sys.exit(6)  # TLS lifecycle")
+    )
+    before = {p.name: p.read_bytes() for p in etc.iterdir() if p.is_file()}
+    result = run()
+    assert result.returncode != 0
+    assert "phase: quiesce" not in result.stdout
+    assert "maintenance/quiesce had begun" not in result.stderr
+    assert before == {p.name: p.read_bytes() for p in etc.iterdir() if p.is_file()}

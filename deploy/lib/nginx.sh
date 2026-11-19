@@ -18,7 +18,7 @@ validate_tls() {
     cert_pub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
     key_pub=$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
     [[ -n $cert_pub && $cert_pub == "$key_pub" ]] || die "TLS certificate and private key do not match"
-    openssl x509 -in "$cert" -noout -checkhost "$host" >/dev/null 2>&1 || die "TLS certificate is not valid for FIREDASH_BASE_URL hostname"
+    openssl x509 -in "$cert" -noout -checkhost "$host" 2>/dev/null | grep -q "does match certificate" || die "TLS certificate is not valid for FIREDASH_BASE_URL hostname"
     openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || die "TLS certificate is expired"
     start=$(openssl x509 -in "$cert" -noout -startdate 2>/dev/null | cut -d= -f2-)
     start_ts=$(date -d "$start" +%s 2>/dev/null || true)
@@ -35,48 +35,7 @@ render_nginx_conf() {
         "$template" > "$out"
 }
 
-# Render, validate, and install Nginx config; reload or first-start as appropriate.
+# The root-only lifecycle helper owns transactional site installation/rollback.
 install_nginx() {
-    local host=${FIREDASH_HOST:?} cert=${FIREDASH_TLS_CERT_PATH:?} key=${FIREDASH_TLS_KEY_PATH:?}
-    local template=${FIREDASH_REPO_ROOT:?}/deploy/nginx/fire-backend.conf
-    validate_tls "$cert" "$key" "$host"
-
-    local rendered backup=""
-    rendered=$(mktemp)
-    render_nginx_conf "$host" "$cert" "$key" "$template" "$rendered"
-
-    install -d -m 0755 -o root -g root /etc/nginx/sites-available /etc/nginx/sites-enabled
-    if [[ -f $NGINX_SITE ]]; then
-        backup=$(mktemp)
-        cp -a "$NGINX_SITE" "$backup"
-    fi
-
-    install -m 0644 -o root -g root "$rendered" "$NGINX_SITE"
-    rm -f "$rendered"
-
-    if [[ ! -e $NGINX_ENABLED && ! -L $NGINX_ENABLED ]]; then
-        ln -s "$NGINX_SITE" "$NGINX_ENABLED"
-    fi
-    rm -f /etc/nginx/sites-enabled/default
-
-    if ! nginx -t; then
-        log_err "nginx configuration validation failed; restoring previous configuration"
-        if [[ -n $backup ]]; then
-            install -m 0644 -o root -g root "$backup" "$NGINX_SITE"
-            nginx -t || log_err "restored configuration also failed nginx -t"
-        else
-            rm -f "$NGINX_SITE" "$NGINX_ENABLED"
-        fi
-        [[ -n $backup ]] && rm -f "$backup"
-        die "Nginx configuration is invalid"
-    fi
-    [[ -n $backup ]] && rm -f "$backup"
-
-    if systemctl is-active --quiet nginx; then
-        log "reloading nginx"
-        systemctl reload nginx
-    else
-        log "starting nginx"
-        systemctl enable --now nginx
-    fi
+    python3 "${FIREDASH_REPO_ROOT:?}/deploy/lib/tls.py" nginx
 }

@@ -350,3 +350,14 @@ layout or age. Unknown ownership requires investigation. Recovery of retired or
 legacy payloads requires a reviewed compatible database/storage/key backup;
 signed manifests and immutable historical rows must never be rewritten to fake
 readiness.
+
+
+## Installer B certificate operations
+
+Use the [TLS lifecycle runbook](installer-b-tls.md#renewal-monitoring-and-recovery)
+for `fire-tls-renew.timer`, journal checks, 30-day expiry warnings, failed-renewal
+recovery and private ACME backups. Both managed modes renew one selected lineage;
+manual mode reports external renewal responsibility. The existing CGNAT Netcup
+installation retains DNS-01 and its original certificate/account/credential paths.
+No public inbound access is needed for its ACME validation. Never run an
+unrestricted host renewal job alongside an adopted FireDash scheduler.

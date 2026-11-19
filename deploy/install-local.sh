@@ -42,6 +42,7 @@ trap on_error ERR
 
 # --- application-level CLI options (--ref is consumed by stage-0) ---
 WAIT=0
+TLS_ADOPTION_REQUESTED=0
 while (($#)); do
     case "$1" in
         --verbose|--quiet)
@@ -53,6 +54,20 @@ while (($#)); do
         --wait) WAIT=1; shift ;;
         --base-url) (($# >= 2)) || die "--base-url requires a value"; FIREDASH_BASE_URL=$2; shift 2 ;;
         --base-url=*) FIREDASH_BASE_URL=${1#--base-url=}; shift ;;
+        --tls-adopt-dns01) FIREDASH_TLS_ADOPT_DNS01=yes; TLS_ADOPTION_REQUESTED=1; shift ;;
+        --tls-certbot) (($# >= 2)) || die "--tls-certbot requires a value"; FIREDASH_TLS_CERTBOT_PATH=$2; shift 2 ;;
+        --tls-certbot=*) FIREDASH_TLS_CERTBOT_PATH=${1#--tls-certbot=}; shift ;;
+        --tls-lineage) (($# >= 2)) || die "--tls-lineage requires a value"; FIREDASH_TLS_LINEAGE=$2; shift 2 ;;
+        --tls-lineage=*) FIREDASH_TLS_LINEAGE=${1#--tls-lineage=}; shift ;;
+        --dns-netcup-credentials) (($# >= 2)) || die "--dns-netcup-credentials requires a value"; FIREDASH_TLS_DNS_CREDENTIALS=$2; shift 2 ;;
+        --dns-netcup-credentials=*) FIREDASH_TLS_DNS_CREDENTIALS=${1#--dns-netcup-credentials=}; shift ;;
+        --tls-mode) (($# >= 2)) || die "--tls-mode requires a value"; FIREDASH_TLS_MODE=$2; shift 2 ;;
+        --tls-mode=*) FIREDASH_TLS_MODE=${1#--tls-mode=}; shift ;;
+        --acme-email) (($# >= 2)) || die "--acme-email requires a value"; FIREDASH_ACME_EMAIL=$2; shift 2 ;;
+        --acme-email=*) FIREDASH_ACME_EMAIL=${1#--acme-email=}; shift ;;
+        --acme-agree-tos) FIREDASH_ACME_AGREE_TOS=yes; shift ;;
+        --tls-warning-days) (($# >= 2)) || die "--tls-warning-days requires a value"; FIREDASH_TLS_WARNING_DAYS=$2; shift 2 ;;
+        --tls-warning-days=*) FIREDASH_TLS_WARNING_DAYS=${1#--tls-warning-days=}; shift ;;
         --tls-cert) (($# >= 2)) || die "--tls-cert requires a value"; FIREDASH_TLS_CERT_PATH=$2; shift 2 ;;
         --tls-cert=*) FIREDASH_TLS_CERT_PATH=${1#--tls-cert=}; shift ;;
         --tls-key) (($# >= 2)) || die "--tls-key requires a value"; FIREDASH_TLS_KEY_PATH=$2; shift 2 ;;
@@ -93,7 +108,7 @@ if [[ -f $CONFIG_SOURCE ]]; then
             FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY)
                 [[ ! ${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY+x} ]] && export "$k=$v"
                 ;;
-            FIREDASH_BASE_URL|FIREDASH_TLS_CERT_PATH|FIREDASH_TLS_KEY_PATH|FIREDASH_REQUESTED_REF)
+            FIREDASH_BASE_URL|FIREDASH_TLS_CERT_PATH|FIREDASH_TLS_KEY_PATH|FIREDASH_REQUESTED_REF|FIREDASH_TLS_MODE|FIREDASH_ACME_EMAIL|FIREDASH_ACME_AGREE_TOS|FIREDASH_TLS_WARNING_DAYS|FIREDASH_TLS_CERTBOT_PATH|FIREDASH_TLS_LINEAGE|FIREDASH_TLS_ADOPT_DNS01|FIREDASH_TLS_DNS_CREDENTIALS)
                 [[ -z ${!k:-} ]] && export "$k=$v"
                 ;;
         esac
@@ -113,8 +128,58 @@ log "installation state: $FIREDASH_STATE"
 
 # --- prompt only for still-missing required values, via /dev/tty ---
 prompt_for FIREDASH_BASE_URL "FireDash HTTPS base URL (e.g. https://firedash.example.org)"
-prompt_for FIREDASH_TLS_CERT_PATH "TLS full-chain certificate path"
-prompt_for FIREDASH_TLS_KEY_PATH "TLS private key path"
+# Missing mode on any persisted installation means external/manual, including DNS-01.
+previous_tls_mode=$(env_value "$CONFIG_SOURCE" FIREDASH_TLS_MODE 2>/dev/null || true)
+if [[ -f $CONFIG_SOURCE ]]; then
+    previous_tls_mode=${previous_tls_mode:-manual}
+    FIREDASH_TLS_MODE=${FIREDASH_TLS_MODE:-$previous_tls_mode}
+    if [[ $FIREDASH_TLS_MODE != "$previous_tls_mode" ]]; then
+        [[ $previous_tls_mode == manual && $FIREDASH_TLS_MODE == letsencrypt-dns01 && $TLS_ADOPTION_REQUESTED == 1 ]] \
+            || die "TLS mode change requires a separately reviewed transition; DNS adoption requires --tls-adopt-dns01"
+    fi
+else
+    if [[ -n ${FIREDASH_TLS_CERT_PATH:-}${FIREDASH_TLS_KEY_PATH:-} ]]; then
+        FIREDASH_TLS_MODE=${FIREDASH_TLS_MODE:-manual}
+    else
+        FIREDASH_TLS_MODE=${FIREDASH_TLS_MODE:-letsencrypt-http01}
+    fi
+fi
+case "$FIREDASH_TLS_MODE" in
+    manual)
+        prompt_for FIREDASH_TLS_CERT_PATH "TLS full-chain certificate path"
+        prompt_for FIREDASH_TLS_KEY_PATH "TLS private key path"
+        ;;
+    letsencrypt-http01)
+        FIREDASH_TLS_CERT_PATH=${FIREDASH_TLS_CERT_PATH:-/etc/fire-backend/tls/current/fullchain.pem}
+        FIREDASH_TLS_KEY_PATH=${FIREDASH_TLS_KEY_PATH:-/etc/fire-backend/tls/current/privkey.pem}
+        prompt_for FIREDASH_ACME_EMAIL "Let's Encrypt ACME contact email"
+        prompt_for FIREDASH_ACME_AGREE_TOS "Read https://letsencrypt.org/repository/ and accept the applicable subscriber agreement (yes/no)"
+        ;;
+    letsencrypt-dns01)
+        FIREDASH_TLS_ADOPT_DNS01=${FIREDASH_TLS_ADOPT_DNS01:-no}
+        FIREDASH_TLS_CERTBOT_PATH=${FIREDASH_TLS_CERTBOT_PATH:-/usr/local/bin/certbot}
+        if [[ $FIREDASH_TLS_ADOPT_DNS01 == yes ]]; then
+            # Existing paths are deliberately not inferred or replaced.
+            prompt_for FIREDASH_TLS_CERT_PATH "Existing Certbot full-chain certificate path"
+            prompt_for FIREDASH_TLS_KEY_PATH "Existing Certbot private key path"
+            prompt_for FIREDASH_TLS_LINEAGE "Existing Certbot certificate name (lineage)"
+        else
+            FIREDASH_TLS_CERT_PATH=${FIREDASH_TLS_CERT_PATH:-/etc/fire-backend/tls/current/fullchain.pem}
+            FIREDASH_TLS_KEY_PATH=${FIREDASH_TLS_KEY_PATH:-/etc/fire-backend/tls/current/privkey.pem}
+            prompt_for FIREDASH_TLS_DNS_CREDENTIALS "Existing root:root 0600 Netcup DNS credentials file path"
+            prompt_for FIREDASH_ACME_EMAIL "Let's Encrypt ACME contact email"
+            prompt_for FIREDASH_ACME_AGREE_TOS "Read https://letsencrypt.org/repository/ and accept the applicable subscriber agreement (yes/no)"
+        fi
+        ;;
+    *) die "FIREDASH_TLS_MODE must be manual, letsencrypt-http01 or letsencrypt-dns01" ;;
+esac
+FIREDASH_TLS_WARNING_DAYS=${FIREDASH_TLS_WARNING_DAYS:-30}
+FIREDASH_TLS_CERTBOT_PATH=${FIREDASH_TLS_CERTBOT_PATH:-/usr/bin/certbot}
+FIREDASH_TLS_LINEAGE=${FIREDASH_TLS_LINEAGE:-firedash}
+FIREDASH_TLS_ADOPT_DNS01=${FIREDASH_TLS_ADOPT_DNS01:-no}
+FIREDASH_TLS_DNS_CREDENTIALS=${FIREDASH_TLS_DNS_CREDENTIALS:-}
+FIREDASH_ACME_EMAIL=${FIREDASH_ACME_EMAIL:-}
+FIREDASH_ACME_AGREE_TOS=${FIREDASH_ACME_AGREE_TOS:-no}
 
 # Initial-admin email/name are prompted later, immediately before the admin phase,
 # once actual administrator state is known (see lib/admin.sh).
@@ -122,8 +187,7 @@ prompt_for FIREDASH_TLS_KEY_PATH "TLS private key path"
 # --- validate ---
 FIREDASH_BASE_URL=$(normalize_base_url "$FIREDASH_BASE_URL")
 FIREDASH_HOST=$(hostname_from_url "$FIREDASH_BASE_URL")
-[[ -f $FIREDASH_TLS_CERT_PATH ]] || die "FIREDASH_TLS_CERT_PATH: certificate not found"
-[[ -f $FIREDASH_TLS_KEY_PATH ]] || die "FIREDASH_TLS_KEY_PATH: private key not found"
+
 
 FIREDASH_RESOLVED_SHA=${FIREDASH_RESOLVED_SHA:-}
 [[ -n $FIREDASH_RESOLVED_SHA ]] || die "FIREDASH_RESOLVED_SHA is not set (run via deploy/install.sh)"
@@ -131,6 +195,9 @@ FIREDASH_REQUESTED_REF=${FIREDASH_REQUESTED_REF:-main}
 FIREDASH_RELEASE=/srv/firedash/releases/$FIREDASH_RESOLVED_SHA
 
 export FIREDASH_BASE_URL FIREDASH_HOST FIREDASH_TLS_CERT_PATH FIREDASH_TLS_KEY_PATH
+export FIREDASH_TLS_MODE FIREDASH_ACME_EMAIL FIREDASH_ACME_AGREE_TOS FIREDASH_TLS_WARNING_DAYS
+export FIREDASH_TLS_CERTBOT_PATH FIREDASH_TLS_LINEAGE FIREDASH_TLS_ADOPT_DNS01 FIREDASH_TLS_DNS_CREDENTIALS
+export FIREDASH_INSTALL_SCHEMA_VERSION=2
 export FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY
 export FIREDASH_RESOLVED_SHA FIREDASH_REQUESTED_REF FIREDASH_RELEASE
 export FIREDASH_INITIAL_ADMIN_EMAIL FIREDASH_INITIAL_ADMIN_DISPLAY_NAME
@@ -145,6 +212,14 @@ FIREDASH_INSTALL_SCHEMA_VERSION=2
 FIREDASH_BASE_URL=$FIREDASH_BASE_URL
 FIREDASH_TLS_CERT_PATH=$FIREDASH_TLS_CERT_PATH
 FIREDASH_TLS_KEY_PATH=$FIREDASH_TLS_KEY_PATH
+FIREDASH_TLS_MODE=$FIREDASH_TLS_MODE
+FIREDASH_ACME_EMAIL=$FIREDASH_ACME_EMAIL
+FIREDASH_ACME_AGREE_TOS=$FIREDASH_ACME_AGREE_TOS
+FIREDASH_TLS_WARNING_DAYS=$FIREDASH_TLS_WARNING_DAYS
+FIREDASH_TLS_CERTBOT_PATH=$FIREDASH_TLS_CERTBOT_PATH
+FIREDASH_TLS_LINEAGE=$FIREDASH_TLS_LINEAGE
+FIREDASH_TLS_ADOPT_DNS01=$FIREDASH_TLS_ADOPT_DNS01
+FIREDASH_TLS_DNS_CREDENTIALS=$FIREDASH_TLS_DNS_CREDENTIALS
 FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY=${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY:-}
 FIREDASH_REQUESTED_REF=$FIREDASH_REQUESTED_REF
 EOF
@@ -156,8 +231,23 @@ EOF
     rm -f "$tmp"
 }
 # Validate the candidate before maintenance or replacing any live configuration.
-validate_tls "$FIREDASH_TLS_CERT_PATH" "$FIREDASH_TLS_KEY_PATH" "$FIREDASH_HOST"
 python3 "$SELF_DIR/lib/configuration.py" prepare
+is_debian_13 && is_amd64 && is_systemd || die "Debian 13 amd64 with systemd is required"
+FIREDASH_PHASE=tls
+# TLS prerequisites only: do not change application services on ACME failure.
+if [[ $FIREDASH_TLS_MODE == letsencrypt-http01 ]]; then
+    if [[ ! -x /usr/bin/certbot ]] || ! command -v nginx >/dev/null || ! command -v ip >/dev/null || ! command -v openssl >/dev/null || ! command -v curl >/dev/null; then
+        run_step apt-get update
+        run_step env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx certbot openssl curl iproute2
+    fi
+fi
+if [[ $FIREDASH_TLS_MODE != manual ]]; then
+    install -d -m 0755 -o root -g root /usr/local/lib/fire-backend
+    for helper in tls.py configuration.py legacy-schema-1.json; do
+        install_file_atomic "$SELF_DIR/lib/$helper" "/usr/local/lib/fire-backend/$helper" 0644 root:root
+    done
+fi
+run_step python3 "$SELF_DIR/lib/tls.py" prepare
 previous_sha=$(env_value "$CONFIG_SOURCE" FIREDASH_LAST_SUCCESSFUL_SHA 2>/dev/null || true)
 if [[ $previous_sha == "$FIREDASH_RESOLVED_SHA" ]]; then
     log_complete "No newer release available; converging configuration for resolved SHA $FIREDASH_RESOLVED_SHA."
@@ -245,6 +335,9 @@ health_probe
 FIREDASH_PHASE=timers
 log "phase: timers"
 run_step activate_timers
+if [[ $FIREDASH_TLS_MODE != manual ]]; then
+    run_step systemctl enable --now fire-tls-renew.timer
+fi
 
 FIREDASH_PHASE=admin
 log "phase: admin"

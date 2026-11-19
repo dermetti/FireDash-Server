@@ -1,0 +1,23 @@
+[Unit]
+Description=Renew only the FireDash-owned certificate lineage
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/lib/fire-backend/tls.py renew
+TimeoutStartSec=45min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=-/etc/fire-backend/acme /etc/fire-backend/tls -/var/lib/fire-backend/acme-webroot -/var/lib/fire-backend/acme-work -/var/log/fire-backend-acme /run/lock -/etc/letsencrypt -/var/lib/letsencrypt -/var/log/letsencrypt
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+

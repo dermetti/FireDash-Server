@@ -18,10 +18,12 @@ depending on a prior partial run. Run the deployment verifier after every
 installation or upgrade.
 
 The installer is Bash (`deploy/install-local.sh` and shared `deploy/lib/`
-helpers). Current manual TLS takes operator-supplied certificate/key paths
-(`--tls-cert`, `--tls-key`). Existing logging prints `firedash:` progress to stdout
-and warnings/errors to stderr; retain relevant sanitized output and service journals.
-Automatic Let's Encrypt issuance is outside the current installer scope.
+helpers). Installer B supports `manual`, `letsencrypt-http01` (fresh public VPS
+default) and `letsencrypt-dns01` (Netcup, including explicit existing-lineage
+adoption behind CGNAT). Manual paths remain supported. See the
+[TLS installation and renewal workflow](installer-b-tls.md) before selecting a
+mode. Existing logging prints `firedash:` progress to stdout and warnings/errors
+to stderr; retain relevant sanitized output and service journals.
 
 ## Standard installation and updates
 

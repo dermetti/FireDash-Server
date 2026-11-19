@@ -234,6 +234,28 @@ native Debian/LXC systemd/credential/sandbox boundaries, backup restoration and
 production-like acceptance. Record candidate SHA and evidence; do not infer
 production success from repository tests or migration files. Complete an
 independent security assessment, EULA/privacy/legal review and installer polishing.
-The Bash installer currently uses manual TLS and existing logging; automatic
-Let's Encrypt and verbose/quiet modes remain planned improvements. These are
-remaining preparation tasks, not completed features or new implementation specs.
+Installer B implements managed HTTP-01 and DNS-Netcup lifecycle paths and retains
+manual TLS. Source implementation and mocked tests do not establish operational
+acceptance. Logging modes are implemented; remaining TLS evidence is below.
+
+
+## Installer B TLS acceptance (pending)
+
+- [ ] Reviewed candidate separately committed/pushed; full GitHub CI passes,
+  including retained deploy security tests and native Nginx routing tests.
+- [ ] Disposable Debian 13/systemd: fresh public HTTP-01 bootstrap, real staging
+  issuance and unattended staging renewal with correct A/AAAA and firewall rules.
+- [ ] Disposable CGNAT/no-inbound environment: fresh DNS-Netcup staging issuance,
+  adoption of an existing staging lineage, unattended renewal and convergence.
+- [ ] Validate actual Certbot/plugin version, standard live/archive symlinks,
+  sandbox access to private credentials, scheduler conflict checks and shared lock.
+- [ ] Exercise DNS/network/rate-limit/challenge failure, invalid pair, expiry,
+  Nginx failure, broken hook, interruption and retry without application writes,
+  Gunicorn restart, credential changes or unrelated certificate changes.
+- [ ] After separate authorization, validate the existing Proxmox installation
+  with DNS-01 retained; preserve accounts, credentials, certificate paths and keys.
+  This is not authorization to deploy during local implementation.
+
+Follow the [Installer B workflow](installer-b-tls.md); never use production ACME
+or live Netcup credentials in automated tests. A security audit follows successful
+separately authorized Installer B deployment and DNS-01 validation.

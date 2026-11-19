@@ -341,6 +341,9 @@ jobs:
           python -m py_compile deploy/scripts/fire-pdf-sanitizer-broker
           python -m py_compile deploy/scripts/report-transfer-credential.py
 
+      - name: Install native Nginx test binary
+        run: sudo apt-get update && sudo apt-get install -y nginx
+
       - name: Run deployment helper tests
         run: |
           bash deploy/tests/test_application_secret_keyring.sh
@@ -362,7 +365,7 @@ jobs:
           bash deploy/tests/test_nginx_etag.sh
           bash deploy/tests/test_nginx_body_size.sh
           TEST_POSTGRES_USER=firedash_test TEST_POSTGRES_PASSWORD=firedash_test_ci \
-            python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_configuration.py -q
+            python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_configuration.py deploy/tests/test_tls.py -q
 
       - name: Run root-only signing-key rotation integration test
         # Preserve setup-python's dependency environment; exit 77 is a failure.

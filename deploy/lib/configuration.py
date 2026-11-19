@@ -53,6 +53,14 @@ INSTALL_KEYS = {
     "FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY",
     "FIREDASH_REQUESTED_REF",
     "FIREDASH_LAST_SUCCESSFUL_SHA",
+    "FIREDASH_TLS_MODE",
+    "FIREDASH_ACME_EMAIL",
+    "FIREDASH_ACME_AGREE_TOS",
+    "FIREDASH_TLS_WARNING_DAYS",
+    "FIREDASH_TLS_CERTBOT_PATH",
+    "FIREDASH_TLS_LINEAGE",
+    "FIREDASH_TLS_ADOPT_DNS01",
+    "FIREDASH_TLS_DNS_CREDENTIALS",
 }
 KEY = re.compile(r"[A-Z][A-Z0-9_]*")
 VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -195,6 +203,54 @@ def validate_install(values):
             fail(key, "unknown install.conf setting; review before retrying")
     if values and values.get("FIREDASH_INSTALL_SCHEMA_VERSION") not in {"1", "2"}:
         fail("FIREDASH_INSTALL_SCHEMA_VERSION", "unsupported schema")
+    if values.get("FIREDASH_TLS_MODE", "manual") not in {
+        "manual",
+        "letsencrypt-http01",
+        "letsencrypt-dns01",
+    }:
+        fail("FIREDASH_TLS_MODE", "expected manual, letsencrypt-http01 or letsencrypt-dns01")
+    if values.get("FIREDASH_TLS_ADOPT_DNS01", "no") not in {"yes", "no"}:
+        fail("FIREDASH_TLS_ADOPT_DNS01", "expected yes or no")
+    if (
+        values.get("FIREDASH_TLS_ADOPT_DNS01") == "yes"
+        and values.get("FIREDASH_TLS_MODE") != "letsencrypt-dns01"
+    ):
+        fail("FIREDASH_TLS_ADOPT_DNS01", "adoption requires DNS-01 mode")
+    if "FIREDASH_TLS_LINEAGE" in values and not re.fullmatch(
+        r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}", values["FIREDASH_TLS_LINEAGE"]
+    ):
+        fail("FIREDASH_TLS_LINEAGE", "invalid Certbot lineage name")
+    warning = values.get("FIREDASH_TLS_WARNING_DAYS", "30")
+    if not re.fullmatch(r"[0-9]{1,2}", warning) or not 1 <= int(warning) <= 60:
+        fail("FIREDASH_TLS_WARNING_DAYS", "expected integer 1 through 60")
+    if values.get("FIREDASH_ACME_AGREE_TOS", "no") not in {"yes", "no"}:
+        fail("FIREDASH_ACME_AGREE_TOS", "expected yes or no")
+    if (
+        values.get("FIREDASH_TLS_MODE", "manual") != "manual"
+        and values.get("FIREDASH_TLS_ADOPT_DNS01") != "yes"
+    ):
+        if not re.fullmatch(
+            r"[A-Za-z0-9._+%-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}",
+            values.get("FIREDASH_ACME_EMAIL", ""),
+        ):
+            fail("FIREDASH_ACME_EMAIL", "valid contact email required")
+        if values.get("FIREDASH_ACME_AGREE_TOS") != "yes":
+            fail("FIREDASH_ACME_AGREE_TOS", "explicit subscriber agreement acceptance required")
+    for key in (
+        "FIREDASH_TLS_CERT_PATH",
+        "FIREDASH_TLS_KEY_PATH",
+        "FIREDASH_TLS_CERTBOT_PATH",
+        "FIREDASH_TLS_DNS_CREDENTIALS",
+    ):
+        if key in {"FIREDASH_TLS_CERTBOT_PATH", "FIREDASH_TLS_DNS_CREDENTIALS"} and not values.get(
+            key
+        ):
+            continue
+        if key in values and (
+            not (values[key].startswith("/") or os.name == "nt" and os.path.isabs(values[key]))
+            or not re.fullmatch(r"[A-Za-z0-9_./:-]+", values[key])
+        ):
+            fail(key, "requires an absolute path without Nginx metacharacters")
     if values:
         for key in (
             "FIREDASH_BASE_URL",
@@ -337,6 +393,14 @@ def main():
         "FIREDASH_TLS_CERT_PATH",
         "FIREDASH_TLS_KEY_PATH",
         "FIREDASH_REQUESTED_REF",
+        "FIREDASH_TLS_MODE",
+        "FIREDASH_ACME_EMAIL",
+        "FIREDASH_ACME_AGREE_TOS",
+        "FIREDASH_TLS_WARNING_DAYS",
+        "FIREDASH_TLS_CERTBOT_PATH",
+        "FIREDASH_TLS_LINEAGE",
+        "FIREDASH_TLS_ADOPT_DNS01",
+        "FIREDASH_TLS_DNS_CREDENTIALS",
     ):
         if key in os.environ:
             candidate_install[key] = os.environ[key]
