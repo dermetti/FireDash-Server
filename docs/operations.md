@@ -370,8 +370,8 @@ saved authenticator and native credential format. See [TLS operations and
 encrypted backup/restore manifest](installer-b-tls.md) before changing providers,
 restoring onto a new host or provisioning plugin dependencies. Backend/plugin
 changes require transition review. The application backup script alone does not
-establish TLS coverage; configure the dedicated B.2 backup boundary below. A
-demonstrated encrypted isolated restore remains an acceptance gate. Do not add
+establish TLS coverage; optionally configure the B.2 backup boundary below. A
+demonstrated encrypted isolated restore remains an optional-backup acceptance gate. Do not add
 report spools or prune backups for this task.
 
 Sanitized lifecycle failures distinguish provider authentication, DNS propagation,
@@ -381,18 +381,22 @@ privately, correct the cause and retry the existing renewal unit. Do not include
 plugin logs, credential contents or raw exception output in support artifacts.
 
 
-## Installer B.2 TLS recovery and backup gate
+## Installer B.2 TLS recovery and optional backups
 
-Managed TLS requires the dedicated root-only encrypted TLS backup service/timer,
-a separate restricted HTTPS Restic repository and protected plugin provenance.
+Managed TLS works independently of backups. Operators may opt into the dedicated
+root-only encrypted TLS backup service/timer with a restricted HTTPS Restic
+repository and protected backup provenance. Missing or failed optional coverage
+is reported as a nonfatal warning, never a certificate deployment gate.
 Application backup sources, database grants and retention remain unchanged.
 See [TLS recovery and isolated restore](tls-recovery.md) for provisioning,
 protected inventory, journal behavior, retries and replacement-host instructions.
-Monitor failed renewal/backup units and the 48-hour coverage freshness gate.
+Monitor failed renewal units. When backups are configured, separately monitor
+backup failures and the 48-hour coverage freshness warning.
 Keep repository access/encryption secrets in an independent recovery store.
 
 Never delete an unresolved recovery journal to bypass an error. Complete pair
 validation and successful Nginx reload are required before journal cleanup.
-Before release acceptance, demonstrate encrypted isolated restoration on disposable
-Debian 13, real root metadata/symlinks, lock/reload interruption and staging renewal
-failure/retry. Unit-test success is not evidence of a real restore or staging renewal.
+Before certificate lifecycle acceptance, demonstrate real root metadata/symlinks,
+lock/reload interruption and staging renewal failure/retry on disposable Debian 13.
+Accept optional backups separately with an encrypted isolated restore drill.
+Unit-test success is not evidence of a real restore or staging renewal.

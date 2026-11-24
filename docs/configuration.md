@@ -375,3 +375,11 @@ Existing Installer B missing backend keys keep their Netcup renewal binding;
 missing pre-B certificate mode remains manual. Existing backend/authenticator
 changes are refused for separate transition review. See the [three workflows,
 versioned dependency process and credential rules](installer-b-tls.md).
+
+TLS backups are a separate opt-in using root-only `tls-backup.conf`; no repository,
+repository password or backup provenance file is required for normal adoption or
+managed issuance. The installer enables the TLS renewal timer for managed modes
+regardless of backup configuration. It attempts to enable the backup timer only
+when its configuration exists. Deployment backup checks warn rather than fail;
+standalone backup monitoring retains strict failure reporting. See
+[optional TLS backups and recovery](tls-recovery.md).

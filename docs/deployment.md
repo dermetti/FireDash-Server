@@ -615,5 +615,7 @@ no public-IP comparison or inbound-ACME requirement applies. Review privileged
 plugin provenance before approval. No DNS plugin is silently installed on upgrade.
 
 Native Debian/systemd and actual staging issuance/renewal evidence, full CI after
-separate commit/push approval, and encrypted TLS backup/restore coverage remain
-release gates; see [B.1 validation](installer-b-validation.md).
+separate commit/push approval remain release gates; see
+[B.1 validation](installer-b-validation.md). Encrypted TLS backups are optional
+and independently configured; absent or failed coverage does not block certificate
+adoption, issuance, renewal or deployment. See [TLS recovery](tls-recovery.md).

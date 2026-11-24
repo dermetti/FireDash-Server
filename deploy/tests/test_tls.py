@@ -474,6 +474,11 @@ def test_unit_is_narrow_and_does_not_load_runtime_secrets():
     assert "EnvironmentFile" not in text and "LoadCredential" not in text
     assert "manage.py" not in text and "fire-backend.service" not in text
     assert "RandomizedDelaySec=1h" in (ROOT / "deploy/systemd/fire-tls-renew.timer").read_text()
+    # Backup errors must not propagate through a required/ordered dependency.
+    assert "Requires=" not in text and "BindsTo=" not in text
+    assert "ExecStartPost=" not in text and "tls_backup.py" not in text
+    backup_unit = (ROOT / "deploy/systemd/fire-tls-backup.service").read_text()
+    assert "ConditionPathExists=/etc/fire-backend/tls-backup.conf" in backup_unit
 
 
 @pytest.fixture
@@ -857,9 +862,14 @@ def test_cgnat_expired_certificate_recovers_without_inbound_checks(
     assert Path(dns_tree["FIREDASH_TLS_CERT_PATH"]).read_bytes() == replacement[0].read_bytes()
 
 
+@pytest.mark.parametrize("backup_state", ["absent", "invalid"])
 def test_repeated_dns_renewal_not_due_never_reloads_or_changes_files(
-    dns_tree, certificate, openssl, monkeypatch
+    dns_tree, certificate, openssl, monkeypatch, backup_state
 ):
+    # Unavailable/misconfigured optional backup state is not a renewal dependency.
+    backup_config = tls.ETC / "tls-backup.conf"
+    if backup_state == "invalid":
+        backup_config.write_text("invalid optional repository configuration")
     dns_lineage(dns_tree, certificate())
     (tls.ETC / "tls").mkdir()
     (tls.ETC / "tls/dns-deployed").write_text(tls.certificate_identity(dns_tree))
@@ -886,6 +896,10 @@ def test_repeated_dns_renewal_not_due_never_reloads_or_changes_files(
     tls.renew(dns_tree)
     assert len(calls) == 2
     assert all((p.read_bytes(), p.stat().st_mtime_ns) == value for p, value in before.items())
+    if backup_state == "invalid":
+        assert backup_config.read_text() == "invalid optional repository configuration"
+    else:
+        assert not backup_config.exists()
 
 
 @pytest.mark.parametrize(

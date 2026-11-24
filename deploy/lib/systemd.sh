@@ -76,7 +76,8 @@ activate_timers() {
         systemctl enable --now fire-backup.timer || return 1
     fi
     if [[ -f /etc/fire-backend/tls-backup.conf ]]; then
-        systemctl enable --now fire-tls-backup.timer || return 1
+        systemctl enable --now fire-tls-backup.timer \
+            || log_warn "optional TLS backup timer could not be enabled; inspect fire-tls-backup.timer privately"
     fi
     return 0
 }

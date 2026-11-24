@@ -1,6 +1,76 @@
 # Installer B.2 local implementation and validation
 
-## Release blocker correction follow-up
+## Optional backup simplification (current behavior)
+
+Starting HEAD: `5eee7c5234b1a14a19e30e067d9aa6e96ff7acf1`; working tree was
+clean. This follow-up supersedes the mandatory backup gates described in the
+historical evidence below. DNS adapter architecture and certificate lifecycle
+implementation are unchanged.
+
+- No installer backup preflight, initial/final snapshots or backup-verification
+  success gate. No repository configuration, backup secrets or backup provenance
+  files are required for managed installation or healthy existing-lineage adoption.
+- Explicit one-time Netcup adoption persists ownership and authenticator settings;
+  subsequent runs preserve those settings without requiring the adoption CLI again.
+- Managed renewal timer activation and strict certificate, scheduler, permission,
+  plugin and durable-journal checks remain. DNS-01 performs no public-IP or inbound
+  ACME probe.
+- Optional backup timer activation is attempted only with `tls-backup.conf` present.
+  Activation or coverage failures warn without failing deployment. Standalone
+  backup verification still fails on invalid coverage for independent monitoring.
+- Optional nested verification retains the inherited installer lock validation.
+  No backup or restore mutation bypass is introduced. Renewal success/failure
+  triggers remain conditional on the backup service's configuration-path condition.
+
+Local results:
+
+```text
+python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_tls.py deploy/tests/test_configuration.py -q --tb=short
+304 passed, 27 skipped in 123.26s
+```
+
+After adding explicit backup-independent renewal/systemd and fatal certificate
+verification assertions, the targeted rerun completed:
+
+```text
+python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_tls.py deploy/tests/test_configuration.py -q --tb=short -k 'test_unit_is_narrow_and_does_not_load_runtime_secrets or test_repeated_dns_renewal_not_due_never_reloads_or_changes_files or test_certificate_verification_still_fails_with_optional_backup'
+4 passed, 329 deselected in 9.61s
+```
+
+The first configuration-only run found four fixture failures (suppressed success
+output and a missing shared helper); these were corrected before the successful
+focused run. No production permission or certificate check was relaxed.
+
+Ruff checks/formatting (448 files), mypy with Linux semantics (five TLS/helper/test
+files), Bandit (three lifecycle helpers), Django test-settings system checks (zero
+issues) and whitespace checks passed. All 40 deployment shell/script files passed
+Bash syntax checks. ShellCheck is unavailable in this session.
+All 19 Bash deployment regressions completed under Git Bash: **18 passed,
+1 skipped (exit 77, root-only signing-key integration), 0 failed**. The Report
+Transfer deployment/installer and existing deployment security regressions passed.
+Tests used a disposable Python shim and synthetic fixtures; native Linux ownership,
+Nginx, flock and systemd execution remain pending. WSL access is denied and Docker
+has no reachable daemon here. No real ACME or remote Restic test was claimed.
+
+
+Native Debian 13/systemd, real staging issuance/renewal and separately authorized
+full GitHub CI remain required. Optional encrypted backup/isolated restore tests
+are required when accepting that independently configured backup workflow.
+
+Changed files in this follow-up:
+
+- Installer/verification: `deploy/install-local.sh`, `deploy/lib/systemd.sh`,
+  `deploy/verify-deployment.sh`.
+- Regressions: `deploy/tests/test_configuration.py`, `deploy/tests/test_tls.py`.
+- Documentation: this report, `docs/tls-recovery.md`, `docs/installer-b-tls.md`,
+  `docs/configuration.md`, `docs/deployment.md`, `docs/operations.md`,
+  `docs/acceptance.md`.
+
+No TLS manager, DNS adapter, backup helper, application/database code, key material,
+Report Transfer implementation or Git refs/index was modified. No deployment,
+production ACME, live credential use or destructive Restic operations occurred.
+
+## Historical release blocker correction follow-up
 
 Starting HEAD: `396fc5f67eaf468248acc06751dbced35123caaf`; initial working tree
 clean. This section supersedes earlier evidence about installer locking and

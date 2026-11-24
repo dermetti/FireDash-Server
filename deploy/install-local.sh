@@ -23,17 +23,12 @@ export FIREDASH_REPO_ROOT
 
 FIREDASH_PHASE=startup
 FIREDASH_MAINTENANCE=0
-FIREDASH_FINALIZATION_PREVIOUS=
 
 on_error() {
     local rc=$?
     if (( BASH_SUBSHELL > 0 )); then
         # In a subshell: propagate the failure silently; the top-level trap reports once.
         exit "$rc"
-    fi
-    if [[ -n $FIREDASH_FINALIZATION_PREVIOUS ]]; then
-        install_file_atomic "$FIREDASH_FINALIZATION_PREVIOUS" "$INSTALL_CONF" 0640 root:root
-        rm -f "$FIREDASH_FINALIZATION_PREVIOUS"
     fi
     log_err "installer failed during phase '$FIREDASH_PHASE' (exit $rc)"
     if [[ $FIREDASH_MAINTENANCE == 1 ]]; then
@@ -298,9 +293,6 @@ if [[ $FIREDASH_TLS_MODE != manual ]]; then
         install_file_atomic "$SELF_DIR/lib/$helper" "/usr/local/lib/fire-backend/$helper" 0644 root:root
     done
 fi
-if [[ $FIREDASH_TLS_MODE != manual ]]; then
-    run_step python3 "$SELF_DIR/lib/tls_backup.py" --installer-lock-fd=9 preflight
-fi
 run_step python3 "$SELF_DIR/lib/tls.py" prepare
 previous_sha=$(env_value "$CONFIG_SOURCE" FIREDASH_LAST_SUCCESSFUL_SHA 2>/dev/null || true)
 if [[ $previous_sha == "$FIREDASH_RESOLVED_SHA" ]]; then
@@ -328,11 +320,6 @@ if [[ $FIREDASH_STATE == ESTABLISHED ]]; then
     validate_premaintenance_secrets "$FIREDASH_RELEASE"
 fi
 persist_install_conf
-if [[ $FIREDASH_TLS_MODE != manual ]]; then
-    # A confirmed encrypted candidate snapshot is required before stopping any
-    # application writer. Retry retains the live install.conf and certificate.
-    run_step python3 "$SELF_DIR/lib/tls_backup.py" --installer-lock-fd=9 initial
-fi
 FIREDASH_PHASE=quiesce
 log "phase: quiesce"
 FIREDASH_MAINTENANCE=1
@@ -404,19 +391,13 @@ run_step "$ROOT/deploy/initialize-firedash.sh" admin
 
 FIREDASH_PHASE=verify
 log "phase: verify"
-if [[ $FIREDASH_TLS_MODE != manual ]]; then
-    run_step python3 "$SELF_DIR/lib/tls_backup.py" --installer-lock-fd=9 backup
-fi
 run_step "$ROOT/deploy/verify-deployment.sh" --installer-lock-fd=9
 
 FIREDASH_PHASE=finalize
 log "phase: finalize"
 record_success() {
-    local tmp previous sha=$FIREDASH_RESOLVED_SHA
+    local tmp sha=$FIREDASH_RESOLVED_SHA
     tmp=$(mktemp)
-    previous=$(mktemp)
-    cp "$INSTALL_CONF" "$previous"
-    FIREDASH_FINALIZATION_PREVIOUS=$previous
     if [[ -f $INSTALL_CONF ]]; then
         grep -v '^FIREDASH_LAST_SUCCESSFUL_SHA=' "$INSTALL_CONF" > "$tmp" || true
     else
@@ -425,14 +406,6 @@ record_success() {
     printf 'FIREDASH_LAST_SUCCESSFUL_SHA=%s\n' "$sha" >> "$tmp"
     install_file_atomic "$tmp" "$INSTALL_CONF" 0640 root:root
     rm -f "$tmp"
-    if [[ $FIREDASH_TLS_MODE != manual ]]; then
-        # Include the final release-history metadata, too. No success message
-        # may precede this gate; a failure is safe to retry under the same lock.
-        run_step python3 "$SELF_DIR/lib/tls_backup.py" --installer-lock-fd=9 backup
-        run_step python3 "$SELF_DIR/lib/tls_backup.py" --installer-lock-fd=9 verify
-    fi
-    rm -f "$previous"
-    FIREDASH_FINALIZATION_PREVIOUS=
     log "deployment successful; active SHA: $sha"
 }
 record_success

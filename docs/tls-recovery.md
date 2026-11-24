@@ -3,38 +3,34 @@
 This procedure does not authorize live deployment. A native Debian 13 restore
 drill remains required; portable mocks are not proof of recoverability.
 
-## Mandatory installer backup gates
+## Optional backups, independent certificate management
 
-Before running a managed-TLS installation or explicit DNS adoption, provision
-the dedicated initialized HTTPS Restic repository, its protected access/encryption
-files, reviewed plugin provenance and dependency lock described below. Restic and
-the selected Certbot environment must already be available. These are operator
-prerequisites; the installer never initializes a repository or creates its secrets.
+Managed TLS installation, issuance and existing-lineage adoption do not require
+`tls-backup.conf`, a Restic repository, repository passwords, backup provenance
+or an initial snapshot. The installer does not run backup preflight, upload
+snapshots or wait for remote backup access. Certificate, credential, plugin,
+scheduler, ownership, locking and durable rollback checks remain mandatory.
 
-The installer checks repository configuration, reviewed installed dependencies and
-authenticated `restic cat config` access before TLS preparation. Before application
-quiescence, it requires an actual encrypted snapshot of the candidate TLS state,
-including `install.conf.pending`. Missing configuration, unavailable access or an
-initial upload failure aborts without stopping application services or promoting
-the candidate configuration. Existing DNS-Netcup adoption retains certificate paths,
-keys, accounts and authenticator; there are no public-IP or inbound-port checks.
+Explicit DNS adoption is a one-time ownership transition. A healthy existing
+Netcup lineage retains its paths, certificate/key, account, credentials and
+authenticator. Persisted adoption settings are reused on subsequent upgrades;
+DNS-01 never requires public-IP matching or inbound ACME ports.
 
-The candidate snapshot is recovery evidence, not permission to promote its pending
-configuration. Isolated restore validation understands its recorded configuration
-path; review that candidate explicitly before replacement-host activation. Later
-snapshots cover ordinary `install.conf`, activation metadata and final release
-history. Deployment success requires those snapshots and coverage verification.
-A failed final backup/verification restores the previous release-success marker;
-rerun the installer to converge. An outage after quiescence still follows the
-existing installer maintenance recovery procedure.
+Backups remain an independent operator option. Provision the protected configuration
+below to opt in. Only then does installation attempt to enable the backup timer
+and the verifier check coverage. Missing optional coverage, failed backup checks
+or timer activation produce nonfatal warnings; they do not block deployment or
+renewal. Backup service failures remain visible in systemd/journald. The backup
+helper's standalone `verify` still exits nonzero for invalid coverage, for use in
+independent monitoring. Review that monitoring separately from deployment health.
+The installer does not create repository secrets or initialize a repository.
 
-Installer child commands explicitly inherit descriptor 9 through
-`--installer-lock-fd=9`. The helper verifies the descriptor's root-owned lock inode,
-that independent opens are excluded and that the inherited descriptor owns the
-exclusive flock. Verification reads coverage without releasing/reacquiring that
-lock. Standalone commands still acquire their own exclusive lock. There is no
-environment-variable bypass, and concurrent scheduled backup, restore or renewal
-cannot enter the critical section. Do not manually supply the internal flag.
+Optional nested read-only verification inherits descriptor 9 through
+`--installer-lock-fd=9`. Root-owned inode and exclusive flock ownership checks
+remain intact. Standalone backup/restore commands take their own exclusive lock;
+no environment flag bypasses concurrency protection. Do not manually supply the
+internal flag. Scheduled backups capture the final deployment metadata on their
+next successful run; installation does not promise an immediate TLS snapshot.
 
 Non-secret root:root installer metadata retains its existing 0640 permission
 contract (0600 also accepted). Private keys, account secrets, DNS credentials,
@@ -161,14 +157,16 @@ sudo systemctl list-timers fire-tls-backup.timer
 ```
 
 Installer convergence enables the timer only when its explicit configuration
-exists. Managed deployment verification rejects missing/invalid coverage, changed
-state/repository binding, a snapshot older than 48 hours, missing units or inactive
-timer. A success receipt requires a confirmed full snapshot ID. It is local coverage
+exists. When configured, managed deployment verification warns about missing/invalid
+coverage, changed state/repository binding, a snapshot older than 48 hours, missing
+units or an inactive timer. Standalone backup verification fails for these conditions.
+A success receipt requires a confirmed full snapshot ID. It is local coverage
 evidence, not proof remote storage remains available: monitor failed units and
 perform periodic repository checks and isolated restores. Lock contention fails
 visibly; retry after installer/renewal finishes. Failed uploads preserve the old
-receipt; changed or stale coverage still fails verification. Capacity and separately
-authorized TLS retention are operator responsibilities; no automatic pruning is added.
+receipt; changed or stale coverage still fails standalone backup verification.
+Capacity and separately authorized TLS retention are operator responsibilities;
+no automatic pruning is added.
 
 ## Isolated replacement-host restore
 

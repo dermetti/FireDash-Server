@@ -454,7 +454,7 @@ require_root() { :; }
 is_debian_13() { :; }; is_amd64() { :; }; is_systemd() { :; }
 install_file_atomic() { cp "$1" "$2"; }
 flock() { :; }
-systemctl() { :; }
+systemctl() { printf '%s\n' "$*" >> "$FIREDASH_ETC/systemctl-calls"; }
 curl() { :; }
 python3() { python "$TEST_CONFIG_DRIVER" "$@"; }
 export -f python3
@@ -864,38 +864,27 @@ ADOPT_NETCUP = (
 
 
 @pytest.mark.parametrize("failure", ["preflight", "initial", "backup", "backup:2", "verify"])
-def test_managed_install_backup_failure_retry_and_convergence(installer_harness, failure):
+def test_netcup_adoption_without_backup_gates_converges(installer_harness, failure):
     run, etc, deploy = installer_harness
     (deploy / "lib/systemd.sh").write_text(
         'quiesce() { touch "$FIREDASH_ETC/quiesced"; }; '
         "activate_socket() { :; }; activate_timers() { :; }\n",
         newline="\n",
     )
-    original = (etc / "install.conf").read_bytes()
     result = run(extra_args=ADOPT_NETCUP, backup_failure=failure)
-    assert result.returncode != 0
-    assert "installation complete" not in result.stdout
-    assert "successfully deployed SHA" not in result.stdout
-    if failure in {"preflight", "initial"}:
-        assert not (etc / "quiesced").exists()
-        assert (etc / "install.conf").read_bytes() == original
-    if failure == "preflight":
-        assert not (etc / "tls-prepared").exists()
-    assert c.read(etc / "install.conf")["FIREDASH_LAST_SUCCESSFUL_SHA"] == "a" * 40
-    # Explicit adoption retry, followed by unchanged established-install convergence.
-    assert run(extra_args=ADOPT_NETCUP).returncode == 0
-    assert run().returncode == 0
-    calls = (etc / "backup-calls").read_text().splitlines()
-    assert calls[-5:] == ["preflight", "initial", "backup", "backup", "verify"]
+    assert result.returncode == 0, result.stderr
+    assert "successfully deployed SHA" in result.stdout
+    assert not (etc / "backup-calls").exists()
+    assert not (etc / "tls-backup.conf").exists()
+    assert "enable --now fire-tls-renew.timer" in (etc / "systemctl-calls").read_text()
+    persisted = (etc / "install.conf").read_bytes()
+    assert run(backup_failure=failure).returncode == 0
+    assert (etc / "install.conf").read_bytes() == persisted
     assert c.read(etc / "install.conf")["FIREDASH_TLS_DNS_AUTHENTICATOR"] == "dns-netcup"
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="native Linux inherited flock descriptors")
-def test_native_nested_installer_verifier_lock_flow(installer_harness):
-    """Real orchestrator, verifier TLS block and Python CLI; host work is stubbed."""
-    run, etc, deploy = installer_harness
-    common = deploy / "lib/common.sh"
-    common.write_text(common.read_text().replace("flock() { :; }", ""), newline="\n")
+def install_lifecycle_verifier(deploy):
+    """Use the actual verifier TLS block without unrelated host/database probes."""
     verifier = (ROOT / "deploy/verify-deployment.sh").read_text()
     for helper in ("report-transfer.sh", "verify-report-transfer.sh"):
         shutil.copyfile(ROOT / "deploy/lib" / helper, deploy / "lib" / helper)
@@ -904,6 +893,54 @@ def test_native_nested_installer_verifier_lock_flow(installer_harness):
     (deploy / "verify-deployment.sh").write_text(
         header + "\n# certificate lifecycle" + lifecycle + '\nexit "$FAIL"\n', newline="\n"
     )
+
+
+@pytest.mark.parametrize("configured,failure", [(False, ""), (True, ""), (True, "verify")])
+def test_optional_backup_verification_is_advisory(installer_harness, configured, failure):
+    run, etc, deploy = installer_harness
+    install_lifecycle_verifier(deploy)
+    if configured:
+        (etc / "tls-backup.conf").touch()
+    result = run(extra_args=ADOPT_NETCUP, backup_failure=failure)
+    assert result.returncode == 0, result.stderr
+    assert "installation complete" in result.stdout
+    if configured:
+        assert (etc / "backup-calls").read_text().splitlines() == ["verify"]
+        if failure:
+            assert "optional TLS backup coverage missing" in result.stderr
+        else:
+            assert "optional TLS backup coverage missing" not in result.stderr
+    else:
+        assert not (etc / "backup-calls").exists()
+        assert "optional encrypted TLS backups are not configured" in result.stderr
+
+
+def test_certificate_verification_still_fails_with_optional_backup(installer_harness):
+    run, etc, deploy = installer_harness
+    install_lifecycle_verifier(deploy)
+    (etc / "tls-backup.conf").touch()
+    driver = etc.parent / "driver.py"
+    driver.write_text(
+        driver.read_text().replace(
+            'if sys.argv[1].endswith("tls.py"):',
+            'if sys.argv[1].endswith("tls.py") and sys.argv[-1] == "verify":\n'
+            '    sys.exit(6)\nif sys.argv[1].endswith("tls.py"):',
+        )
+    )
+    result = run(extra_args=ADOPT_NETCUP, backup_failure="verify")
+    assert result.returncode != 0
+    assert "installation complete" not in result.stdout
+    assert c.read(etc / "install.conf")["FIREDASH_LAST_SUCCESSFUL_SHA"] == "a" * 40
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="native Linux inherited flock descriptors")
+def test_native_nested_installer_verifier_lock_flow(installer_harness):
+    """Real orchestrator, verifier TLS block and Python CLI; host work is stubbed."""
+    run, etc, deploy = installer_harness
+    common = deploy / "lib/common.sh"
+    common.write_text(common.read_text().replace("flock() { :; }", ""), newline="\n")
+    install_lifecycle_verifier(deploy)
+    (etc / "tls-backup.conf").touch()
     driver = etc.parent / "driver.py"
     body = driver.read_text()
     start = body.index('if sys.argv[1].endswith("tls_backup.py"):')
@@ -943,22 +980,15 @@ def test_native_nested_installer_verifier_lock_flow(installer_harness):
     driver.write_text(body[:start] + replacement + body[end:])
     result = run(extra_args=ADOPT_NETCUP)
     assert result.returncode == 0, result.stderr
-    assert (etc / "native-gates").read_text().splitlines() == [
-        "preflight",
-        "initial",
-        "backup",
-        "verify",
-        "backup",
-        "verify",
-    ]
+    assert (etc / "native-gates").read_text().splitlines() == ["verify"]
     import fcntl
 
     with (etc.parent / "lock").open("r") as file:
         fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-@pytest.mark.parametrize("failure", ["preflight", "initial", ""])
-def test_fresh_dns_multi_requires_initial_encrypted_snapshot(installer_harness, failure):
+@pytest.mark.parametrize("tls_mode", ["letsencrypt-http01", "letsencrypt-dns01"])
+def test_fresh_managed_tls_without_backup_configuration(installer_harness, tls_mode):
     run, etc, deploy = installer_harness
     (etc / "install.conf").unlink()
     (etc / "fire-backend.env").unlink()
@@ -968,34 +998,77 @@ def test_fresh_dns_multi_requires_initial_encrypted_snapshot(installer_harness, 
         "activate_socket() { :; }; activate_timers() { :; }\n",
         newline="\n",
     )
-    args = (
+    # Host package provisioning is outside this isolated orchestrator fixture.
+    orchestrator = deploy / "install-local.sh"
+    body = orchestrator.read_text()
+    start = body.index("    if [[ ! -x /usr/bin/certbot ]]")
+    end = body.index("; then", start)
+    orchestrator.write_text(body[:start] + "    if false" + body[end:], newline="\n")
+    install_lifecycle_verifier(deploy)
+    args: tuple[str, ...] = (
         "--base-url",
         "https://firedash.test",
         "--tls-mode",
-        "letsencrypt-dns01",
-        "--tls-dns-backend",
-        "certbot-multi",
-        "--tls-dns-provider",
-        "netcup",
-        "--tls-dns-credentials",
-        "/etc/private-acme/dns.ini",
-        "--tls-dns-plugin-approved",
+        tls_mode,
         "--acme-email",
         "acme@example.org",
         "--acme-agree-tos",
     )
-    result = run(extra_args=args, backup_failure=failure)
-    assert (result.returncode == 0) == (not failure), result.stderr
-    if failure:
-        assert not (etc / "quiesced").exists()
-        assert not (etc / "install.conf").exists()
-        assert "installation complete" not in result.stdout
-    else:
-        assert (etc / "backup-calls").read_text().splitlines() == [
-            "preflight",
-            "initial",
-            "backup",
-            "backup",
-            "verify",
-        ]
-        assert run().returncode == 0
+    if tls_mode == "letsencrypt-dns01":
+        args += (
+            "--tls-dns-backend",
+            "certbot-multi",
+            "--tls-dns-provider",
+            "netcup",
+            "--tls-dns-credentials",
+            "/etc/private-acme/dns.ini",
+            "--tls-dns-plugin-approved",
+        )
+    result = run(extra_args=args, backup_failure="preflight")
+    assert result.returncode == 0, result.stderr
+    assert not (etc / "backup-calls").exists()
+    assert not (etc / "tls-backup.conf").exists()
+    assert "optional encrypted TLS backups are not configured" in result.stderr
+    assert "enable --now fire-tls-renew.timer" in (etc / "systemctl-calls").read_text()
+    assert run().returncode == 0
+
+
+@pytest.mark.parametrize("configured,failed", [(False, False), (True, False), (True, True)])
+def test_optional_backup_timer_activation(tmp_path, configured, failed):
+    shutil.copyfile(ROOT / "deploy/lib/common.sh", tmp_path / "common.sh")
+    script = tmp_path / "systemd.sh"
+    script.write_text(
+        (ROOT / "deploy/lib/systemd.sh")
+        .read_text()
+        .replace("/etc/fire-backend", tmp_path.as_posix()),
+        newline="\n",
+    )
+    if configured:
+        (tmp_path / "tls-backup.conf").touch()
+    result = subprocess.run(
+        [
+            BASH,
+            "-c",
+            r"""
+set -Eeuo pipefail
+source "$1"
+SECRET_DIR=$2
+FAILED=$3
+log_warn() { printf '%s\n' "$*" >&2; }
+systemctl() {
+    printf '%s\n' "$*"
+    if [[ ${*: -1} == fire-tls-backup.timer && $FAILED == yes ]]; then return 1; fi
+}
+activate_timers
+""",
+            "fixture",
+            script.as_posix(),
+            tmp_path.as_posix(),
+            "yes" if failed else "no",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ("enable --now fire-tls-backup.timer" in result.stdout) == configured
+    assert ("optional TLS backup timer could not be enabled" in result.stderr) == failed

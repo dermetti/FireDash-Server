@@ -183,6 +183,12 @@ renewals retain normal account/archive/renewal bookkeeping. Near-expiry/expired
 managed certificates can renew through the existing recovery path before the
 final validity gate. No public address or inbound probe occurs for DNS-01.
 
+Adoption is a one-time ownership transition: subsequent exact-SHA installations
+reuse the persisted mode, backend, authenticator, executable and lineage without
+repeating the adoption flags. Neither adoption nor later upgrades require
+`tls-backup.conf`, repository credentials or backup provenance files. Privileged
+plugin approval and the existing lineage/security checks still apply.
+
 Installations already persisted by Installer B without backend keys retain their
 Netcup binding and existing private namespace or adopted host lineage. Missing
 backend keys authorize **renewal only**, never fresh issuance. Pre-Installer B
@@ -261,11 +267,15 @@ possible migrations.
 The B.1 backup implementation gap is addressed by the dedicated root-only TLS
 backup service and timer. See [TLS recovery](tls-recovery.md) for the selected
 inventory, separate encrypted repository, protected provenance, durable DNS
-rollback and isolated replacement-host restore procedure. Managed deployment
-verification now rejects absent, stale or changed TLS backup coverage.
+rollback and isolated replacement-host restore procedure. TLS backups are optional:
+issuance, one-time adoption, renewal and upgrades require no Restic repository or
+backup provenance files. When explicitly configured, backup coverage and timer
+checks are advisory in deployment verification; standalone backup monitoring still
+reports failures. Certificate lifecycle checks and durable rollback remain strict.
 
-Native Debian 13/systemd restore and staging ACME acceptance remain required;
-portable unit tests do not establish that a real restore has succeeded.
+Native Debian 13/systemd and staging ACME acceptance remain required. Accept
+optional backups separately with a real isolated restore; portable unit tests do
+not establish that a real restore has succeeded.
 
 ## Required release evidence
 

@@ -628,10 +628,14 @@ else
     fail "TLS certificate lifecycle; renew through the configured certificate owner"
 fi
 if [[ $(env_value "$INSTALL_CONF" FIREDASH_TLS_MODE 2>/dev/null || true) == letsencrypt-* ]]; then
-    if python3 "$SELF_DIR/lib/tls_backup.py" "${TLS_BACKUP_LOCK_ARGS[@]}" verify; then
-        ok "encrypted TLS/ACME backup coverage"
+    if [[ -e $FIREDASH_ETC/tls-backup.conf || -L $FIREDASH_ETC/tls-backup.conf ]]; then
+        if python3 "$SELF_DIR/lib/tls_backup.py" "${TLS_BACKUP_LOCK_ARGS[@]}" verify; then
+            ok "optional encrypted TLS/ACME backup coverage"
+        else
+            log_warn "optional TLS backup coverage missing, stale or invalid; inspect fire-tls-backup.service privately"
+        fi
     else
-        fail "encrypted TLS/ACME backup coverage missing, stale or invalid; inspect fire-tls-backup.service privately"
+        log_warn "optional encrypted TLS backups are not configured; certificate renewal remains independent"
     fi
 fi
 
