@@ -621,6 +621,13 @@ if python3 "$SELF_DIR/lib/tls.py" verify; then
 else
     fail "TLS certificate lifecycle; renew through the configured certificate owner"
 fi
+if [[ $(env_value "$INSTALL_CONF" FIREDASH_TLS_MODE 2>/dev/null || true) == letsencrypt-* ]]; then
+    if python3 "$SELF_DIR/lib/tls_backup.py" verify; then
+        ok "encrypted TLS/ACME backup coverage"
+    else
+        fail "encrypted TLS/ACME backup coverage missing, stale or invalid; inspect fire-tls-backup.service privately"
+    fi
+fi
 
 # -------- HTTP (local --resolve) --------
 log "=== HTTP ==="

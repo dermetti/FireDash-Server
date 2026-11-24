@@ -270,7 +270,25 @@ adoption without production material changes, and a second real staging provider
 when credentials are available. Record any unavailable credential cases as pending.
 
 Require a narrowly scoped encrypted TLS/ACME/account/credential snapshot and an
-isolated restore drill. Existing automated backups do not include all this state;
-recovery is beta-blocked until this evidence exists. Preserve all earlier
+isolated restore drill. B.2 supplies the dedicated TLS backup boundary; the
+application backup alone does not cover this state. Recovery acceptance remains
+blocked until the encrypted restore drill is demonstrated. Preserve all earlier
 deployment-security gates and application data/cryptographic selectors. See
 [B.1 report](installer-b-validation.md) and [operator workflows](installer-b-tls.md).
+
+
+## Installer B.2 TLS recovery and backup gate
+
+Managed TLS requires the dedicated root-only encrypted TLS backup service/timer,
+a separate restricted HTTPS Restic repository and protected plugin provenance.
+Application backup sources, database grants and retention remain unchanged.
+See [TLS recovery and isolated restore](tls-recovery.md) for provisioning,
+protected inventory, journal behavior, retries and replacement-host instructions.
+Monitor failed renewal/backup units and the 48-hour coverage freshness gate.
+Keep repository access/encryption secrets in an independent recovery store.
+
+Never delete an unresolved recovery journal to bypass an error. Complete pair
+validation and successful Nginx reload are required before journal cleanup.
+Before release acceptance, demonstrate encrypted isolated restoration on disposable
+Debian 13, real root metadata/symlinks, lock/reload interruption and staging renewal
+failure/retry. Unit-test success is not evidence of a real restore or staging renewal.

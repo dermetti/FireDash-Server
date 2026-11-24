@@ -438,7 +438,13 @@ def installer_harness(tmp_path, legacy, install):
         "install -d -m 0755 -o root -g root /usr/local/lib/fire-backend",
         ":",
     ).replace("/usr/local/lib/fire-backend/", helper_target.as_posix() + "/")
-    for filename in ("tls.py", "dns_auth.py", "configuration.py", "legacy-schema-1.json"):
+    for filename in (
+        "tls.py",
+        "dns_auth.py",
+        "tls_backup.py",
+        "configuration.py",
+        "legacy-schema-1.json",
+    ):
         shutil.copyfile(ROOT / "deploy/lib" / filename, lib / filename)
     (deploy / "install-local.sh").write_text(orchestrator, newline="\n")
     common = (

@@ -342,8 +342,8 @@ jobs:
           python -m py_compile deploy/scripts/fire-pdf-sanitizer-broker
           python -m py_compile deploy/scripts/report-transfer-credential.py
 
-      - name: Install native Nginx test binary
-        run: sudo apt-get update && sudo apt-get install -y nginx
+      - name: Install native Nginx and Restic test binaries
+        run: sudo apt-get update && sudo apt-get install -y nginx restic
 
       - name: Run deployment helper tests
         run: |

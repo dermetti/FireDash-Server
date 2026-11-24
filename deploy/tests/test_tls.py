@@ -38,6 +38,14 @@ LINUX = pytest.mark.skipif(sys.platform != "linux", reason="native Linux symlink
 
 
 @pytest.fixture
+def backup_module(monkeypatch):
+    import tls_backup
+
+    monkeypatch.setattr(tls_backup, "tls", tls)
+    return tls_backup
+
+
+@pytest.fixture
 def tree(tmp_path, monkeypatch):
     for name, value in {
         "ETC": tmp_path / "etc",
@@ -520,6 +528,8 @@ def dns_lineage(values, pair, *, links=False, version=1):
         if links:
             target = archive / name.replace(".pem", f"{version}.pem")
             target.write_bytes(contents)
+            if name == "privkey.pem":
+                target.chmod(0o600)
             (source / name).unlink(missing_ok=True)
             (source / name).symlink_to(os.path.relpath(target, source))
         else:
@@ -985,7 +995,12 @@ def test_dns01_renewal_and_rollback_preserve_authentication(
         with pytest.raises((tls.TLSError, InterruptedError)):
             tls.renew(dns_tree)
         assert {p.name: os.readlink(p) for p in tls.lineage(dns_tree).iterdir()} == before
-        assert not any(c[:2] == ["systemctl", "reload"] for c in calls)
+        # Reload the old generation even if a candidate reload was interrupted.
+        if failure == "nginx":
+            assert not any(c[:2] == ["systemctl", "reload"] for c in calls)
+            assert (tls.ETC / "tls/dns-recovery.json").exists()
+        else:
+            assert calls[-1] == ["systemctl", "reload", "nginx"]
     else:
         tls.renew(dns_tree)
         assert Path(dns_tree["FIREDASH_TLS_CERT_PATH"]).read_bytes() == next_pair[0].read_bytes()
@@ -1125,3 +1140,481 @@ def test_nginx_site_transaction_restores_existing_site(tree, monkeypatch, failur
     assert tls.SITE.read_text() == "previous-site" and unrelated.read_text() == "preserved"
     if failure == "nginx":
         assert not any(c[:2] == ["systemctl", "reload"] for c in calls)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("symlink update failed"),
+        InterruptedError("reload interrupted"),
+        ValueError("bad journal"),
+    ],
+)
+def test_dns_recovery_failure_always_retains_journal(tree, monkeypatch, error):
+    journal = tls.ETC / "tls/dns-recovery.json"
+    journal.parent.mkdir()
+    journal.write_text("private-recovery-metadata")
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr(tls, "restore_dns", fail)
+    with pytest.raises(tls.TLSError, match="journal retained"):
+        tls.recover_dns(tree)
+    assert journal.read_text() == "private-recovery-metadata"
+    with pytest.raises(tls.TLSError, match="unresolved"):
+        tls.dns_snapshot(tree)
+    assert journal.read_text() == "private-recovery-metadata"
+
+
+@LINUX
+@pytest.mark.parametrize("failure", ["one-link", "reload", "missing-archive", "manipulated"])
+def test_dns_crash_recovery_is_durable_and_repeatable(
+    dns_tree, certificate, openssl, monkeypatch, failure
+):
+    dns_lineage(dns_tree, certificate("before-crash"), links=True)
+    (tls.ETC / "tls").mkdir()
+    before = tls.certificate_identity(dns_tree)
+    journal = tls.dns_snapshot(dns_tree)
+    saved = journal.read_bytes()
+    dns_lineage(dns_tree, certificate("after-crash"), links=True, version=2)
+    original_run, original_replace = tls.run, os.replace
+    restored = []
+    broken = True
+
+    def replace(source, destination):
+        if str(source).endswith(".firedash-chain.pem") and failure == "one-link" and broken:
+            raise OSError("synthetic interrupted symlink update")
+        original_replace(source, destination)
+        if Path(source).name.startswith(".firedash-"):
+            restored.append(str(destination))
+
+    def run(args, **kwargs):
+        if args[0] == "openssl":
+            return original_run(args, **kwargs)
+        if failure == "reload" and broken and args[:2] == ["systemctl", "reload"]:
+            raise InterruptedError("reload acknowledgement interrupted")
+        assert args in (["nginx", "-t"], ["systemctl", "reload", "nginx"])
+        return b""
+
+    monkeypatch.setattr(tls.os, "replace", replace)
+    monkeypatch.setattr(tls, "run", run)
+    missing = tls.acme_root(dns_tree) / "archive" / tls.cert_name(dns_tree) / "privkey1.pem"
+    contents = missing.read_bytes()
+    if failure == "missing-archive":
+        missing.unlink()
+    if failure == "manipulated":
+        record = json.loads(saved)
+        record["links"]["privkey.pem"] = "../../unrelated/secret.pem"
+        journal.write_text(json.dumps(record))
+    with pytest.raises(tls.TLSError, match="journal retained"):
+        tls.recover_dns(dns_tree)
+    assert journal.exists()
+    if failure in {"missing-archive", "manipulated"}:
+        assert not restored
+    if failure == "one-link":
+        assert restored == [str(tls.lineage(dns_tree) / "cert.pem")]
+    broken = False
+    missing.write_bytes(contents)
+    journal.write_bytes(saved)
+    journal.chmod(0o600)
+    tls.recover_dns(dns_tree)
+    assert not journal.exists() and tls.certificate_identity(dns_tree) == before
+    assert (tls.ETC / "tls/dns-deployed").read_text() == before
+    count = len(restored)
+    tls.recover_dns(dns_tree)
+    assert len(restored) == count
+
+
+@pytest.fixture
+def backup_tree(tree, certificate, backup_module, monkeypatch):
+    b = backup_module
+    pair = certificate("backup")
+    put_lineage(pair)
+    archive = tls.acme_root(tree) / "archive/firedash"
+    archive.mkdir(parents=True)
+    for source in pair:
+        shutil.copyfile(source, archive / source.name)
+    current = tls.ETC / "tls/current"
+    current.mkdir(parents=True)
+    for source in pair:
+        shutil.copyfile(source, current / source.name)
+    account = (
+        tls.acme_root(tree)
+        / "accounts"
+        / "acme-staging-v02.api.letsencrypt.org/directory"
+        / ("a" * 32)
+    )
+    account.mkdir(parents=True)
+    for name in ("meta.json", "regr.json", "private_key.json"):
+        (account / name).write_text('{"synthetic":"never-log-backup-secret"}')
+    renewal = tls.acme_root(tree) / "renewal/firedash.conf"
+    renewal.write_text(renewal.read_text() + "account = " + "a" * 32 + "\n")
+    (tls.ETC / "install.conf").write_text("".join(f"{k}={v}\n" for k, v in tree.items()))
+    b.state().mkdir()
+    proof = {
+        "packages": {"certbot": "5.7.0", "acme": "5.7.0"},
+        "source": "synthetic reviewed fixture",
+        "plugin_package": "",
+    }
+    (b.state() / "plugin-provenance.json").write_text(json.dumps(proof))
+    (b.state() / "dependency-lock.txt").write_text("certbot==5.7.0\nacme==5.7.0\n")
+    for name in ("repository-password", "repository-auth"):
+        (tls.ETC / name).write_text("synthetic-backup-secret")
+    (tls.ETC / "tls-backup.conf").write_text(
+        "RESTIC_REPOSITORY=rest:https://backup.example.org/firedash-tls\n"
+        f"RESTIC_PASSWORD_FILE={(tls.ETC / 'repository-password').as_posix()}\n"
+        "RESTIC_REST_USERNAME=firedash-tls\n"
+        f"RESTIC_REST_PASSWORD_FILE={(tls.ETC / 'repository-auth').as_posix()}\n"
+    )
+    modes: dict[str, int] = {}
+
+    def metadata(path):
+        actual = path.lstat()
+        kind = stat.S_IFMT(actual.st_mode)
+        mode = modes.get(
+            str(path), 0o777 if path.is_symlink() else 0o700 if path.is_dir() else 0o600
+        )
+        return SimpleNamespace(st_mode=kind | mode, st_uid=0, st_gid=0)
+
+    def private(path, *, directory=False):
+        info = metadata(path)
+        assert path.exists()
+        tls.require(
+            stat.S_IMODE(info.st_mode) == (0o700 if directory else 0o600),
+            "private permissions invalid",
+        )
+
+    monkeypatch.setattr(b, "metadata", metadata)
+    monkeypatch.setattr(b, "private", private)
+    monkeypatch.setattr(b, "check_versions", lambda *args: None)
+    monkeypatch.setattr(tls, "secure_directory", lambda path, mode: path.mkdir(exist_ok=True))
+    return b, tree, modes
+
+
+def test_tls_backup_exact_encrypted_inputs_exclude_unrelated_and_spool(
+    backup_tree, monkeypatch, capsys
+):
+    b, values, _ = backup_tree
+    unrelated = tls.acme_root(values) / "archive/unrelated"
+    unrelated.mkdir()
+    (unrelated / "privkey.pem").write_text("unrelated-never-backup")
+    journal = tls.ETC / "tls/dns-recovery.json"
+    journal.write_text('{"retained":"recovery"}')
+    calls = []
+
+    def restic(args):
+        calls.append(args)
+        return json.dumps({"message_type": "summary", "snapshot_id": "b" * 64}).encode()
+
+    monkeypatch.setattr(b, "restic", restic)
+    b.backup(values)
+    args = calls[0]
+    assert args[:4] == ["backup", "--json", "--tag", "firedash-tls"]
+    assert str(journal) in args and str(tls.ETC / "install.conf") in args
+    assert str(b.state() / "dependency-lock.txt") in args
+    assert any("private_key.json" in p for p in args)
+    assert not any(
+        "unrelated" in p or "/var/spool" in p or "repository-password" in p for p in args
+    )
+    assert (b.state() / "last-success.json").exists()
+    assert "synthetic-backup-secret" not in capsys.readouterr().out
+
+
+def test_failed_tls_backup_preserves_previous_success(backup_tree, monkeypatch):
+    b, values, _ = backup_tree
+    previous = b.state() / "last-success.json"
+    previous.write_text("previous-success")
+
+    def fail(args):
+        raise tls.TLSError("repository unavailable")
+
+    monkeypatch.setattr(b, "restic", fail)
+    with pytest.raises(tls.TLSError):
+        b.backup(values)
+    assert previous.read_text() == "previous-success"
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "missing",
+        "permissions",
+        "mismatch",
+        "account",
+        "success",
+        "dns-missing",
+        "dns-permissions",
+        "dns-success",
+    ],
+)
+def test_isolated_tls_restore_validates_material_and_never_activates(
+    backup_tree, openssl, certificate, monkeypatch, tmp_path, problem
+):
+    b, values, modes = backup_tree
+    credential = tls.ETC / "dns.ini"
+    if problem.startswith("dns-"):
+        values.update(
+            FIREDASH_TLS_MODE="letsencrypt-dns01",
+            FIREDASH_TLS_DNS_BACKEND="certbot-multi",
+            FIREDASH_TLS_DNS_PROVIDER="netcup",
+            FIREDASH_TLS_DNS_PLUGIN_APPROVED="yes",
+        )
+        credential.write_text(
+            "dns_multi_provider = netcup\nNETCUP_API_KEY = synthetic-dns-secret\n"
+        )
+        monkeypatch.setattr(tls, "protected_dns_credentials", b.private)
+        renewal = tls.acme_root(values) / "renewal/firedash.conf"
+        renewal.write_text(
+            renewal.read_text().replace("authenticator = webroot", "authenticator = dns-multi")
+            + f"dns_multi_credentials = {credential.as_posix()}\n"
+        )
+        proof = json.loads((b.state() / "plugin-provenance.json").read_text())
+        proof["plugin_package"] = "certbot-dns-multi"
+        proof["packages"]["certbot-dns-multi"] = "5.6.0"
+        (b.state() / "plugin-provenance.json").write_text(json.dumps(proof))
+        (tls.ETC / "install.conf").write_text("".join(f"{k}={v}\n" for k, v in values.items()))
+    record = b.manifest(values)
+    root = tmp_path / "restore"
+    destination = root / "exercise"
+    destination.mkdir(parents=True)
+    monkeypatch.setattr(b, "RESTORE_ROOT", root)
+    for name, item in record["files"].items():
+        source = Path(name)
+        target = destination / source.relative_to(source.anchor)
+        if item["kind"] == "directory":
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+    manifest_path = destination / (b.state() / "manifest.json").relative_to(tls.ETC.anchor)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(record))
+    original = str(next(p for p in record["files"] if p.endswith("private_key.json")))
+    if problem.startswith("dns-"):
+        original = str(credential)
+    target = b.restored_path(destination, original)
+    if problem in {"missing", "dns-missing"}:
+        target.unlink()
+    elif problem in {"permissions", "dns-permissions"}:
+        modes[str(target)] = 0o644
+    elif problem == "account":
+        target.write_text("[]")
+        record["files"][str(Path(original))]["sha256"] = hashlib.sha256(
+            target.read_bytes()
+        ).hexdigest()
+        manifest_path.write_text(json.dumps(record))
+    elif problem == "mismatch":
+        original = values["FIREDASH_TLS_KEY_PATH"]
+        target = b.restored_path(destination, original)
+        target.write_bytes(certificate("wrong-restored-key")[1].read_bytes())
+        record["files"][str(Path(original))]["sha256"] = hashlib.sha256(
+            target.read_bytes()
+        ).hexdigest()
+        manifest_path.write_text(json.dumps(record))
+    before = Path(values["FIREDASH_TLS_CERT_PATH"]).read_bytes()
+    if problem in {"success", "dns-success"}:
+        b.restore_check(values, destination)
+    else:
+        with pytest.raises((tls.TLSError, OSError, AssertionError)):
+            b.restore_check(values, destination)
+    assert Path(values["FIREDASH_TLS_CERT_PATH"]).read_bytes() == before
+
+
+def test_restic_transport_has_no_shell_hooks_or_inherited_credentials(backup_tree, monkeypatch):
+    b, _, _ = backup_tree
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
+    monkeypatch.setenv("RESTIC_PASSWORD_COMMAND", "unsafe-command")
+
+    def run(args, **kwargs):
+        assert args == [b.RESTIC, "--no-cache", "backup", "--", "/selected/file"]
+        assert "unsafe-command" not in str(kwargs) and "ambient-secret" not in str(kwargs)
+        assert kwargs["env"]["RESTIC_REST_PASSWORD"] == "synthetic-backup-secret"
+        return SimpleNamespace(returncode=1, stdout=b"secret raw output", stderr=b"private failure")
+
+    monkeypatch.setattr(b.subprocess, "run", run)
+    with pytest.raises(tls.TLSError, match="inspect repository access privately") as error:
+        b.restic(["backup", "--", "/selected/file"])
+    assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "destination",
+    ["/etc/letsencrypt", "/etc/fire-backend", "/var/lib/fire-backend-tls-restore/../live"],
+)
+def test_restore_rejects_live_or_traversing_destination(backup_module, destination):
+    with pytest.raises(tls.TLSError):
+        backup_module.isolated(destination, empty=True)
+
+
+@pytest.mark.parametrize("backend", ["netcup-existing", "multi"])
+def test_tls_backup_includes_selected_dns_credentials_only(backup_tree, monkeypatch, backend):
+    b, values, _ = backup_tree
+    root = tls.acme_root(values)
+    values["FIREDASH_TLS_MODE"] = "letsencrypt-dns01"
+    values["FIREDASH_TLS_DNS_PLUGIN_APPROVED"] = "yes"
+    if backend == "multi":
+        values.update(FIREDASH_TLS_DNS_BACKEND="certbot-multi", FIREDASH_TLS_DNS_PROVIDER="netcup")
+        package = "certbot-dns-multi"
+        content = "dns_multi_provider = netcup\nNETCUP_API_KEY = synthetic-private-dns\n"
+    else:
+        values.update(
+            FIREDASH_TLS_DNS_BACKEND="certbot-existing",
+            FIREDASH_TLS_DNS_AUTHENTICATOR="dns-netcup",
+            FIREDASH_TLS_ADOPT_DNS01="yes",
+        )
+        monkeypatch.setattr(tls, "acme_root", lambda values=None: root)
+        package = "certbot-dns-netcup"
+        content = "dns_netcup_api_key = synthetic-private-dns\n"
+    credential = tls.ETC / "dns.ini"
+    credential.write_text(content)
+    values["FIREDASH_TLS_DNS_CREDENTIALS"] = str(credential)
+    monkeypatch.setattr(tls, "protected_dns_credentials", b.private)
+    renewal = root / "renewal/firedash.conf"
+    renewal.write_text(
+        f"[renewalparams]\nauthenticator = {tls.dns_auth.authenticator(values)}\n"
+        f"server = {tls.SERVER}\naccount = "
+        + "a" * 32
+        + f"\n{tls.dns_auth.credential_parameter(values)} = {credential.as_posix()}\n"
+    )
+    proof = json.loads((b.state() / "plugin-provenance.json").read_text())
+    proof["plugin_package"] = package
+    proof["packages"][package] = "5.6.0" if backend == "multi" else "1.0.0"
+    (b.state() / "plugin-provenance.json").write_text(json.dumps(proof))
+    before = {path: path.read_bytes() for path in (credential, renewal)}
+    files = b.inventory(values)
+    assert str(credential) in files and b.provenance(values) == proof
+    assert all(path.read_bytes() == contents for path, contents in before.items())
+
+
+@pytest.mark.parametrize("problem", ["none", "stale", "changed", "repository"])
+def test_tls_backup_coverage_verifier_detects_stale_or_changed_state(
+    backup_tree, monkeypatch, problem
+):
+    b, values, _ = backup_tree
+    monkeypatch.setattr(
+        b,
+        "restic",
+        lambda args: json.dumps({"message_type": "summary", "snapshot_id": "c" * 64}).encode(),
+    )
+    b.backup(values)
+    monkeypatch.setattr(tls, "verify_owned_file", lambda *args: None)
+    monkeypatch.setattr(tls, "run", lambda *args, **kwargs: b"reviewed-unit")
+    if problem == "stale":
+        marker = b.state() / "last-success.json"
+        record = json.loads(marker.read_text())
+        record["time"] -= 49 * 3600
+        marker.write_text(json.dumps(record))
+    elif problem == "changed":
+        (tls.ETC / "tls/new-recovery-metadata").write_text("new state")
+    elif problem == "repository":
+        path = tls.ETC / "tls-backup.conf"
+        path.write_text(path.read_text().replace("backup.example.org", "other.example.org"))
+    if problem == "none":
+        b.verify(values)
+    else:
+        with pytest.raises(tls.TLSError):
+            b.verify(values)
+
+
+def test_tls_backup_dependency_versions_are_checked_without_plugin_import(backup_tree, monkeypatch):
+    b, values, _ = backup_tree
+    # Restore the real verifier rather than the filesystem fixture boundary.
+    spec = importlib.util.spec_from_file_location(
+        "backup_versions", ROOT / "deploy/lib/tls_backup.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "tls", tls)
+    binary = Path(tls.certbot_args(values)[0])
+    binary.write_text("#!/opt/reviewed/bin/python3\n")
+    expected = {"certbot": "5.7.0", "acme": "5.7.0"}
+
+    def run(args, **kwargs):
+        assert args[:3] == [str(Path("/opt/reviewed/bin/python3")), "-I", "-c"]
+        assert "import_module" not in args[3] and "json.load(sys.stdin)" in args[3]
+        assert all(isinstance(name, str) for name in json.loads(kwargs["input"]))
+        return json.dumps(expected).encode()
+
+    monkeypatch.setattr(tls, "run", run)
+    module.check_versions(values, expected)
+    with pytest.raises(tls.TLSError, match="recorded"):
+        module.check_versions(values, {"certbot": "old"})
+
+
+@LINUX
+@pytest.mark.skipif(shutil.which("restic") is None, reason="native Restic executable unavailable")
+def test_native_restic_encrypted_roundtrip_preserves_relative_links(
+    backup_tree, openssl, monkeypatch, tmp_path
+):
+    b, values, _ = backup_tree
+    current = tls.ETC / "tls/current"
+    generation = current.with_name("verified")
+    current.rename(generation)
+    current.symlink_to("verified")
+    repository = tmp_path / "disposable-repository"
+    password = tmp_path / "disposable-password"
+    password.write_text("synthetic-restic-encryption-passphrase")
+    environment = {
+        "PATH": os.environ["PATH"],
+        "RESTIC_REPOSITORY": str(repository),
+        "RESTIC_PASSWORD_FILE": str(password),
+    }
+    executable = shutil.which("restic")
+    assert executable
+
+    def local_restic(args):
+        return subprocess.run(
+            [executable, "--no-cache", *args],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=True,
+            timeout=90,
+        ).stdout
+
+    local_restic(["init"])
+    monkeypatch.setattr(b, "restic", local_restic)
+    b.backup(values)
+    snapshot = json.loads((b.state() / "last-success.json").read_text())["snapshot"]
+    root = tmp_path / "native-restore"
+    destination = root / "exercise"
+    destination.mkdir(parents=True)
+    monkeypatch.setattr(b, "RESTORE_ROOT", root)
+    b.restore(values, snapshot, destination)
+    restored = b.restored_path(destination, str(current))
+    assert restored.is_symlink() and os.readlink(restored) == "verified"
+    assert (
+        b"PRIVATE KEY" in b.restored_path(destination, values["FIREDASH_TLS_KEY_PATH"]).read_bytes()
+    )
+    for path in repository.rglob("*"):
+        if path.is_file():
+            assert b"never-log-backup-secret" not in path.read_bytes()
+            assert b"BEGIN PRIVATE KEY" not in path.read_bytes()
+    with pytest.raises(tls.TLSError, match="empty"):
+        b.restore(values, snapshot, destination)
+
+
+@LINUX
+def test_backup_private_boundary_rejects_actual_public_file(backup_module, tmp_path):
+    path = tmp_path / "public-credential"
+    path.write_text("synthetic")
+    path.chmod(0o644)
+    with pytest.raises(backup_module.config.ConfigurationError):
+        backup_module.private(path)
+
+
+def test_unresolved_journal_blocks_new_renewal_without_certbot(dns_tree, certificate, monkeypatch):
+    dns_lineage(dns_tree, certificate())
+    journal = tls.ETC / "tls/dns-recovery.json"
+    journal.parent.mkdir()
+    journal.write_text("unresolved-private-journal")
+    monkeypatch.setattr(tls.dns_auth, "check_plugin", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        tls, "run", lambda *args, **kwargs: pytest.fail("unresolved recovery must prevent Certbot")
+    )
+    for _ in range(2):
+        with pytest.raises(tls.TLSError, match="journal retained"):
+            tls.renew(dns_tree)
+        assert journal.read_text() == "unresolved-private-journal"

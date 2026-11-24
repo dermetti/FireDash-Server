@@ -462,7 +462,17 @@ def nginx_apply(text):
         raise
 
 
-def atomic(path, data, permissions):
+def sync_directory(path):
+    """Persist directory entries as well as file contents on the supported OS."""
+    if os.name == "posix":
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def atomic(path, data, permissions, *, exclusive=False):
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".tls-")
     try:
         with os.fdopen(fd, "wb") as file:
@@ -470,7 +480,12 @@ def atomic(path, data, permissions):
             file.write(data)
             file.flush()
             os.fsync(file.fileno())
-        os.replace(name, path)
+        if exclusive:
+            # Publish a complete journal without ever replacing unresolved state.
+            os.link(name, path)
+        else:
+            os.replace(name, path)
+        sync_directory(path.parent)
     finally:
         Path(name).unlink(missing_ok=True)
 
@@ -521,7 +536,7 @@ def certificate_identity(values):
     ).hexdigest()
 
 
-def deploy_dns(values):
+def deploy_dns(values, *, recovering=False):
     validate(
         values["FIREDASH_TLS_CERT_PATH"],
         values["FIREDASH_TLS_KEY_PATH"],
@@ -529,6 +544,10 @@ def deploy_dns(values):
     )
     run(["nginx", "-t"])
     run(["systemctl", "reload", "nginx"])
+    if recovering:
+        # The first wait can join an in-flight reload from an interrupted hook.
+        # Once it completes, request a distinct reload of the restored files.
+        run(["systemctl", "reload", "nginx"])
     atomic(ETC / "tls/dns-deployed", certificate_identity(values).encode(), 0o600)
 
 
@@ -538,6 +557,11 @@ def dns_snapshot(values):
     Certbot retains historical archive files. Restore links after an unsuccessful
     renewal/deploy so an invalid candidate cannot become the next Nginx start.
     """
+    journal = ETC / "tls/dns-recovery.json"
+    require(
+        not journal.exists() and not journal.is_symlink(),
+        "unresolved DNS recovery journal; run recovery before renewing",
+    )
     links = {}
     source = lineage(values)
     archive = (acme_root(values) / "archive" / cert_name(values)).resolve()
@@ -548,48 +572,173 @@ def dns_snapshot(values):
             "adoption requires standard Certbot live/archive symlinks",
         )
         links[name] = os.readlink(path)
-    journal = ETC / "tls/dns-recovery.json"
-    atomic(journal, json.dumps(links).encode(), 0o600)
+    record = {
+        "version": 2,
+        "state": "pending",
+        "lineage": str(source),
+        "links": links,
+        "identity": certificate_identity(values),
+    }
+    # Validate the entire snapshot before it can authorize any later writes.
+    dns_recovery_record(values, record)
+    atomic(journal, json.dumps(record).encode(), 0o600, exclusive=True)
     return journal
 
 
-def restore_dns(values, journal):
-    links = json.loads(journal.read_text())
+def dns_recovery_record(values, record):
+    """Validate all old archive targets before touching even the first live link."""
+    source = lineage(values)
     require(
-        set(links) == {"cert.pem", "chain.pem", "fullchain.pem", "privkey.pem"},
+        isinstance(record, dict)
+        and set(record) == {"version", "state", "lineage", "links", "identity"}
+        and record["version"] == 2
+        and record["state"] in {"pending", "rollback"}
+        and record["lineage"] == str(source),
+        "invalid DNS recovery journal; retain it for private operator recovery",
+    )
+    links = record["links"]
+    require(
+        isinstance(links, dict)
+        and set(links) == {"cert.pem", "chain.pem", "fullchain.pem", "privkey.pem"},
         "invalid DNS renewal recovery journal",
     )
-    source = lineage(values)
     archive = (acme_root(values) / "archive" / cert_name(values)).resolve()
+    require(
+        source.resolve() == source.absolute()
+        and archive == (acme_root(values) / "archive" / cert_name(values)).absolute(),
+        "DNS recovery requires standard live/archive directories",
+    )
+    versions = set()
     for name, target in links.items():
-        require(
-            (source / target).resolve().is_relative_to(archive),
-            "invalid DNS renewal recovery target",
+        require(isinstance(target, str), "invalid DNS recovery target")
+        match = re.fullmatch(
+            r"\.\./\.\./archive/"
+            + re.escape(cert_name(values))
+            + "/"
+            + name[:-4]
+            + r"([1-9][0-9]*)\.pem",
+            target,
         )
+        require(match is not None, "invalid DNS recovery target")
+        versions.add(match[1] if match is not None else "")
+        path = source / target
+        require(
+            not path.is_symlink() and path.is_file() and path.resolve().parent == archive,
+            "DNS recovery archive missing or unsafe; preserve journal and restore private backup",
+        )
+        protected_acme_file(path)
+        if name == "privkey.pem":
+            require(
+                path.stat().st_mode & 0o777 == 0o600, "DNS recovery private key requires mode 0600"
+            )
+    require(len(versions) == 1, "inconsistent DNS recovery archive generation")
+    identity = hashlib.sha256(
+        (source / links["fullchain.pem"]).read_bytes()
+        + (source / links["privkey.pem"]).read_bytes()
+    ).hexdigest()
+    require(record["identity"] == identity, "DNS recovery archive identity mismatch")
+    try:
+        validate(
+            source / links["fullchain.pem"],
+            source / links["privkey.pem"],
+            hostname(values["FIREDASH_BASE_URL"]),
+        )
+    except TLSError as error:
+        # An expired generation may be snapshotted for a recovery renewal, but
+        # deploy_dns still refuses to activate it if that renewal fails.
+        if "expired or not yet valid" not in str(error):
+            raise
+    return links
+
+
+def read_dns_journal(values, journal):
+    protected_acme_file(journal)
+    require(
+        not journal.is_symlink()
+        and journal.stat().st_mode & 0o777 == 0o600
+        and journal.stat().st_size <= 8192,
+        "unsafe DNS recovery journal",
+    )
+    record = json.loads(journal.read_text())
+    return record, dns_recovery_record(values, record)
+
+
+def restore_dns(values, journal):
+    record, links = read_dns_journal(values, journal)
+    source = lineage(values)
+    for name, target in links.items():
+        require((source / name).is_symlink(), "DNS recovery requires live symlinks; retain journal")
+        pending = source / (".firedash-" + name)
+        require(
+            not pending.exists()
+            and not pending.is_symlink()
+            or pending.is_symlink()
+            and os.readlink(pending) == target,
+            "unsafe DNS recovery temporary path; retain journal",
+        )
+    if record["state"] != "rollback":
+        record["state"] = "rollback"
+        atomic(journal, json.dumps(record).encode(), 0o600)
+    for name, target in links.items():
         pending = source / (".firedash-" + name)
         pending.unlink(missing_ok=True)
         pending.symlink_to(target)
         os.replace(pending, source / name)
+        sync_directory(source)
+    require(
+        all(
+            (source / name).is_symlink() and os.readlink(source / name) == target
+            for name, target in links.items()
+        )
+        and certificate_identity(values) == record["identity"],
+        "DNS recovery incomplete; retain journal",
+    )
+    # A reload may have succeeded before an interruption. Always restore Nginx
+    # too; a marker alone cannot establish which generation workers loaded.
+    deploy_dns(values, recovering=True)
 
 
 def recover_dns(values):
     journal = ETC / "tls/dns-recovery.json"
-    if not journal.exists():
+    if not journal.exists() and not journal.is_symlink():
         return
     try:
-        validate(
-            values["FIREDASH_TLS_CERT_PATH"],
-            values["FIREDASH_TLS_KEY_PATH"],
-            hostname(values["FIREDASH_BASE_URL"]),
-        )
-        marker = ETC / "tls/dns-deployed"
-        if not marker.exists() or marker.read_text() != certificate_identity(values):
-            deploy_dns(values)
-    except BaseException:
         restore_dns(values, journal)
-        raise
-    finally:
-        journal.unlink(missing_ok=True)
+        complete_dns(values, journal)
+    except BaseException as error:
+        raise TLSError(
+            "DNS recovery incomplete; journal retained. Do not renew or edit renewal metadata; "
+            "restore missing archives from encrypted backup and retry tls.py recover"
+        ) from error
+
+
+def complete_dns(values, journal):
+    source = lineage(values)
+    dns_recovery_record(
+        values,
+        {
+            "version": 2,
+            "state": "pending",
+            "lineage": str(source),
+            "links": {
+                name: os.readlink(source / name)
+                for name in ("cert.pem", "chain.pem", "fullchain.pem", "privkey.pem")
+            },
+            "identity": certificate_identity(values),
+        },
+    )
+    validate(
+        values["FIREDASH_TLS_CERT_PATH"],
+        values["FIREDASH_TLS_KEY_PATH"],
+        hostname(values["FIREDASH_BASE_URL"]),
+    )
+    marker = ETC / "tls/dns-deployed"
+    require(
+        marker.is_file() and marker.read_text() == certificate_identity(values),
+        "DNS activation incomplete; recovery journal retained",
+    )
+    journal.unlink()
+    sync_directory(journal.parent)
 
 
 def renew(values, *, use_hook=True):
@@ -638,16 +787,17 @@ def renew(values, *, use_hook=True):
         )
     except BaseException:
         if journal:
-            restore_dns(values, journal)
+            recover_dns(values)
         raise
-    finally:
-        if journal:
-            journal.unlink(missing_ok=True)
+    if journal:
+        complete_dns(values, journal)
 
 
 def dry_run(values):
     """Certbot's staging validation, without deploy hooks or application changes."""
     check_lineage(values)
+    if adopted(values):
+        recover_dns(values)
     if mode(values) == "letsencrypt-dns01":
         dns_auth.check_plugin(
             values, certbot_args(values), run, require, protect=protected_acme_file
@@ -879,7 +1029,13 @@ def verify(values):
             b"webroot" in run(certbot_args(values) + ["plugins", "--authenticators", "--text"]),
             "configured Certbot authenticator unavailable",
         )
-    for filename in ("tls.py", "dns_auth.py", "configuration.py", "legacy-schema-1.json"):
+    for filename in (
+        "tls.py",
+        "dns_auth.py",
+        "tls_backup.py",
+        "configuration.py",
+        "legacy-schema-1.json",
+    ):
         path = HELPER.parent / filename
         verify_owned_file(path, Path(__file__).with_name(filename).read_bytes())
     for unit in ("fire-tls-renew.service", TIMER):
@@ -933,9 +1089,12 @@ def main():
                 atomic(marker, loaded_identity.encode(), 0o600)
         else:
             require(mode(values) != "manual", "renewal is restricted to FireDash managed mode")
-            if command in {"renew", "dry-run"}:
+            if command in {"renew", "dry-run", "recover"}:
                 with renewal_lock():
-                    if command == "dry-run":
+                    if command == "recover":
+                        require(adopted(values), "recovery applies to adopted DNS lineages")
+                        recover_dns(values)
+                    elif command == "dry-run":
                         dry_run(values)
                     else:
                         renew(values)

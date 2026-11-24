@@ -1,0 +1,28 @@
+[Unit]
+Description=Encrypted selected-lineage FireDash TLS backup
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/fire-backend/tls-backup.conf
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/lib/fire-backend/tls_backup.py backup
+TimeoutStartSec=35min
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/etc/fire-backend/tls-backup /run/lock
+InaccessiblePaths=/var/spool
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+

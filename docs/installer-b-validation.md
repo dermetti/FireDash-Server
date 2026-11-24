@@ -1,4 +1,124 @@
-# Installer B.1 local implementation and validation
+# Installer B.2 local implementation and validation
+
+Reviewed HEAD: `27d127fc01cf3d70a362231a40aca53cb232c54f`; the initial working
+tree was clean. Changes are local only. No deployment, SSH, production ACME,
+live DNS credentials, database operations, application migrations, key rotation,
+Git staging/commit/push or destructive Restic operation occurred.
+
+## Recovery durability
+
+The old `finally` blocks removed the recovery journal even when restoring a
+symlink failed. They also treated an attempted restoration as sufficient cleanup,
+without establishing a complete pair and consistent Nginx activation.
+
+Version-2 journals are now exclusively published before mutation and fsynced,
+with `pending`/`rollback` states, lineage identity and original archive links.
+All targets are checked before the first replacement. Each link update is atomic
+and directory-synced. Recovery validates the complete restored generation and
+certificate/key/hostname/validity, waits for any outstanding reload, then requests
+a distinct reload of restored files. Only verified activation permits durable
+journal removal. Failed or interrupted restoration/reload retains the journal.
+New renewal/dry-run resolves existing recovery first; unresolved information is
+never overwritten. Explicit locked `tls.py recover` is idempotent. Missing archives,
+unsafe/old journal formats and expired rollback material fail closed for private
+operator review. Certbot accounts, archives, keys and renewal INIs are not rewritten.
+
+## Encrypted backup and isolated restore
+
+The dedicated root-only `tls_backup.py` helper and service/timer reuse Restic
+encryption with a **separate restricted HTTPS REST repository**. This avoids
+changing application backup authorization, sources, history or retention. There
+are no initialization, forget, prune or live-restore operations. `/var/spool` is
+inaccessible in the service sandbox and excluded from input selection.
+
+The snapshot selects FireDash install/TLS metadata and verified generations,
+the single configured live/archive/renewal lineage, its referenced account,
+protected DNS credentials, dependency lock and plugin provenance. It excludes
+unrelated certificates/accounts, work/log directories, application credentials,
+database/storage data, temporary spools/receipts and repository access/encryption
+secrets. The latter must remain in an independent operator recovery store.
+
+The daily randomized timer and renewal success/failure triggers take the shared
+installer lock. Confirmation requires Restic's full snapshot ID. Verification
+checks exact inventory, repository binding, a 48-hour receipt, installed units
+and an enabled/active timer. Failed backups are observable and cannot advance
+the last-success receipt. There is no automatic TLS pruning.
+
+Restoration accepts an explicit TLS-tagged snapshot ID and an empty named child
+of `/var/lib/fire-backend-tls-restore`. It verifies hashes, ownership, modes,
+relative symlinks, account/renewal metadata, protected DNS credentials, certificate
+identity/key/hostname/validity and approved installed dependency versions. It
+never executes restored programs, activates files, enables timers or starts
+services. An unresolved journal requires explicit isolated recovery review.
+See [operator procedure](tls-recovery.md) for exact provisioning/restore steps.
+
+## Local verification
+
+- Focused pytest: **277 passed, 26 skipped, 0 failed** in 63.97 seconds:
+  `python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_tls.py deploy/tests/test_configuration.py -q --tb=short`.
+  Skips are explicit native Linux gates. New coverage includes partial-link
+  failure, interrupted reload, malformed journals, missing archives, retry/no-op,
+  unresolved-journal renewal refusal, encrypted input selection, secret isolation,
+  failed uploads, freshness/repository binding, isolated restore failures and
+  existing Netcup/fresh multi compatibility. Existing HTTP/security tests remain.
+- Bash syntax: **40 passed** (deployment `.sh` files plus backup/restore scripts).
+- Bash regressions: **18 passed, 1 skipped, 0 failed**. The root-only signing-key
+  integration script returned its documented exit 77 on Windows.
+- Ruff repository check passed; formatting check: **448 files** unchanged.
+- Relevant mypy: **5 files passed**, using Linux platform semantics.
+- Bandit: TLS manager, DNS adapter and backup helper passed.
+- Django test-settings system check: **0 issues**. No database query/migration run.
+- CI YAML parsing and Git whitespace checks passed.
+- Final recovery/backup subset after temporary-path hardening: **24 passed,
+  7 skipped, 106 deselected**, 0 failed in 5.55 seconds. Ruff, mypy, Bandit
+  and whitespace checks were repeated successfully.
+
+Initial test-fixture failures involved Windows path spelling and were corrected;
+the final run above has no failures. No full local Python suite was run.
+
+## Pending acceptance and remaining risks
+
+Native Linux could not run here: WSL enumeration returns access denied and no
+Docker daemon is reachable. ShellCheck is unavailable. The 26 native skips,
+including durable symlinks and actual disposable Restic encryption/restore, remain
+pending. CI now installs Restic alongside Nginx for the native round-trip test;
+the new CI run requires separately reviewed/authorized commit and push.
+
+Ready for **disposable-environment acceptance**, not live deployment. Demonstrate
+real root metadata, Debian 13/systemd sandbox/timers, interruption during reload,
+lock contention, encrypted REST upload and isolated restore, plus actual staging
+renewal/failure/retry with disposable DNS credentials. No real restore, staging
+ACME or production Netcup validation is claimed by the local results.
+
+Provision and independently verify the dedicated repository/identity and off-host
+recovery secrets before acceptance. Equal repository settings are rejected, but
+different URLs aliasing the same repository must be excluded operationally.
+Local success receipts do not prove continuing remote availability; monitor and
+perform periodic restore drills. Old-format journals and expired rollback targets
+need explicit review; no unsafe automatic conversion is provided. TLS retention
+and capacity require a separately authorized policy. Provider support and privileged
+dependency versions were not expanded.
+
+## Changed files
+
+- Recovery: `deploy/lib/tls.py`.
+- New backup boundary: `deploy/lib/tls_backup.py`,
+  `deploy/systemd/fire-tls-backup.service`, `deploy/systemd/fire-tls-backup.timer`.
+- Wiring: `deploy/install-local.sh`, `deploy/lib/systemd.sh`,
+  `deploy/systemd/fire-tls-renew.service`, `deploy/verify-deployment.sh`.
+- Tests/CI: `deploy/tests/test_tls.py`, `deploy/tests/test_configuration.py`,
+  `.github/workflows/ci.yml`.
+- Documentation: this report, `docs/installer-b-tls.md`, `docs/tls-recovery.md`,
+  `docs/operations.md`, `docs/acceptance.md`.
+
+`deploy/scripts/fire-backup` and `deploy/lib/dns_auth.py` remain unchanged.
+
+---
+
+# Historical Installer B.1 local implementation and validation
+
+Retained as phase evidence. Current recovery and backup behavior is superseded
+by B.2 above; earlier backup implementation blockers describe the B.1 state.
 
 Reviewed and inspected baseline: `08f4c21ec3fcf444e67605bab10ddd2ec6f264b9`.
 HEAD matched the review and the initial working tree was clean. This report

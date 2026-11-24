@@ -256,52 +256,16 @@ state; rerun with the same configuration. Interrupted upgrades follow the
 existing maintenance recovery instructions and must not restart old code after
 possible migrations.
 
-## Encrypted TLS backup and restore ? beta recovery gate
+## Installer B.2: durable recovery and encrypted backup
 
-**Automatic `fire-backup` TLS coverage is not implemented. B.1 recovery acceptance
-is beta-blocked until a separately scheduled encrypted TLS snapshot and isolated
-restore drill are demonstrated.** The existing backup job covers database,
-application storage and application credentials, not the complete ACME state.
-It is unchanged; no retention/pruning behavior is broadened or executed here.
+The B.1 backup implementation gap is addressed by the dedicated root-only TLS
+backup service and timer. See [TLS recovery](tls-recovery.md) for the selected
+inventory, separate encrypted repository, protected provenance, durable DNS
+rollback and isolated replacement-host restore procedure. Managed deployment
+verification now rejects absent, stale or changed TLS backup coverage.
 
-Use a dedicated root-operated snapshot with the existing encrypted Restic
-repository/password credential authorization. Take the FireDash lock and ensure
-no external Certbot process is running. Keep all snapshots encrypted, restrict
-repository and restore access to approved operators, and monitor snapshot
-completion. Never stage unencrypted TLS archives in application storage or CI.
-For each installation, review a literal, narrow source manifest containing:
-
-- `/etc/fire-backend/install.conf` and `/etc/fire-backend/tls` (verified copies,
-  previous generations, activation markers, recovery journal).
-- Fresh managed mode: `/etc/fire-backend/acme` in full (renewal INI, live/archive,
-  accounts and private keys). Work/log directories are diagnostic, not required
-  for certificate recovery; do not copy them into broad application backups.
-- Adopted mode: only the selected `/etc/letsencrypt/renewal/<lineage>.conf`,
-  `/etc/letsencrypt/live/<lineage>` and `/etc/letsencrypt/archive/<lineage>`,
-  plus its referenced account directory under `/etc/letsencrypt/accounts`.
-  Live symlinks alone are insufficient. Record the exact account path privately.
-- The protected DNS credential file referenced by that lineage and any separately
-  approved dependencies. Retain its original absolute path, ownership and mode.
-- The reviewed dependency lock, approved package provenance/inventory and exact
-  release SHA. Rebuild the isolated plugin environment from pinned artifacts.
-
-Use one encrypted snapshot for the reviewed literal paths, for example
-`restic backup --tag firedash --tag tls <reviewed-literal-paths>` inside the
-existing protected backup authorization context and shared lock. Do not accept
-arbitrary paths from an application request. Do not add `/var/spool` or private
-report spools. Do not run `forget --prune` as part of this TLS workflow.
-Schedule this root-only operation independently only after permission/sandbox
-review; merely documenting or listing paths is not proof of backup coverage.
-
-Restore into a private staging root on an isolated replacement host, never over
-an active installation. Verify archive targets, account identity, credentials,
-root ownership, file permissions, lineage/hostname and plugin versions before
-activating. Reconcile old/new schedulers to prevent concurrent operations and
-restore to the same absolute paths. Validate certificates/Nginx, run a disposable
-staging unattended renewal and verify application/cryptographic selectors remain
-unchanged before moving traffic. HTTP-01 needs corrected A/AAAA/firewall rules;
-DNS-01 needs outbound API/ACME access, not public inbound ports. No application
-key rotation or database restore is implied by a TLS restore.
+Native Debian 13/systemd restore and staging ACME acceptance remain required;
+portable unit tests do not establish that a real restore has succeeded.
 
 ## Required release evidence
 

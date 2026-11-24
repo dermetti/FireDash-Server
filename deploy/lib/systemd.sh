@@ -75,5 +75,8 @@ activate_timers() {
         && [[ -f $SECRET_DIR/restic-password ]]; then
         systemctl enable --now fire-backup.timer || return 1
     fi
+    if [[ -f /etc/fire-backend/tls-backup.conf ]]; then
+        systemctl enable --now fire-tls-backup.timer || return 1
+    fi
     return 0
 }

@@ -369,12 +369,30 @@ lock. Renewal remains limited to the selected lineage; adoption preserves the
 saved authenticator and native credential format. See [TLS operations and
 encrypted backup/restore manifest](installer-b-tls.md) before changing providers,
 restoring onto a new host or provisioning plugin dependencies. Backend/plugin
-changes require transition review. The current backup script does not establish
-TLS recovery coverage; an encrypted snapshot schedule and isolated restore drill
-are explicit beta gates. Do not add report spools or prune backups for this task.
+changes require transition review. The application backup script alone does not
+establish TLS coverage; configure the dedicated B.2 backup boundary below. A
+demonstrated encrypted isolated restore remains an acceptance gate. Do not add
+report spools or prune backups for this task.
 
 Sanitized lifecycle failures distinguish provider authentication, DNS propagation,
 missing plugins, lineage mismatch and certificate validation where command output
 permits classification; ambiguous errors remain generic. Inspect protected logs
 privately, correct the cause and retry the existing renewal unit. Do not include
 plugin logs, credential contents or raw exception output in support artifacts.
+
+
+## Installer B.2 TLS recovery and backup gate
+
+Managed TLS requires the dedicated root-only encrypted TLS backup service/timer,
+a separate restricted HTTPS Restic repository and protected plugin provenance.
+Application backup sources, database grants and retention remain unchanged.
+See [TLS recovery and isolated restore](tls-recovery.md) for provisioning,
+protected inventory, journal behavior, retries and replacement-host instructions.
+Monitor failed renewal/backup units and the 48-hour coverage freshness gate.
+Keep repository access/encryption secrets in an independent recovery store.
+
+Never delete an unresolved recovery journal to bypass an error. Complete pair
+validation and successful Nginx reload are required before journal cleanup.
+Before release acceptance, demonstrate encrypted isolated restoration on disposable
+Debian 13, real root metadata/symlinks, lock/reload interruption and staging renewal
+failure/retry. Unit-test success is not evidence of a real restore or staging renewal.

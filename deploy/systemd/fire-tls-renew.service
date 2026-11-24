@@ -2,6 +2,8 @@
 Description=Renew only the FireDash-owned certificate lineage
 After=network-online.target nginx.service
 Wants=network-online.target
+OnSuccess=fire-tls-backup.service
+OnFailure=fire-tls-backup.service
 
 [Service]
 Type=oneshot

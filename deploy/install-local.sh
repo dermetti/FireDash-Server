@@ -289,7 +289,7 @@ if [[ $FIREDASH_TLS_MODE == letsencrypt-http01 ]]; then
 fi
 if [[ $FIREDASH_TLS_MODE != manual ]]; then
     install -d -m 0755 -o root -g root /usr/local/lib/fire-backend
-    for helper in tls.py dns_auth.py configuration.py legacy-schema-1.json; do
+    for helper in tls.py dns_auth.py tls_backup.py configuration.py legacy-schema-1.json; do
         install_file_atomic "$SELF_DIR/lib/$helper" "/usr/local/lib/fire-backend/$helper" 0644 root:root
     done
 fi

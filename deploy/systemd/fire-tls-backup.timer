@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up FireDash TLS recovery state daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=45min
+Persistent=true
+Unit=fire-tls-backup.service
+
+[Install]
+WantedBy=timers.target
