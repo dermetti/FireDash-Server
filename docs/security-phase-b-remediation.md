@@ -1,5 +1,10 @@
 # Phase B remediation and local verification
 
+Follow-up: [Phase B.2 remediation](security-phase-b2-remediation.md) implements
+FD-SEC-002 and FD-SEC-011. The reproduction results and file list below describe
+the historical Phase B state; the probes have since moved to normal security
+regressions that assert the vulnerabilities are absent.
+
 Scope: FD-SEC-008, FD-SEC-009 and FD-SEC-010. The local working tree was
 authoritative; the review baseline was e230110f0717e605bd4c34896042ef8e888b0ad0.
 No deployment, Git mutations, historical-account cleanup, production data, or

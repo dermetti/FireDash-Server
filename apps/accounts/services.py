@@ -6,8 +6,45 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
+from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from apps.accounts.models import AccountSetupToken, AuthenticationThrottle
+
+
+@transaction.atomic
+def enrollment_device(user):
+    """Serialize creation against confirmation, using the existing account row."""
+    user = get_user_model().objects.select_for_update().get(pk=user.pk)
+    if not user.is_active or user.mfa_enabled:
+        return None
+    if TOTPDevice.objects.filter(user=user, confirmed=True).exists():
+        return None
+    device, _ = TOTPDevice.objects.get_or_create(
+        user=user, name="default", defaults={"confirmed": False}
+    )
+    return device
+
+
+@transaction.atomic(durable=True)
+def verify_totp(*, user, token: str, enrollment: bool = False) -> bool:
+    """Commit django-otp replay/throttle state before publishing authentication."""
+    user = get_user_model().objects.select_for_update().get(pk=user.pk)
+    if not user.is_active or user.mfa_enabled == enrollment:
+        return False
+    devices = TOTPDevice.objects.select_for_update().filter(user=user, confirmed=not enrollment)
+    if enrollment:
+        devices = devices.filter(name="default")
+    device = devices.order_by("pk").first()
+    if enrollment and TOTPDevice.objects.filter(user=user, confirmed=True).exists():
+        return False
+    if device is None or not device.verify_token(token):
+        return False
+    if enrollment:
+        device.confirmed = True
+        device.save(update_fields=("confirmed",))
+        user.mfa_enabled = True
+        user.save(update_fields=("mfa_enabled",))
+    return True
 
 
 class DuplicateEmailError(ValueError):

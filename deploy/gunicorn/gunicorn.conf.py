@@ -12,9 +12,14 @@ capture_output = True
 access_log_format = "%(h)s %(t)s %(m)s %(s)s %(b)s"
 
 
-def post_fork(server, worker):
+def on_starting(server):
     from apps.report_transfer.security import TokenLogFilter
 
     # Worker diagnostics may contain paths independently of the access logger.
     server.log.error_log.addFilter(TokenLogFilter())
     server.log.access_log.addFilter(TokenLogFilter())
+
+
+def post_fork(server, worker):
+    # Also protect worker diagnostics when this hook is invoked independently.
+    on_starting(server)

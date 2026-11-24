@@ -18,3 +18,38 @@ def test_nginx_replaces_forwarded_address_on_every_proxy_location():
     assert "DirectoryMode=0750" in socket
     gunicorn = (root / "deploy/gunicorn/gunicorn.conf.py").read_text()
     assert 'bind = "unix:/run/fire-backend/gunicorn.sock"' in gunicorn
+
+
+def test_credential_logging_boundaries():
+    import logging
+    import runpy
+    from types import SimpleNamespace
+
+    root = Path(__file__).resolve().parents[2]
+    nginx = (root / "deploy/nginx/fire-backend.conf").read_text()
+    for listen in ("80", "[::]:80", "443 ssl", "[::]:443 ssl"):
+        assert f"listen {listen} default_server;" in nginx
+    assert nginx.count("error_log /dev/null crit;") == 4
+    assert "location ^~ /accounts/setup {" in nginx
+    # Preserve Report Transfer stripping and setup CSRF Referer fallback.
+    assert nginx.count('proxy_set_header Referer "";') == 1
+    format_ = nginx.split("log_format fire_backend_safe", 1)[1].split(";", 1)[0]
+    assert format_.strip() == "'$request_id $status $body_bytes_sent $request_time'"
+    config = runpy.run_path(str(root / "deploy/gunicorn/gunicorn.conf.py"))
+    logs = SimpleNamespace(
+        error_log=logging.Logger("gunicorn-test-error"),
+        access_log=logging.Logger("gunicorn-test-access"),
+    )
+    config["on_starting"](SimpleNamespace(log=logs))
+    for logger in (logs.error_log, logs.access_log):
+        record = logging.LogRecord(
+            logger.name,
+            logging.ERROR,
+            __file__,
+            1,
+            "Rejected /accounts/setup/disposable?token=disposable",
+            (),
+            None,
+        )
+        assert logger.filter(record)
+        assert "disposable" not in record.getMessage()

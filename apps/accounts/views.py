@@ -10,16 +10,17 @@ from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
-from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from apps.accounts.forms import LoginForm, ReauthenticationForm, SetupForm, TokenForm
 from apps.accounts.models import AuthenticationThrottle, User
 from apps.accounts.services import (
     clear_pre_mfa_session,
     consume_setup_token,
+    enrollment_device,
     is_throttled,
     pending_mfa_user,
     record_auth_failure,
+    verify_totp,
 )
 from apps.audit.services import record_event
 
@@ -85,9 +86,9 @@ def mfa_enroll(request: HttpRequest) -> HttpResponse:
     user = pending_mfa_user(request.session)
     if user is None or user.mfa_enabled:
         return redirect("accounts-login")
-    device, _ = TOTPDevice.objects.get_or_create(
-        user=user, name="default", defaults={"confirmed": False}
-    )
+    device = enrollment_device(user)
+    if device is None:
+        return redirect("accounts-login")
     if request.method == "POST":
         form = TokenForm(request.POST)
         account = str(user.id)
@@ -97,11 +98,9 @@ def mfa_enroll(request: HttpRequest) -> HttpResponse:
             source_ip=getattr(request, "client_ip", None),
         ):
             messages.error(request, "Authentication is temporarily unavailable.")
-        elif form.is_valid() and device.verify_token(form.cleaned_data["token"]):
-            device.confirmed = True
-            device.save(update_fields=("confirmed",))
-            user.mfa_enabled = True
-            user.save(update_fields=("mfa_enabled",))
+        elif form.is_valid() and verify_totp(
+            user=user, token=form.cleaned_data["token"], enrollment=True
+        ):
             login(request, user)
             request.session["recent_reauthentication_at"] = timezone_now_timestamp()
             clear_pre_mfa_session(request.session)
@@ -156,9 +155,7 @@ def mfa_verify(request: HttpRequest) -> HttpResponse:
             source_ip=getattr(request, "client_ip", None),
         ):
             messages.error(request, "Authentication is temporarily unavailable.")
-        elif (
-            device := TOTPDevice.objects.filter(user=user, confirmed=True).first()
-        ) and device.verify_token(form.cleaned_data["token"]):
+        elif verify_totp(user=user, token=form.cleaned_data["token"]):
             login(request, user)
             request.session["recent_reauthentication_at"] = timezone_now_timestamp()
             clear_pre_mfa_session(request.session)
@@ -253,7 +250,6 @@ def reauthenticate(request: HttpRequest) -> HttpResponse:
             return_url = pending.return_url
     form = ReauthenticationForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        device = TOTPDevice.objects.filter(user=current_user, confirmed=True).first()
         account = str(current_user.id)
         if is_throttled(
             scope=AuthenticationThrottle.Scope.MFA,
@@ -261,7 +257,7 @@ def reauthenticate(request: HttpRequest) -> HttpResponse:
             source_ip=getattr(request, "client_ip", None),
         ):
             messages.error(request, "Authentication is temporarily unavailable.")
-        elif device and device.verify_token(form.cleaned_data["token"]):
+        elif verify_totp(user=current_user, token=form.cleaned_data["token"]):
             request.session["recent_reauthentication_at"] = timezone_now_timestamp()
             record_event(
                 action="authentication.reauthenticated",

@@ -61,7 +61,11 @@ INSTALLED_APPS = [
     "apps.file_library",
 ]
 
+DEFAULT_EXCEPTION_REPORTER = "apps.accounts.security.CredentialExceptionReporter"
+DEFAULT_EXCEPTION_REPORTER_FILTER = "apps.accounts.security.CredentialExceptionFilter"
+
 MIDDLEWARE = [
+    "apps.accounts.security.SetupSecurityMiddleware",
     "apps.report_transfer.security.PortalSecurityMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "apps.audit.middleware.RequestContextMiddleware",
@@ -365,10 +369,20 @@ TRUSTED_PROXY_UNIX_SOCKET = ""
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "filters": {"report_tokens": {"()": "apps.report_transfer.security.TokenLogFilter"}},
-    "handlers": {"console": {"class": "logging.StreamHandler", "filters": ["report_tokens"]}},
+    "filters": {
+        "report_tokens": {"()": "apps.report_transfer.security.TokenLogFilter"},
+        "require_debug_false": {"()": "django.utils.log.RequireDebugFalse"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "filters": ["report_tokens"]},
+        "mail_admins": {
+            "class": "django.utils.log.AdminEmailHandler",
+            "filters": ["report_tokens", "require_debug_false"],
+        },
+    },
     "root": {"handlers": ["console"], "level": "INFO"},
     "loggers": {
+        "django": {"handlers": ["mail_admins"], "level": "INFO", "propagate": True},
         "django.server": {
             "handlers": ["console"],
             "level": "INFO",

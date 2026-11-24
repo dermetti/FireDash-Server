@@ -1,8 +1,4 @@
-"""Verification-only probes: assert reproduction, not remediation acceptance.
-
-Run explicitly with pytest; deliberately excluded from normal test discovery.
-All identities, setup tokens, and MFA devices belong to disposable test fixtures.
-"""
+"""Security regressions use disposable credentials and independent sessions."""
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
@@ -22,7 +18,7 @@ from apps.audit.models import AuditEvent
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("failure", ["csrf", "exception"])
-def test_fd_sec_002_setup_token_enters_django_error_log(caplog, monkeypatch, failure):
+def test_setup_token_absent_from_django_error_log(caplog, monkeypatch, failure):
     actor = User.objects.create_user("probe@example.test", "Probe", "password")
     _, token = create_setup_token(
         actor=actor, email="setup-probe@example.test", display_name="Disposable"
@@ -42,11 +38,13 @@ def test_fd_sec_002_setup_token_enters_django_error_log(caplog, monkeypatch, fai
         assert response.status_code == 500
     # Do not print or include the disposable token in assertion diagnostics.
     leaked = any(token in record.getMessage() for record in caplog.records)
-    assert leaked is True
+    assert leaked is False
+    assert all(token not in (record.exc_text or "") for record in caplog.records)
+    assert response["X-Request-ID"]
 
 
 @pytest.mark.django_db(transaction=True)
-def test_fd_sec_011_two_concurrent_requests_accept_same_totp(monkeypatch):
+def test_two_concurrent_requests_cannot_accept_same_totp(monkeypatch):
     user = User.objects.create_user("mfa-probe@example.test", "Probe", "password")
     user.mfa_enabled = True
     user.save(update_fields=("mfa_enabled",))
@@ -60,14 +58,16 @@ def test_fd_sec_011_two_concurrent_requests_accept_same_totp(monkeypatch):
         session["pending_mfa_started_at"] = time()
         session.save()
     loaded = Barrier(2, timeout=15)
-    original = TOTPDevice.verify_token
+    from apps.accounts import views
 
-    def synchronized_verify(self, token):
-        # Both requests have independently loaded last_t before verification.
+    original = views.verify_totp
+
+    def synchronized_verify(**kwargs):
+        # Rendezvous before the service acquires any replay-state lock.
         loaded.wait()
-        return original(self, token)
+        return original(**kwargs)
 
-    monkeypatch.setattr(TOTPDevice, "verify_token", synchronized_verify)
+    monkeypatch.setattr(views, "verify_totp", synchronized_verify)
 
     def verify(client):
         try:
@@ -78,8 +78,8 @@ def test_fd_sec_011_two_concurrent_requests_accept_same_totp(monkeypatch):
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         accepted = list(executor.map(verify, clients))
-    assert accepted == [True, True]
+    assert sum(accepted) == 1
     assert (
         AuditEvent.objects.filter(action="authentication.login_succeeded", actor_user=user).count()
-        == 2
+        == 1
     )
