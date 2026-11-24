@@ -469,7 +469,7 @@ export -f python3
         "admin": "display_admin_setup_url() { :; }",
         "secrets": """validate_outbound_mail_https_proxy() { :; }
 validate_premaintenance_secrets() { :; }
-effective_outbound_mail_https_proxy() { printf '%s' "$FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY"; }""",
+effective_outbound_mail_https_proxy() { printf '%s' "${FIREDASH_OUTBOUND_MAIL_HTTPS_PROXY:-}"; }""",
     }
     for name, body in stubs.items():
         (lib / f"{name}.sh").write_text(body + "\n", newline="\n")
@@ -503,8 +503,23 @@ c = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(c)
 c.validate_files = lambda directory: None  # OS metadata separately tested.
 if sys.argv[1].endswith("tls.py"):
+    if sys.argv[-1] == "prepare" and os.environ.get("FIREDASH_TLS_MODE") != "manual":
+        from pathlib import Path
+        (Path(os.environ["FIREDASH_ETC"]) / "tls-prepared").touch()
     sys.exit(0)  # TLS lifecycle exercised separately with real synthetic certificates.
+if sys.argv[1].endswith("tls_backup.py"):
+    from pathlib import Path
+    command = sys.argv[-1]
+    with (Path(os.environ["FIREDASH_ETC"]) / "backup-calls").open("a") as log:
+        log.write(command + "\\n")
+    calls = (Path(os.environ["FIREDASH_ETC"]) / "backup-calls").read_text().splitlines()
+    count = calls.count(command)
+    fail = os.environ.get("TEST_BACKUP_FAILURE")
+    sys.exit(8 if fail in {command, command + ":" + str(count)} else 0)
 sys.argv = sys.argv[1:]
+if sys.argv[-1] == "render":
+    os.environ.setdefault("FIREDASH_RUNTIME_PASSWORD", "synthetic-fixture-password")
+    os.environ.setdefault("FIREDASH_DJANGO_SECRET", "synthetic-fixture-secret")
 c.main()
 """)
     env = dict(
@@ -514,11 +529,15 @@ c.main()
         TEST_CONFIGURATION_MODULE=(ROOT / "deploy/lib/configuration.py").as_posix(),
         FIREDASH_RESOLVED_SHA="b" * 40,
         FIREDASH_REQUESTED_REF="main",
-        MSYS2_ENV_CONV_EXCL="FIREDASH_TLS_CERTBOT_PATH",
+        MSYS2_ENV_CONV_EXCL=(
+            "FIREDASH_TLS_CERTBOT_PATH;FIREDASH_TLS_CERT_PATH;"
+            "FIREDASH_TLS_KEY_PATH;FIREDASH_TLS_DNS_CREDENTIALS"
+        ),
     )
 
-    def run(mode="default", sha="b" * 40, extra_args=()):
+    def run(mode="default", sha="b" * 40, extra_args=(), backup_failure=""):
         env["FIREDASH_RESOLVED_SHA"] = sha
+        env["TEST_BACKUP_FAILURE"] = backup_failure
         args = [] if mode == "default" else [f"--{mode}"]
         return subprocess.run(
             [BASH, (deploy / "install-local.sh").as_posix(), *args, *extra_args],
@@ -828,3 +847,155 @@ def test_dns_configuration_rejects_invalid_settings(install, changes):
     install.update(changes)
     with pytest.raises(c.ConfigurationError):
         c.validate_install(install)
+
+
+ADOPT_NETCUP = (
+    "--tls-mode",
+    "letsencrypt-dns01",
+    "--tls-adopt-dns01",
+    "--tls-dns-backend",
+    "certbot-existing",
+    "--tls-dns-authenticator",
+    "dns-netcup",
+    "--tls-dns-plugin-approved",
+    "--tls-lineage",
+    "firedash.test",
+)
+
+
+@pytest.mark.parametrize("failure", ["preflight", "initial", "backup", "backup:2", "verify"])
+def test_managed_install_backup_failure_retry_and_convergence(installer_harness, failure):
+    run, etc, deploy = installer_harness
+    (deploy / "lib/systemd.sh").write_text(
+        'quiesce() { touch "$FIREDASH_ETC/quiesced"; }; '
+        "activate_socket() { :; }; activate_timers() { :; }\n",
+        newline="\n",
+    )
+    original = (etc / "install.conf").read_bytes()
+    result = run(extra_args=ADOPT_NETCUP, backup_failure=failure)
+    assert result.returncode != 0
+    assert "installation complete" not in result.stdout
+    assert "successfully deployed SHA" not in result.stdout
+    if failure in {"preflight", "initial"}:
+        assert not (etc / "quiesced").exists()
+        assert (etc / "install.conf").read_bytes() == original
+    if failure == "preflight":
+        assert not (etc / "tls-prepared").exists()
+    assert c.read(etc / "install.conf")["FIREDASH_LAST_SUCCESSFUL_SHA"] == "a" * 40
+    # Explicit adoption retry, followed by unchanged established-install convergence.
+    assert run(extra_args=ADOPT_NETCUP).returncode == 0
+    assert run().returncode == 0
+    calls = (etc / "backup-calls").read_text().splitlines()
+    assert calls[-5:] == ["preflight", "initial", "backup", "backup", "verify"]
+    assert c.read(etc / "install.conf")["FIREDASH_TLS_DNS_AUTHENTICATOR"] == "dns-netcup"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="native Linux inherited flock descriptors")
+def test_native_nested_installer_verifier_lock_flow(installer_harness):
+    """Real orchestrator, verifier TLS block and Python CLI; host work is stubbed."""
+    run, etc, deploy = installer_harness
+    common = deploy / "lib/common.sh"
+    common.write_text(common.read_text().replace("flock() { :; }", ""), newline="\n")
+    verifier = (ROOT / "deploy/verify-deployment.sh").read_text()
+    for helper in ("report-transfer.sh", "verify-report-transfer.sh"):
+        shutil.copyfile(ROOT / "deploy/lib" / helper, deploy / "lib" / helper)
+    header = verifier.split("# -------- derive context --------")[0]
+    lifecycle = verifier.split("# -------- certificate lifecycle")[1].split("# -------- HTTP")[0]
+    (deploy / "verify-deployment.sh").write_text(
+        header + "\n# certificate lifecycle" + lifecycle + '\nexit "$FAIL"\n', newline="\n"
+    )
+    driver = etc.parent / "driver.py"
+    body = driver.read_text()
+    start = body.index('if sys.argv[1].endswith("tls_backup.py"):')
+    end = body.index("sys.argv = sys.argv[1:]", start)
+    replacement = """if sys.argv[1].endswith("tls_backup.py"):
+    from pathlib import Path
+    sys.path.insert(0, str(Path(sys.argv[1]).parent))
+    import tls_backup as b
+    import fcntl
+    original_fstat = os.fstat
+    def root_fstat(fd):
+        from types import SimpleNamespace
+        actual = original_fstat(fd)
+        return SimpleNamespace(st_mode=actual.st_mode, st_uid=0,
+                               st_dev=actual.st_dev, st_ino=actual.st_ino)
+    b.os.fstat = root_fstat  # CI is unprivileged; inode/descriptor/flock are native.
+    b.os.geteuid = lambda: 0
+    b.tls.ETC = Path(os.environ["FIREDASH_ETC"])
+    b.tls.LOCK = b.tls.ETC.parent / "lock"
+    b.installation_file = lambda path: None  # OS metadata has separate native coverage.
+    def gate(*args):
+        # The actual inherited lock remains held throughout the nested verifier.
+        with b.tls.LOCK.open("r") as other:
+            try:
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                raise AssertionError("concurrent mutation was admitted")
+        with (b.tls.ETC / "native-gates").open("a") as log:
+            log.write(sys.argv[-1] + "\\n")
+    b.preflight = b.backup = b.verify = gate
+    sys.argv = sys.argv[1:]
+    b.main()
+    sys.exit(0)
+"""
+    driver.write_text(body[:start] + replacement + body[end:])
+    result = run(extra_args=ADOPT_NETCUP)
+    assert result.returncode == 0, result.stderr
+    assert (etc / "native-gates").read_text().splitlines() == [
+        "preflight",
+        "initial",
+        "backup",
+        "verify",
+        "backup",
+        "verify",
+    ]
+    import fcntl
+
+    with (etc.parent / "lock").open("r") as file:
+        fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize("failure", ["preflight", "initial", ""])
+def test_fresh_dns_multi_requires_initial_encrypted_snapshot(installer_harness, failure):
+    run, etc, deploy = installer_harness
+    (etc / "install.conf").unlink()
+    (etc / "fire-backend.env").unlink()
+    (deploy / "lib/state.sh").write_text("classify_state() { echo FRESH; }\n")
+    (deploy / "lib/systemd.sh").write_text(
+        'quiesce() { touch "$FIREDASH_ETC/quiesced"; }; '
+        "activate_socket() { :; }; activate_timers() { :; }\n",
+        newline="\n",
+    )
+    args = (
+        "--base-url",
+        "https://firedash.test",
+        "--tls-mode",
+        "letsencrypt-dns01",
+        "--tls-dns-backend",
+        "certbot-multi",
+        "--tls-dns-provider",
+        "netcup",
+        "--tls-dns-credentials",
+        "/etc/private-acme/dns.ini",
+        "--tls-dns-plugin-approved",
+        "--acme-email",
+        "acme@example.org",
+        "--acme-agree-tos",
+    )
+    result = run(extra_args=args, backup_failure=failure)
+    assert (result.returncode == 0) == (not failure), result.stderr
+    if failure:
+        assert not (etc / "quiesced").exists()
+        assert not (etc / "install.conf").exists()
+        assert "installation complete" not in result.stdout
+    else:
+        assert (etc / "backup-calls").read_text().splitlines() == [
+            "preflight",
+            "initial",
+            "backup",
+            "backup",
+            "verify",
+        ]
+        assert run().returncode == 0

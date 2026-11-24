@@ -1216,6 +1216,7 @@ def test_dns_crash_recovery_is_durable_and_repeatable(
         assert restored == [str(tls.lineage(dns_tree) / "cert.pem")]
     broken = False
     missing.write_bytes(contents)
+    missing.chmod(0o600)
     journal.write_bytes(saved)
     journal.chmod(0o600)
     tls.recover_dns(dns_tree)
@@ -1343,6 +1344,7 @@ def test_failed_tls_backup_preserves_previous_success(backup_tree, monkeypatch):
         "mismatch",
         "account",
         "success",
+        "candidate",
         "dns-missing",
         "dns-permissions",
         "dns-success",
@@ -1374,7 +1376,13 @@ def test_isolated_tls_restore_validates_material_and_never_activates(
         proof["packages"]["certbot-dns-multi"] = "5.6.0"
         (b.state() / "plugin-provenance.json").write_text(json.dumps(proof))
         (tls.ETC / "install.conf").write_text("".join(f"{k}={v}\n" for k, v in values.items()))
-    record = b.manifest(values)
+    if problem == "candidate":
+        pending = tls.ETC / "install.conf.pending"
+        (tls.ETC / "install.conf").rename(pending)
+        modes[str(pending)] = 0o640
+        record = b.manifest(values, pending)
+    else:
+        record = b.manifest(values)
     root = tmp_path / "restore"
     destination = root / "exercise"
     destination.mkdir(parents=True)
@@ -1387,6 +1395,7 @@ def test_isolated_tls_restore_validates_material_and_never_activates(
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+            modes[str(target)] = item["mode"]
     manifest_path = destination / (b.state() / "manifest.json").relative_to(tls.ETC.anchor)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(record))
@@ -1413,7 +1422,7 @@ def test_isolated_tls_restore_validates_material_and_never_activates(
         ).hexdigest()
         manifest_path.write_text(json.dumps(record))
     before = Path(values["FIREDASH_TLS_CERT_PATH"]).read_bytes()
-    if problem in {"success", "dns-success"}:
+    if problem in {"success", "dns-success", "candidate"}:
         b.restore_check(values, destination)
     else:
         with pytest.raises((tls.TLSError, OSError, AssertionError)):
@@ -1618,3 +1627,101 @@ def test_unresolved_journal_blocks_new_renewal_without_certbot(dns_tree, certifi
         with pytest.raises(tls.TLSError, match="journal retained"):
             tls.renew(dns_tree)
         assert journal.read_text() == "unresolved-private-journal"
+
+
+@pytest.mark.parametrize("problem", ["missing", "unavailable", "invalid", "none"])
+def test_tls_backup_preflight_is_read_only_and_checks_repository(backup_tree, monkeypatch, problem):
+    b, values, _ = backup_tree
+    if problem == "missing":
+        (tls.ETC / "tls-backup.conf").unlink()
+    calls = []
+
+    def restic(args):
+        calls.append(args)
+        if problem == "unavailable":
+            raise tls.TLSError("TLS encrypted repository unavailable")
+        return json.dumps(
+            {"version": 2, "id": "a" * 64 if problem != "invalid" else "bad"}
+        ).encode()
+
+    monkeypatch.setattr(b, "restic", restic)
+    before = {p: p.read_bytes() for p in tls.ETC.rglob("*") if p.is_file()}
+    if problem == "none":
+        b.preflight(values)
+    else:
+        with pytest.raises((tls.TLSError, FileNotFoundError)):
+            b.preflight(values)
+    assert before == {p: p.read_bytes() for p in tls.ETC.rglob("*") if p.is_file()}
+    assert calls == ([] if problem == "missing" else [["cat", "config"]])
+
+
+def test_initial_snapshot_covers_candidate_before_live_configuration(backup_tree, monkeypatch):
+    b, values, modes = backup_tree
+    installed = tls.ETC / "install.conf"
+    pending = tls.ETC / "install.conf.pending"
+    installed.rename(pending)
+    modes[str(pending)] = 0o640
+    calls = []
+
+    def restic(args):
+        calls.append(args)
+        return json.dumps({"message_type": "summary", "snapshot_id": "c" * 64}).encode()
+
+    monkeypatch.setattr(b, "restic", restic)
+    b.backup(values, pending)
+    saved = json.loads((b.state() / "manifest.json").read_text())
+    assert saved["configuration"] == str(pending)
+    assert str(pending) in calls[0] and str(installed) not in calls[0]
+    assert not installed.exists()
+    assert json.loads((b.state() / "last-success.json").read_text())["snapshot"] == "c" * 64
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o640, 0o644, 0o660])
+def test_backup_installation_metadata_permission_contract(backup_tree, mode):
+    b, _, modes = backup_tree
+    path = tls.ETC / "install.conf"
+    modes[str(path)] = mode
+    if mode in {0o600, 0o640}:
+        b.installation_file(path)
+    else:
+        with pytest.raises(tls.TLSError):
+            b.installation_file(path)
+
+
+@pytest.mark.parametrize("problem", ["wrong-inode", "unlocked", "other-owner", "none"])
+def test_inherited_backup_lock_requires_installer_ownership(
+    tree, backup_module, monkeypatch, problem
+):
+    b = backup_module
+    tls.LOCK.touch()
+    info = tls.LOCK.stat()
+    monkeypatch.setattr(
+        b.os,
+        "fstat",
+        lambda fd: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o600,
+            st_uid=0,
+            st_dev=info.st_dev,
+            st_ino=info.st_ino + (problem == "wrong-inode"),
+        ),
+    )
+    calls = []
+
+    def flock(fd, operation):
+        calls.append(fd)
+        if len(calls) == 1 and problem != "unlocked":
+            raise BlockingIOError("separate open excluded")
+        if len(calls) == 2 and problem == "other-owner":
+            raise BlockingIOError("fd 9 is not owner")
+
+    monkeypatch.setitem(sys.modules, "fcntl", SimpleNamespace(LOCK_EX=2, LOCK_NB=4, flock=flock))
+    entered = False
+    if problem == "none":
+        with b.operation_lock(True):
+            entered = True
+    else:
+        with pytest.raises((tls.TLSError, BlockingIOError)), b.operation_lock(True):
+            entered = True
+    assert entered == (problem == "none")
+    if problem == "none":
+        assert calls[-1] == 9 and len(calls) == 2  # Never unlock parent's descriptor.

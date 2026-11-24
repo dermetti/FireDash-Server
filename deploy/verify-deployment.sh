@@ -21,6 +21,12 @@ fail() { log_err "FAIL: $*"; FAIL=$((FAIL + 1)); }
 ok() { log "OK: $*"; }
 
 require_root
+TLS_BACKUP_LOCK_ARGS=()
+case "$*" in
+    '') ;;
+    --installer-lock-fd=9) TLS_BACKUP_LOCK_ARGS=(--installer-lock-fd=9) ;;
+    *) die "unsupported deployment verifier arguments" ;;
+esac
 
 # -------- derive context --------
 HOST=$(hostname_from_url "$(env_value "$INSTALL_CONF" FIREDASH_BASE_URL)")
@@ -622,7 +628,7 @@ else
     fail "TLS certificate lifecycle; renew through the configured certificate owner"
 fi
 if [[ $(env_value "$INSTALL_CONF" FIREDASH_TLS_MODE 2>/dev/null || true) == letsencrypt-* ]]; then
-    if python3 "$SELF_DIR/lib/tls_backup.py" verify; then
+    if python3 "$SELF_DIR/lib/tls_backup.py" "${TLS_BACKUP_LOCK_ARGS[@]}" verify; then
         ok "encrypted TLS/ACME backup coverage"
     else
         fail "encrypted TLS/ACME backup coverage missing, stale or invalid; inspect fire-tls-backup.service privately"

@@ -29,6 +29,7 @@ set -Eeuo pipefail
 source "$HELPERS"
 SELF_DIR="$ROOT/deploy"
 FIREDASH_STATE=ESTABLISHED
+FIREDASH_TLS_MODE=manual
 FIREDASH_RELEASE="$ROOT/release"
 python3() { [[ $REJECT != configuration ]]; }
 persist_install_conf() { : > "${INSTALL_CONF}.pending"; }

@@ -5,6 +5,7 @@ Restic transport is deliberately HTTPS REST only: no user-selected commands,
 SSH configuration, cloud credential discovery or arbitrary environment injection.
 """
 
+import contextlib
 import hashlib
 import json
 import os
@@ -41,6 +42,66 @@ def private(path, *, directory=False):
             not parent.is_symlink() and info.st_uid == 0 and info.st_mode & 0o022 == 0,
             "TLS backup parents must be root-controlled",
         )
+
+
+def installation_file(path):
+    """Non-secret installer metadata uses the installer's root:root 0640 mode."""
+    tls.protected_acme_file(path)
+    info = metadata(path)
+    tls.require(
+        stat.S_ISREG(info.st_mode)
+        and info.st_gid == 0
+        and stat.S_IMODE(info.st_mode) in {0o600, 0o640},
+        "TLS installation metadata requires root:root 0640 or 0600",
+    )
+
+
+@contextlib.contextmanager
+def operation_lock(inherited=False):
+    """Borrow only the installer's already-held exclusive open-file description.
+
+    No environment flag bypasses locking. A separate open must be excluded, and
+    fd 9 must itself own the lock. Never unlock the parent's description.
+    """
+    if not inherited:
+        with tls.renewal_lock():
+            yield
+        return
+    import fcntl
+
+    info = os.fstat(9)
+    expected = tls.LOCK.stat()
+    tls.require(
+        stat.S_ISREG(info.st_mode)
+        and info.st_uid == 0
+        and (info.st_dev, info.st_ino) == (expected.st_dev, expected.st_ino),
+        "invalid inherited installer lock",
+    )
+    with tls.LOCK.open("r") as probe:
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise tls.TLSError("inherited installer lock is not held")
+        # Fails if another open-file description owns the lock instead of fd 9.
+        fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+
+
+def preflight(values):
+    """Read-only repository/dependency gate before certificate or app changes."""
+    repository()
+    proof = provenance(values)
+    check_versions(values, proof["packages"])
+    private(state() / "dependency-lock.txt")
+    record = json.loads(restic(["cat", "config"]))
+    tls.require(
+        isinstance(record, dict)
+        and record.get("version") in {1, 2}
+        and bool(re.fullmatch(r"[a-f0-9]{64}", record.get("id", ""))),
+        "TLS encrypted repository is unavailable or invalid",
+    )
 
 
 def repository():
@@ -187,7 +248,7 @@ def account_directory(values, params):
     return path
 
 
-def inventory(values):
+def inventory(values, installation=None):
     """Select only the configured lineage/account, never all of /etc/letsencrypt."""
     tls.require(
         tls.mode(values) != "manual", "automatic TLS backup applies to managed certificates"
@@ -195,7 +256,7 @@ def inventory(values):
     params = tls.check_lineage(values)
     root = tls.acme_root(values)
     selected = [
-        tls.ETC / "install.conf",
+        installation or tls.ETC / "install.conf",
         root / "renewal" / (tls.cert_name(values) + ".conf"),
         root / "live" / tls.cert_name(values),
         root / "archive" / tls.cert_name(values),
@@ -231,10 +292,11 @@ def inventory(values):
             record.update(kind="file", sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             if "privkey" in path.name or path.name in {
                 "private_key.json",
-                "install.conf",
                 "dns-recovery.json",
             }:
                 private(path)
+            if path.name in {"install.conf", "install.conf.pending"}:
+                installation_file(path)
         else:
             tls.require(path.is_dir(), "unsupported TLS backup file type")
             record.update(kind="directory")
@@ -256,23 +318,26 @@ def inventory(values):
     return records
 
 
-def manifest(values):
+def manifest(values, installation=None):
     proof = provenance(values)
     check_versions(values, proof["packages"])
-    return {
+    record = {
         "version": 1,
         "hostname": tls.hostname(values["FIREDASH_BASE_URL"]),
         "cert": values["FIREDASH_TLS_CERT_PATH"],
         "key": values["FIREDASH_TLS_KEY_PATH"],
         "provenance": proof,
-        "files": inventory(values),
+        "files": inventory(values, installation),
     }
+    if installation is not None:
+        record["configuration"] = str(installation)
+    return record
 
 
-def backup(values):
+def backup(values, installation=None):
     repository_config = repository()
     tls.secure_directory(state(), 0o700)
-    record = manifest(values)
+    record = manifest(values, installation)
     path = state() / "manifest.json"
     data = json.dumps(record, sort_keys=True).encode()
     tls.atomic(path, data, 0o600)
@@ -401,10 +466,11 @@ def restore_check(values, destination):
             )
             if "privkey" in candidate.name or candidate.name in {
                 "private_key.json",
-                "install.conf",
                 "dns-recovery.json",
             }:
                 private(candidate)
+            if candidate.name in {"install.conf", "install.conf.pending"}:
+                installation_file(candidate)
         elif kind == "link":
             tls.require(
                 candidate.is_symlink()
@@ -432,7 +498,13 @@ def restore_check(values, destination):
             "restored certificate missing from inventory",
         )
     # Revalidate semantic requirements independently of recorded hashes/modes.
-    installed = config.read(restored_path(destination, str(tls.ETC / "install.conf")))
+    installation = record.get("configuration", str(tls.ETC / "install.conf"))
+    tls.require(
+        installation in {str(tls.ETC / "install.conf"), str(tls.ETC / "install.conf.pending")}
+        and installation in files,
+        "invalid restored installation metadata path",
+    )
+    installed = config.read(restored_path(destination, installation))
     for key in (
         "FIREDASH_BASE_URL",
         "FIREDASH_TLS_MODE",
@@ -558,19 +630,37 @@ def restore(values, snapshot, destination):
 
 def main():
     tls.require(os.geteuid() == 0, "TLS backup requires root")
-    private(tls.ETC / "install.conf")
-    values = config.read(tls.ETC / "install.conf")
+    args = sys.argv[1:]
+    inherited = args[:1] == ["--installer-lock-fd=9"]
+    if inherited:
+        args = args[1:]
+        tls.require(
+            args in [["preflight"], ["initial"], ["backup"], ["verify"]],
+            "installer lock delegation restricted to backup gates",
+        )
+    candidate = args == ["initial"]
+    installation = tls.ETC / ("install.conf.pending" if candidate else "install.conf")
+    # Preflight uses validated candidate settings, before a fresh install.conf exists.
+    if args == ["preflight"]:
+        values = {k: os.environ[k] for k in config.INSTALL_KEYS if k in os.environ}
+    else:
+        installation_file(installation)
+        values = config.read(installation)
     config.validate_install(values)
     tls.hostname(values["FIREDASH_BASE_URL"])
-    with tls.renewal_lock():
-        if sys.argv[1:] == ["backup"]:
+    with operation_lock(inherited):
+        if args == ["preflight"]:
+            preflight(values)
+        elif candidate:
+            backup(values, installation)
+        elif args == ["backup"]:
             backup(values)
-        elif sys.argv[1:] == ["verify"]:
+        elif args == ["verify"]:
             verify(values)
-        elif len(sys.argv) == 3 and sys.argv[1] == "restore-check":
-            restore_check(values, sys.argv[2])
-        elif len(sys.argv) == 4 and sys.argv[1] == "restore":
-            restore(values, sys.argv[2], sys.argv[3])
+        elif len(args) == 2 and args[0] == "restore-check":
+            restore_check(values, args[1])
+        elif len(args) == 3 and args[0] == "restore":
+            restore(values, args[1], args[2])
         else:
             raise tls.TLSError(
                 "expected backup, verify, restore SNAPSHOT DESTINATION or restore-check DESTINATION"

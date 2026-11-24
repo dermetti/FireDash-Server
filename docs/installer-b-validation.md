@@ -1,5 +1,69 @@
 # Installer B.2 local implementation and validation
 
+## Release blocker correction follow-up
+
+Starting HEAD: `396fc5f67eaf468248acc06751dbced35123caaf`; initial working tree
+clean. This section supersedes earlier evidence about installer locking and
+initial backup gates. DNS adapters/provider support are unchanged.
+
+- The `missing-archive` synthetic private key is explicitly restored to 0600.
+  Production private-key checks remain intact.
+- The installer and nested deployment verifier explicitly delegate the held
+  descriptor 9 to backup gates. Independent-open exclusion and inherited flock
+  ownership are checked; no environment flag skips locking. Standalone backup,
+  restore and renewal remain excluded throughout nested read-only verification.
+- Repository configuration, protected prerequisites, reviewed installed dependency
+  versions and authenticated read access are checked before TLS preparation.
+  An actual encrypted candidate snapshot is required before application quiescence.
+  Further snapshots cover persisted configuration and final release history before
+  reporting success. A finalization failure restores the previous success marker.
+- Root:root 0640 non-secret installer metadata is accepted consistently with the
+  installer. Strict 0600 key/account/DNS/repository credential checks are retained.
+- Added portable tests for repository access/configuration failures, candidate
+  snapshots/restoration, lock-owner rejection, failed upload/final verification,
+  fresh DNS installation, unchanged Netcup adoption, retry and convergence.
+  Added a Linux test invoking the real orchestrator, verifier TLS section and
+  backup CLI with real inherited flock descriptors; unrelated host operations
+  and backup endpoints are stubbed and CI root ownership is simulated.
+
+Native Linux execution remains pending: WSL returns `E_ACCESSDENIED`; no Docker
+daemon is reachable in this session. No systemd, real Restic REST repository,
+ACME staging or live certificate test has been demonstrated by these corrections.
+Full GitHub CI requires separately authorized commit/push. The runbook is
+[tls-recovery.md](tls-recovery.md).
+
+Sequential focused rerun:
+
+```text
+python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_tls.py deploy/tests/test_configuration.py -q --tb=short
+299 passed, 27 skipped in 142.86s
+```
+
+Ruff repository checks and formatting (448 files), mypy with Linux semantics
+(five TLS/adapter/backup/test files), Bandit (three lifecycle helpers), Django
+system checks (test settings, zero issues) and `git diff --check` passed.
+Forty deploy Bash/script files passed `bash -n`. ShellCheck is unavailable.
+An earlier overlapping pytest run was invalidated by the shared fixed scratch
+directory; the sequential result above is the valid completed rerun.
+
+The Bash run exposed one additional fixture-only regression: the Report Transfer
+installer phase-extraction harness lacked `FIREDASH_TLS_MODE`. It now explicitly
+selects manual TLS; application/Report Transfer functionality is unchanged. The
+failed test and remaining scripts were rerun after that correction.
+Final Bash regression result across all 19 scripts: **18 passed, 1 skipped**
+(exit 77, root-only signing-key integration), no remaining failures. These run
+under Git Bash with a disposable Python shim; native ownership/systemd acceptance
+is still pending.
+
+Changed files: `deploy/install-local.sh`, `deploy/lib/tls_backup.py`,
+`deploy/verify-deployment.sh`, `deploy/tests/test_tls.py`,
+`deploy/tests/test_configuration.py`,
+`deploy/tests/test_report_transfer_installer.sh`, `docs/tls-recovery.md` and
+`docs/installer-b-validation.md`.
+
+The previous B.2 implementation evidence follows and retains its original date,
+baseline and test counts; follow-up results are recorded separately above.
+
 Reviewed HEAD: `27d127fc01cf3d70a362231a40aca53cb232c54f`; the initial working
 tree was clean. Changes are local only. No deployment, SSH, production ACME,
 live DNS credentials, database operations, application migrations, key rotation,

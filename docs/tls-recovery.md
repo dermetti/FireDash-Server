@@ -3,6 +3,43 @@
 This procedure does not authorize live deployment. A native Debian 13 restore
 drill remains required; portable mocks are not proof of recoverability.
 
+## Mandatory installer backup gates
+
+Before running a managed-TLS installation or explicit DNS adoption, provision
+the dedicated initialized HTTPS Restic repository, its protected access/encryption
+files, reviewed plugin provenance and dependency lock described below. Restic and
+the selected Certbot environment must already be available. These are operator
+prerequisites; the installer never initializes a repository or creates its secrets.
+
+The installer checks repository configuration, reviewed installed dependencies and
+authenticated `restic cat config` access before TLS preparation. Before application
+quiescence, it requires an actual encrypted snapshot of the candidate TLS state,
+including `install.conf.pending`. Missing configuration, unavailable access or an
+initial upload failure aborts without stopping application services or promoting
+the candidate configuration. Existing DNS-Netcup adoption retains certificate paths,
+keys, accounts and authenticator; there are no public-IP or inbound-port checks.
+
+The candidate snapshot is recovery evidence, not permission to promote its pending
+configuration. Isolated restore validation understands its recorded configuration
+path; review that candidate explicitly before replacement-host activation. Later
+snapshots cover ordinary `install.conf`, activation metadata and final release
+history. Deployment success requires those snapshots and coverage verification.
+A failed final backup/verification restores the previous release-success marker;
+rerun the installer to converge. An outage after quiescence still follows the
+existing installer maintenance recovery procedure.
+
+Installer child commands explicitly inherit descriptor 9 through
+`--installer-lock-fd=9`. The helper verifies the descriptor's root-owned lock inode,
+that independent opens are excluded and that the inherited descriptor owns the
+exclusive flock. Verification reads coverage without releasing/reacquiring that
+lock. Standalone commands still acquire their own exclusive lock. There is no
+environment-variable bypass, and concurrent scheduled backup, restore or renewal
+cannot enter the critical section. Do not manually supply the internal flag.
+
+Non-secret root:root installer metadata retains its existing 0640 permission
+contract (0600 also accepted). Private keys, account secrets, DNS credentials,
+repository secrets and recovery journals retain strict 0600 checks.
+
 ## Durable DNS rollback
 
 Before modifying an adopted lineage, the manager exclusively publishes and fsyncs
