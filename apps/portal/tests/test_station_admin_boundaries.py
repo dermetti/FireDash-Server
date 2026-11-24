@@ -236,6 +236,24 @@ def test_department_admin_can_grant_and_revoke_station_scope(client, station_adm
         },
     )
 
+    assert response.status_code == 403
+    assert not StationAdminAssignment.objects.filter(
+        user=station_admin, station=additional_station
+    ).exists()
+    original = StationAdminAssignment.objects.get(user=station_admin, status="ACTIVE")
+    response = client.post(
+        reverse("portal-department-manage", args=(department.id,)),
+        {"action": "revoke-station", "assignment_id": original.id},
+    )
+    assert response.status_code == 302
+    response = client.post(
+        reverse("portal-department-manage", args=(department.id,)),
+        {
+            "action": "grant-station",
+            "user_id": station_admin.id,
+            "station_id": additional_station.id,
+        },
+    )
     assert response.status_code == 302
     assignment = StationAdminAssignment.objects.get(user=station_admin, station=additional_station)
     assert assignment.status == StationAdminAssignment.Status.ACTIVE

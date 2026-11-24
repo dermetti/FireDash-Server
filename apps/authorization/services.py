@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, cast
 
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils import timezone
@@ -12,6 +13,7 @@ from apps.authorization.models import (
     DepartmentManagedMailEligibility,
     DepartmentMembership,
     StationAdminAssignment,
+    SystemRole,
     VehicleRescueGuidesConfiguration,
 )
 from apps.authorization.scopes import (
@@ -487,7 +489,11 @@ def provision_department_admin(
 
 @transaction.atomic
 def provision_station_admin(*, actor, station: Station, email: str, display_name: str) -> str:
-    require_department_admin(actor, station.department)
+    department = _locked_department(station.department_id)
+    station = Station.objects.select_for_update().get(pk=station.pk)
+    _require_tenant_lifecycle_actor(actor, department)
+    if not station.active or station.department_id != department.pk:
+        raise PermissionDenied("Station must be active and belong to the department.")
     token, raw_token = create_setup_token(actor=actor, email=email, display_name=display_name)
     StationAdminAssignment.objects.create(user=token.user, station=station, created_by=actor)
     record_event(
@@ -517,6 +523,42 @@ def _locked_department(department_id) -> Department:
     return Department.objects.select_for_update().get(pk=department_id)
 
 
+def _locked_user(user):
+    # The stable account row serializes transitions even when no authority row
+    # exists yet, and across grants for different stations/departments.
+    return get_user_model().objects.select_for_update().get(pk=user.pk)
+
+
+def _require_target_eligibility(*, user, department, station=None, excluding=None) -> None:
+    if SystemRole.objects.filter(user=user, active=True).exists():
+        raise PermissionDenied("System Administrator accounts cannot receive tenant authority.")
+    memberships = DepartmentMembership.objects.filter(user=user, status__in=("ACTIVE", "SUSPENDED"))
+    assignments = StationAdminAssignment.objects.filter(
+        user=user, status__in=("ACTIVE", "SUSPENDED")
+    )
+    if station is not None:
+        if not station.active or station.department_id != department.pk:
+            raise PermissionDenied("Station must be active and belong to the department.")
+        if excluding is not None:
+            assignments = assignments.exclude(pk=excluding)
+        if memberships.exists() or assignments.exclude(station=station).exists():
+            raise PermissionDenied("Target account has conflicting administrator authority.")
+        if assignments.filter(status="SUSPENDED").exists():
+            raise PermissionDenied("Suspended authority must be explicitly reinstated.")
+        if not (
+            DepartmentMembership.objects.filter(user=user, department=department).exists()
+            or StationAdminAssignment.objects.filter(
+                user=user, station__department=department
+            ).exists()
+        ):
+            raise PermissionDenied("Target account has no relationship to this department.")
+    else:
+        if excluding is not None:
+            memberships = memberships.exclude(pk=excluding)
+        if memberships.exists() or assignments.exists():
+            raise PermissionDenied("Target account has conflicting administrator authority.")
+
+
 def _require_tenant_lifecycle_actor(actor, department: Department) -> None:
     """Lifecycle administration belongs to the tenant, never the SaaS operator."""
     if is_system_admin(actor):
@@ -543,6 +585,7 @@ def _prevent_last_effective_admin_removal(
 @transaction.atomic
 def suspend_department_admin(*, actor, membership: DepartmentMembership) -> None:
     department = _locked_department(membership.department_id)
+    _locked_user(membership.user)
     membership = _locked_membership(membership)
     _require_tenant_lifecycle_actor(actor, department)
     if membership.status != DepartmentMembership.Status.ACTIVE:
@@ -570,10 +613,14 @@ def suspend_department_admin(*, actor, membership: DepartmentMembership) -> None
 @transaction.atomic
 def reinstate_department_admin(*, actor, membership: DepartmentMembership) -> None:
     department = _locked_department(membership.department_id)
+    _locked_user(membership.user)
     membership = _locked_membership(membership)
     _require_tenant_lifecycle_actor(actor, department)
     if membership.status != DepartmentMembership.Status.SUSPENDED:
         raise ValueError("Only a suspended Department Administrator can be reinstated.")
+    _require_target_eligibility(
+        user=membership.user, department=department, excluding=membership.pk
+    )
     if (
         DepartmentMembership.objects.filter(
             user=membership.user,
@@ -601,6 +648,7 @@ def reinstate_department_admin(*, actor, membership: DepartmentMembership) -> No
 @transaction.atomic
 def revoke_department_admin(*, actor, membership: DepartmentMembership) -> None:
     department = _locked_department(membership.department_id)
+    _locked_user(membership.user)
     membership = _locked_membership(membership)
     _require_tenant_lifecycle_actor(actor, department)
     if membership.status not in (
@@ -633,6 +681,7 @@ def revoke_department_admin(*, actor, membership: DepartmentMembership) -> None:
 @transaction.atomic
 def revoke_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
     department = _locked_department(assignment.station.department_id)
+    _locked_user(assignment.user)
     assignment = (
         StationAdminAssignment.objects.select_for_update()
         .select_related("station__department")
@@ -664,6 +713,7 @@ def revoke_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
 @transaction.atomic
 def suspend_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
     department = _locked_department(assignment.station.department_id)
+    _locked_user(assignment.user)
     assignment = (
         StationAdminAssignment.objects.select_for_update()
         .select_related("station__department")
@@ -692,6 +742,7 @@ def suspend_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
 @transaction.atomic
 def reinstate_station_admin(*, actor, assignment: StationAdminAssignment) -> None:
     department = _locked_department(assignment.station.department_id)
+    _locked_user(assignment.user)
     assignment = (
         StationAdminAssignment.objects.select_for_update()
         .select_related("station__department")
@@ -700,6 +751,10 @@ def reinstate_station_admin(*, actor, assignment: StationAdminAssignment) -> Non
     _require_tenant_lifecycle_actor(actor, department)
     if assignment.status != StationAdminAssignment.Status.SUSPENDED:
         raise ValueError("Only a suspended Station Administrator can be reinstated.")
+    station = Station.objects.select_for_update().get(pk=assignment.station_id)
+    _require_target_eligibility(
+        user=assignment.user, department=department, station=station, excluding=assignment.pk
+    )
     if (
         StationAdminAssignment.objects.filter(
             user=assignment.user,
@@ -727,7 +782,11 @@ def reinstate_station_admin(*, actor, assignment: StationAdminAssignment) -> Non
 
 @transaction.atomic
 def grant_station_admin(*, actor, user, station: Station) -> StationAdminAssignment:
-    require_department_admin(actor, station.department)
+    department = _locked_department(station.department_id)
+    user = _locked_user(user)
+    station = Station.objects.select_for_update().get(pk=station.pk)
+    _require_tenant_lifecycle_actor(actor, department)
+    _require_target_eligibility(user=user, department=department, station=station)
     assignment, created = StationAdminAssignment.objects.get_or_create(
         user=user,
         station=station,
@@ -754,8 +813,9 @@ def grant_station_admin(*, actor, user, station: Station) -> StationAdminAssignm
 def permanently_remove_administrator(*, actor, user, department: Department) -> None:
     """Revoke tenant authority and anonymize the retained historical account."""
     department = Department.objects.select_for_update().get(pk=department.pk)
+    user = _locked_user(user)
     _require_tenant_lifecycle_actor(actor, department)
-    if is_system_admin(user):
+    if SystemRole.objects.filter(user=user, active=True).exists():
         raise ValueError(
             "A System Administrator cannot be permanently removed from tenant administration."
         )
@@ -770,12 +830,10 @@ def permanently_remove_administrator(*, actor, user, department: Department) -> 
     if not memberships and not assignments:
         raise ValueError("User has no administrator authority in this department.")
     if (
-        DepartmentMembership.objects.filter(user=user, status=DepartmentMembership.Status.ACTIVE)
+        DepartmentMembership.objects.filter(user=user, status__in=("ACTIVE", "SUSPENDED"))
         .exclude(department=department)
         .exists()
-        or StationAdminAssignment.objects.filter(
-            user=user, status=StationAdminAssignment.Status.ACTIVE
-        )
+        or StationAdminAssignment.objects.filter(user=user, status__in=("ACTIVE", "SUSPENDED"))
         .exclude(station__department=department)
         .exists()
     ):

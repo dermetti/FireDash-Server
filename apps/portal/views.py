@@ -983,14 +983,6 @@ def department_manage(request: HttpRequest, department_id) -> HttpResponse:
         action = request.POST.get("action")
         if action == "grant-station":
             user = get_object_or_404(User, pk=request.POST.get("user_id"))
-            if DepartmentMembership.objects.filter(
-                user=user,
-                department=department,
-            ).exists():
-                raise PermissionDenied(
-                    "Department Administrators are department-wide and cannot receive "
-                    "station scope."
-                )
             station = get_object_or_404(
                 Station, pk=request.POST.get("station_id"), department=department, active=True
             )

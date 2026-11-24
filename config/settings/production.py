@@ -2,6 +2,8 @@ from config.settings.base import *  # noqa: F403
 from config.settings.env import get_typed_env
 
 DEBUG = False
+# Trust only Gunicorn requests accepted on the protected deployment socket.
+TRUSTED_PROXY_UNIX_SOCKET = "/run/fire-backend/gunicorn.sock"
 
 if not SECRET_KEY:  # noqa: F405
     raise RuntimeError("DJANGO_SECRET_KEY must be set in production.")

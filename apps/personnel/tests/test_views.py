@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.audit.models import AuditEvent
-from apps.authorization.models import DepartmentMembership, StationAdminAssignment
+from apps.authorization.models import DepartmentMembership, StationAdminAssignment, SystemRole
 from apps.organizations.models import Department, Station
 from apps.personnel.models import Person
 from apps.personnel.services import (
@@ -45,6 +45,69 @@ def _login_with_reauth(client, user) -> None:
 
 def _messages(response) -> list[str]:
     return [str(message) for message in get_messages(response.wsgi_request)]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "role", ["owner", "foreign", "station", "system", "suspended", "revoked", "none"]
+)
+def test_retention_policy_requires_owning_department_authority(client, department_admin, role):
+    actor, department, station = department_admin
+    set_retention_policy(actor=actor, department=department, retention_period=timedelta(days=137))
+    if role == "owner":
+        user = actor
+    else:
+        user = User.objects.create_user("reader@example.test", "Reader", "safe-password")
+        if role in {"foreign", "suspended", "revoked"}:
+            scope = department
+            if role == "foreign":
+                scope = Department.objects.create(name="Foreign", short_code="F", created_by=actor)
+            membership = DepartmentMembership.objects.create(
+                user=user, department=scope, created_by=actor
+            )
+            if role != "foreign":
+                membership.status = role.upper()
+                if role == "revoked":
+                    membership.revoked_at = timezone.now()
+                    membership.revoked_by = actor
+                membership.save()
+        elif role == "station":
+            StationAdminAssignment.objects.create(user=user, station=station, created_by=actor)
+        elif role == "system":
+            SystemRole.objects.create(user=user)
+    _login_with_reauth(client, user)
+    audit_before = AuditEvent.objects.count()
+    url = reverse("personnel-retention-policy", args=(department.id,))
+    read = client.get(url)
+    update = client.post(url, {"retention_days": "42"})
+    department.refresh_from_db()
+    if role == "owner":
+        assert read.status_code == 200
+        assert b"137" in read.content
+        assert update.status_code == 302
+        assert department.personnel_retention_policy.retention_period == timedelta(days=42)
+        assert AuditEvent.objects.count() > audit_before
+    else:
+        assert read.status_code == update.status_code == 403
+        assert b"137" not in read.content
+        assert b"137" not in update.content
+        assert department.personnel_retention_policy.retention_period == timedelta(days=137)
+        assert AuditEvent.objects.count() == audit_before
+
+
+def test_retention_policy_update_still_requires_reauthentication(client, department_admin):
+    actor, department, _ = department_admin
+    set_retention_policy(actor=actor, department=department, retention_period=timedelta(days=137))
+    client.force_login(actor)
+    audits = AuditEvent.objects.count()
+    response = client.post(
+        reverse("personnel-retention-policy", args=(department.pk,)), {"retention_days": "42"}
+    )
+    assert response.status_code == 302
+    assert response.url.startswith(reverse("accounts-reauthenticate"))
+    department.refresh_from_db()
+    assert department.personnel_retention_policy.retention_period == timedelta(days=137)
+    assert AuditEvent.objects.count() == audits
 
 
 @pytest.mark.django_db

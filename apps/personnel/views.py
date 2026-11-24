@@ -20,6 +20,7 @@ from apps.authorization.scopes import (
     active_station_ids,
     station_admin_station,
 )
+from apps.authorization.services import require_department_admin
 from apps.ingestion.models import ImportBatch
 from apps.ingestion.services import ImportError, create_single_preview
 from apps.organizations.models import Department, Station
@@ -399,6 +400,7 @@ def anonymize(request: HttpRequest, department_id, person_id) -> HttpResponse:
 @login_required
 def retention_policy(request: HttpRequest, department_id) -> HttpResponse:
     department = get_object_or_404(Department, pk=department_id)
+    require_department_admin(request.user, department)
     if request.method == "POST":
         require_recent_reauthentication(
             request,

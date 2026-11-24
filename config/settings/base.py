@@ -360,6 +360,7 @@ OUTBOUND_MAIL_SMTP_ALLOWED_NETWORKS = tuple(get_list("OUTBOUND_MAIL_SMTP_ALLOWED
 
 # Gunicorn is reachable only through the local Nginx Unix socket.
 TRUSTED_PROXY_IPS = frozenset(get_list("TRUSTED_PROXY_IPS", default=("127.0.0.1", "::1")))
+TRUSTED_PROXY_UNIX_SOCKET = ""
 
 LOGGING = {
     "version": 1,
