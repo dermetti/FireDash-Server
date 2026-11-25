@@ -256,7 +256,10 @@ jobs:
 
       - name: Verify locked production wheels and system PDF worker on Debian 13 amd64
         run: |
-          docker run --rm --platform linux/amd64 -v "$PWD:/source:ro" debian:13-slim bash -ceu '
+          source_snapshot=$(mktemp -d)
+          trap 'rm -rf -- "$source_snapshot"' EXIT
+          git archive HEAD | tar --exclude='.secrets' --exclude='provider-signing.key' -x -C "$source_snapshot"
+          docker run --rm --platform linux/amd64 -v "$source_snapshot:/source:ro" debian:13-slim bash -ceu '
             apt-get update
             apt-get install -y python3-venv ca-certificates libmagic1 python3-pikepdf python3-magic qpdf util-linux
             dpkg-query -W python3-pikepdf python3-magic qpdf
@@ -359,8 +362,8 @@ jobs:
           python -m py_compile deploy/scripts/fire-pdf-sanitizer-broker
           python -m py_compile deploy/scripts/report-transfer-credential.py
 
-      - name: Install native Nginx and Restic test binaries
-        run: sudo apt-get update && sudo apt-get install -y nginx restic
+      - name: Install native deployment test binaries
+        run: sudo apt-get update && sudo apt-get install -y nginx restic curl minisign
 
       - name: Run deployment helper tests
         run: |
@@ -384,7 +387,7 @@ jobs:
           bash deploy/tests/test_nginx_etag.sh
           bash deploy/tests/test_nginx_body_size.sh
           TEST_POSTGRES_USER=firedash_test TEST_POSTGRES_PASSWORD=firedash_test_ci \
-            python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_configuration.py deploy/tests/test_tls.py deploy/tests/test_verify_systemd.py deploy/tests/test_pdf_sanitizer.py -q
+            python -m pytest --ds=config.settings.test -p no:cacheprovider deploy/tests/test_configuration.py deploy/tests/test_tls.py deploy/tests/test_verify_systemd.py deploy/tests/test_pdf_sanitizer.py deploy/tests/test_eula.py -q
 
       - name: Run root-only signing-key rotation integration test
         # Preserve setup-python's dependency environment; exit 77 is a failure.
@@ -426,7 +429,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: dependency-advisories
-          path: dependency-audit/
+          path: |
+            dependency-audit/
+            !dependency-audit/**/.secrets/**
+            !dependency-audit/**/provider-signing.key
           if-no-files-found: warn
 
   acme-environment:
@@ -437,7 +443,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Verify pinned Debian 13 isolated Certbot/plugin environment
         run: |
-          docker run --rm -v "$PWD:/source:ro" debian:13-slim bash -ceu '
+          source_snapshot=$(mktemp -d)
+          trap 'rm -rf -- "$source_snapshot"' EXIT
+          git archive HEAD | tar --exclude='.secrets' --exclude='provider-signing.key' -x -C "$source_snapshot"
+          docker run --rm -v "$source_snapshot:/source:ro" debian:13-slim bash -ceu '
             apt-get update
             apt-get install -y python3-venv ca-certificates util-linux
             python3 -m venv /tmp/download

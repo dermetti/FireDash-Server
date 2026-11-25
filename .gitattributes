@@ -1,1 +1,11 @@
 deploy/** text eol=lf
+
+# Approved public legal inputs must retain LF bytes on every platform.
+/legal/EULA.public.de.md text eol=lf
+/legal/EULA.public.en.md text eol=lf
+/legal/provider-manifest.json text eol=lf
+/legal/provider-signing.pub text eol=lf
+
+# Defense in depth for git archive, even if confidential files are force-added.
+.secrets export-ignore
+**/provider-signing.key export-ignore

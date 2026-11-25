@@ -250,3 +250,7 @@ context/
 /.audit-cache/
 # Local output from the informational CI dependency scan.
 /dependency-audit/
+# Confidential FireDash signing material
+/.secrets/
+.secrets/
+**/provider-signing.key

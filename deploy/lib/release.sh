@@ -51,7 +51,8 @@ build_release() {
     staging="$RELEASES_DIR/.$sha.staging.$$"
     install -d -m 0755 -o root -g root "$staging"
     log "extracting source for release $sha"
-    git -C "$root" archive HEAD | tar -x -C "$staging"
+    # Exclude confidential material independently of archive attributes.
+    git -C "$root" archive HEAD | tar --exclude='.secrets' --exclude='provider-signing.key' -x -C "$staging"
     actual=$(git -C "$root" rev-parse HEAD)
     [[ $actual == "$sha" ]] || { rm -rf "$staging"; die "source SHA $actual does not match requested $sha"; }
 
