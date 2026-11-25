@@ -4,6 +4,7 @@
 import base64
 import hashlib
 import hmac
+import io
 import time
 from dataclasses import dataclass
 from uuid import UUID
@@ -107,16 +108,14 @@ class InstallationBearerAuthentication(authentication.BaseAuthentication):
             settings.SECRET_KEY.encode(), credential.encode(), hashlib.sha256
         ).hexdigest()
         # Do not use a client-provided installation identifier to select the credential hash.
-        installation = next(
-            (
-                candidate
-                for candidate in (AppInstallation.objects.select_related("tablet__department"))
-                if hmac.compare_digest(candidate.credential_hash, digest)
-            ),
-            None,
+        candidates = list(
+            AppInstallation.objects.select_related("tablet__department").filter(
+                credential_hash=digest
+            )[:2]
         )
-        if installation is None:
+        if len(candidates) != 1 or not hmac.compare_digest(candidates[0].credential_hash, digest):
             raise InstallationAuthenticationFailed("Invalid installation credential.")
+        installation = candidates[0]
         return InstallationPrincipal(installation), credential
 
 
@@ -274,6 +273,20 @@ def _telemetry_from_headers(request) -> tuple[str | None, int | None, bool]:
     return parsed_version, parsed_build, build_value is not None
 
 
+class RequestTooLarge(exceptions.APIException):
+    status_code = 413
+    default_detail = "Request body exceeds the control-plane limit."
+    default_code = "request_too_large"
+
+
+class BoundedControlParser(parsers.JSONParser):
+    def parse(self, stream, media_type=None, parser_context=None):
+        raw = stream.read(64 * 1024 + 1)
+        if len(raw) > 64 * 1024:
+            raise RequestTooLarge()
+        return super().parse(io.BytesIO(raw), media_type, parser_context)
+
+
 class TabletProtocolAPIView(APIView):
     """Apply private/no-store semantics to every tablet protocol response."""
 
@@ -300,7 +313,7 @@ class TabletProtocolAPIView(APIView):
 class AdoptionPreviewView(TabletProtocolAPIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
-    parser_classes = [parsers.JSONParser]
+    parser_classes = [BoundedControlParser]
 
     def post(self, request):
         serializer = AdoptionPreviewSerializer(data=request.data)
@@ -341,7 +354,7 @@ class AdoptionPreviewView(TabletProtocolAPIView):
 class AdoptionCompleteView(TabletProtocolAPIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
-    parser_classes = [parsers.JSONParser]
+    parser_classes = [BoundedControlParser]
 
     def post(self, request):
         serializer = AdoptionCompleteSerializer(data=request.data)
@@ -422,7 +435,7 @@ _MANIFEST_CONDITIONAL_GET_PARAMETERS = [
 )
 class CheckInView(InstallationAPIView):
     defer_compatibility = True
-    parser_classes = [parsers.JSONParser]
+    parser_classes = [BoundedControlParser]
 
     def post(self, request):
         serializer = CheckInRequestSerializer(data=request.data)

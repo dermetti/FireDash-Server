@@ -325,6 +325,12 @@ REPORT_TRANSFER_KEYRING_PATH = credential_path(
 )
 REPORT_TRANSFER_ACTIVE_KEY = get_env("REPORT_TRANSFER_ACTIVE_KEY", default="1")
 REPORT_TRANSFER_ROOT = Path(get_env("REPORT_TRANSFER_ROOT", default="/var/spool/firedash-reports"))
+REPORT_TRANSFER_SPOOL_MAX_BYTES = get_typed_env(
+    "REPORT_TRANSFER_SPOOL_MAX_BYTES", int, default=5 * 1024**3
+)
+REPORT_TRANSFER_MIN_FREE_BYTES = get_typed_env(
+    "REPORT_TRANSFER_MIN_FREE_BYTES", int, default=2 * 1024**3
+)
 REPORT_TRANSFER_MAX_REQUEST_BYTES = get_typed_env(
     "REPORT_TRANSFER_MAX_REQUEST_BYTES", int, default=96 * 1024 * 1024
 )

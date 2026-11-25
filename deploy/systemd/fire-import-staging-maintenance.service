@@ -12,6 +12,9 @@ Environment=DJANGO_SETTINGS_MODULE=config.settings.production
 EnvironmentFile=/etc/fire-backend/fire-backend.env
 ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_import_staging
 ExecStart=/srv/firedash/current/venv/bin/python manage.py reconcile_library_storage --older-than-days 7
+ExecStart=/srv/firedash/current/venv/bin/python manage.py prune_tablet_api_activity
+ExecStart=/srv/firedash/current/venv/bin/python manage.py clearsessions
+ExecStart=/srv/firedash/current/venv/bin/python manage.py cleanup_authentication_throttles
 TimeoutStartSec=120s
 UMask=0077
 NoNewPrivileges=true

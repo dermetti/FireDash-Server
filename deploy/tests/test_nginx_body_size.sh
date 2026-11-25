@@ -25,8 +25,12 @@ if grep -q 'match MAX_PDF_INPUT_BYTES' "$TEMPLATE"; then
     fail "template comment still ties client_max_body_size to MAX_PDF_INPUT_BYTES"
 fi
 
-grep -q 'Nginx client_max_body_size is 300m' "$VERIFY" \
-    || fail "verifier does not check the 300m outer boundary"
+for boundary in 3m 64k 96m; do
+    grep -Eq "^[[:space:]]*client_max_body_size[[:space:]]+$boundary;[[:space:]]*$" "$TEMPLATE" \
+        || fail "template lacks route boundary $boundary"
+done
+grep -q 'Nginx ordinary form boundary' "$VERIFY" \
+    || fail "verifier does not check the ordinary form boundary"
 grep -Eq '^[[:space:]]*proxy_read_timeout[[:space:]]+95s;[[:space:]]*$' "$TEMPLATE" \
     || fail "template proxy_read_timeout is not 95s"
 if grep -Eq '^[[:space:]]*proxy_read_timeout[[:space:]]+30s;[[:space:]]*$' "$TEMPLATE"; then

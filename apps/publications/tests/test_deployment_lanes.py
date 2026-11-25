@@ -75,6 +75,13 @@ def test_maintenance_units_are_separated_by_service_identity_and_legacy_worker_i
     assert "User=fire_backend" in staging_maintenance
     assert "Group=fire_backend" in staging_maintenance
     assert "cleanup_import_staging" in staging_maintenance
+    for command in (
+        "prune_tablet_api_activity",
+        "clearsessions",
+        "cleanup_authentication_throttles",
+    ):
+        assert f"manage.py {command}" in staging_maintenance
+    assert "LoadCredential=" not in staging_maintenance
     assert "ReadWritePaths=/var/lib/fire-backend/import-staging" in staging_maintenance
     assert "ReadWritePaths=/var/lib/fire-backend/publications" not in staging_maintenance
     assert "OnBootSec=10min" in staging_timer

@@ -66,7 +66,7 @@ class AppInstallation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tablet = models.ForeignKey(Tablet, on_delete=models.PROTECT, related_name="installations")
     installation_uuid = models.UUIDField(unique=True)
-    credential_hash = models.CharField(max_length=64)
+    credential_hash = models.CharField(max_length=64, db_index=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     app_version = models.CharField(max_length=64, validators=[validate_app_version])
     adopted_app_version = models.CharField(max_length=64, validators=[validate_app_version])

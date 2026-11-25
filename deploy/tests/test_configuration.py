@@ -135,6 +135,11 @@ def test_unclassified_changes_fail_closed_without_values(legacy, install, key):
         ("REPORT_TRANSFER_MAX_REPORTS=101", "REPORT_TRANSFER_MAX_REPORTS"),
         ("REPORT_TRANSFER_MAX_REPORTS=0", "REPORT_TRANSFER_MAX_REPORTS"),
         ("REPORT_TRANSFER_MAX_REPORTS=2.5", "REPORT_TRANSFER_MAX_REPORTS"),
+        ("REPORT_TRANSFER_SPOOL_MAX_BYTES=0", "REPORT_TRANSFER_SPOOL_MAX_BYTES"),
+        ("REPORT_TRANSFER_SPOOL_MAX_BYTES=5GiB", "REPORT_TRANSFER_SPOOL_MAX_BYTES"),
+        ("REPORT_TRANSFER_SPOOL_MAX_BYTES=1.5", "REPORT_TRANSFER_SPOOL_MAX_BYTES"),
+        ("REPORT_TRANSFER_MIN_FREE_BYTES=-1", "REPORT_TRANSFER_MIN_FREE_BYTES"),
+        ("REPORT_TRANSFER_MIN_FREE_BYTES=NaN", "REPORT_TRANSFER_MIN_FREE_BYTES"),
         ("OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS=NaN", "OUTBOUND_MAIL_HTTP_READ_TIMEOUT_SECONDS"),
         ("OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS=0", "OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS"),
         ("MAX_INGEST_UPLOAD_BYTES=1", "FILE_LIBRARY_MAX_FILE_BYTES"),
@@ -162,6 +167,18 @@ def test_approved_customization_and_override_removal(legacy, install):
     c.validate_overrides(
         {"REPORT_TRANSFER_MAX_REPORTS": "100", "OUTBOUND_MAIL_SMTP_TIMEOUT_SECONDS": "0.5"}
     )
+
+
+def test_spool_capacity_overrides_converge_and_can_be_removed(legacy, install):
+    overrides = {
+        "REPORT_TRANSFER_SPOOL_MAX_BYTES": "1073741824",
+        "REPORT_TRANSFER_MIN_FREE_BYTES": "0",
+    }
+    runtime = c.prepare(legacy, install, overrides)
+    assert all(runtime[key] == value for key, value in overrides.items())
+    assert c.prepare(runtime, install, overrides) == runtime
+    removed = c.prepare(runtime, install, {})
+    assert not overrides.keys() & removed.keys()
 
 
 def test_interrupted_configuration_promotion_recovers(tmp_path, legacy, install):

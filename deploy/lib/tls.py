@@ -1149,6 +1149,13 @@ def main():
                 .replace("__TLS_CERT_PATH__", values["FIREDASH_TLS_CERT_PATH"])
                 .replace("__TLS_KEY_PATH__", values["FIREDASH_TLS_KEY_PATH"])
             )
+            overrides = config.read(ETC / "overrides.env")
+            config.validate_overrides(overrides)
+            # Keep the established default ceiling and multipart headroom when
+            # the supported aggregate upload override exceeds its default.
+            upload_bytes = int(overrides.get("MAX_INGEST_UPLOAD_BYTES", 268435456))
+            outer_mib = max(300, (upload_bytes * 300 + 268435456 - 1) // 268435456)
+            text = text.replace("client_max_body_size 300m;", f"client_max_body_size {outer_mib}m;")
             nginx_apply(text)
             if mode(values) != "manual":
                 loaded_identity = hashlib.sha256(

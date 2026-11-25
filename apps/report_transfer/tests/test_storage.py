@@ -5,6 +5,37 @@ import pytest
 from django.utils import timezone
 
 from apps.report_transfer import storage
+from apps.report_transfer.contract import TransferError
+
+
+def test_capacity_counts_orphans_and_reserves_incoming_space(tmp_path, settings, monkeypatch):
+    settings.REPORT_TRANSFER_ROOT = tmp_path / "spool"
+    settings.REPORT_TRANSFER_SPOOL_MAX_BYTES = 10
+    settings.REPORT_TRANSFER_MIN_FREE_BYTES = 20
+    monkeypatch.setattr(storage.shutil, "disk_usage", lambda _: SimpleNamespace(free=30))
+    storage.check_capacity(10)
+    key = storage.write_payload(b"123456")
+    storage.check_capacity(4)
+    with pytest.raises(TransferError):
+        storage.check_capacity(5)
+    assert storage.payload_path(key).read_bytes() == b"123456"
+    storage.remove_payload(key)
+    storage.check_capacity(10)
+    monkeypatch.setattr(storage.shutil, "disk_usage", lambda _: SimpleNamespace(free=29))
+    with pytest.raises(TransferError):
+        storage.check_capacity(10)
+
+
+def test_capacity_inspection_error_fails_closed(tmp_path, settings, monkeypatch):
+    settings.REPORT_TRANSFER_ROOT = tmp_path / "spool"
+
+    def fail(_):
+        raise OSError("disposable inspection failure")
+
+    monkeypatch.setattr(storage.shutil, "disk_usage", fail)
+    with pytest.raises(TransferError) as error:
+        storage.check_capacity(1)
+    assert error.value.code == "report_storage_unavailable"
 
 
 @pytest.mark.parametrize("receipt", [False, True])

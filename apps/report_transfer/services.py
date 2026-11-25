@@ -81,6 +81,9 @@ def submit(*, installation, envelope):
                 ):
                     raise TransferError("idempotency_conflict", 409)
                 return result(existing), False
+            # Optimistic preflight avoids decrypting when capacity is already exhausted.
+            # The final check in write_payload is authoritative under the spool lock.
+            storage.check_capacity(len(raw))
             _, _, document_digest = decrypt_and_validate(envelope, header)
             storage.lock_spool()
             payload_key = storage.write_payload(raw)

@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -381,7 +382,10 @@ def test_dry_run_is_scoped_and_never_runs_deploy_hook(tree, certificate, monkeyp
     assert "--deploy-hook" not in calls[0] and "--run-deploy-hooks" not in calls[0]
 
 
-def test_final_https_render_and_activation_marker(tree, certificate, openssl, monkeypatch):
+@pytest.mark.parametrize("upload_override", [None, "536870912"])
+def test_final_https_render_and_activation_marker(
+    tree, certificate, openssl, monkeypatch, upload_override
+):
     pair = certificate()
     tls.paths()[0].parent.mkdir(parents=True)
     for source, destination in zip(pair, tls.paths(), strict=True):
@@ -391,6 +395,8 @@ def test_final_https_render_and_activation_marker(tree, certificate, openssl, mo
     monkeypatch.setattr(tls, "settings", lambda: tree)
     rendered: list[str] = []
     monkeypatch.setattr(tls, "nginx_apply", rendered.append)
+    if upload_override:
+        (tls.ETC / "overrides.env").write_text(f"MAX_INGEST_UPLOAD_BYTES={upload_override}\n")
     tls.main()
     expected = (ROOT / "deploy/nginx/fire-backend.conf").read_text()
     expected = (
@@ -398,6 +404,8 @@ def test_final_https_render_and_activation_marker(tree, certificate, openssl, mo
         .replace("__TLS_CERT_PATH__", tree["FIREDASH_TLS_CERT_PATH"])
         .replace("__TLS_KEY_PATH__", tree["FIREDASH_TLS_KEY_PATH"])
     )
+    if upload_override:
+        expected = expected.replace("client_max_body_size 300m;", "client_max_body_size 600m;")
     assert rendered == [expected]
     assert (tls.ETC / "tls/deployed").read_text() == hashlib.sha256(
         pair[0].read_bytes() + pair[1].read_bytes()
@@ -1198,6 +1206,75 @@ def test_native_nginx_generated_routing(tree, certificate, tmp_path, monkeypatch
             assert response.getheader("Location") == "https://firedash.example.org/ordinary"
         response.read()
         conn.close()
+        if final:
+            # Native admission checks use only headers and synthetic empty JSON.
+            # An interim 100 proves acceptance without allocating a huge body.
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+
+            def admission(path, length):
+                with socket.create_connection(("127.0.0.1", https_port), timeout=5) as raw:
+                    with context.wrap_socket(raw, server_hostname="firedash.example.org") as sock:
+                        sock.sendall(
+                            (
+                                f"POST {path} HTTP/1.1\r\nHost: firedash.example.org\r\n"
+                                f"Content-Length: {length}\r\nExpect: 100-continue\r\n\r\n"
+                            ).encode()
+                        )
+                        return int(sock.recv(4096).split(b" ")[1])
+
+            department = "11111111-1111-1111-1111-111111111111"
+            boundaries = [
+                ("/ordinary", 3 * 1024**2),
+                ("/api/v1/tablet/check-in", 64 * 1024),
+                ("/api/v1/adoption/preview", 64 * 1024),
+                ("/api/v1/adoption/complete", 64 * 1024),
+                ("/api/v1/tablet/report-submissions", 96 * 1024**2),
+                (f"/departments/{department}/imports/", 300 * 1024**2),
+                (f"/departments/{department}/imports/fire-plans/", 300 * 1024**2),
+                ("/system/data/dangerous-goods/edit/", 300 * 1024**2),
+                (f"/files/{department}/", 300 * 1024**2),
+                (f"/files/{department}/explorer/actions/upload/", 300 * 1024**2),
+                (f"/files/{department}/explorer/actions/replace/", 300 * 1024**2),
+                (f"/departments/{department}/fire-plans/", 101 * 1024**2),
+                (f"/departments/{department}/klgv-plans/", 101 * 1024**2),
+            ]
+            for path, limit in boundaries:
+                assert admission(path, limit) == 100, path
+                assert admission(path, limit + 1) == 413, path
+
+            statuses = []
+            for index in range(45):
+                conn = http.client.HTTPSConnection(
+                    "127.0.0.1", https_port, context=context, timeout=5
+                )
+                conn.request(
+                    "POST",
+                    "/accounts/login/",
+                    "{}",
+                    headers={"X-Forwarded-For": f"192.0.2.{index}"},
+                )
+                response = conn.getresponse()
+                statuses.append(response.status)
+                response.read()
+                conn.close()
+            assert statuses[0] != 429 and 429 in statuses
+            for path in (
+                "/accounts/setup/disposable-token/",
+                "/api/v1/adoption/preview",
+                "/api/v1/adoption/complete",
+            ):
+                conn = http.client.HTTPSConnection(
+                    "127.0.0.1", https_port, context=context, timeout=5
+                )
+                conn.request("POST", path, "{}")
+                response = conn.getresponse()
+                assert response.status == 429, path
+                response.read()
+                conn.close()
+            # The exhausted entry bucket never limits ordinary shared-NAT API traffic.
+            assert admission("/api/v1/tablet/check-in", 2) == 100
     finally:
         process.terminate()
         process.communicate(timeout=10)

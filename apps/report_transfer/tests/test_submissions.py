@@ -29,7 +29,7 @@ from apps.outbound_mail.models import DepartmentRecipientPolicy
 from apps.publications.manifests import canonical_manifest_payload
 from apps.publications.worker_grants import process_next_signed_manifest
 from apps.report_transfer import storage
-from apps.report_transfer.contract import configuration
+from apps.report_transfer.contract import canonical, configuration
 from apps.report_transfer.models import ReportSubmission
 from apps.report_transfer.services import cleanup
 from apps.report_transfer.tests.fixtures import request_context  # noqa: F401
@@ -161,6 +161,131 @@ def encrypt(report_key, header, payload):
 
 def post(client, envelope):
     return client.post(URL, data=json.dumps(envelope), content_type="application/json")
+
+
+@pytest.mark.parametrize("capacity", ["budget", "reserve", "orphan"])
+def test_capacity_rejection_preserves_replay_and_accepted_content(
+    context, report_key, settings, monkeypatch, capacity
+):
+    from types import SimpleNamespace
+
+    from apps.report_transfer import services
+
+    _, _, client, header = context
+    envelope = encrypt(report_key, header, package(header))
+    assert post(client, envelope).status_code == 201
+    row = ReportSubmission.objects.get()
+    original = storage.payload_path(row.payload_key).read_bytes()
+    next_header = {**header, "submission_id": str(uuid4()), "report_id": str(uuid4())}
+    other = encrypt(report_key, next_header, package(next_header))
+    required = len(canonical(other))
+    settings.REPORT_TRANSFER_MIN_FREE_BYTES = 0
+    if capacity == "budget":
+        settings.REPORT_TRANSFER_SPOOL_MAX_BYTES = len(original) + required - 1
+    elif capacity == "reserve":
+        settings.REPORT_TRANSFER_MIN_FREE_BYTES = 20
+        monkeypatch.setattr(
+            storage.shutil, "disk_usage", lambda _: SimpleNamespace(free=required + 19)
+        )
+    else:
+        storage.write_payload(b"orphan")
+        settings.REPORT_TRANSFER_SPOOL_MAX_BYTES = len(original) + required
+
+    def expensive(*args):
+        pytest.fail("Capacity rejection must precede decryption")
+
+    monkeypatch.setattr(services, "decrypt_and_validate", expensive)
+    rejected = post(client, other)
+    assert rejected.status_code == 503
+    assert rejected.json()["code"] == "report_storage_unavailable"
+    assert ReportSubmission.objects.count() == 1
+    assert storage.payload_path(row.payload_key).read_bytes() == original
+    assert post(client, envelope).status_code == 200
+    assert len(list(storage.root().glob("*.jwe"))) == (2 if capacity == "orphan" else 1)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_installations_share_spool_capacity(context, report_key, settings, monkeypatch):
+    installation, _, client, header = context
+    first = encrypt(report_key, header, package(header))
+    old_tablet = installation.tablet
+    tablet = Tablet.objects.create(
+        department=old_tablet.department, display_name="Second", status=Tablet.Status.ACTIVE
+    )
+    assignment = TabletVehicleAssignment.objects.get(tablet=old_tablet)
+    TabletVehicleAssignment.objects.create(
+        tablet=tablet,
+        vehicle=assignment.vehicle,
+        valid_from=assignment.valid_from,
+        created_by=assignment.created_by,
+    )
+    credential = "disposable-second-capacity-credential"
+    installation.pk = uuid4()
+    installation.tablet = tablet
+    installation.installation_uuid = uuid4()
+    installation.credential_hash = hmac.new(
+        settings.SECRET_KEY.encode(), credential.encode(), hashlib.sha256
+    ).hexdigest()
+    installation.save(force_insert=True)
+    other_header = {
+        **header,
+        "submission_id": str(uuid4()),
+        "report_id": str(uuid4()),
+        "installation_id": str(installation.pk),
+    }
+    second = encrypt(report_key, other_header, package(other_header))
+    settings.REPORT_TRANSFER_SPOOL_MAX_BYTES = max(len(canonical(first)), len(canonical(second)))
+    settings.REPORT_TRANSFER_MIN_FREE_BYTES = 0
+    barrier = Barrier(2)
+    original_lock = storage.lock_spool
+
+    def lock():
+        # Synchronize BEFORE the serialized section, never while holding its lock.
+        barrier.wait(timeout=10)
+        original_lock()
+
+    monkeypatch.setattr(storage, "lock_spool", lock)
+
+    def run(args):
+        close_old_connections()
+        try:
+            defaults, envelope = args
+            return post(Client(**defaults), envelope).status_code
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                run,
+                [
+                    (client.defaults, first),
+                    ({"HTTP_AUTHORIZATION": f"Bearer {credential}"}, second),
+                ],
+            )
+        )
+    assert sorted(results) == [201, 503]
+    assert ReportSubmission.objects.count() == 1
+    assert len(list(storage.root().glob("*.jwe"))) == 1
+
+
+def test_expiry_restores_capacity_without_losing_submission_tombstone(
+    context, report_key, settings
+):
+    _, _, client, header = context
+    first = encrypt(report_key, header, package(header))
+    other_header = {**header, "submission_id": str(uuid4()), "report_id": str(uuid4())}
+    second = encrypt(report_key, other_header, package(other_header))
+    settings.REPORT_TRANSFER_SPOOL_MAX_BYTES = max(len(canonical(first)), len(canonical(second)))
+    settings.REPORT_TRANSFER_MIN_FREE_BYTES = 0
+    assert post(client, first).status_code == 201
+    assert post(client, second).status_code == 503
+    ReportSubmission.objects.update(expires_at=timezone.now() - timedelta(seconds=1))
+    assert cleanup() == {"expired": 1, "orphans": 0, "failed": 0}
+    assert post(client, second).status_code == 201
+    assert post(client, first).status_code == 200
+    assert ReportSubmission.objects.count() == 2
+    assert len(list(storage.root().glob("*.jwe"))) == 1
 
 
 @pytest.mark.parametrize("jpeg", [False, True])

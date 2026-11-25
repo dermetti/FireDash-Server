@@ -533,9 +533,29 @@ fi
 # The outer request-size boundary must sit above the application's aggregate
 # upload ceiling (MAX_INGEST_UPLOAD_BYTES = 256 MiB), never equal to or below it,
 # so multipart framing overhead cannot clip a near-limit upload.
-grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]+300m;[[:space:]]*$' "$nginx_site" \
-    && ok "Nginx client_max_body_size is 300m (above the 256 MiB upload ceiling)" \
-    || fail "Nginx client_max_body_size is not 300m"
+grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]+3m;[[:space:]]*$' "$nginx_site" \
+    && ok "Nginx ordinary form boundary is 3m" \
+    || fail "Nginx ordinary form boundary is missing"
+grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]+64k;[[:space:]]*$' "$nginx_site" \
+    && ok "Nginx control-plane boundary is 64k" \
+    || fail "Nginx control-plane boundary is missing"
+grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]+96m;[[:space:]]*$' "$nginx_site" \
+    && ok "Nginx report boundary is 96m" \
+    || fail "Nginx report boundary is missing"
+upload_bytes=$(env_value "$ENV_FILE" MAX_INGEST_UPLOAD_BYTES)
+upload_bytes=${upload_bytes:-268435456}
+if [[ $upload_bytes =~ ^[0-9]+$ ]] && ((upload_bytes >= 1 && upload_bytes <= 536870912)); then
+    upload_mib=$(((upload_bytes * 300 + 268435455) / 268435456))
+    ((upload_mib >= 300)) || upload_mib=300
+    grep -Eq "^[[:space:]]*client_max_body_size[[:space:]]+${upload_mib}m;[[:space:]]*$" "$nginx_site" \
+        && ok "Nginx administrative upload boundary matches configuration" \
+        || fail "Nginx administrative upload boundary does not match configuration"
+else
+    fail "Invalid aggregate upload configuration"
+fi
+grep -Eq '^[[:space:]]*limit_req_status[[:space:]]+429;' "$nginx_site" \
+    && ok "Nginx anonymous entry rate rejection is 429" \
+    || fail "Nginx anonymous entry rate protection is missing"
 grep -Eq '^[[:space:]]*proxy_read_timeout[[:space:]]+95s;[[:space:]]*$' "$nginx_site" \
     && ok "Nginx proxy_read_timeout is 95s (above the 90s Gunicorn timeout)" \
     || fail "Nginx proxy_read_timeout is not 95s"

@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import Client, override_settings
 from django.utils import timezone
 from drf_spectacular.checks import schema_check
@@ -45,7 +45,7 @@ from apps.publications.models import (
     SignedManifest,
 )
 from apps.publications.worker_grants import process_next_signed_manifest
-from apps.tablets.api import DownloadView
+from apps.tablets.api import DownloadView, InstallationBearerAuthentication
 from apps.tablets.models import AppInstallation, Tablet
 from apps.tablets.services import (
     activate_tablet,
@@ -53,6 +53,68 @@ from apps.tablets.services import (
     generate_credential,
     verify_credential,
 )
+
+
+def test_credential_lookup_is_bounded_and_filtered(api_context, django_assert_num_queries):
+    _, installation, credential, _ = api_context
+    # Authentication itself is independent of endpoint lifecycle authorization.
+    request = APIRequestFactory().get("/", HTTP_AUTHORIZATION=f"Bearer {credential}")
+    with django_assert_num_queries(1) as queries:
+        principal, token = InstallationBearerAuthentication().authenticate(request)
+    assert principal.installation.pk == installation.pk and token == credential
+    sql = queries.captured_queries[0]["sql"]
+    assert '"credential_hash" =' in sql and "LIMIT 2" in sql
+    with connection.cursor() as cursor:
+        indexes = connection.introspection.get_constraints(cursor, AppInstallation._meta.db_table)
+    assert any(
+        index["index"] and index["columns"] == ["credential_hash"] for index in indexes.values()
+    )
+
+
+def test_ambiguous_credential_fails_closed(api_context):
+    from rest_framework.exceptions import AuthenticationFailed
+
+    _, installation, credential, _ = api_context
+    installation.pk = uuid.uuid4()
+    installation.installation_uuid = uuid.uuid4()
+    installation.status = AppInstallation.Status.REPLACED
+    installation.save(force_insert=True)
+    request = APIRequestFactory().get("/", HTTP_AUTHORIZATION=f"Bearer {credential}")
+    with pytest.raises(AuthenticationFailed):
+        InstallationBearerAuthentication().authenticate(request)
+
+
+def test_historical_credentials_do_not_require_table_scan(api_context, django_assert_num_queries):
+    from rest_framework.exceptions import AuthenticationFailed
+
+    _, installation, credential, _ = api_context
+    current_pk = installation.pk
+    for index in range(10):
+        installation.pk = uuid.uuid4()
+        installation.installation_uuid = uuid.uuid4()
+        installation.status = AppInstallation.Status.REPLACED
+        installation.credential_hash = hashlib.sha256(f"historical-{index}".encode()).hexdigest()
+        installation.save(force_insert=True)
+    auth = InstallationBearerAuthentication()
+    with django_assert_num_queries(1):
+        principal, _ = auth.authenticate(
+            APIRequestFactory().get("/", HTTP_AUTHORIZATION=f"Bearer {credential}")
+        )
+    assert principal.installation.pk == current_pk
+    with django_assert_num_queries(1) as queries, pytest.raises(AuthenticationFailed):
+        auth.authenticate(
+            APIRequestFactory().get("/", HTTP_AUTHORIZATION="Bearer disposable-invalid")
+        )
+    assert '"credential_hash" =' in queries.captured_queries[0]["sql"]
+    assert "LIMIT 2" in queries.captured_queries[0]["sql"]
+
+
+@pytest.mark.parametrize("url", ["/api/v1/adoption/preview", "/api/v1/adoption/complete"])
+def test_public_adoption_parser_is_bounded(client, url):
+    response = client.post(url, b" " * (65536 + 1), content_type="application/json")
+    assert response.status_code == 413
+    assert b"request_too_large" in response.content
+    assert client.post(url, "{}", content_type="application/json").status_code == 400
 
 
 @pytest.fixture

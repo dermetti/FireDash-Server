@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+import stat
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -50,6 +52,8 @@ def payload_path(key):
 
 
 def write_payload(raw):
+    # Caller holds the transaction-scoped spool lock through write and commit.
+    check_capacity(len(raw))
     key = f"{uuid4()}.jwe"
     path = payload_path(key)
     try:
@@ -70,6 +74,31 @@ def write_payload(raw):
         path.unlink(missing_ok=True)
         raise
     return key
+
+
+def check_capacity(incoming_bytes):
+    """Count physical spool files, including orphans, without reading ciphertext."""
+    try:
+        directory = root()
+        used = 0
+        for path in directory.iterdir():
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError("Unexpected spool entry")
+            used += info.st_size
+        budget = settings.REPORT_TRANSFER_SPOOL_MAX_BYTES
+        reserve = settings.REPORT_TRANSFER_MIN_FREE_BYTES
+        if (
+            type(budget) is not int
+            or type(reserve) is not int
+            or budget <= 0
+            or reserve < 0
+            or used + incoming_bytes > budget
+            or shutil.disk_usage(directory).free - incoming_bytes < reserve
+        ):
+            raise TransferError("report_storage_unavailable", 503)
+    except OSError:
+        raise TransferError("report_storage_unavailable", 503) from None
 
 
 def remove_payload(key):
