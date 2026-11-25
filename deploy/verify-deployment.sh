@@ -268,46 +268,22 @@ else
     ok "obsolete fire-publication-worker.service is inactive"
 fi
 
-# credential separation
-if systemctl cat fire-backend.service 2>/dev/null | grep -q 'publication-signing-public-key-ring'; then
-    ok "web service loads public signing-key ring"
+# Read manager-effective values, including overrides, without emitting secrets.
+if python3 "$SELF_DIR/lib/verify_systemd.py"; then
+    ok "effective service identities, isolation, credentials, limits and sockets"
 else
-    fail "web service missing public signing-key ring credential"
+    fail "unsafe or uninspectable effective systemd security configuration"
 fi
-if systemctl cat fire-backend.service 2>/dev/null | grep -q 'application-secret-kek-ring'; then
-    ok "web service loads application-secret key ring"
+# Command checks remain separate from the principal effective security checks.
+if systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q -- '--delivery --forever --poll-seconds 2'; then
+    ok "publication delivery command configured"
 else
-    fail "web service missing application-secret key ring credential"
-fi
-if systemctl cat fire-backend.service 2>/dev/null | grep -Eq 'publication-kek|publication-signing-key:'; then
-    fail "web service loads private KEK/signing key"
-else
-    ok "web service does not load KEK/private signing key"
-fi
-if systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q 'publication-kek' \
-    && systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q 'publication-signing-key' \
-    && systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q 'publication-signing-public-key-ring' \
-    && systemctl cat fire-publication-delivery.service 2>/dev/null | grep -q -- '--delivery --forever --poll-seconds 2'; then
-    ok "publication delivery worker has private credentials and delivery-only command"
-else
-    fail "publication delivery worker credentials or command unexpected"
+    fail "publication delivery command unexpected"
 fi
 if systemctl cat fire-publication-build.service 2>/dev/null | grep -q -- 'process_publication_jobs --build'; then
-    ok "publication build worker is build-only"
+    ok "publication build command configured"
 else
-    fail "publication build worker command unexpected"
-fi
-if systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-kek' \
-    && systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-signing-key' \
-    && systemctl cat fire-publication-build.service 2>/dev/null | grep -q 'publication-signing-public-key-ring'; then
-    ok "publication build worker has required private credentials"
-else
-    fail "publication build worker private credentials unexpected"
-fi
-if systemctl cat fire-publication-maintenance.service 2>/dev/null | grep -Eq 'publication-kek|publication-signing-key:'; then
-    fail "maintenance service must not load KEK/private signing key"
-else
-    ok "maintenance service does not load KEK/private signing key"
+    fail "publication build command unexpected"
 fi
 if [[ $(systemctl show --property=User --value fire-import-staging-maintenance.service 2>/dev/null) == fire_backend ]] \
     && [[ $(systemctl show --property=Group --value fire-import-staging-maintenance.service 2>/dev/null) == fire_backend ]] \
@@ -328,43 +304,13 @@ else
     ok "fire_backend has no passwordless sudo privilege"
 fi
 
-# backend privilege boundary: NoNewPrivileges must remain enforced.
-if systemctl cat fire-backend.service 2>/dev/null | grep -Eq '^NoNewPrivileges=(true|yes)'; then
-    ok "fire-backend.service NoNewPrivileges enforced"
-else
-    fail "fire-backend.service missing NoNewPrivileges=true"
-fi
-
-# sanitizer broker must carry no application secrets and no credential material.
-if systemctl cat fire-pdf-sanitizer-broker@.service 2>/dev/null | grep -Eq 'publication-kek|publication-signing-key|LoadCredential|EnvironmentFile'; then
-    fail "sanitizer broker must not load credentials/environment"
-else
-    ok "sanitizer broker loads no credentials/environment"
-fi
-
-# inetd-style stdio: accepted connection on stdin, journal on stderr, stdout inherited.
-if systemctl cat fire-pdf-sanitizer-broker.socket 2>/dev/null | grep -q '^Accept=yes'; then
-    ok "sanitizer broker socket Accept=yes"
-else
-    fail "sanitizer broker socket missing Accept=yes"
-fi
-if systemctl cat fire-pdf-sanitizer-broker@.service 2>/dev/null | grep -q '^StandardInput=socket'; then
-    ok "sanitizer broker StandardInput=socket"
-else
-    fail "sanitizer broker missing StandardInput=socket"
-fi
-if systemctl cat fire-pdf-sanitizer-broker@.service 2>/dev/null | grep -q '^StandardOutput=inherit'; then
-    ok "sanitizer broker StandardOutput=inherit"
-else
-    fail "sanitizer broker missing StandardOutput=inherit"
-fi
-if systemctl cat fire-pdf-sanitizer-broker@.service 2>/dev/null | grep -q '^StandardError=journal'; then
-    ok "sanitizer broker StandardError=journal"
-else
-    fail "sanitizer broker missing StandardError=journal"
-fi
-
 # obsolete sudo handoff must be absent; the socket broker must be present.
+if [[ -S /run/fire-backend/gunicorn.sock ]] \
+    && [[ $(stat -c '%U:%G:%a' /run/fire-backend/gunicorn.sock) == "fire_backend:www-data:660" ]]; then
+    ok "Gunicorn socket fire_backend:www-data 0660"
+else
+    fail "Gunicorn socket missing or ownership/mode unexpected"
+fi
 [[ ! -e /etc/sudoers.d/fire-pdf-sanitizer ]] && ok "obsolete sudoers rule removed" || fail "obsolete sudoers rule still installed"
 [[ ! -e /usr/local/lib/fire-backend/fire-pdf-sanitize ]] && ok "obsolete sudo wrapper removed" || fail "obsolete sudo wrapper still installed"
 if [[ -x /usr/local/lib/fire-backend/fire-pdf-sanitizer-broker ]]; then
@@ -396,10 +342,6 @@ if systemctl cat fire-pdf-sanitizer@.service | grep -q '^ExecStart=/usr/bin/pyth
 else
     fail "isolated PDF worker missing"
 fi
-if systemctl cat fire-pdf-sanitizer@.service | grep -Eq 'LoadCredential|EnvironmentFile'; then
-    fail "PDF worker must not load application credentials/environment"
-fi
-
 # -------- filesystem / credentials --------
 log "=== filesystem / credentials ==="
 [[ $(stat -c '%U:%G:%a' /var/lib/fire-backend) == "root:root:711" ]] \

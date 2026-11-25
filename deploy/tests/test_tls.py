@@ -1080,7 +1080,7 @@ def test_native_nginx_routing_config_is_isolated(tree, tmp_path, final):
     assert listeners == (
         ["127.0.0.1:18080 default_server", "127.0.0.1:18443 ssl default_server"]
         if final
-        else ["127.0.0.1:18080"]
+        else ["127.0.0.1:18080 default_server"]
     )
     assert "/var/log/" not in rendered
     assert rendered.count("error_log /dev/null crit;") == text.count("error_log /dev/null crit;")
@@ -1094,7 +1094,7 @@ def test_native_nginx_routing_config_is_isolated(tree, tmp_path, final):
 @LINUX
 @pytest.mark.skipif(not shutil.which("nginx"), reason="native Nginx binary required")
 @pytest.mark.parametrize("final", [False, True])
-def test_native_nginx_generated_routing(tree, certificate, tmp_path, final):
+def test_native_nginx_generated_routing(tree, certificate, tmp_path, monkeypatch, final):
     """Run actual Nginx on disposable high ports, with the generated location rules."""
     cert, key = certificate()
     with socket.socket() as sock:
@@ -1123,8 +1123,43 @@ def test_native_nginx_generated_routing(tree, certificate, tmp_path, final):
     (tmp_path / "logs").mkdir()
     conf.write_text(
         f"pid {tmp_path}/nginx.pid;\nerror_log stderr;\nevents {{}}\n"
-        f"http {{\naccess_log off;\n{text}\n}}\n"
+        f"http {{\naccess_log off;\ninclude {tls.ENABLED.parent}/*;\n}}\n"
     )
+    # Disposable Debian-style enabled default: reconciliation must remove only
+    # this link before the real routing configuration can validate.
+    tls.SITE.parent.mkdir(parents=True)
+    tls.ENABLED.parent.mkdir(parents=True)
+    available = tls.SITE.parent / "default"
+    available.write_text(f"server {{ listen 127.0.0.1:{port} default_server; }}")
+    default = tls.ENABLED.parent / "default"
+    default.symlink_to(available)
+    digest = hashlib.md5(available.read_bytes(), usedforsecurity=False).hexdigest()
+    original_run = subprocess.run
+    nginx_binary = shutil.which("nginx")
+    assert nginx_binary
+
+    def lifecycle_run(args, **kwargs):
+        if args[0] == "/usr/bin/dpkg-query":
+            return f"installed\n {available} {digest}\n".encode()
+        if args == ["nginx", "-t"]:
+            result = original_run(
+                [nginx_binary, "-p", str(tmp_path), "-c", str(conf), "-t"],
+                capture_output=True,
+            )
+            assert result.returncode == 0, result.stderr.decode()
+        else:
+            assert args == ["systemctl", "reload", "nginx"]
+        return b""
+
+    def is_active(args, **kwargs):
+        if args[:2] == ["/usr/bin/systemctl", "is-active"]:
+            return SimpleNamespace(returncode=0)
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(tls, "run", lifecycle_run)
+    monkeypatch.setattr(tls.subprocess, "run", is_active)
+    tls.nginx_apply(text)
+    assert not default.is_symlink() and available.exists()
     nginx = shutil.which("nginx")
     assert nginx
     checked = subprocess.run(
@@ -1784,3 +1819,165 @@ def test_inherited_backup_lock_requires_installer_ownership(
     assert entered == (problem == "none")
     if problem == "none":
         assert calls[-1] == 9 and len(calls) == 2  # Never unlock parent's descriptor.
+
+
+@LINUX
+@pytest.mark.parametrize("failure", [None, "validate", "reload", "activate"])
+def test_packaged_default_transaction(tree, monkeypatch, failure):
+    tls.SITE.parent.mkdir(parents=True)
+    tls.ENABLED.parent.mkdir(parents=True)
+    available = tls.SITE.parent / "default"
+    available.write_text("server { listen 80 default_server; listen [::]:80 default_server; }")
+    default = tls.ENABLED.parent / "default"
+    default.symlink_to("../available/default")
+    unrelated = tls.ENABLED.parent / "other"
+    unrelated.write_text("server { listen 8080 default_server; }")
+    digest = hashlib.md5(available.read_bytes(), usedforsecurity=False).hexdigest()
+    metadata = f"installed\n {available} {digest}\n".encode()
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[0] == "/usr/bin/dpkg-query":
+            return metadata
+        assert not default.exists() or tls.SITE.read_text() == "old"
+        if args == ["nginx", "-t"] and failure == "validate":
+            raise tls.TLSError("validation failed")
+        if args[:2] == ["systemctl", "reload"] and failure == "reload":
+            raise tls.TLSError("reload failed")
+        if args[:2] == ["systemctl", "enable"] and failure == "activate":
+            raise tls.TLSError("activation failed")
+        return b""
+
+    monkeypatch.setattr(tls, "run", run)
+    monkeypatch.setattr(
+        tls.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=3 if failure == "activate" else 0),
+    )
+    tls.SITE.write_text("old")
+    if failure:
+        with pytest.raises(tls.TLSError):
+            tls.nginx_apply("candidate")
+        assert tls.SITE.read_text() == "old"
+        assert os.readlink(default) == "../available/default"
+        assert not tls.ENABLED.exists()
+    else:
+        tls.nginx_apply("candidate")
+        assert not default.is_symlink()
+        tls.nginx_apply("candidate")
+        assert tls.ENABLED.resolve() == tls.SITE
+        assert tls.SITE.read_text() == "candidate"
+    assert available.read_text().startswith("server { listen 80")
+    assert unrelated.read_text() == "server { listen 8080 default_server; }"
+
+
+@LINUX
+@pytest.mark.parametrize("state", ["modified", "file", "foreign", "unowned", "removed", "custom"])
+def test_default_site_ownership_rejects_custom_state(tree, monkeypatch, state):
+    tls.SITE.parent.mkdir(parents=True)
+    tls.ENABLED.parent.mkdir(parents=True)
+    available = tls.SITE.parent / "default"
+    available.write_text("packaged default")
+    digest = hashlib.md5(available.read_bytes(), usedforsecurity=False).hexdigest()
+    default = tls.ENABLED.parent / "default"
+    if state == "file":
+        default.write_text("administrator default")
+    else:
+        default.symlink_to(available if state != "foreign" else tls.SITE.parent / "foreign")
+    if state == "modified":
+        available.write_text("modified default")
+    if state == "custom":
+        (tls.ENABLED.parent / "custom").write_text("server { listen [::]:80 default_server; }")
+    metadata = f"installed\n {available} {digest}\n".encode()
+    if state == "unowned":
+        metadata = b"installed\n"
+    if state == "removed":
+        metadata = metadata.replace(b"installed", b"config-files")
+    monkeypatch.setattr(tls, "run", lambda args, **kw: metadata)
+    with pytest.raises(tls.TLSError, match="manually"):
+        tls.nginx_ownership_preflight()
+    assert default.exists() or default.is_symlink()
+    assert not tls.SITE.exists()
+
+
+def test_optional_legacy_pdf_path():
+    unit = (ROOT / "deploy/systemd/fire-pdf-sanitizer@.service").read_text()
+    match = re.search(r"^InaccessiblePaths=(.*)$", unit, re.M)
+    assert match
+    paths = match.group(1).split()
+    assert "-/var/lib/fire-backend/publications-tmp" in paths
+    assert "/var/lib/fire-backend/publications-tmp" not in paths
+    assert "/var/lib/fire-backend/publications" in paths
+    assert "/var/lib/fire-backend/fire-plans" in paths
+    assert "/etc/fire-backend" in paths and "/srv/firedash" in paths
+
+
+@LINUX
+@pytest.mark.skipif(
+    not Path("/etc/nginx/sites-available/default").is_file(),
+    reason="installed Debian nginx-common conffile required (read-only)",
+)
+def test_native_installed_package_identity_with_disposable_copy(tree, monkeypatch):
+    source = Path("/etc/nginx/sites-available/default")
+    metadata = tls.run(
+        ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Conffiles}", "nginx-common"]
+    )
+    tls.SITE.parent.mkdir(parents=True)
+    tls.ENABLED.parent.mkdir(parents=True)
+    available = tls.SITE.parent / "default"
+    available.write_bytes(source.read_bytes())
+    enabled = tls.ENABLED.parent / "default"
+    enabled.symlink_to(available)
+    metadata = metadata.replace(str(source).encode(), str(available).encode())
+    monkeypatch.setattr(tls, "run", lambda args: metadata)
+    expected = re.search(rb" " + re.escape(str(available).encode()) + rb" ([a-f0-9]{32})", metadata)
+    assert expected
+    if hashlib.md5(source.read_bytes(), usedforsecurity=False).hexdigest().encode() == expected[1]:
+        assert tls.packaged_default_site() == enabled
+    else:
+        with pytest.raises(tls.TLSError):
+            tls.packaged_default_site()
+    available.write_bytes(available.read_bytes() + b"\n# administrator modification\n")
+    with pytest.raises(tls.TLSError):
+        tls.packaged_default_site()
+    assert enabled.is_symlink()
+
+
+def test_disabled_default_needs_no_package_query(tree, monkeypatch):
+    tls.SITE.parent.mkdir(parents=True)
+    (tls.SITE.parent / "default").write_text("administrator-modified but disabled")
+    monkeypatch.setattr(
+        tls, "run", lambda *a, **k: pytest.fail("no enabled default needs ownership query")
+    )
+    assert tls.nginx_ownership_preflight() is None
+
+
+@pytest.mark.parametrize(
+    "listener",
+    [
+        "80 default_server",
+        "[::]:80 default_server",
+        "443 ssl default_server",
+        "*:80 default_server",
+    ],
+)
+def test_custom_default_listener_preflight_is_read_only(tree, listener):
+    tls.ENABLED.parent.mkdir(parents=True)
+    custom = tls.ENABLED.parent / "administrator"
+    text = f"server {{ listen {listener}; }}"
+    custom.write_text(text)
+    with pytest.raises(tls.TLSError, match="manually"):
+        tls.nginx_ownership_preflight()
+    assert custom.read_text() == text
+    assert not tls.SITE.exists()
+
+
+@pytest.mark.parametrize("listener", ["8080 default_server", "192.0.2.5:80 default_server", "80"])
+def test_nonconflicting_virtual_host_preflight_preserves_configuration(tree, listener):
+    tls.ENABLED.parent.mkdir(parents=True)
+    custom = tls.ENABLED.parent / "administrator"
+    text = f"server {{ listen {listener}; }}"
+    custom.write_text(text)
+    assert tls.nginx_ownership_preflight() is None
+    assert custom.read_text() == text

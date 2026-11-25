@@ -410,8 +410,8 @@ def dns_addresses(host):
 
 def challenge_config(host):
     return f"""server {{
-    listen 80;
-    listen [::]:80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
     server_name {host};
     access_log off;
     error_log /dev/null crit;
@@ -425,8 +425,63 @@ def challenge_config(host):
 """
 
 
+def packaged_default_site():
+    """Return only the enabled, unmodified nginx-common conffile symlink."""
+    enabled = ENABLED.parent / "default"
+    if not enabled.exists() and not enabled.is_symlink():
+        return None
+    available = SITE.parent / "default"
+    message = (
+        "Nginx sites-enabled/default is not the unmodified nginx-common default; "
+        "review and disable conflicting administrator configuration manually"
+    )
+    require(enabled.is_symlink() and enabled.resolve() == available, message)
+    require(available.is_file() and not available.is_symlink(), message)
+    metadata = run(
+        ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Conffiles}", "nginx-common"]
+    ).decode()
+    require(metadata.startswith("installed\n"), message)
+    matches = re.findall(r"^ " + re.escape(str(available)) + r" ([0-9a-f]{32})$", metadata, re.M)
+    require(len(matches) == 1, message)
+    # dpkg's conffile identity uses MD5; this is not a cryptographic trust decision.
+    require(
+        hashlib.md5(available.read_bytes(), usedforsecurity=False).hexdigest() == matches[0],
+        message,
+    )
+    return enabled
+
+
+def nginx_ownership_preflight():
+    default = packaged_default_site()
+    if ENABLED.parent.exists():
+        for path in ENABLED.parent.iterdir():
+            if path in (ENABLED, default):
+                continue
+            # Detect ordinary Debian enabled-vhost conflicts before maintenance.
+            # nginx -t remains authoritative for includes and full syntax.
+            text = re.sub(r"#[^\n]*", "", path.read_text())
+            listeners = re.findall(r"\blisten\s+([^;]+);", text)
+            require(
+                not any(
+                    "default_server" in listener.split()
+                    and listener.split()[0]
+                    in {
+                        f"{address}{port}"
+                        for address in ("", "*:", "0.0.0.0:", "[::]:")
+                        for port in (80, 443)
+                    }
+                    for listener in listeners
+                ),
+                "custom Nginx default_server conflicts with FireDash; "
+                "review sites-enabled virtual hosts manually (no custom files changed)",
+            )
+    return default
+
+
 def nginx_apply(text):
     """Transactional FireDash site change, including rollback on reload failure."""
+    default = nginx_ownership_preflight()
+    default_target = os.readlink(default) if default is not None else None
     previous = SITE.read_bytes() if SITE.exists() else None
     created_link = not ENABLED.exists() and not ENABLED.is_symlink()
     require(not SITE.is_symlink(), "FireDash Nginx site must be a regular file")
@@ -436,19 +491,25 @@ def nginx_apply(text):
     )
     SITE.parent.mkdir(parents=True, exist_ok=True)
     ENABLED.parent.mkdir(parents=True, exist_ok=True)
+    activation_attempted = False
+    active = False
     try:
+        if default is not None:
+            default.unlink()
         atomic(SITE, text.encode(), 0o644)
         if created_link:
             ENABLED.symlink_to(SITE)
         run(["nginx", "-t"])
-        if (
+        active = (
             subprocess.run(  # nosec B603
                 ["/usr/bin/systemctl", "is-active", "--quiet", "nginx"],
                 capture_output=True,
                 timeout=30,
             ).returncode
             == 0
-        ):  # noqa: S603,S607
+        )  # noqa: S603,S607
+        activation_attempted = True
+        if active:
             run(["systemctl", "reload", "nginx"])
         else:
             run(["systemctl", "enable", "--now", "nginx"])
@@ -459,6 +520,14 @@ def nginx_apply(text):
             atomic(SITE, previous, 0o644)
         if created_link:
             ENABLED.unlink(missing_ok=True)
+        if default is not None and default_target is not None:
+            default.symlink_to(default_target)
+        if activation_attempted and active:
+            # A failed reload may have partially applied; reload the restored
+            # configuration too. Keep the original failure if recovery fails.
+            with contextlib.suppress(TLSError, OSError, subprocess.SubprocessError):
+                run(["nginx", "-t"])
+                run(["systemctl", "reload", "nginx"])
         raise
 
 
@@ -894,6 +963,7 @@ def prepare_dns(values):
 
 
 def prepare(values):
+    nginx_ownership_preflight()
     host = hostname(values["FIREDASH_BASE_URL"])
     warning = int(values.get("FIREDASH_TLS_WARNING_DAYS", "30"))
     if mode(values) == "manual":
