@@ -1,5 +1,6 @@
 """Static deployment regression tests for the three publication worker lanes."""
 
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -99,7 +100,12 @@ def test_verifier_checks_lane_commands_socket_security_and_credential_separation
     assert "publication-signing-public-key-ring.json" in verifier
     assert "private/public pair matches the retained public-key ring" in verifier
     assert 'python3 "$SELF_DIR/lib/verify_systemd.py"' in verifier
-    from deploy.lib import verify_systemd
+    spec = importlib.util.spec_from_file_location(
+        "verify_systemd", ROOT / "deploy/lib/verify_systemd.py"
+    )
+    assert spec and spec.loader
+    verify_systemd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verify_systemd)
 
     maintenance = (ROOT / "deploy/systemd/fire-publication-maintenance.service").read_text()
 
