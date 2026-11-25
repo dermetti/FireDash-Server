@@ -36,13 +36,22 @@ def git(*args, input=None):
 def test_approved_templates_match_manifest_and_use_lf():
     manifest = json.loads((ROOT / "legal/provider-manifest.json").read_bytes())
     assert manifest["agreement_version"] == "1.0-beta"
-    assert manifest["agreement_revision"] == 2
+    assert manifest["agreement_revision"] == 3
     assert manifest["provider_revision"] == 1
     assert manifest["authoritative_language"] == "de"
+    assert manifest["schema_version"] == 1
+    assert manifest["effective_date"] == "2026-11-25"
+    assert manifest["status"] == "approved"
+    expected = {
+        "de": "f8dc87445df16481437f7c85541b527f0bf987a227d7b5b2ad01f9c66065a4e3",
+        "en": "ec256509c211acaf6b8ff82cd30250db1e8f94eba9ef0bbafeb8b3b20242b581",
+    }
     for language in ("de", "en"):
         record = manifest["languages"][language]
         content = (ROOT / "legal" / record["template"]).read_bytes()
-        assert hashlib.sha256(content).hexdigest() == record["template_sha256"]
+        assert (
+            hashlib.sha256(content).hexdigest() == record["template_sha256"] == expected[language]
+        )
     for name in PUBLIC_INPUTS:
         assert b"\r" not in (ROOT / name).read_bytes()
 
@@ -57,6 +66,43 @@ def test_public_inputs_are_not_ignored_and_checkout_with_lf():
     for name in PUBLIC_INPUTS:
         assert f"{name}: text: set" in result.stdout
         assert f"{name}: eol: lf" in result.stdout
+
+
+def test_revision_3_documentation_and_reference_identity():
+    public = (ROOT / "legal/README.md").read_text(encoding="utf-8")
+    assert "| Agreement revision | 3 |" in public
+    assert "third-party hosting" in public and "§ 16a" in public
+    assert "does not automatically bind another legally independent organization" in public
+    maintenance = (ROOT / "deploy/EULA-maintenance.md").read_text(encoding="utf-8")
+    current, historical = maintenance.split("## Historical Revision 2 references", 1)
+    assert "## Approved Revision 3 comparison" in current
+    assert '"1.0-beta", 3, 1' in current
+    hashes = {
+        "de": "d2ba7f36392eccf63e7b6b27b91ff845cf654575c9d70623c40fe7ec6af6409e",
+        "en": "828153dfad9bf33618d7830bf6e27d1ddce37cd7c05c1a5fb4af74c82cdb17ef",
+    }
+    identity = {
+        "schema_version": 1,
+        "agreement_version": "1.0-beta",
+        "agreement_revision": 3,
+        "provider_revision": 1,
+        "assembled_sha256": hashes,
+    }
+    canonical = json.dumps(
+        identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode()
+    expected_set = "34fbea5a0b478d05fbf24b857ea8ad2c787b79621ace24c2470ef6909755528e"
+    assert hashlib.sha256(canonical).hexdigest() == expected_set
+    for value in (*hashes.values(), expected_set):
+        assert value in current
+    for value in (
+        "15188bd7ab716abccfccb5981f8066a966a7de82d4746464f5ef1274279e1aa1",
+        "7de85b1cd3c45716e62e0f8108c269b95c84ed102997d5bf3a292e229116f1d9",
+        "38bf58bd49fd8f70fcb64d46f7d7a77c548ef9b27853b0cbee91ee549cb61b56",
+    ):
+        assert value in historical
+    procedure = current.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    compile(procedure, "maintainer-reference-procedure", "exec")
 
 
 def test_synthetic_private_paths_ignored_and_excluded_from_git_archives():

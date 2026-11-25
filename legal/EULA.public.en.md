@@ -2,7 +2,7 @@
 
 **Operational safety requirements and limitations of liability**
 
-- Version: 1.0-beta, revision 2
+- Version: 1.0-beta, revision 3
 - Revision date: 25 November 2026
 - Effective date of this version: 25 November 2026; contractual effect begins only upon valid acceptance under § 17
 - Language: English translation (German version authoritative)
@@ -236,6 +236,10 @@ No voluntary guarantees are provided, particularly concerning availability, accu
 
 (6) Each party's own data protection obligations remain unaffected.
 
+(7) To document expressly declared acceptance, the name of the represented Operating Organization, the accepting person's first and last name and role, their declared authority and confirmations under Annex A, the time, method and language of acceptance, and version, revision and integrity identifiers of the Agreement and the Software are stored locally on the respective installation. The record serves as evidence of the declared acceptance and its association with the accepted version. It does not constitute independent proof of identity or authority to represent the organization. This acceptance data is not automatically transmitted to the Provider.
+
+(8) Those responsible as controllers for this processing must ensure, in particular, an appropriate legal basis, the required data protection information, processing and storage limited to the evidentiary purpose, appropriate access restrictions and required deletion. Retention is governed by necessity for the evidentiary purpose and applicable statutory requirements. General technical logs should not contain names or other personal acceptance details. Acceptance of this Agreement replaces neither the required data protection legal basis nor the information obligations towards data subjects.
+
 ---
 
 ## § 15 Third-party components, external services and information sources
@@ -257,6 +261,26 @@ No voluntary guarantees are provided, particularly concerning availability, accu
 (3) Commissioning an independent service provider does not alone create additional obligations for the Provider or Contributors. Corporate, personnel or organizational connections do not in themselves constitute assumption of another party's contractual obligations.
 
 (4) Statutory liability and attribution rules remain unaffected. This Agreement does not restrict claims under separately commissioned paid services.
+
+---
+
+## § 16a Provision and operation for third parties
+
+(1) Where an Operating Organization makes FireDash available to other legally independent organizations for operational use through hosting, installation, administration, maintenance or other services, it must make the complete version of this Agreement applicable to the Software provided, including Provider identification and safety notices, available to those organizations in a retainable form before operational use begins.
+
+(2) The providing Operating Organization must expressly inform the relevant organizations of the supplementary function of the Software, its respective development status, the possible consequences of errors and failures, and the requirements for independent Fallback Solutions, operational testing and documented internal approvals.
+
+(3) Where the applicable Agreement or material safety information changes, the providing Operating Organization must inform the affected organizations in an appropriate manner and make the updated documents available to them.
+
+(4) Acceptance of this Agreement by an Infrastructure Operator, hosting provider, installation service provider or other third party does not constitute automatic acceptance by the organizations for which services are provided. Acceptance on behalf of another organization requires the necessary authority to represent it.
+
+(5) The providing Operating Organization must give the relevant organizations the opportunity to accept this supplementary Agreement independently and expressly. Acceptance must neither be deemed to have occurred nor be declared on behalf of third parties without the corresponding authority to represent them.
+
+(6) The responsibilities of the parties involved for technical infrastructure, IT security, maintenance, backup, data protection, operational approvals and independent Fallback Solutions must be appropriately defined in accordance with their respective tasks and areas of responsibility.
+
+(7) Provision of the Software for third parties does not alone create additional contractual obligations of the Provider or Contributors towards those third parties. Statutory responsibilities and third-party claims remain unaffected.
+
+(8) The above obligations apply exclusively within the scope of this voluntarily accepted supplementary Agreement. They do not constitute additional copyright license conditions. Rights under the AGPL-3.0, in particular to use, convey and make the Software available over networks, remain unaffected.
 
 ---
 
@@ -316,10 +340,14 @@ By explicitly accepting, I confirm:
 6. The Operating Organization assumes the described responsibilities for testing, documented internal approval, independent Fallback Solutions and their regular testing. This acceptance does not certify that operational testing has already been completed.
 7. I understand that safe operational capability must not depend on FireDash.
 8. I have reviewed the provisions on guarantees, liability for defects and limitations of liability.
+9. Where the Operating Organization makes FireDash available to other legally independent organizations for operational use, it assumes the information and provision obligations described in § 16a.
+10. I understand that this acceptance is declared exclusively for the identified Operating Organization and does not constitute automatic acceptance by other organizations.
 
 AGPL rights and mandatory statutory rights remain unaffected.
 
 - Operating Organization (legal entity): [to be entered]
+- First and last name of the accepting person: [to be entered]
+- Role within the organization: [to be entered]
 - Agreement version and revision: [to be entered]
 - Date: [to be entered]
 

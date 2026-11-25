@@ -2,7 +2,7 @@
 
 **Betriebliche Sicherheitsanforderungen und Haftungsbeschränkungen**
 
-- Fassung: 1.0-beta, Revision 2
+- Fassung: 1.0-beta, Revision 3
 - Stand: 25.11.2026
 - Gültigkeitsbeginn dieser Fassung: 25.11.2026; vertragliche Wirkung erst mit wirksamer Annahme gemäß § 17
 - Sprache: Deutsch (maßgebliche Fassung)
@@ -236,6 +236,10 @@ Es werden keine freiwilligen Garantien insbesondere für Verfügbarkeit, Richtig
 
 (6) Eigene datenschutzrechtliche Pflichten aller Beteiligten bleiben unberührt.
 
+(7) Zur Dokumentation einer ausdrücklich erklärten Zustimmung werden auf der jeweiligen Installation der Name der vertretenen Betreiberorganisation, Vor- und Nachname und Funktion der zustimmenden Person, deren erklärte Vertretungsbefugnis und Bestätigungen gemäß Anlage A, der Zustimmungszeitpunkt, die Art und Sprache der Zustimmung sowie Versions-, Revisions- und Integritätskennungen der Vereinbarung und der Software lokal gespeichert. Die Aufzeichnung dient dem Nachweis der erklärten Zustimmung und der Zuordnung zur angenommenen Fassung. Sie stellt keinen unabhängigen Nachweis der Identität oder Vertretungsbefugnis dar. Eine automatische Übermittlung dieser Zustimmungsdaten an den Anbieter findet nicht statt.
+
+(8) Die für diese Verarbeitung Verantwortlichen stellen insbesondere eine geeignete Rechtsgrundlage, die erforderlichen Datenschutzinformationen, eine auf den Nachweiszweck beschränkte Verarbeitung und Speicherung, angemessene Zugriffsbeschränkungen sowie die erforderliche Löschung sicher. Die Aufbewahrung richtet sich nach der Erforderlichkeit für den Nachweiszweck und den anwendbaren gesetzlichen Anforderungen. Allgemeine technische Protokolle sollen keine Namen oder sonstigen personenbezogenen Zustimmungsangaben enthalten. Die Zustimmung zu dieser Vereinbarung ersetzt weder die erforderliche datenschutzrechtliche Rechtsgrundlage noch die Informationspflichten gegenüber betroffenen Personen.
+
 ---
 
 ## § 15 Drittkomponenten, externe Dienste und Informationsquellen
@@ -257,6 +261,26 @@ Es werden keine freiwilligen Garantien insbesondere für Verfügbarkeit, Richtig
 (3) Die Beauftragung eines selbstständigen Dienstleisters begründet allein keine zusätzlichen Pflichten des Anbieters oder der Mitwirkenden. Gesellschaftsrechtliche, personelle oder organisatorische Verbindungen begründen für sich genommen keine Übernahme fremder Vertragspflichten.
 
 (4) Gesetzliche Haftungs- und Zurechnungstatbestände bleiben unberührt. Diese Vereinbarung beschränkt keine Ansprüche aus gesondert beauftragten entgeltlichen Leistungen.
+
+---
+
+## § 16a Bereitstellung und Betrieb für Dritte
+
+(1) Stellt eine Betreiberorganisation FireDash im Rahmen von Hosting, Installation, Administration, Wartung oder sonstigen Dienstleistungen anderen rechtlich selbstständigen Organisationen zur betrieblichen Nutzung bereit, hat sie diesen Organisationen vor Aufnahme der betrieblichen Nutzung die für die bereitgestellte Software maßgebliche vollständige Fassung dieser Vereinbarung einschließlich der Anbieteridentifikation und der Sicherheitshinweise in speicherbarer Form zugänglich zu machen.
+
+(2) Die bereitstellende Betreiberorganisation hat die betreffenden Organisationen ausdrücklich auf die ergänzende Funktion der Software, ihren jeweiligen Entwicklungsstand, die möglichen Folgen von Fehlern und Ausfällen sowie die Anforderungen an unabhängige Rückfalllösungen, betriebliche Prüfungen und dokumentierte interne Freigaben hinzuweisen.
+
+(3) Bei Änderungen der maßgeblichen Vereinbarung oder wesentlichen Sicherheitsinformationen hat die bereitstellende Betreiberorganisation die betroffenen Organisationen in angemessener Weise zu informieren und ihnen die aktualisierten Unterlagen zugänglich zu machen.
+
+(4) Die Annahme dieser Vereinbarung durch einen Infrastrukturbetreiber, Hostinganbieter, Installationsdienstleister oder sonstigen Dritten begründet keine automatische Zustimmung der Organisationen, für die Leistungen erbracht werden. Eine Zustimmung im Namen einer anderen Organisation setzt die hierfür erforderliche Vertretungsbefugnis voraus.
+
+(5) Die bereitstellende Betreiberorganisation hat den betreffenden Organisationen die Möglichkeit einer eigenständigen, ausdrücklichen Zustimmung zu dieser ergänzenden Vereinbarung einzuräumen. Eine Zustimmung darf weder fingiert noch ohne entsprechende Vertretungsbefugnis im Namen Dritter erklärt werden.
+
+(6) Die Verantwortlichkeiten der Beteiligten für technische Infrastruktur, IT-Sicherheit, Wartung, Datensicherung, Datenschutz, betriebliche Freigaben und unabhängige Rückfalllösungen sind entsprechend ihren jeweiligen Aufgaben und Verantwortungsbereichen angemessen festzulegen.
+
+(7) Die Bereitstellung der Software für Dritte begründet allein keine zusätzlichen vertraglichen Verpflichtungen des Anbieters oder der Mitwirkenden gegenüber diesen Dritten. Gesetzliche Verantwortlichkeiten und Ansprüche Dritter bleiben unberührt.
+
+(8) Die vorstehenden Pflichten gelten ausschließlich im Rahmen dieser freiwillig angenommenen ergänzenden Vereinbarung. Sie stellen keine zusätzlichen urheberrechtlichen Lizenzbedingungen dar. Die Rechte aus der AGPL-3.0, insbesondere zur Nutzung, Weitergabe und Bereitstellung der Software über Netzwerke, bleiben unberührt.
 
 ---
 
@@ -316,10 +340,14 @@ Durch ausdrückliche Zustimmung bestätige ich:
 6. Die Betreiberorganisation übernimmt die beschriebenen Verantwortlichkeiten für Prüfung, dokumentierte interne Freigabe, unabhängige Rückfalllösungen und deren regelmäßige Prüfung. Diese Zustimmung bestätigt nicht, dass die betriebliche Prüfung bereits abgeschlossen ist.
 7. Mir ist bekannt, dass die sichere Einsatzfähigkeit nicht von FireDash abhängen darf.
 8. Ich habe die Bestimmungen zu Garantien, Mängelhaftung und Haftungsbeschränkungen zur Kenntnis genommen.
+9. Sofern die Betreiberorganisation FireDash anderen rechtlich selbstständigen Organisationen zur betrieblichen Nutzung bereitstellt, übernimmt sie die in § 16a beschriebenen Informations- und Bereitstellungspflichten.
+10. Mir ist bekannt, dass diese Zustimmung ausschließlich für die angegebene Betreiberorganisation erklärt wird und keine automatische Zustimmung anderer Organisationen begründet.
 
 AGPL-Rechte und zwingende gesetzliche Rechte bleiben unberührt.
 
 - Betreiberorganisation (Rechtsträger): [einzutragen]
+- Vor- und Nachname der zustimmenden Person: [einzutragen]
+- Funktion innerhalb der Organisation: [einzutragen]
 - Vereinbarungsfassung und Revision: [einzutragen]
 - Stand: [einzutragen]
 

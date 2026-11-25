@@ -22,7 +22,7 @@ The Python result types are internal interfaces: constructing one manually is
 not cryptographic verification. Production callers must obtain provenance from
 `verify_document_set()`; there is no raw-provider assembly entry point.
 
-## Approved Revision 2 comparison
+## Approved Revision 3 comparison
 
 This is an explicit maintainer operation, separate from automated tests. On a
 controlled Linux host, use a trusted FireDash release checkout with the unchanged
@@ -44,14 +44,14 @@ except EULAError as exc:
     raise SystemExit(f"Verification or assembly failed: {exc}") from None
 
 if (result.agreement_version, result.agreement_revision, result.provider_revision) != (
-    "1.0-beta", 2, 1
+    "1.0-beta", 3, 1
 ):
-    raise SystemExit("Reference comparison requires agreement 1.0-beta revision 2, provider revision 1")
+    raise SystemExit("Reference comparison requires agreement 1.0-beta revision 3, provider revision 1")
 
 expected = {
-    "de": "15188bd7ab716abccfccb5981f8066a966a7de82d4746464f5ef1274279e1aa1",
-    "en": "7de85b1cd3c45716e62e0f8108c269b95c84ed102997d5bf3a292e229116f1d9",
-    "set": "38bf58bd49fd8f70fcb64d46f7d7a77c548ef9b27853b0cbee91ee549cb61b56",
+    "de": "d2ba7f36392eccf63e7b6b27b91ff845cf654575c9d70623c40fe7ec6af6409e",
+    "en": "828153dfad9bf33618d7830bf6e27d1ddce37cd7c05c1a5fb4af74c82cdb17ef",
+    "set": "34fbea5a0b478d05fbf24b857ea8ad2c787b79621ace24c2470ef6909755528e",
 }
 actual = {
     "de": result.german.sha256,
@@ -69,6 +69,20 @@ These reference hashes are comparison data for this approved revision, not
 constants in the general assembly algorithm or additions to the manifest.
 Do not replace trusted inputs, normalize bytes, or bypass verification to resolve
 a mismatch. Investigate the trusted release and assembly rules instead.
+
+## Historical Revision 2 references
+
+These owner-verified values apply only to agreement version `1.0-beta`, agreement
+revision `2`, provider revision `1`, with the approved Revision 2 templates. They
+do not apply to the current Revision 3 inputs.
+
+| Complete agreement / identity | Historical SHA-256 |
+|---|---|
+| German | `15188bd7ab716abccfccb5981f8066a966a7de82d4746464f5ef1274279e1aa1` |
+| English | `7de85b1cd3c45716e62e0f8108c269b95c84ed102997d5bf3a292e229116f1d9` |
+| Canonical agreement set | `38bf58bd49fd8f70fcb64d46f7d7a77c548ef9b27853b0cbee91ee549cb61b56` |
+
+## Automated validation
 
 Automated assembly tests use synthetic identities, literal golden documents and
 independently calculated hashes. They do not download provider documents or add

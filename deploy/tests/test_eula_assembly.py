@@ -377,9 +377,22 @@ def test_input_must_still_match_verified_provenance(part):
 
 @pytest.mark.parametrize("language", ["de", "en"])
 def test_approved_public_template_compatible_and_annex_a_untouched(language):
-    templates = dict(TEMPLATES)
-    templates[language] = (ROOT / f"legal/EULA.public.{language}.md").read_bytes()
-    result = e.assemble_agreement_set(verified(templates))
+    manifest = e.parse_manifest((ROOT / "legal/provider-manifest.json").read_bytes())
+    templates = {
+        record.language: (ROOT / "legal" / record.template).read_bytes()
+        for record in manifest.languages
+    }
+    result = e.assemble_agreement_set(
+        verified(
+            templates,
+            agreement_version=manifest.agreement_version,
+            agreement_revision=manifest.agreement_revision,
+            provider_revision=manifest.provider_revision,
+            effective_date=manifest.effective_date,
+            authoritative_language=manifest.authoritative_language,
+        )
+    )
+    assert result.agreement_revision == 3
     agreement = result.german if language == "de" else result.english
     original = templates[language]
     notice, block = NOTICES[language].encode(), BLOCKS[language].encode()
@@ -389,7 +402,23 @@ def test_approved_public_template_compatible_and_annex_a_untouched(language):
         agreement.content == original.replace(notice, b"", 1)[: -len(block)] + PROVIDERS[language]
     )
     field = b"[einzutragen]" if language == "de" else b"[to be entered]"
-    assert agreement.content.count(field) == original.count(field) == 3
+    assert agreement.content.count(field) == original.count(field) == 5
+    annex_heading = "## Anlage A —" if language == "de" else "## Annex A —"
+    original_annex = original.split(annex_heading.encode(), 1)[1].split(block, 1)[0]
+    assembled_annex = agreement.content.split(annex_heading.encode(), 1)[1].split(
+        PROVIDERS[language], 1
+    )[0]
+    assert assembled_annex == original_annex
+    acknowledgments = [
+        line.split(b". ", 1)[0]
+        for line in original_annex.splitlines()
+        if line.split(b". ", 1)[0].isdigit()
+    ]
+    assert acknowledgments == [str(number).encode() for number in range(1, 11)]
+    section_14 = original.split("## § 14 ".encode(), 1)[1].split("## § 15 ".encode(), 1)[0]
+    for paragraph in (b"(7) ", b"(8) "):
+        assert paragraph in section_14
+    assert "## § 16a ".encode() in agreement.content
 
 
 def test_assembly_performs_no_io_or_execution(monkeypatch):

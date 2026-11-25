@@ -21,7 +21,7 @@ FireDash must not constitute an indispensable component of operational readiness
 | | |
 |---|---|
 | Agreement version | 1.0-beta |
-| Agreement revision | 2 |
+| Agreement revision | 3 |
 | Provider revision | 1 |
 | Authoritative language | German |
 
@@ -33,6 +33,8 @@ The agreement is available in the following languages:
 The German version is authoritative. The English translation is provided for convenience.
 
 The documents in this repository are public templates. The complete supplementary agreement includes the corresponding provider identification in Annex B.
+
+Revision 3 addresses third-party hosting and provision to other operating organizations. Organizations providing FireDash to others must fulfill the information and provision responsibilities in § 16a and define the parties' operational responsibilities. One organization's acceptance does not automatically bind another legally independent organization; acceptance on its behalf requires appropriate authority.
 
 ## Document authenticity
 

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "agreement_version": "1.0-beta",
-  "agreement_revision": 2,
+  "agreement_revision": 3,
   "provider_revision": 1,
   "status": "approved",
   "effective_date": "2026-11-25",
@@ -10,14 +10,14 @@
   "languages": {
     "de": {
       "template": "EULA.public.de.md",
-      "template_sha256": "3bd5878293fc0713599426ec274b40b74894f30e2dda874ace2b768ea0ce2f61",
+      "template_sha256": "f8dc87445df16481437f7c85541b527f0bf987a227d7b5b2ad01f9c66065a4e3",
       "provider_url": "https://firedash-web.mjblab.de/legal/1.0-beta/PROVIDER.de.md",
       "provider_sha256": "e0d34e9df51431a44dc718d9a8ea2806164f715289a20f6f2ff17c5287a757dd",
       "signature_url": "https://firedash-web.mjblab.de/legal/1.0-beta/PROVIDER.de.md.minisig"
     },
     "en": {
       "template": "EULA.public.en.md",
-      "template_sha256": "bec37457bb8477a758604f58769ae81c286e12589181f22a60d6de8352e753ae",
+      "template_sha256": "ec256509c211acaf6b8ff82cd30250db1e8f94eba9ef0bbafeb8b3b20242b581",
       "provider_url": "https://firedash-web.mjblab.de/legal/1.0-beta/PROVIDER.en.md",
       "provider_sha256": "e7c9f0120b6912d9efda6307d5c0cac0f9a5042a98031725972c8da17d4de4b9",
       "signature_url": "https://firedash-web.mjblab.de/legal/1.0-beta/PROVIDER.en.md.minisig"
