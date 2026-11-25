@@ -395,12 +395,47 @@ def test_mail_failure_no_retries(submitted, mail, failure, state, caplog):
     assert replacement.json()["status"] == "SENT"
 
 
-def test_rate_limit_allows_replacement_but_bounds_mail(submitted, mail):
-    for _ in range(3):
+@pytest.mark.parametrize("dimension", ["minute", "hour"])
+def test_rate_limit_allows_replacement_but_bounds_mail(
+    submitted, mail, settings, monkeypatch, dimension
+):
+    settings.REPORT_TRANSFER_MAILS_PER_MINUTE = 3 if dimension == "minute" else 100
+    settings.REPORT_TRANSFER_MAILS_PER_HOUR = 3 if dimension == "hour" else 100
+    request_id = uuid4()
+    for _ in range(2):
         assert issue(submitted, mail)[0].status_code == 201
-    assert issue(submitted, mail)[0].status_code == 429
-    assert mail.send.call_count == 3
+    accepted, _ = issue(submitted, mail, request_id=request_id)
+    assert accepted.status_code == 201
     active = ReportTransfer.objects.get(revoked_at__isnull=True)
+    assert set(active.submissions.values_list("pk", flat=True)) == {submitted[3].pk}
+    transfers_before = list(ReportTransfer.objects.order_by("pk").values())
+    events_before = list(AuditEvent.objects.order_by("pk").values())
+    memberships_before = list(ReportTransfer.submissions.through.objects.order_by("pk").values())
+    load_payload = Mock(side_effect=AssertionError("Rate-limited requests must not load payloads"))
+    check_report = Mock(
+        side_effect=AssertionError("Rate-limited requests must not validate reports")
+    )
+    monkeypatch.setattr("apps.report_transfer.exports.load_verified_payload", load_payload)
+    monkeypatch.setattr(transfers, "check_report", check_report)
+
+    rejected, _ = issue(submitted, mail)
+    assert rejected.status_code == 429
+    assert rejected.json()["code"] == "transfer_rate_limited"
+    replay, _ = issue(submitted, mail, request_id=request_id)
+    assert replay.status_code == 200 and replay.json() == accepted.json()
+    conflict, _ = issue(submitted, mail, request_id=request_id, recipient_id=uuid4())
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "idempotency_conflict"
+    load_payload.assert_not_called()
+    check_report.assert_not_called()
+    assert list(ReportTransfer.objects.order_by("pk").values()) == transfers_before
+    assert list(AuditEvent.objects.order_by("pk").values()) == events_before
+    assert (
+        list(ReportTransfer.submissions.through.objects.order_by("pk").values())
+        == memberships_before
+    )
+    assert mail.send.call_count == 3
+    assert ReportTransfer.objects.get(revoked_at__isnull=True).pk == active.pk
     assert submitted[2].post(f"{API}/{active.pk}/revoke").status_code == 200
 
 

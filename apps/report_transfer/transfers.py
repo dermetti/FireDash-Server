@@ -112,6 +112,18 @@ def request_transfer(*, installation, data):
             recipient_for(installation, person_id)
             return transfer_result(prior), False
         recipient = recipient_for(installation, person_id)
+        now = timezone.now()
+        attempts = ReportTransfer.objects.filter(installation=installation)
+        # Three immediate replacements remain possible; no cooldown on revocation.
+        if (
+            attempts.filter(issued_at__gt=now - timedelta(hours=1)).count()
+            >= settings.REPORT_TRANSFER_MAILS_PER_HOUR
+            or attempts.filter(
+                recipient_id=recipient.personnel_id, issued_at__gt=now - timedelta(minutes=1)
+            ).count()
+            >= settings.REPORT_TRANSFER_MAILS_PER_MINUTE
+        ):
+            raise TransferError("transfer_rate_limited", 429)
         rows = []
         for row in (
             ReportSubmission.objects.select_for_update()
@@ -140,17 +152,6 @@ def request_transfer(*, installation, data):
         for row in rows:
             load_verified_payload(row)
         now = timezone.now()
-        attempts = ReportTransfer.objects.filter(installation=installation)
-        # Three immediate replacements remain possible; no cooldown on revocation.
-        if (
-            attempts.filter(issued_at__gt=now - timedelta(hours=1)).count()
-            >= settings.REPORT_TRANSFER_MAILS_PER_HOUR
-            or attempts.filter(
-                recipient_id=recipient.personnel_id, issued_at__gt=now - timedelta(minutes=1)
-            ).count()
-            >= settings.REPORT_TRANSFER_MAILS_PER_MINUTE
-        ):
-            raise TransferError("transfer_rate_limited", 429)
         from config.settings.base import validate_public_origin
 
         try:
