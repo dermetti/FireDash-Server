@@ -2,7 +2,7 @@
 # Regression test: build_release must create the virtualenv at its FINAL path
 # (never under the staging directory), so console-script shebangs (e.g.
 # venv/bin/gunicorn -> venv/bin/python) resolve after construction.
-set -Euo pipefail
+set -Eeuo pipefail
 
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 LIB_DIR=$(CDPATH= cd -- "$SELF_DIR/../lib" && pwd)
@@ -16,6 +16,7 @@ export FIREDASH_CURRENT_LINK="$TMPROOT/current"
 export FIREDASH_RESOLVED_SHA="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 export FIREDASH_REPO_ROOT="$TMPROOT/repo"
 export VENV_CREATED_LOG="$TMPROOT/venv-created.log"
+export PIP_TRACE="$TMPROOT/pip.log" FAIL_PIP=""
 
 # Environment-agnostic shims (host may lack a "root" user, e.g. Git Bash).
 install() {
@@ -56,7 +57,11 @@ if [[ $# -ge 3 && $1 == -m && $2 == venv ]]; then
     target="$3"
     mkdir -p "$target/bin"
     printf '#!/bin/sh\nexit 0\n' > "$target/bin/python"
-    printf '#!/bin/sh\nexit 0\n' > "$target/bin/pip"
+    cat > "$target/bin/pip" <<'PIP'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$PIP_TRACE"
+[[ ${1:-} != "$FAIL_PIP" ]]
+PIP
     printf '#!%s/bin/python\n' "$target" > "$target/bin/gunicorn"
     chmod +x "$target/bin/python" "$target/bin/pip" "$target/bin/gunicorn"
     printf '%s\n' "$target" > "$VENV_CREATED_LOG"
@@ -93,6 +98,28 @@ if [[ $interp != "$FINAL/venv/bin/"* ]]; then
 elif [[ ! -e "$interp" ]]; then
     fail "gunicorn shebang interpreter does not exist: $interp"
 fi
+
+grep -Fq -- "install --no-cache-dir --require-hashes --only-binary=:all: -r $FINAL/requirements/production.lock" "$PIP_TRACE" \
+    || fail "release did not install the hash-verified binary production lock"
+grep -Fxq check "$PIP_TRACE" || fail "release did not check dependency consistency"
+
+# A completed release must never be silently rebuilt, including dependency upgrades.
+before=$(cat "$PIP_TRACE")
+export FAIL_PIP=install
+build_release
+[[ $(cat "$PIP_TRACE") == "$before" ]] || fail "completed release was mutated"
+
+# Real child shells preserve errexit even when the caller observes their status.
+export -f install chown
+for FAIL_PIP in install check; do
+    export FAIL_PIP FIREDASH_RESOLVED_SHA="failed-$FAIL_PIP"
+    if bash -Eeuo pipefail -c 'source "$1/release.sh"; build_release' bash "$LIB_DIR"; then
+        fail "release accepted failed pip $FAIL_PIP"
+    fi
+    failed="$FIREDASH_RELEASES_DIR/$FIREDASH_RESOLVED_SHA"
+    [[ -e "$failed/.firedash-release-building" ]] || fail "failed build lost incomplete marker"
+    [[ ! -e "$failed/.firedash-release-complete" ]] || fail "failed build was marked complete"
+done
 
 if [[ $failures -eq 0 ]]; then
     echo "ok: release venv is created at the final path and gunicorn resolves"

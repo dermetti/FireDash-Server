@@ -34,6 +34,8 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements/base.txt
+            requirements/production.lock
+            requirements/production-constraints.txt
             requirements/dev.txt
 
       - name: Install GeoDjango runtime libraries
@@ -45,7 +47,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements/dev.txt
+          python -m pip install --require-hashes --only-binary=:all: -r requirements/production.lock
+          python -m pip install -r requirements/dev.txt -c requirements/production-constraints.txt
+          python -m pip check
+          python tools/production_lock.py check
 
       - name: Check formatting
         run: ruff format --check .
@@ -113,6 +118,8 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements/base.txt
+            requirements/production.lock
+            requirements/production-constraints.txt
             requirements/dev.txt
 
       - name: Install GeoDjango system dependencies
@@ -127,7 +134,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements/dev.txt
+          python -m pip install --require-hashes --only-binary=:all: -r requirements/production.lock
+          python -m pip install -r requirements/dev.txt -c requirements/production-constraints.txt
+          python -m pip check
+          python tools/production_lock.py check
 
       - name: Supply and verify the FireDash PostgreSQL locale
         run: |
@@ -223,6 +233,8 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements/base.txt
+            requirements/production.lock
+            requirements/production-constraints.txt
             requirements/dev.txt
 
       - name: Install GeoDjango system dependencies
@@ -237,7 +249,22 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements/dev.txt
+          python -m pip install --require-hashes --only-binary=:all: -r requirements/production.lock
+          python -m pip install -r requirements/dev.txt -c requirements/production-constraints.txt
+          python -m pip check
+          python tools/production_lock.py check
+
+      - name: Verify locked production wheels on Debian 13 amd64
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD:/source:ro" debian:13-slim bash -ceu '
+            apt-get update
+            apt-get install -y python3-venv ca-certificates libmagic1
+            python3 -m venv /tmp/production
+            /tmp/production/bin/python -m pip install --require-hashes --only-binary=:all: \
+              -r /source/requirements/production.lock
+            /tmp/production/bin/python -m pip check
+            /tmp/production/bin/python -I -c "import sys; assert sys.version_info[:2] == (3, 13); import django, rest_framework, drf_spectacular, drf_spectacular_sidecar, django_otp, gunicorn, cryptography, pikepdf, pypdf, psycopg, PIL, magic, qrcode, requests, reportlab; assert magic.from_buffer(bytes([37,80,68,70,45,49,46,55]), mime=True)"
+          '
 
       - name: Supply and verify the FireDash PostgreSQL locale
         run: |

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -86,7 +88,7 @@ def test_maintenance_units_are_separated_by_service_identity_and_legacy_worker_i
     assert "fire-import-staging-maintenance.service" in installer
 
 
-def test_verifier_checks_lane_commands_socket_security_and_credential_separation():
+def test_verifier_checks_lane_commands_socket_security_and_credential_separation(monkeypatch):
     verifier = (ROOT / "deploy" / "verify-deployment.sh").read_text(encoding="utf-8")
     assert "fire-publication-delivery.service active" in verifier
     assert "--delivery --forever --poll-seconds 2" in verifier
@@ -96,7 +98,19 @@ def test_verifier_checks_lane_commands_socket_security_and_credential_separation
     assert "FileDescriptorName=publication-build-wake" in verifier
     assert "publication-signing-public-key-ring.json" in verifier
     assert "private/public pair matches the retained public-key ring" in verifier
-    assert "maintenance service does not load KEK/private signing key" in verifier
+    assert 'python3 "$SELF_DIR/lib/verify_systemd.py"' in verifier
+    from deploy.lib import verify_systemd
+
+    maintenance = (ROOT / "deploy/systemd/fire-publication-maintenance.service").read_text()
+
+    def inspect(args):
+        return "NeedDaemonReload=no" if args[1] == "show" else maintenance
+
+    monkeypatch.setattr(verify_systemd, "command", inspect)
+    verify_systemd.credentials("fire-publication-maintenance.service", [])
+    maintenance += "\n[Service]\nLoadCredential=publication-kek:/unwanted-key\n"
+    with pytest.raises(verify_systemd.VerificationError):
+        verify_systemd.credentials("fire-publication-maintenance.service", [])
     assert "import staging maintenance runs as fire_backend with narrow staging access" in verifier
     assert "publication maintenance has no import staging access" in verifier
     assert "fire_publication cannot modify import staging" in verifier

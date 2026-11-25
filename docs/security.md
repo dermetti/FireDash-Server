@@ -75,11 +75,11 @@ formal certification based on these controls.
 
 The local installed-environment `pip-audit --local` observation recorded 22
 advisory entries across five packages (105 packages scanned, no skips). These
-findings remain open pending severity, reachability and remediation review;
+findings describe that previously installed local development environment;
 unknown severity must not be treated as harmless. The observations do not
 establish the current deployed dependency state or provide release approval.
 
-| Observed package | Observed version | Unresolved advisory identifiers |
+| Observed package | Observed version | Historical advisory identifiers |
 | --- | --- | --- |
 | certifi | 2026.7.22 | PYSEC-2026-4320 |
 | filelock | 3.32.2 | GHSA-v4x8-3wr5-3wq8, GHSA-9vhv-jxww-xfm5, GHSA-567q-5qvw-pf92, GHSA-m462-7rxw-wvpg, GHSA-j8f7-rjxc-mr56, GHSA-8mx5-7m5m-r77g, GHSA-69hj-f68j-2879, GHSA-9c4x-gm8v-wgc4, GHSA-rfpc-qcw5-3pc4, GHSA-cwqr-hh33-gh44, GHSA-fq56-3cx3-fjxp, GHSA-6627-m3xw-93mp |
@@ -95,6 +95,42 @@ clears the installed-environment findings. Use the existing
 actual scan status and candidate environment; mandatory CI job success alone does
 not establish dependency security. See the
 [release advisory review policy](deployment.md#dependency-advisory-review-and-release-approval).
+
+### Resolved requirement-set reconciliation (2026-11-25, FD-SEC-004)
+
+The actual [CI run 45628537680](https://github.com/dermetti/FireDash-Server/actions/runs/45628537680)
+[artifact 15029872195](https://github.com/dermetti/FireDash-Server/actions/runs/45628537680/artifacts/15029872195)
+was downloaded and inspected. Its `pip-audit -r requirements/base.txt` and
+`pip-audit -r requirements/dev.txt` JSON reports completed with dependency
+resolution, no skipped dependencies, and zero advisory entries: respectively
+34 and 73 resolved packages. This supersedes the historical unresolved status
+**for those resolved application requirement sets**, not installed environments.
+
+| Package | Historical installed version | Resolved development version | Resolved production set |
+| --- | --- | --- | --- |
+| certifi | 2026.7.22 | 2026.11.20 | 2026.11.20 |
+| filelock | 3.32.2 | 4.3.1 | absent |
+| msgpack | 1.2.1 | 1.2.4 | absent |
+| sqlparse | 0.5.5 | 0.6.1 | 0.6.1 |
+| urllib3 | 2.7.0 | 2.8.0 | 2.8.0 |
+
+All five reported zero advisory entries in that resolved development scan.
+The historical identifiers above are retained for traceability; this is not an
+independent verification of each advisory's patched-version range. Neither
+that artifact nor a zero count demonstrates complete dependency security.
+
+The previous local installed environment has not been re-audited here. The
+existing development VM has not been inspected or modified. The isolated ACME
+lock is a separate dependency set and is now reported separately; this report
+does not clear its findings or upgrade an installed ACME environment. An adopted
+operator-managed Certbot/DNS plugin environment requires its own inventory and
+advisory review. No future beta deployment has been installed or audited.
+
+Phase H adds a production binary-wheel lock and local Swagger assets after
+this artifact; their complete advisory results require the new CI run. See the
+[Phase H report](security-phase-h-remediation.md) and
+[frontend inventory](frontend-dependencies.md), including outstanding bundled
+JavaScript advisory review. Installed environments remain separate evidence.
 
 ## Report Transfer trust boundary
 

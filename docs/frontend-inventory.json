@@ -1,0 +1,739 @@
+{
+  "review_date": "2026-11-25",
+  "swagger_ui_version": "5.33.1",
+  "sidecar_version": "2026.10.1",
+  "source": "https://github.com/swagger-api/swagger-ui/tree/v5.33.1",
+  "inventory_method": "Union of the two shipped JS source maps, matched to the versioned upstream package-lock.json; integrity is covered by aggregate bundle hashes. This is not a complete source-code security review.",
+  "swagger_assets": [
+    {
+      "path": "drf_spectacular_sidecar/swagger-ui-dist/swagger-ui-bundle.js",
+      "sha256": "050bc415ee7048dcd881682678f720264e7da5e373f7461d7c58c755305255f7"
+    },
+    {
+      "path": "drf_spectacular_sidecar/swagger-ui-dist/swagger-ui-standalone-preset.js",
+      "sha256": "5243d492e14505e0cab87ac8b0195d0e615943e651743b2b698450a46eb470be"
+    },
+    {
+      "path": "drf_spectacular_sidecar/swagger-ui-dist/swagger-ui.css",
+      "sha256": "1ac324f7dcd27e4b9386b4bd6421271ec147e922a22c05ba24b11515e9aa6321"
+    },
+    {
+      "path": "drf_spectacular_sidecar/swagger-ui-dist/favicon-32x32.png",
+      "sha256": "3ed612f41e050ca5e7000cad6f1cbe7e7da39f65fca99c02e99e6591056e5837"
+    }
+  ],
+  "swagger_bundled_packages": [
+    {
+      "name": "@babel/runtime",
+      "version": "7.27.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "@babel/runtime-corejs3",
+      "version": "7.27.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "@swagger-api/apidom-ast",
+      "version": "1.11.6",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "@swagger-api/apidom-core",
+      "version": "1.11.6",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "@swagger-api/apidom-error",
+      "version": "1.11.6",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "@swagger-api/apidom-json-pointer",
+      "version": "1.11.6",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "@swagger-api/apidom-ns-json-schema-draft-4",
+      "version": "1.11.6",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "@swagger-api/apidom-ns-openapi-3-0",
+      "version": "1.11.6",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "@swagger-api/apidom-ns-openapi-3-1",
+      "version": "1.11.6",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "@swagger-api/apidom-reference",
+      "version": "1.11.6",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "autolinker",
+      "version": "3.16.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "base64-js",
+      "version": "1.5.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "buffer",
+      "version": "6.0.3",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "call-bind",
+      "version": "1.0.8",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "classnames",
+      "version": "2.5.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "cookie",
+      "version": "0.7.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "copy-to-clipboard",
+      "version": "3.3.3",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "core-js-pure",
+      "version": "3.40.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "css.escape",
+      "version": "1.5.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "deep-extend",
+      "version": "0.6.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "deepmerge",
+      "version": "4.3.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "define-data-property",
+      "version": "1.1.4",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "dompurify",
+      "version": "3.4.13",
+      "license": "(MPL-2.0 OR Apache-2.0)",
+      "advisories": [
+        "GHSA-6688-9rhm-gjv2",
+        "GHSA-c6gr-qvv4-5v3f",
+        "GHSA-cg2g-xh64-v4q7",
+        "GHSA-mrv2-3pqr-j5jr",
+        "GHSA-p98j-92pf-mc4p"
+      ]
+    },
+    {
+      "name": "drange",
+      "version": "1.1.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "es-define-property",
+      "version": "1.0.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "es-errors",
+      "version": "1.3.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "events",
+      "version": "3.3.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "fast-json-patch",
+      "version": "3.1.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "fault",
+      "version": "1.0.4",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "format",
+      "version": "0.2.2",
+      "license": "see upstream distribution notices",
+      "advisories": []
+    },
+    {
+      "name": "function-bind",
+      "version": "1.1.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "get-intrinsic",
+      "version": "1.2.7",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "gopd",
+      "version": "1.2.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "has-property-descriptors",
+      "version": "1.0.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "has-proto",
+      "version": "1.2.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "has-symbols",
+      "version": "1.1.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "hasown",
+      "version": "2.0.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "highlight.js",
+      "version": "10.7.3",
+      "license": "BSD-3-Clause",
+      "advisories": []
+    },
+    {
+      "name": "ieee754",
+      "version": "1.2.1",
+      "license": "BSD-3-Clause",
+      "advisories": []
+    },
+    {
+      "name": "immutable",
+      "version": "5.1.9",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "inherits",
+      "version": "2.0.4",
+      "license": "ISC",
+      "advisories": []
+    },
+    {
+      "name": "js-file-download",
+      "version": "0.4.12",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "js-yaml",
+      "version": "4.3.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "lodash",
+      "version": "4.18.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "lodash.debounce",
+      "version": "4.0.8",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "lowlight",
+      "version": "1.20.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "minim",
+      "version": "0.23.8",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "object-inspect",
+      "version": "1.13.4",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "process",
+      "version": "0.11.10",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "prop-types",
+      "version": "15.8.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "qs",
+      "version": "6.15.2",
+      "license": "BSD-3-Clause",
+      "advisories": [
+        "GHSA-4mjr-xmp4-gh2g",
+        "GHSA-6pq8-jhm2-2vcw",
+        "GHSA-x5fp-wj9c-mxmx"
+      ]
+    },
+    {
+      "name": "querystringify",
+      "version": "2.2.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "ramda",
+      "version": "0.30.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "ramda-adjunct",
+      "version": "5.1.0",
+      "license": "BSD-3-Clause",
+      "advisories": []
+    },
+    {
+      "name": "randexp",
+      "version": "0.5.3",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "randombytes",
+      "version": "2.1.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "react",
+      "version": "18.3.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "react-copy-to-clipboard",
+      "version": "5.1.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "react-debounce-input",
+      "version": "3.3.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "react-dom",
+      "version": "18.3.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "react-immutable-proptypes",
+      "version": "2.2.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "react-immutable-pure-component",
+      "version": "2.2.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "react-redux",
+      "version": "9.3.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "react-syntax-highlighter",
+      "version": "16.0.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "readable-stream",
+      "version": "3.6.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "redux",
+      "version": "5.0.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "remarkable",
+      "version": "2.0.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "repeat-string",
+      "version": "1.6.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "requires-port",
+      "version": "1.0.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "reselect",
+      "version": "5.1.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "ret",
+      "version": "0.2.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "safe-buffer",
+      "version": "5.2.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "scheduler",
+      "version": "0.23.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "serialize-error",
+      "version": "8.1.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "set-function-length",
+      "version": "1.2.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "sha.js",
+      "version": "2.4.12",
+      "license": "(MIT AND BSD-3-Clause)",
+      "advisories": []
+    },
+    {
+      "name": "short-unique-id",
+      "version": "5.3.2",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "side-channel",
+      "version": "1.1.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "stream-browserify",
+      "version": "3.0.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "string_decoder",
+      "version": "1.3.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "swagger-client",
+      "version": "3.38.2",
+      "license": "Apache-2.0",
+      "advisories": []
+    },
+    {
+      "name": "toggle-selection",
+      "version": "1.0.6",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "ts-mixer",
+      "version": "6.0.4",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "tslib",
+      "version": "2.8.1",
+      "license": "0BSD",
+      "advisories": []
+    },
+    {
+      "name": "url-parse",
+      "version": "1.5.10",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "use-sync-external-store",
+      "version": "1.4.0",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "util-deprecate",
+      "version": "1.0.2",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "xml",
+      "version": "1.0.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "xml-but-prettier",
+      "version": "1.0.1",
+      "license": "MIT",
+      "advisories": []
+    },
+    {
+      "name": "zenscroll",
+      "version": "4.0.2",
+      "license": "Unlicense",
+      "advisories": []
+    }
+  ],
+  "advisory_details": {
+    "GHSA-6688-9rhm-gjv2": {
+      "summary": "DOMPurify: IN_PLACE returns a force-removed rawtext root whose text carries attacker markup \u2014 pure HTML reparse executes",
+      "severity": "LOW",
+      "ranges": [
+        [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "0"
+              },
+              {
+                "fixed": "3.4.16"
+              }
+            ]
+          }
+        ]
+      ],
+      "source": "https://osv.dev/vulnerability/GHSA-6688-9rhm-gjv2"
+    },
+    "GHSA-c6gr-qvv4-5v3f": {
+      "summary": "DOMPurify: SMIL attributeName=href guard is skipped when PARSER_MEDIA_TYPE is application/xhtml+xml",
+      "severity": "LOW",
+      "ranges": [
+        [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "0"
+              },
+              {
+                "fixed": "3.4.17"
+              }
+            ]
+          }
+        ]
+      ],
+      "source": "https://osv.dev/vulnerability/GHSA-c6gr-qvv4-5v3f"
+    },
+    "GHSA-cg2g-xh64-v4q7": {
+      "summary": "DOMPurify SAFE_FOR_TEMPLATES bypass: split template expressions survive in attached shadow root content on DOM output modes",
+      "severity": "LOW",
+      "ranges": [
+        [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "3.4.4"
+              },
+              {
+                "fixed": "3.4.17"
+              }
+            ]
+          }
+        ]
+      ],
+      "source": "https://osv.dev/vulnerability/GHSA-cg2g-xh64-v4q7"
+    },
+    "GHSA-mrv2-3pqr-j5jr": {
+      "summary": "DOMPurify IN_PLACE: hook that removes a parent or sibling leaves the detached subtree's event handlers armed (incomplete fix for GHSA-p98j-92pf-mc4p)",
+      "severity": "LOW",
+      "ranges": [
+        [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "0"
+              },
+              {
+                "fixed": "3.4.17"
+              }
+            ]
+          }
+        ]
+      ],
+      "source": "https://osv.dev/vulnerability/GHSA-mrv2-3pqr-j5jr"
+    },
+    "GHSA-p98j-92pf-mc4p": {
+      "summary": "DOMPurify: IN_PLACE: node-removing afterSanitize hook leaves detached subtree event handlers armed, causing DOM XSS",
+      "severity": "LOW",
+      "ranges": [
+        [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "3.4.13"
+              },
+              {
+                "fixed": "3.4.16"
+              }
+            ]
+          }
+        ]
+      ],
+      "source": "https://osv.dev/vulnerability/GHSA-p98j-92pf-mc4p"
+    },
+    "GHSA-4mjr-xmp4-gh2g": {
+      "summary": "qs: Denial of Service via Attacker Controlled isBuffer",
+      "severity": "MODERATE",
+      "ranges": [
+        [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "2.2.5"
+              },
+              {
+                "fixed": "6.16.0"
+              }
+            ]
+          }
+        ]
+      ],
+      "source": "https://osv.dev/vulnerability/GHSA-4mjr-xmp4-gh2g"
+    },
+    "GHSA-6pq8-jhm2-2vcw": {
+      "summary": "qs : qs.stringify with arrayFormat 'comma' throws an uncaught TypeError on array elements carrying a non-callable own toString (DoS)",
+      "severity": "MODERATE",
+      "ranges": [
+        [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "6.7.0"
+              },
+              {
+                "fixed": "6.16.1"
+              }
+            ]
+          }
+        ]
+      ],
+      "source": "https://osv.dev/vulnerability/GHSA-6pq8-jhm2-2vcw"
+    },
+    "GHSA-x5fp-wj9c-mxmx": {
+      "summary": "qs array-limit bypass via bracket-key comma parsing",
+      "severity": "MODERATE",
+      "ranges": [
+        [
+          {
+            "type": "SEMVER",
+            "events": [
+              {
+                "introduced": "6.14.2"
+              },
+              {
+                "fixed": "6.16.0"
+              }
+            ]
+          }
+        ]
+      ],
+      "source": "https://osv.dev/vulnerability/GHSA-x5fp-wj9c-mxmx"
+    }
+  }
+}

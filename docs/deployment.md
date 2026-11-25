@@ -363,9 +363,9 @@ migration because the legacy data is not copied to SYSTEM.
 ## Automatic Report Transfer infrastructure (Phase 3.6)
 
 The standard `deploy/install.sh` command now provisions Report Transfer without
-an enablement flag or a separate installer. The previous failure scenario—a
+an enablement flag or a separate installer. The previous failure scenarioâ€”a
 generally healthy installation advertising `report_transfer.enabled=false`
-because its dedicated infrastructure was absent—is now a deployment failure.
+because its dedicated infrastructure was absentâ€”is now a deployment failure.
 
 - `/etc/fire-backend/credentials/report-transfer-keyring.json` is a durable,
   root-owned `0600` JSON credential. Its `keys` map contains immutable version
@@ -515,7 +515,8 @@ before operational approval; Windows/Git Bash cannot establish those guarantees.
 
 Dependency advisories are tracked maintenance findings, not automatic CI failures.
 Every standard CI run has an independent, non-blocking `dependency-audit` job.
-It scans both pinned requirements files with dependency resolution, publishes
+It audits the complete production and ACME locks without re-resolution and the
+development requirements with dependency resolution, publishes
 `dependency-advisories` JSON/Markdown artifacts and a job summary, and reports
 advisory-entry and affected-package counts separately for each scan. Counts can
 overlap between scans and advisory aliases. Each scan has a four-minute limit.
@@ -538,14 +539,18 @@ block production release approval through an explicit release decision. Require
 green quality checks independently of this review. This policy triggers no
 automatic deployment or credential operation.
 
-For local reproduction, run `python tools/dependency_audit.py`. This executes
-`pip-audit -r requirements/base.txt` and `pip-audit -r requirements/dev.txt` with
-JSON output and the same timeout/reporting rules. If resolution cannot complete,
-`pip-audit --local` audits the actual installed environment, including transitives,
-but is not proof of a fresh requirements resolution. A supplementary
-`pip-audit -r requirements/base.txt --no-deps --disable-pip` checks direct pins
-only; scan dev separately, since this mode does not include its nested base file.
-Always record the scan mode and incomplete results.
+For local reproduction, run `python tools/dependency_audit.py`. It audits
+`requirements/production.lock` and `deploy/acme/requirements.lock` with
+`--no-deps --disable-pip` (every dependency is enumerated in these complete
+locks), and `requirements/dev.txt` with resolution. Separate JSON and summary
+sections retain each result. `pip-audit --local` separately audits an actual
+installed environment; it does not establish a fresh resolution or clear a
+host that was not inspected. Always record the scan mode and incomplete results.
+
+Production release construction uses the binary-only, hash-verified
+[production lock](../requirements/production.lock), followed by `pip check`
+before its completion marker. Completed SHA-addressed releases are reused
+without modifying their environments. See the [lock update procedure](production-dependencies.md).
 
 See [historical unresolved dependency findings](security.md#historical-unresolved-dependency-findings-2026-11-02)
 for the dated local-environment observations and outstanding advisory review.

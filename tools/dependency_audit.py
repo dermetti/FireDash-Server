@@ -57,7 +57,11 @@ def main() -> None:
         "Advisory entries can include aliases and overlap between scans. "
         "A completed scan is not proof of dependency security.",
     ]
-    for name in ("base", "dev"):
+    for name, requirements, locked in (
+        ("production", "requirements/production.lock", True),
+        ("dev", "requirements/dev.txt", False),
+        ("acme", "deploy/acme/requirements.lock", True),
+    ):
         report = destination / f"{name}.json"
         report.unlink(missing_ok=True)
         try:
@@ -67,7 +71,10 @@ def main() -> None:
                     "-m",
                     "pip_audit",
                     "-r",
-                    f"requirements/{name}.txt",
+                    requirements,
+                    # Complete locks enumerate the entire reviewed set. Do not
+                    # re-resolve it or add host-specific dependencies during audit.
+                    *(["--no-deps", "--disable-pip"] if locked else []),
                     "--format",
                     "json",
                     "--output",
@@ -82,7 +89,12 @@ def main() -> None:
             returncode = result.returncode
         except (OSError, subprocess.TimeoutExpired):
             returncode = None
-        sections.extend([f"## requirements/{name}.txt", summarize(report, returncode)])
+        mode = (
+            "Exact enumerated lock (--no-deps --disable-pip)"
+            if locked
+            else "Requirements resolution"
+        )
+        sections.extend([f"## {requirements}\n\nMode: {mode}.", summarize(report, returncode)])
         # Publish only structured audit data, never raw resolver/environment logs.
         # Incomplete JSON may contain diagnostic strings: retain the summary only.
         if "INCOMPLETE" in sections[-1]:

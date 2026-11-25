@@ -68,7 +68,9 @@ build_release() {
 
     # 6. Install requirements into the final-path venv.
     log "installing Python requirements"
-    "$final/venv/bin/pip" install --no-cache-dir -r "$final/requirements/base.txt"
+    "$final/venv/bin/pip" install --no-cache-dir --require-hashes --only-binary=:all: \
+        -r "$final/requirements/production.lock"
+    "$final/venv/bin/pip" check
 
     # 7. Compile and import checks.
     log "compile and import checks"
