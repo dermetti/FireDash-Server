@@ -284,22 +284,13 @@ jobs:
         env:
           PGPASSWORD: database_owner_ci
         run: |
-          runtime_role_is_unprivileged=$(psql -v ON_ERROR_STOP=1 -At \
-            -h 127.0.0.1 -U database_owner -d fire_backend \
-            -c "SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname = 'application_runtime';")
-          test "$runtime_role_is_unprivileged" = "t"
+          FIREDASH_DISPOSABLE_DATABASE_TEST=1 \
+            OWNER_PW=database_owner_ci RUNTIME_PW=application_runtime_ci \
+            BACKUP_PW=backup_role_ci ADMIN_PW=postgres_ci \
+            bash deploy/tests/test_database_privileges.sh
 
-          for statement in \
-            "UPDATE audit_event SET id = id" \
-            "DELETE FROM audit_event" \
-            "TRUNCATE audit_event" \
-            "UPDATE publications_datasettyperegistry SET code = code"; do
-            if PGPASSWORD=application_runtime_ci psql -v ON_ERROR_STOP=1 \
-              -h 127.0.0.1 -U application_runtime -d fire_backend -c "$statement"; then
-              echo "Runtime role unexpectedly executed: $statement" >&2
-              exit 1
-            fi
-          done
+          POSTGRES_USER=application_runtime POSTGRES_PASSWORD=application_runtime_ci \
+            python manage.py migrate --check
 
           postgres_container="${{ job.services.postgres.id }}"
 
@@ -318,13 +309,6 @@ jobs:
             pg_restore \
               --list /tmp/fire-backend-ci.dump \
               >/dev/null
-
-          if PGPASSWORD=backup_role_ci psql -v ON_ERROR_STOP=1 \
-            -h 127.0.0.1 -U backup_role -d fire_backend \
-            -c "UPDATE audit_event SET id = id"; then
-            echo "backup_role unexpectedly has write access" >&2
-            exit 1
-          fi
 
       - name: Check deployment shell syntax
         run: |
@@ -354,6 +338,7 @@ jobs:
           bash deploy/tests/test_postgres_utf8.sh
           bash deploy/tests/test_state.sh
           bash deploy/tests/test_postgres_bootstrap.sh
+          bash deploy/tests/test_verify_postgresql.sh
           bash deploy/tests/test_converge.sh
           bash deploy/tests/test_release_venv.sh
           bash deploy/tests/test_release_activation.sh

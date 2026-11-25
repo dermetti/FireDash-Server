@@ -46,7 +46,12 @@ BEGIN
             object_record.relname
         );
         EXECUTE format(
-            'GRANT USAGE, SELECT ON SEQUENCE %I.%I TO backup_role',
+            'REVOKE USAGE, UPDATE ON SEQUENCE %I.%I FROM backup_role',
+            object_record.nspname,
+            object_record.relname
+        );
+        EXECUTE format(
+            'GRANT SELECT ON SEQUENCE %I.%I TO backup_role',
             object_record.nspname,
             object_record.relname
         );
@@ -61,7 +66,9 @@ ALTER DEFAULT PRIVILEGES FOR ROLE database_owner IN SCHEMA public
 ALTER DEFAULT PRIVILEGES FOR ROLE database_owner IN SCHEMA public
     GRANT SELECT ON TABLES TO backup_role;
 ALTER DEFAULT PRIVILEGES FOR ROLE database_owner IN SCHEMA public
-    GRANT USAGE, SELECT ON SEQUENCES TO backup_role;
+    REVOKE USAGE, UPDATE ON SEQUENCES FROM backup_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE database_owner IN SCHEMA public
+    GRANT SELECT ON SEQUENCES TO backup_role;
 
 REVOKE ALL ON TABLE audit_event FROM PUBLIC;
 REVOKE UPDATE, DELETE, TRUNCATE ON TABLE audit_event FROM application_runtime;
@@ -71,3 +78,8 @@ GRANT SELECT, INSERT ON TABLE audit_event TO application_runtime;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE publications_datasettyperegistry
     FROM application_runtime;
 GRANT SELECT ON TABLE publications_datasettyperegistry TO application_runtime;
+
+-- Migration history belongs to the migration identity, never the web runtime.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE django_migrations
+    FROM application_runtime;
+GRANT SELECT ON TABLE django_migrations TO application_runtime;

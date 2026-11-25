@@ -47,21 +47,8 @@ pg_as_postgres() { # statement...
     runuser -u postgres -- psql -v ON_ERROR_STOP=1 -d postgres -tAc "$1"
 }
 
-expect_sqlstate() { # role pw sqlstate stmt
-    local role=$1 pw=$2 sqlstate=$3 stmt=$4 out rc
-    out=$(PGPASSWORD="$pw" psql -v ON_ERROR_STOP=1 -v VERBOSITY=verbose -h 127.0.0.1 -U "$role" -d fire_backend -c "$stmt" 2>&1)
-    rc=$?
-    if [[ $rc -eq 0 ]]; then
-        fail "$role unexpectedly executed: $stmt"
-        return 1
-    fi
-    if ! grep -q "$sqlstate" <<<"$out"; then
-        fail "$role denial did not yield SQLSTATE $sqlstate (got: $out)"
-        return 1
-    fi
-    ok "$role denied ($sqlstate): $stmt"
-    return 0
-}
+# shellcheck source=lib/verify-postgresql.sh
+source "$SELF_DIR/lib/verify-postgresql.sh"
 
 # -------- host --------
 log "=== host ==="
@@ -151,24 +138,16 @@ trigger_enabled=$(pg_as database_owner "$OWNER_PW" "SELECT tgenabled FROM pg_tri
 [[ $trigger_func == reject_audit_event_mutation ]] && ok "audit_event_immutable trigger attached to reject_audit_event_mutation" || fail "audit trigger function mismatch (got: $trigger_func)"
 [[ $trigger_enabled == O || $trigger_enabled == A ]] && ok "audit_event_immutable trigger enabled" || fail "audit trigger missing/disabled (got: $trigger_enabled)"
 
-expect_sqlstate application_runtime "$RUNTIME_PW" 42501 "UPDATE audit_event SET id = id"
-expect_sqlstate application_runtime "$RUNTIME_PW" 42501 "DELETE FROM audit_event"
-expect_sqlstate application_runtime "$RUNTIME_PW" 42501 "TRUNCATE audit_event"
-
-# The immutable trigger is statement-level, but only force a database_owner
-# mutation probe when a valid audit row exists so the check is deterministic.
-if pg_as database_owner "$OWNER_PW" "SELECT 1 FROM audit_event LIMIT 1" | grep -q 1; then
-    expect_sqlstate database_owner "$OWNER_PW" P0001 "DELETE FROM audit_event"
+# Check effective grants without attempting operational table mutations.
+if PGPASSWORD="$OWNER_PW" psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 \
+    -U database_owner -d fire_backend -f "$SELF_DIR/postgresql/verify-privileges.sql"; then
+    ok "effective runtime and backup privilege boundaries"
 else
-    log_warn "audit_event has no rows; skipping database_owner trigger-fire probe"
+    fail "effective database privileges unsafe or could not be inspected"
 fi
 
-# -------- protected registry --------
-log "=== protected registry ==="
-expect_sqlstate application_runtime "$RUNTIME_PW" 42501 "UPDATE publications_datasettyperegistry SET code = code"
-expect_sqlstate application_runtime "$RUNTIME_PW" 42501 "INSERT INTO publications_datasettyperegistry (code) VALUES ('__probe__')"
-expect_sqlstate application_runtime "$RUNTIME_PW" 42501 "DELETE FROM publications_datasettyperegistry"
-pg_as application_runtime "$RUNTIME_PW" "SELECT 1 FROM publications_datasettyperegistry LIMIT 1" >/dev/null && ok "runtime can read registry" || fail "runtime cannot read registry"
+# The audit trigger is statement-level: no row scan or row mutation is needed.
+expect_sqlstate database_owner "$OWNER_PW" P0001 "DELETE FROM public.audit_event WHERE false"
 
 # -------- backup --------
 log "=== backup ==="
@@ -185,7 +164,6 @@ else
     fail "pg_restore --list failed"
 fi
 rm -f "$dump"
-expect_sqlstate backup_role "$BACKUP_PW" 42501 "UPDATE audit_event SET id = id"
 
 # -------- application --------
 log "=== application ==="
