@@ -119,6 +119,26 @@ def verify(case):
     return e.verify_document_set(case.legal, transport=case.transport, minisign=Path("synthetic"))
 
 
+@pytest.mark.parametrize("representation", ["document", "document_set"])
+def test_verified_representations_hide_document_bytes(representation):
+    contents = (b"CONFIDENTIAL_TEMPLATE", b"CONFIDENTIAL_PROVIDER", b"CONFIDENTIAL_SIGNATURE")
+    document = e.VerifiedDocument("de", *contents)
+    manifest = e.parse_manifest((ROOT / "legal/provider-manifest.json").read_bytes())
+    document_set = e.VerifiedDocumentSet(manifest, "manifest-hash", "key-hash", (document,))
+    result = repr(document if representation == "document" else document_set)
+    for content in contents:
+        assert content.decode() not in result
+        assert repr(content) not in result
+    assert document.template == contents[0]
+    assert document.provider == contents[1]
+    assert document.signature == contents[2]
+    assert document_set.documents == (document,)
+    with pytest.raises(FrozenInstanceError):
+        document.provider = b"changed"
+    with pytest.raises(FrozenInstanceError):
+        document_set.documents = ()
+
+
 def test_verified_result_flows_into_bilingual_assembly(release):
     # Real public templates, synthetic providers and mocked signature verification.
     # No production provider access and no complete real agreement is constructed.

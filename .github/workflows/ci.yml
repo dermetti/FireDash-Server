@@ -259,6 +259,8 @@ jobs:
           source_snapshot=$(mktemp -d)
           trap 'rm -rf -- "$source_snapshot"' EXIT
           git archive HEAD | tar --exclude='.secrets' --exclude='provider-signing.key' -x -C "$source_snapshot"
+          # Only filtered public source: allow unprivileged container users to read it.
+          chmod -R a+rX "$source_snapshot"
           docker run --rm --platform linux/amd64 -v "$source_snapshot:/source:ro" debian:13-slim bash -ceu '
             apt-get update
             apt-get install -y python3-venv ca-certificates libmagic1 python3-pikepdf python3-magic qpdf util-linux
@@ -446,6 +448,8 @@ jobs:
           source_snapshot=$(mktemp -d)
           trap 'rm -rf -- "$source_snapshot"' EXIT
           git archive HEAD | tar --exclude='.secrets' --exclude='provider-signing.key' -x -C "$source_snapshot"
+          # Only filtered public source: allow unprivileged container users to read it.
+          chmod -R a+rX "$source_snapshot"
           docker run --rm -v "$source_snapshot:/source:ro" debian:13-slim bash -ceu '
             apt-get update
             apt-get install -y python3-venv ca-certificates util-linux

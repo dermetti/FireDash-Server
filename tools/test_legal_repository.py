@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import os
 import re
 import shlex
 import shutil
@@ -137,3 +138,51 @@ def test_artifact_exclusions_are_explicit():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "!dependency-audit/**/.secrets/**" in workflow
     assert "!dependency-audit/**/provider-signing.key" in workflow
+
+
+def test_ci_snapshot_permissions_preserve_filtering_and_isolation():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    snapshots = re.findall(
+        r"source_snapshot=\$\(mktemp -d\)(.*?)docker run ([^\n]+)", workflow, re.DOTALL
+    )
+    assert len(snapshots) == 2
+    for preparation, container in snapshots:
+        assert "trap 'rm -rf -- \"$source_snapshot\"' EXIT" in preparation
+        extraction = (
+            "git archive HEAD | tar --exclude='.secrets' --exclude='provider-signing.key' "
+            '-x -C "$source_snapshot"'
+        )
+        permissions = 'chmod -R a+rX "$source_snapshot"'
+        assert preparation.count(extraction) == 1
+        assert preparation.count(permissions) == 1
+        assert preparation.index(extraction) < preparation.index(permissions)
+        assert '-v "$source_snapshot:/source:ro"' in container
+        assert "$PWD" not in container
+    assert "runuser -u pdf_worker_test -- /usr/bin/python3 -I " in workflow
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires native Unix permission semantics")
+def test_ci_snapshot_permissions_with_restrictive_synthetic_fixture(tmp_path):
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    permissions = re.findall(r'^\s*(chmod -R a\+rX "\$source_snapshot")$', workflow, re.MULTILINE)
+    assert len(permissions) == 2 and permissions[0] == permissions[1]
+    snapshot = tmp_path / "synthetic-snapshot"
+    snapshot.mkdir(mode=0o700)
+    nested = snapshot / "deploy/tests"
+    nested.mkdir(parents=True)
+    nested.parent.chmod(0o700)
+    nested.chmod(0o700)
+    worker = nested / "native_pdf_worker.py"
+    worker.write_bytes(b"# Synthetic public worker fixture\n")
+    worker.chmod(0o600)
+    result = subprocess.run(
+        ["sh", "-eu", "-c", "source_snapshot=$1\n" + permissions[0], "fixture", str(snapshot)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    for directory in (snapshot, nested.parent, nested):
+        assert directory.stat().st_mode & 0o777 == 0o755
+    assert worker.stat().st_mode & 0o777 == 0o644
+    assert worker.read_bytes() == b"# Synthetic public worker fixture\n"

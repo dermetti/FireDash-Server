@@ -72,9 +72,9 @@ class Manifest:
 @dataclass(frozen=True)
 class VerifiedDocument:
     language: str
-    template: bytes
-    provider: bytes
-    signature: bytes
+    template: bytes = field(repr=False)
+    provider: bytes = field(repr=False)
+    signature: bytes = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ class VerifiedDocumentSet:
     manifest: Manifest
     manifest_sha256: str
     public_key_sha256: str
-    documents: tuple[VerifiedDocument, ...]
+    documents: tuple[VerifiedDocument, ...] = field(repr=False)
 
 
 @dataclass(frozen=True)
