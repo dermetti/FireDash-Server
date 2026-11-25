@@ -64,6 +64,7 @@ def test_sanitizer_sends_only_job_uuid_over_broker_socket(tmp_path: Path) -> Non
         patch("apps.reference_data.pdf_sandbox.sys.platform", "linux"),
         patch("apps.reference_data.pdf_sandbox.Path.exists", return_value=True),
         patch("apps.reference_data.pdf_sandbox.Path.is_file", return_value=True),
+        patch("apps.reference_data.pdf_sandbox.Path.chmod") as chmod,
         patch("apps.reference_data.pdf_sandbox.socket.socket", return_value=client) as socket_cls,
     ):
         sanitize(
@@ -72,6 +73,7 @@ def test_sanitizer_sends_only_job_uuid_over_broker_socket(tmp_path: Path) -> Non
         )
 
     assert sent == [job.encode("ascii") + b"\n"]
+    chmod.assert_called_once_with(0o644)
     socket_cls.assert_called_once_with(getattr(socket, "AF_UNIX", 1), socket.SOCK_STREAM)
     client.connect.assert_called_once_with("/run/fire-pdf-sanitizer-broker/broker.sock")
     client.shutdown.assert_called_once_with(socket.SHUT_WR)

@@ -95,8 +95,9 @@ def sanitize(
     }
     with (sanitized_output.parent / "request.json").open("x", encoding="ascii") as stream:
         json.dump(policy, stream)
-    # The setgid output directory supplies the narrow sanitizer group.
-    (sanitized_output.parent / "request.json").chmod(0o640)
+    # The job directory is not setgid, so this file keeps the backend primary group.
+    # Its non-secret policy is readable by the sanitizer through restricted directories.
+    (sanitized_output.parent / "request.json").chmod(0o644)
     try:
         status = _request_sanitization(
             socket_path, job_id, settings.PDF_SANITIZER_TIMEOUT_SECONDS + 10
