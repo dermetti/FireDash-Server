@@ -34,8 +34,7 @@ if validate_outbound_mail_https_proxy "$TMPROOT/release" 'http:///missing-host';
     fail "hostless proxy was accepted"
 fi
 
-if grep -Eri '100\.64\.0\.8|mjblab|squid|tailscale|headscale' \
-    "$ROOT/deploy/lib" "$ROOT/deploy/install-local.sh" "$ROOT/docs/configuration.md" "$ROOT/docs/deployment.md" >/dev/null; then
+if "${FIREDASH_TEST_PYTHON:-python3}" "$ROOT/deploy/tests/proxy_infrastructure_check.py" "$ROOT"; then
     fail "deployment contains environment-specific proxy infrastructure"
 else
     search_status=$?
