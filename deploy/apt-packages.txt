@@ -2,3 +2,5 @@
 # qpdf is required by the independent reference-data PDF sanitizer.
 # testing. Do not pin a Debian 12 version here.
 qpdf
+python3-pikepdf
+python3-magic

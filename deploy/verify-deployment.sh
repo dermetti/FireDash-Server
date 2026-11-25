@@ -237,6 +237,11 @@ fi
     else
         fail "migrate --check failed"
     fi
+    if runuser -u fire_backend -- "$RELEASE/venv/bin/python" "$RELEASE/manage.py" verify_library_pdf_sanitizer; then
+        ok "native PDF pipeline smoke check"
+    else
+        fail "native PDF pipeline smoke check failed"
+    fi
     # fail() updates a subshell-local counter; propagate it to the parent.
     [[ $FAIL -eq 0 ]]
 ) || fail "Django deployment checks failed"
@@ -394,6 +399,27 @@ if [[ -S /run/fire-pdf-sanitizer-broker/broker.sock ]]; then
     [[ $(stat -c '%U:%G:%a' /run/fire-pdf-sanitizer-broker/broker.sock) == "root:fire_backend:660" ]] && ok "sanitizer broker socket root:fire_backend 0660" || fail "sanitizer broker socket ownership/mode unexpected"
 else
     fail "sanitizer broker socket not present"
+fi
+
+# The worker receives no application environment, configuration or virtualenv.
+for helper in pdf_worker.py pdf_validation.py; do
+    [[ $(stat -c '%U:%G:%a' "/usr/local/lib/fire-backend/pdf/$helper") == "root:root:644" ]] \
+        && ok "PDF helper $helper root:root 0644" || fail "PDF helper $helper ownership/mode unexpected"
+done
+[[ $(stat -c '%U:%G:%a' /usr/local/lib/fire-backend/pdf) == "root:root:755" ]] \
+    && ok "PDF helper directory root:root 0755" || fail "PDF helper directory ownership/mode unexpected"
+if /usr/bin/python3 -I -c 'import pikepdf, magic; assert callable(magic.from_file)'; then
+    ok "system Python PDF dependencies available"
+else
+    fail "system Python PDF dependencies unavailable"
+fi
+if systemctl cat fire-pdf-sanitizer@.service | grep -q '^ExecStart=/usr/bin/python3 -I /usr/local/lib/fire-backend/pdf/pdf_worker.py$'; then
+    ok "isolated PDF worker configured"
+else
+    fail "isolated PDF worker missing"
+fi
+if systemctl cat fire-pdf-sanitizer@.service | grep -Eq 'LoadCredential|EnvironmentFile'; then
+    fail "PDF worker must not load application credentials/environment"
 fi
 
 # -------- filesystem / credentials --------

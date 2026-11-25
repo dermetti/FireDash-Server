@@ -100,3 +100,56 @@ def test_invalid_signature_code(_validate_mime, tmp_path: Path) -> None:
     with pytest.raises(PdfValidationError) as exc:
         validate_pdf(path, original_filename="broken.pdf")
     assert exc.value.code == "invalid_pdf_signature"
+
+
+@pytest.mark.parametrize(
+    "name", ["/JavaScript", "/Launch", "/GoToR", "/URI", "/SubmitForm", "/ImportData"]
+)
+@pytest.mark.parametrize("container", ["dictionary", "array", "stream"])
+@pytest.mark.parametrize("strict", [False, True])
+def test_prohibited_name_values_in_nested_objects(tmp_path, monkeypatch, name, container, strict):
+    monkeypatch.setattr("apps.reference_data.pdf_validation._validate_mime", lambda path: None)
+    path = tmp_path / "action.pdf"
+    with pikepdf.new() as document:
+        document.add_blank_page()
+        action = pikepdf.Dictionary(S=pikepdf.Name(name))
+        nested: pikepdf.Object
+        if container == "array":
+            nested = pikepdf.Array([pikepdf.Dictionary(Next=action)])
+        elif container == "stream":
+            nested = document.make_stream(b"harmless")
+            nested["/Next"] = action
+        else:
+            nested = pikepdf.Dictionary(Next=action)
+        document.Root["/OpenAction"] = document.make_indirect(nested)
+        document.save(path)
+    # No prohibited dictionary key is present: the /S name value must suffice.
+    with pytest.raises(PdfValidationError) as rejected:
+        validate_pdf(path, strict=strict)
+    assert rejected.value.code == "prohibited_pdf_content"
+
+
+def test_internal_navigation_text_and_indirect_cycles_remain_valid(tmp_path, monkeypatch):
+    monkeypatch.setattr("apps.reference_data.pdf_validation._validate_mime", lambda path: None)
+    path = tmp_path / "navigation.pdf"
+    with pikepdf.new() as document:
+        page = document.add_blank_page()
+        action = document.make_indirect(
+            pikepdf.Dictionary(
+                S=pikepdf.Name("/GoTo"), D=pikepdf.Array([page.obj, pikepdf.Name("/Fit")])
+            )
+        )
+        action["/Next"] = action
+        document.Root["/OpenAction"] = action
+        document.Root["/Description"] = pikepdf.String("/JavaScript /Launch /URI ordinary text")
+        page.obj["/Annots"] = pikepdf.Array(
+            [
+                pikepdf.Dictionary(
+                    Type=pikepdf.Name("/Annot"),
+                    Subtype=pikepdf.Name("/Link"),
+                    Dest=pikepdf.Array([page.obj, pikepdf.Name("/Fit")]),
+                )
+            ]
+        )
+        document.save(path)
+    assert validate_pdf(path, strict=True)[1] == 1

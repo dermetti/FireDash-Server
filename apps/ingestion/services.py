@@ -44,8 +44,8 @@ from apps.personnel.services import create_person, set_commander_eligibility, up
 from apps.publications.models import DatasetScopeState, DatasetSourceRevision
 from apps.publications.services import mark_dirty
 from apps.reference_data.models import FirePlan, Hydrant, KlgvPlan, PhonebookEntry
-from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitizerError, sanitize
-from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
+from apps.reference_data.pdf_sandbox import PdfSanitizerContentError, PdfSanitizerError
+from apps.reference_data.pdf_validation import PdfValidationError
 from apps.reference_data.phonebook import (
     entry_fingerprint,
     find_entry_duplicate_candidates,
@@ -58,7 +58,10 @@ from apps.reference_data.storage import (
 from apps.reference_data.storage import (
     cleanup,
     output_path,
-    promote_to_accepted,
+    process_pdf,
+    promote_preview,
+    promotion_batch,
+    retire_plan_content,
     write_quarantine,
 )
 
@@ -1189,6 +1192,7 @@ def _preview_personnel(*, intent, department):
     return (add, update, 0, unchanged), details, update > len(details)
 
 
+@promotion_batch()
 @transaction.atomic
 def apply_preview(*, actor, batch_id) -> ImportBatch:
     """Apply exactly the staged, still-current preview once."""
@@ -2388,12 +2392,11 @@ def _sanitize_pdf_preview(
                 )
                 quarantine = write_quarantine(uploaded)
                 stage = "input_validation"
-                validate_pdf(quarantine, original_filename=entry.filename)
-                stage = "sanitize"
                 sanitized = output_path(job_id=quarantine.parent.name)
-                sanitize(quarantined_input=quarantine, sanitized_output=sanitized)
-                stage = "output_validation"
-                file_size, page_count, sanitized_sha256 = validate_pdf(sanitized)
+                stage = "sandbox_validation"
+                file_size, page_count, sanitized_sha256 = process_pdf(
+                    quarantine, sanitized, original_filename=entry.filename
+                )
                 stage = "staging_copy"
                 output_key = f"{batch.id}.{uuid.uuid4()}.sanitized.pdf"
                 target = settings.INGESTION_STAGING_ROOT / output_key
@@ -2567,7 +2570,7 @@ def _create_document(*, batch, row, model, sanitized_path):
         (settings.REFERENCE_DATA_ACCEPTED_ROOT / "plans").mkdir(
             mode=0o750, parents=True, exist_ok=True
         )
-    promote_to_accepted(sanitized_path, key)
+    promote_preview(sanitized_path, key, sha256=row["sanitized_pdf_sha256"])
     common = {
         "id": document_id,
         "department": batch.department,
@@ -2608,11 +2611,10 @@ def _create_document(*, batch, row, model, sanitized_path):
 
 
 def _replace_document_content(*, current, row, model, sanitized_path):
-    key = f"plans/{current.id}.pdf" if model is KlgvPlan else f"{uuid.uuid4()}.pdf"
-    if model is KlgvPlan:
-        promote_to_accepted(sanitized_path, key, replace=True)
-    else:
-        promote_to_accepted(sanitized_path, key)
+    previous_key = current.path if model is KlgvPlan else current.document_key
+    previous_digest = current.sha256
+    key = f"plans/{uuid.uuid4()}.pdf" if model is KlgvPlan else f"{uuid.uuid4()}.pdf"
+    promote_preview(sanitized_path, key, sha256=row["sanitized_pdf_sha256"])
     if model is FirePlan:
         current.document_key = key
     current.original_filename = row["original_filename"]
@@ -2644,6 +2646,7 @@ def _replace_document_content(*, current, row, model, sanitized_path):
         current.city = row["city"]
         current.location = _location(row)
     current.save()
+    retire_plan_content(key=previous_key, document_id=current.id, sha256=previous_digest)
 
 
 def _merge_document_metadata(*, current, row, model) -> bool:

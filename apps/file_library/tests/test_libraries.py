@@ -1,10 +1,13 @@
+import hashlib
 import io
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import patch
 
 import pikepdf
 import pytest
@@ -20,7 +23,8 @@ from apps.file_library import services
 from apps.file_library.models import Content, Entry, Library
 from apps.organizations.models import Department, Station
 from apps.reference_data.pdf_sandbox import PdfSanitizerError
-from apps.reference_data.pdf_validation import PdfValidationError
+from apps.reference_data.pdf_sandbox import sanitize as broker_sanitize
+from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
 
 pytestmark = pytest.mark.django_db
 
@@ -51,13 +55,13 @@ def pdf_pipeline(settings, tmp_path, monkeypatch):
     monkeypatch.setitem(
         sys.modules, "magic", SimpleNamespace(from_file=lambda *a, **kw: "application/pdf")
     )
-    monkeypatch.setattr(
-        services.pdf_sandbox,
-        "sanitize",
-        lambda quarantined_input, sanitized_output: shutil.copyfile(
-            quarantined_input, sanitized_output
-        ),
-    )
+
+    def worker(*, quarantined_input, sanitized_output, strict=False):
+        validate_pdf(quarantined_input, original_filename="input.pdf", strict=strict)
+        shutil.copyfile(quarantined_input, sanitized_output)
+        return validate_pdf(sanitized_output, strict=strict)
+
+    monkeypatch.setattr(services.storage.pdf_sandbox, "sanitize", worker)
     return tmp_path
 
 
@@ -175,13 +179,24 @@ def test_rejected_uploads_leave_no_canonical_state(
         def fail(**kwargs):
             raise PdfSanitizerError("Unavailable")
 
-        monkeypatch.setattr(services.pdf_sandbox, "sanitize", fail)
+        monkeypatch.setattr(services.storage.pdf_sandbox, "sanitize", fail)
     elif failure == "output":
-        monkeypatch.setattr(
-            services.pdf_sandbox,
-            "sanitize",
-            lambda **kwargs: kwargs["sanitized_output"].write_bytes(b"bad"),
-        )
+
+        def corrupt_output(**kwargs):
+            kwargs["sanitized_output"].write_bytes(b"bad")
+            status = f"OK 3 1 {hashlib.sha256(b'bad').hexdigest()}"
+            with (
+                patch.object(
+                    services.storage.pdf_sandbox, "sys", SimpleNamespace(platform="linux")
+                ),
+                patch.object(Path, "exists", return_value=True),
+                patch.object(
+                    services.storage.pdf_sandbox, "_request_sanitization", return_value=status
+                ),
+            ):
+                return broker_sanitize(**kwargs)
+
+        monkeypatch.setattr(services.storage.pdf_sandbox, "sanitize", corrupt_output)
     elif failure == "quota":
         services.set_library_quota(actor=scope[0], library_id=library.id, quota_bytes=1)
     elif failure == "size":
@@ -304,13 +319,14 @@ def test_concurrent_uploads_enforce_capacity(scope, pdf_pipeline, monkeypatch):
     library = library_for(scope)
     services.set_library_quota(actor=scope[0], library_id=library.id, quota_bytes=pdf().size)
     barrier = Barrier(2)
-    original = services.pdf_sandbox.sanitize
+    original = services.storage.pdf_sandbox.sanitize
 
     def sanitize(**kwargs):
-        original(**kwargs)
+        result = original(**kwargs)
         barrier.wait(timeout=10)
+        return result
 
-    monkeypatch.setattr(services.pdf_sandbox, "sanitize", sanitize)
+    monkeypatch.setattr(services.storage.pdf_sandbox, "sanitize", sanitize)
 
     def upload(index):
         close_old_connections()
@@ -512,13 +528,14 @@ def test_concurrent_capacity_changes(scope, pdf_pipeline, monkeypatch, race):
         quota_bytes=original_usage + new_size - first.content.size_bytes,
     )
     barrier = Barrier(2)
-    original = services.pdf_sandbox.sanitize
+    original = services.storage.pdf_sandbox.sanitize
 
     def sanitize(**kwargs):
-        original(**kwargs)
+        result = original(**kwargs)
         barrier.wait(timeout=10)
+        return result
 
-    monkeypatch.setattr(services.pdf_sandbox, "sanitize", sanitize)
+    monkeypatch.setattr(services.storage.pdf_sandbox, "sanitize", sanitize)
 
     def mutate(index):
         close_old_connections()

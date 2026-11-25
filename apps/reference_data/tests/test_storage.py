@@ -11,6 +11,7 @@ from apps.reference_data.storage import (
     StorageError,
     output_path,
     promote_to_accepted,
+    retire_plan_content,
     write_quarantine,
 )
 
@@ -184,3 +185,29 @@ def test_runtime_directories_are_restrict_suidsgid_compatible(
 
     assert uploaded.read_bytes() == b"%PDF-1.4"
     assert sanitized.name == "sanitized.pdf"
+
+
+@pytest.mark.django_db
+def test_unreferenced_retired_content_is_removed_only_after_commit(
+    private_roots, django_capture_on_commit_callbacks
+):
+    root = private_roots / "accepted"
+    root.mkdir()
+    path = root / "123e4567-e89b-12d3-a456-426614174000.pdf"
+    path.write_bytes(b"old")
+    with django_capture_on_commit_callbacks(execute=True):
+        retire_plan_content(key=path.name, document_id=path.stem, sha256="a" * 64)
+        assert path.read_bytes() == b"old"
+    assert not path.exists()
+
+
+def test_promotion_never_overwrites_existing_content(private_roots):
+    source = private_roots / "source.pdf"
+    source.write_bytes(b"new")
+    root = private_roots / "accepted"
+    root.mkdir()
+    destination = root / "123e4567-e89b-12d3-a456-426614174000.pdf"
+    destination.write_bytes(b"old")
+    with pytest.raises(StorageError):
+        promote_to_accepted(source, destination.name)
+    assert destination.read_bytes() == b"old" and source.read_bytes() == b"new"

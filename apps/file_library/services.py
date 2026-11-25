@@ -20,8 +20,7 @@ from apps.file_library.models import (
     TemporaryStationAccess,
 )
 from apps.organizations.models import Department, Station
-from apps.reference_data import pdf_sandbox, storage
-from apps.reference_data.pdf_validation import validate_pdf
+from apps.reference_data import storage
 
 
 class LibraryError(ValueError):
@@ -489,10 +488,10 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
         source = storage.write_quarantine(upload, limit=settings.FILE_LIBRARY_MAX_FILE_BYTES)
         if source.stat().st_size > settings.FILE_LIBRARY_MAX_FILE_BYTES:
             raise LibraryError("PDF exceeds the file size limit.")
-        validate_pdf(source, original_filename=name, strict=True)
         output = storage.output_path(job_id=source.parent.name)
-        pdf_sandbox.sanitize(quarantined_input=source, sanitized_output=output)
-        size, _pages, digest = validate_pdf(output, strict=True)
+        size, _pages, digest = storage.process_pdf(
+            source, output, original_filename=name, strict=True
+        )
         if size > settings.FILE_LIBRARY_MAX_FILE_BYTES:
             raise LibraryError("Sanitized PDF exceeds the file size limit.")
         with transaction.atomic():
@@ -545,7 +544,7 @@ def upload_pdf(*, actor, library_id, upload, parent_id=None, replace_id=None, ap
     finally:
         storage.cleanup(source)
         storage.cleanup(output)
-        storage.cleanup(accepted)
+        storage.cleanup_unreferenced_accepted(accepted)
 
 
 def _validate_quota(quota_bytes):

@@ -11,12 +11,28 @@ syntax, and never uses a shell.
 import os
 import re
 import stat
-import subprocess
+
+# Only the fixed systemctl executable is invoked with the UUID-derived unit.
+import subprocess  # nosec B404
 import sys
 
 SYSTEMCTL = "/bin/systemctl"
 SANITIZER_OUTPUT_ROOT = "/var/lib/fire-backend/sanitizer-output"
 OUTPUT_NAME = "sanitized.pdf"
+RESULT_NAME = "result.txt"
+_CONTENT_CODES = frozenset(
+    {
+        "invalid_pdf_signature",
+        "invalid_pdf_mime",
+        "input_too_large",
+        "output_too_large",
+        "encrypted_pdf",
+        "malformed_pdf",
+        "page_limit_exceeded",
+        "prohibited_pdf_content",
+    }
+)
+_SUCCESS = re.compile(r"OK ([1-9][0-9]{0,8}) (0|[1-9][0-9]{0,9}) ([0-9a-f]{64})")
 OUTPUT_OWNER = "fire_backend"
 OUTPUT_GROUP = "fire_backend"
 OUTPUT_MODE = 0o600
@@ -50,17 +66,27 @@ def _owner_ids() -> tuple[int, int]:
     return pwd.getpwnam(OUTPUT_OWNER).pw_uid, grp.getgrnam(OUTPUT_GROUP).gr_gid
 
 
-def run_job(job_id: str) -> str:
-    """Run the sanitizer for *job_id*; return an ``OK``/``ERR`` status token.
+def _read_result(job_fd: int) -> str:
+    fd = os.open(RESULT_NAME, os.O_RDONLY | _O_NONBLOCK | _O_NOFOLLOW, dir_fd=job_fd)
+    try:
+        entry = os.fstat(fd)
+        if not stat.S_ISREG(entry.st_mode) or entry.st_nlink != 1 or not 0 < entry.st_size <= 128:
+            raise ValueError("Invalid worker result.")
+        result = os.read(fd, 129).decode("ascii", "strict")
+        if not result.endswith("\n") or len(result) > 128:
+            raise ValueError("Invalid worker result.")
+        result = result[:-1]
+        if _SUCCESS.fullmatch(result) or (
+            result.startswith("ERR content ") and result[12:] in _CONTENT_CODES
+        ):
+            return result
+        raise ValueError("Invalid worker result.")
+    finally:
+        os.close(fd)
 
-    Any non-zero ``systemctl start --wait`` result is reported as infrastructure
-    (``ERR output``). qpdf's exit status 2 is ambiguous: it is returned both for
-    a genuine document-content rejection *and* for operational failures (I/O,
-    permissions, filesystem, output, or a bad invocation), so the broker must
-    never infer a skippable content rejection from the unit exit status alone.
-    Content rejection remains the caller's pre-validation responsibility; the
-    broker only reports success or infrastructure failure.
-    """
+
+def run_job(job_id: str) -> str:
+    """Execute the fixed worker; only a validated result can identify content rejection."""
     unit = f"fire-pdf-sanitizer@{job_id}.service"
     try:
         # Fixed argv derived from a validated UUID; never a shell.
@@ -85,6 +111,12 @@ def run_job(job_id: str) -> str:
         # renamed/replaced job directory cannot redirect privileged finalization.
         root_fd = os.open(SANITIZER_OUTPUT_ROOT, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW)
         job_fd = os.open(job_id, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW, dir_fd=root_fd)
+        result_text = _read_result(job_fd)
+        if result_text.startswith("ERR content "):
+            return result_text
+        match = _SUCCESS.fullmatch(result_text)
+        if match is None:
+            return "ERR output"
         # A FIFO must not block before fstat can reject it.
         fd = os.open(OUTPUT_NAME, os.O_RDONLY | _O_NONBLOCK | _O_NOFOLLOW, dir_fd=job_fd)
         entry = os.fstat(fd)
@@ -92,18 +124,19 @@ def run_job(job_id: str) -> str:
             not stat.S_ISREG(entry.st_mode)
             or entry.st_nlink != 1
             or not 0 < entry.st_size <= MAX_OUTPUT_BYTES
+            or entry.st_size != int(match[1])
         ):
             return "ERR output"
         uid, gid = _owner_ids()
         os.fchown(fd, uid, gid)
         os.fchmod(fd, OUTPUT_MODE)
-    except (OSError, KeyError):
+    except (OSError, KeyError, ValueError, UnicodeError):
         return "ERR output"
     finally:
         for opened_fd in (fd, job_fd, root_fd):
             if opened_fd is not None:
                 os.close(opened_fd)
-    return "OK"
+    return result_text
 
 
 def parse_request(raw: bytes) -> str:

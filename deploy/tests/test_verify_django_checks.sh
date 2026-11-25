@@ -22,12 +22,18 @@ awk '/^\($/ { copy=1 } copy && /^# -------- systemd --------/ { exit } copy { pr
 fail() { FAIL=$((FAIL + 1)); }
 ok() { :; }
 load_env_file() { [[ -f $1 ]]; }
-for REJECT in check migrate ''; do
+runuser() {
+    [[ $1 == -u && $2 == fire_backend && $3 == -- ]] || return 1
+    shift 3
+    "$@"
+}
+for REJECT in check migrate verify_library_pdf_sanitizer ''; do
     export REJECT
     FAIL=0
     source "$TMP/checks"
     if [[ -n $REJECT ]]; then [[ $FAIL -gt 0 ]]; else [[ $FAIL -eq 0 ]]; fi
 done
+grep -qx verify_library_pdf_sanitizer "$TRACE"
 rm "$ENV_FILE"
 FAIL=0
 source "$TMP/checks"

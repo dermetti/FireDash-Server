@@ -24,7 +24,7 @@ PACKAGES=(ca-certificates git sudo python3 python3-venv python3-dev build-essent
           libpq-dev libffi-dev libssl-dev libmagic1
           postgresql-17 postgresql-17-postgis-3 postgresql-17-postgis-3-scripts postgresql-client-17
           gdal-bin libgdal-dev libgeos-dev libproj-dev proj-bin
-          qpdf nginx restic openssl curl util-linux)
+          qpdf python3-pikepdf python3-magic nginx restic openssl curl util-linux)
 
 require_root
 is_debian_13 || die "Debian 13 (trixie) is required"
@@ -54,6 +54,13 @@ install_systemd_units
 install -d -o root -g root -m 0755 /usr/local/lib/fire-backend
 install -m 0755 -o root -g root "$ROOT/deploy/scripts/fire-pdf-sanitizer-broker" \
     /usr/local/lib/fire-backend/fire-pdf-sanitizer-broker
+install -d -o root -g root -m 0755 /usr/local/lib/fire-backend/pdf
+for helper in pdf_worker.py pdf_validation.py; do
+    install -m 0644 -o root -g root "$ROOT/apps/reference_data/$helper" \
+        "/usr/local/lib/fire-backend/pdf/$helper"
+done
+# Verify the actual system interpreter, not the application's virtual environment.
+/usr/bin/python3 -I -c 'import pikepdf, magic; assert callable(magic.from_file)'
 
 log "converging obsolete deployment artifacts"
 remove_obsolete_deployment_artifacts

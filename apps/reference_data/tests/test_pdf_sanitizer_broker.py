@@ -15,6 +15,8 @@ BROKER_PATH = (
     Path(__file__).resolve().parents[3] / "deploy" / "scripts" / "fire-pdf-sanitizer-broker"
 )
 
+SUCCESS = "OK 10 1 " + "a" * 64
+
 JOB = "123e4567-e89b-12d3-a456-426614174000"
 
 
@@ -25,7 +27,13 @@ def broker() -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.__dict__["original_read_result"] = module._read_result
     return module
+
+
+@pytest.fixture(autouse=True)
+def result_contract(broker, monkeypatch):
+    monkeypatch.setattr(broker, "_read_result", lambda _fd: SUCCESS)
 
 
 def test_validate_job_id_accepts_only_canonical_lowercase_uuid(broker: ModuleType) -> None:
@@ -79,7 +87,7 @@ def test_run_job_invokes_only_fixed_sanitizer_template(broker: ModuleType) -> No
         patch.object(broker.os, "fchmod", create=True) as fchmod,
         patch.object(broker.os, "close") as close,
     ):
-        assert broker.run_job(JOB) == "OK"
+        assert broker.run_job(JOB) == SUCCESS
 
     run.assert_called_once_with(
         ["/bin/systemctl", "start", "--wait", f"fire-pdf-sanitizer@{JOB}.service"],
@@ -121,6 +129,46 @@ def test_run_job_has_no_exit_status_content_classification(broker: ModuleType) -
     # from the unit exit status.
     assert not hasattr(broker, "_classify_unit_failure")
     assert not hasattr(broker, "_show_unit_state")
+
+
+def test_run_job_only_accepts_positive_worker_content_result(broker, monkeypatch):
+    monkeypatch.setattr(broker, "_read_result", lambda fd: "ERR content encrypted_pdf")
+    with (
+        patch.object(broker.subprocess, "run", return_value=SimpleNamespace(returncode=0)),
+        patch.object(broker.os, "open", side_effect=[3, 4]),
+        patch.object(broker.os, "close"),
+        patch.object(broker.os, "fchown", create=True) as chown,
+    ):
+        assert broker.run_job(JOB) == "ERR content encrypted_pdf"
+    chown.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"OK\n",
+        b"ERR failed\n",
+        b"ERR content unknown\n",
+        b"ERR content encrypted_pdf\nextra\n",
+        b"a" * 129,
+        b"\xff\n",
+        b"",
+        b"OK -1 1 " + b"a" * 64 + b"\n",
+    ],
+)
+def test_descriptor_result_contract_rejects_malformed_output(broker, raw):
+    with (
+        patch.object(broker.os, "open", return_value=7),
+        patch.object(
+            broker.os,
+            "fstat",
+            return_value=SimpleNamespace(st_mode=stat.S_IFREG, st_nlink=1, st_size=len(raw)),
+        ),
+        patch.object(broker.os, "read", return_value=raw),
+        patch.object(broker.os, "close"),
+        pytest.raises((ValueError, UnicodeError)),
+    ):
+        broker.original_read_result(4)
 
 
 def test_run_job_handles_timeout(broker: ModuleType) -> None:
@@ -239,6 +287,10 @@ def native_output(broker, tmp_path, monkeypatch):
     job.mkdir(parents=True)
     output = job / broker.OUTPUT_NAME
     output.write_bytes(b"%PDF-1.4 fixture")
+    (job / "result.txt").write_text(
+        f"OK {output.stat().st_size} 1 " + "a" * 64 + "\n", encoding="ascii"
+    )
+    monkeypatch.setattr(broker, "_read_result", broker.original_read_result)
     monkeypatch.setattr(broker, "SANITIZER_OUTPUT_ROOT", str(root))
     monkeypatch.setattr(broker, "_owner_ids", lambda: (os.getuid(), os.getgid()))
     # Only job execution is mocked; descriptor/path validation uses the real kernel.
@@ -308,6 +360,7 @@ def test_native_directory_replacement_cannot_redirect_finalization(
     victim = outside / broker.OUTPUT_NAME
     victim.write_bytes(b"untouched")
     os.chmod(victim, 0o640)
+    size = output.stat().st_size
     original_open = os.open
 
     def replace_after_directory_open(path, flags, **kwargs):
@@ -317,7 +370,7 @@ def test_native_directory_replacement_cannot_redirect_finalization(
         return original_open(path, flags, **kwargs)
 
     monkeypatch.setattr(broker.os, "open", replace_after_directory_open)
-    assert broker.run_job(JOB) == "OK"
+    assert broker.run_job(JOB) == f"OK {size} 1 " + "a" * 64
     assert stat.S_IMODE((root / "pinned-job" / output.name).stat().st_mode) == 0o600
     assert victim.read_bytes() == b"untouched"
     assert stat.S_IMODE(victim.stat().st_mode) == 0o640
@@ -339,13 +392,16 @@ def test_broker_unit_files_use_accept_yes_and_inetd_stdio() -> None:
     assert "LoadCredential=" not in service_unit
 
 
-def test_sanitizer_unit_tolerates_qpdf_warnings_only_exit() -> None:
+def test_sanitizer_unit_uses_isolated_worker_and_preserves_qpdf_warning_policy() -> None:
     root = Path(__file__).resolve().parents[3]
-    sanitizer_unit = (root / "deploy" / "systemd" / "fire-pdf-sanitizer@.service").read_text()
-
-    # qpdf exits 3 on warnings-without-errors; --warning-exit-0 maps that to 0 so
-    # the oneshot unit does not fail on recoverable structural warnings while a
-    # real qpdf error (status 2) still fails the unit.
-    assert "--warning-exit-0" in sanitizer_unit
-    assert "ExecStart=/usr/bin/qpdf" in sanitizer_unit
-    assert "--deterministic-id" in sanitizer_unit
+    unit = (root / "deploy" / "systemd" / "fire-pdf-sanitizer@.service").read_text()
+    worker = (root / "apps" / "reference_data" / "pdf_worker.py").read_text()
+    assert "--warning-exit-0" in worker
+    assert "--deterministic-id" in worker
+    assert "ExecStart=/usr/bin/python3 -I /usr/local/lib/fire-backend/pdf/pdf_worker.py" in unit
+    assert "User=fire_pdf_sanitizer" in unit
+    assert "MemoryMax=512M" in unit and "TasksMax=32" in unit
+    assert "TimeoutStartSec=60s" in unit and "CPUQuota=100%" in unit
+    assert "/srv/firedash" in unit and "/etc/fire-backend" in unit
+    assert "/var/spool/firedash-reports" in unit
+    assert "EnvironmentFile=" not in unit and "LoadCredential=" not in unit

@@ -1,7 +1,5 @@
-from pathlib import Path
 from typing import cast
 
-from django.conf import settings
 from django.contrib.gis.geos import Point
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -19,6 +17,7 @@ from apps.reference_data.models import (
     PhonebookEntry,
 )
 from apps.reference_data.phonebook import entry_fingerprint, normalize_phone_number
+from apps.reference_data.storage import retire_plan_content
 
 
 def _mark_phonebook_scope_dirty(*, department, station, actor) -> None:
@@ -439,8 +438,7 @@ def delete_fire_plan(*, actor, fire_plan: FirePlan) -> None:
         metadata=metadata,
     )
     mark_dirty(department=department, dataset_type_code="department_fire_plans", actor=actor)
-    accepted_path = settings.REFERENCE_DATA_ACCEPTED_ROOT / Path(document_key).name
-    transaction.on_commit(lambda: accepted_path.unlink(missing_ok=True))
+    retire_plan_content(key=document_key, document_id=plan_id, sha256=fire_plan.sha256)
 
 
 @transaction.atomic
@@ -538,5 +536,4 @@ def delete_klgv_plan(*, actor, klgv_plan: KlgvPlan) -> None:
         metadata=metadata,
     )
     mark_dirty(department=department, dataset_type_code="department_klgv_plans", actor=actor)
-    accepted_path = settings.REFERENCE_DATA_ACCEPTED_ROOT / document_key
-    transaction.on_commit(lambda: accepted_path.unlink(missing_ok=True))
+    retire_plan_content(key=document_key, document_id=plan_id, sha256=klgv_plan.sha256)

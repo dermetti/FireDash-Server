@@ -76,17 +76,14 @@ def wizard_fixture(db, settings, tmp_path, monkeypatch):
         content = path.read_bytes()
         return len(content), 1, hashlib.sha256(content).hexdigest()
 
-    def promote(source, key):
-        accepted_root.mkdir(parents=True, exist_ok=True)
-        destination = accepted_root / key
-        shutil.move(source, destination)
-        return destination
+    def process(source, output, **kwargs):
+        validate(source)
+        sanitize(quarantined_input=source, sanitized_output=output)
+        return validate(output)
 
     monkeypatch.setattr("apps.ingestion.services.write_quarantine", write)
     monkeypatch.setattr("apps.ingestion.services.output_path", output_path)
-    monkeypatch.setattr("apps.ingestion.services.sanitize", sanitize)
-    monkeypatch.setattr("apps.ingestion.services.validate_pdf", validate)
-    monkeypatch.setattr("apps.ingestion.services.promote_to_accepted", promote)
+    monkeypatch.setattr("apps.ingestion.services.process_pdf", process)
 
     return actor, department
 

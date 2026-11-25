@@ -1,3 +1,4 @@
+import hashlib
 import socket
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,16 @@ from apps.reference_data.pdf_sandbox import (
     sanitize,
 )
 
+PDF = b"%PDF-1.4 fixture"
+SUCCESS = f"OK {len(PDF)} 1 {hashlib.sha256(PDF).hexdigest()}\n".encode("ascii")
+
+
+@pytest.fixture(autouse=True)
+def output_job(tmp_path):
+    job = tmp_path / _job_id()
+    job.mkdir()
+    (job / "sanitized.pdf").write_bytes(PDF)
+
 
 def _job_id() -> str:
     return "123e4567-e89b-12d3-a456-426614174000"
@@ -21,7 +32,7 @@ def _mock_client(reply: bytes) -> MagicMock:
     client = MagicMock()
     client.__enter__ = MagicMock(return_value=client)
     client.__exit__ = MagicMock(return_value=False)
-    client.recv.return_value = reply
+    client.recv.side_effect = [reply, b""]
     return client
 
 
@@ -45,7 +56,7 @@ def test_sanitizer_requires_linux(tmp_path: Path) -> None:
 @override_settings(PDF_SANITIZER_BROKER_SOCKET="/run/fire-pdf-sanitizer-broker/broker.sock")
 def test_sanitizer_sends_only_job_uuid_over_broker_socket(tmp_path: Path) -> None:
     job = _job_id()
-    client = _mock_client(b"OK\n")
+    client = _mock_client(SUCCESS)
     sent: list[bytes] = []
     client.sendall.side_effect = sent.append
 
@@ -84,7 +95,7 @@ def test_sanitizer_timeout_is_categorized(tmp_path: Path) -> None:
 
 
 def test_sanitizer_broker_failure_is_categorized(tmp_path: Path) -> None:
-    client = _mock_client(b"ERR failed\n")
+    client = _mock_client(b"ERR content malformed_pdf\n")
 
     with (
         patch("apps.reference_data.pdf_sandbox.sys.platform", "linux"),
@@ -153,7 +164,7 @@ def test_sanitizer_errors_when_broker_socket_missing(tmp_path: Path) -> None:
 
 
 def test_sanitizer_errors_when_output_missing(tmp_path: Path) -> None:
-    client = _mock_client(b"OK\n")
+    client = _mock_client(SUCCESS)
 
     with (
         patch("apps.reference_data.pdf_sandbox.sys.platform", "linux"),
@@ -166,3 +177,67 @@ def test_sanitizer_errors_when_output_missing(tmp_path: Path) -> None:
                 quarantined_input=tmp_path / _job_id() / "input.pdf",
                 sanitized_output=tmp_path / _job_id() / "sanitized.pdf",
             )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        b"OK\n",
+        b"ERR failed\n",
+        b"ERR content unknown\n",
+        b"ERR content malformed_pdf\nextra\n",
+        b"OK -1 1 " + b"a" * 64 + b"\n",
+        b"OK 10 true " + b"a" * 64 + b"\n",
+        b"OK 999999999 1 " + b"a" * 64 + b"\n",
+        b"x" * 129 + b"\n",
+        b"\xff\n",
+        b"",
+    ],
+)
+def test_malformed_or_missing_results_are_infrastructure_failures(tmp_path, reply):
+    client = _mock_client(reply)
+    with (
+        patch("apps.reference_data.pdf_sandbox.sys.platform", "linux"),
+        patch("apps.reference_data.pdf_sandbox.Path.exists", return_value=True),
+        patch("apps.reference_data.pdf_sandbox.socket.socket", return_value=client),
+        pytest.raises(PdfSanitizerError) as rejected,
+    ):
+        sanitize(
+            quarantined_input=tmp_path / _job_id() / "input.pdf",
+            sanitized_output=tmp_path / _job_id() / "sanitized.pdf",
+        )
+    assert not isinstance(rejected.value, PdfSanitizerContentError)
+
+
+@pytest.mark.parametrize("changed", [b"%PDF-tampered", b"not a PDF"])
+def test_output_integrity_is_checked_without_native_parsing(tmp_path, changed):
+    output = tmp_path / _job_id() / "sanitized.pdf"
+    output.write_bytes(changed)
+    client = _mock_client(SUCCESS)
+    with (
+        patch("apps.reference_data.pdf_sandbox.sys.platform", "linux"),
+        patch("apps.reference_data.pdf_sandbox.Path.exists", return_value=True),
+        patch("apps.reference_data.pdf_sandbox.socket.socket", return_value=client),
+        patch(
+            "apps.reference_data.pdf_validation._inspect_pdf",
+            side_effect=AssertionError("web parser"),
+        ),
+        pytest.raises(PdfSanitizerError, match="integrity"),
+    ):
+        sanitize(quarantined_input=tmp_path / _job_id() / "input.pdf", sanitized_output=output)
+
+
+def test_partial_socket_reads_and_positive_rejection_code(tmp_path):
+    client = _mock_client(b"")
+    client.recv.side_effect = [b"ERR con", b"tent encrypted_pdf\n", b""]
+    with (
+        patch("apps.reference_data.pdf_sandbox.sys.platform", "linux"),
+        patch("apps.reference_data.pdf_sandbox.Path.exists", return_value=True),
+        patch("apps.reference_data.pdf_sandbox.socket.socket", return_value=client),
+        pytest.raises(PdfSanitizerContentError) as rejected,
+    ):
+        sanitize(
+            quarantined_input=tmp_path / _job_id() / "input.pdf",
+            sanitized_output=tmp_path / _job_id() / "sanitized.pdf",
+        )
+    assert rejected.value.code == "encrypted_pdf"
