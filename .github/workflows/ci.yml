@@ -254,11 +254,17 @@ jobs:
           python -m pip check
           python tools/production_lock.py check
 
-      - name: Verify locked production wheels on Debian 13 amd64
+      - name: Verify locked production wheels and system PDF worker on Debian 13 amd64
         run: |
           docker run --rm --platform linux/amd64 -v "$PWD:/source:ro" debian:13-slim bash -ceu '
             apt-get update
-            apt-get install -y python3-venv ca-certificates libmagic1
+            apt-get install -y python3-venv ca-certificates libmagic1 python3-pikepdf python3-magic qpdf util-linux
+            dpkg-query -W python3-pikepdf python3-magic qpdf
+            install -d -o root -g root -m 0755 /usr/local/lib/fire-backend/pdf
+            install -o root -g root -m 0644 /source/apps/reference_data/pdf_worker.py /source/apps/reference_data/pdf_validation.py /usr/local/lib/fire-backend/pdf/
+            useradd --system --no-create-home --shell /usr/sbin/nologin pdf_worker_test
+            install -d -o pdf_worker_test -g pdf_worker_test -m 0700 /run/fire-pdf-sanitizer /run/fire-pdf-sanitizer/output
+            runuser -u pdf_worker_test -- /usr/bin/python3 -I /source/deploy/tests/native_pdf_worker.py
             python3 -m venv /tmp/production
             /tmp/production/bin/python -m pip install --require-hashes --only-binary=:all: \
               -r /source/requirements/production.lock

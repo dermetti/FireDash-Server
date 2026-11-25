@@ -1,11 +1,17 @@
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pikepdf
 import pytest
 from django.test import override_settings
 
-from apps.reference_data.pdf_validation import PdfValidationError, validate_pdf
+from apps.reference_data.pdf_validation import (
+    PdfValidationError,
+    _has_syntax_problems,
+    _inspect_pdf,
+    validate_pdf,
+)
 
 
 def write_pdf(path: Path, *, javascript: bool = False, encrypted: bool = False) -> None:
@@ -19,6 +25,82 @@ def write_pdf(path: Path, *, javascript: bool = False, encrypted: bool = False) 
         document.save(path, encryption=pikepdf.Encryption(user="user", owner="owner", R=6))
     else:
         document.save(path)
+
+
+def test_modern_syntax_checker_is_preferred():
+    modern, legacy = Mock(return_value=[]), Mock(side_effect=AssertionError("legacy used"))
+    assert not _has_syntax_problems(SimpleNamespace(check_pdf_syntax=modern, check=legacy))
+    modern.assert_called_once_with()
+    legacy.assert_not_called()
+
+
+@pytest.mark.parametrize("api", ["check_pdf_syntax", "check"])
+@pytest.mark.parametrize("warnings", [[], ["structural warning"]])
+def test_supported_syntax_apis_preserve_warning_rejection(tmp_path, monkeypatch, api, warnings):
+    checker = Mock(return_value=warnings)
+    document = SimpleNamespace(
+        is_encrypted=False, pages=[object()], Root=pikepdf.Dictionary(), **{api: checker}
+    )
+    context = Mock()
+    context.__enter__ = Mock(return_value=document)
+    context.__exit__ = Mock(return_value=False)
+    open_pdf = Mock(return_value=context)
+    monkeypatch.setattr(pikepdf, "open", open_pdf)
+    path = tmp_path / "synthetic.pdf"
+    path.write_bytes(b"%PDF-1.7")
+    if warnings:
+        with pytest.raises(PdfValidationError) as rejected:
+            _inspect_pdf(path, strict=True, max_pages=10)
+        assert rejected.value.code == "malformed_pdf"
+    else:
+        assert _inspect_pdf(path, strict=True, max_pages=10)[1] == 1
+    open_pdf.assert_called_once_with(path, attempt_recovery=False)
+    checker.assert_called_once_with()
+
+
+@pytest.mark.parametrize("document", [object(), SimpleNamespace(check=None)])
+def test_missing_syntax_api_is_infrastructure_failure(document):
+    with pytest.raises(RuntimeError, match="API is unavailable"):
+        _has_syntax_problems(document)
+
+
+@pytest.mark.parametrize("api", ["check_pdf_syntax", "check"])
+@pytest.mark.parametrize("error", [OSError("I/O"), MemoryError(), pikepdf.PdfError("checker")])
+def test_syntax_checker_exceptions_are_infrastructure_failures(api, error, monkeypatch):
+    document = SimpleNamespace(
+        is_encrypted=False, pages=[object()], **{api: Mock(side_effect=error)}
+    )
+    context = Mock()
+    context.__enter__ = Mock(return_value=document)
+    context.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(pikepdf, "open", Mock(return_value=context))
+    with pytest.raises(RuntimeError, match="syntax inspection failed") as failure:
+        _inspect_pdf(Path("unused.pdf"), strict=True, max_pages=10)
+    assert failure.value.__cause__ is error
+
+
+def test_failed_modern_checker_does_not_retry_legacy_api():
+    legacy = Mock(return_value=[])
+    document = SimpleNamespace(check_pdf_syntax=Mock(side_effect=OSError("I/O")), check=legacy)
+    with pytest.raises(RuntimeError, match="syntax inspection failed"):
+        _has_syntax_problems(document)
+    legacy.assert_not_called()
+
+
+@pytest.mark.parametrize("result", [None, "warning", [None]])
+def test_unsupported_syntax_result_fails_closed(result):
+    with pytest.raises(RuntimeError, match="unsupported result"):
+        _has_syntax_problems(SimpleNamespace(check_pdf_syntax=lambda: result))
+
+
+@patch("apps.reference_data.pdf_validation._validate_mime")
+def test_strict_zero_page_rejection_is_preserved(_mime, tmp_path):
+    path = tmp_path / "empty.pdf"
+    with pikepdf.new() as document:
+        document.save(path)
+    with pytest.raises(PdfValidationError) as rejected:
+        validate_pdf(path, strict=True)
+    assert rejected.value.code == "malformed_pdf"
 
 
 @patch("apps.reference_data.pdf_validation._validate_mime")

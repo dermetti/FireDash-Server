@@ -84,6 +84,25 @@ def _validate_mime(path: Path) -> None:
         )
 
 
+def _has_syntax_problems(document: object) -> bool:
+    # Debian 13's pikepdf 9.5 uses check(); 9.10 introduced the replacement,
+    # and pikepdf 10 removed check(). Never retry a failed modern checker.
+    checker = getattr(document, "check_pdf_syntax", None)
+    if checker is None:
+        checker = getattr(document, "check", None)
+    if not callable(checker):
+        raise RuntimeError("PDF syntax-checking API is unavailable.")
+    try:
+        problems = checker()
+    except Exception as error:
+        # In particular, do not let the outer PdfError handler classify an
+        # unexpected checker failure as a positively identified content issue.
+        raise RuntimeError("PDF syntax inspection failed.") from error
+    if not isinstance(problems, list) or any(not isinstance(item, str) for item in problems):
+        raise RuntimeError("PDF syntax checker returned an unsupported result.")
+    return bool(problems)
+
+
 def _inspect_pdf(path: Path, *, strict: bool = False, max_pages: int) -> tuple[int, int, str]:
     import pikepdf
 
@@ -92,7 +111,7 @@ def _inspect_pdf(path: Path, *, strict: bool = False, max_pages: int) -> tuple[i
             if document.is_encrypted:
                 raise PdfValidationError("Encrypted PDFs are not accepted.", code="encrypted_pdf")
             page_count = len(document.pages)
-            if strict and (page_count == 0 or document.check_pdf_syntax()):
+            if strict and (page_count == 0 or _has_syntax_problems(document)):
                 raise PdfValidationError(
                     "PDF is empty or structurally invalid.", code="malformed_pdf"
                 )

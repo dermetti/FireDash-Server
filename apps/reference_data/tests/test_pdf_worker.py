@@ -50,6 +50,18 @@ def test_worker_checks_real_input_and_normalized_output(job, monkeypatch):
 
 
 @pytest.mark.parametrize("stage", ["input", "output"])
+def test_strict_syntax_warnings_reject_at_both_boundaries(job, monkeypatch, stage):
+    source, output = job
+    checker = Mock(side_effect=[True] if stage == "input" else [False, True])
+    monkeypatch.setattr("apps.reference_data.pdf_validation._has_syntax_problems", checker)
+    run = Mock(side_effect=lambda *a, **kw: shutil.copyfile(source, output))
+    monkeypatch.setattr(pdf_worker.subprocess, "run", run)
+    assert pdf_worker.process(source, output) == "ERR content malformed_pdf"
+    assert checker.call_count == (1 if stage == "input" else 2)
+    assert run.call_count == (0 if stage == "input" else 1)
+
+
+@pytest.mark.parametrize("stage", ["input", "output"])
 def test_positive_content_rejection_at_both_boundaries(job, monkeypatch, stage):
     source, output = job
 

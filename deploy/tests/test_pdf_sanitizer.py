@@ -29,3 +29,18 @@ def test_deployment_verification_requires_real_pipeline_smoke_as_backend():
     assert '"root:root:644"' in verify
     assert '"root:root:755"' in verify
     assert "import pikepdf, magic" in verify
+
+
+def test_debian_ci_exercises_distribution_worker_as_non_root():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "debian:13-slim" in workflow
+    assert "python3-pikepdf python3-magic qpdf" in workflow
+    assert "dpkg-query -W python3-pikepdf python3-magic qpdf" in workflow
+    assert (
+        "runuser -u pdf_worker_test -- /usr/bin/python3 -I "
+        "/source/deploy/tests/native_pdf_worker.py" in workflow
+    )
+    assert (
+        "install -o root -g root -m 0644 /source/apps/reference_data/pdf_worker.py "
+        "/source/apps/reference_data/pdf_validation.py /usr/local/lib/fire-backend/pdf/" in workflow
+    )
