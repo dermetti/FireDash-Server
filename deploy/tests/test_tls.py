@@ -19,7 +19,9 @@ import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from types import SimpleNamespace
 
 import pytest
@@ -1099,10 +1101,50 @@ def test_native_nginx_routing_config_is_isolated(tree, tmp_path, final):
         assert "location ^~ /reports/access/" in rendered
 
 
+@pytest.fixture
+def synthetic_nginx_upstream():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            result = json.dumps(
+                {
+                    "method": self.command,
+                    "path": self.path,
+                    "body": body.decode(),
+                    "version": self.request_version,
+                    "host": self.headers.get("Host"),
+                    "real_ip": self.headers.get("X-Real-IP"),
+                    "forwarded_for": self.headers.get("X-Forwarded-For"),
+                    "forwarded_proto": self.headers.get("X-Forwarded-Proto"),
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
+
+        do_POST = do_GET
+
+        def log_message(self, format, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as upstream:
+        thread = Thread(target=upstream.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield upstream.server_port
+        finally:
+            upstream.shutdown()
+            thread.join(timeout=5)
+
+
 @LINUX
 @pytest.mark.skipif(not shutil.which("nginx"), reason="native Nginx binary required")
 @pytest.mark.parametrize("final", [False, True])
-def test_native_nginx_generated_routing(tree, certificate, tmp_path, monkeypatch, final):
+def test_native_nginx_generated_routing(
+    tree, certificate, tmp_path, monkeypatch, final, synthetic_nginx_upstream
+):
     """Run actual Nginx on disposable high ports, with the generated location rules."""
     cert, key = certificate()
     with socket.socket() as sock:
@@ -1121,6 +1163,10 @@ def test_native_nginx_generated_routing(tree, certificate, tmp_path, monkeypatch
             .replace("__TLS_CERT_PATH__", str(cert))
             .replace("__TLS_KEY_PATH__", str(key))
             .replace("/var/lib/fire-backend/acme-webroot", str(tls.WEBROOT))
+            .replace(
+                "server unix:/run/fire-backend/gunicorn.sock;",
+                f"server 127.0.0.1:{synthetic_nginx_upstream};",
+            )
         )
     else:
         text = tls.challenge_config("firedash.example.org")
@@ -1240,6 +1286,40 @@ def test_native_nginx_generated_routing(tree, certificate, tmp_path, monkeypatch
                 (f"/departments/{department}/fire-plans/", 101 * 1024**2),
                 (f"/departments/{department}/klgv-plans/", 101 * 1024**2),
             ]
+            # Actual delivery catches missing proxy content handlers, independently
+            # of Nginx's preliminary Expect: 100-continue admission decision.
+            for path, _ in boundaries:
+                for method in ("GET", "POST"):
+                    conn = http.client.HTTPSConnection(
+                        "127.0.0.1", https_port, context=context, timeout=5
+                    )
+                    original_path = path + "?synthetic=original"
+                    body = "{}" if method == "POST" else ""
+                    conn.request(
+                        method,
+                        original_path,
+                        body,
+                        headers={
+                            "Host": "firedash.example.org",
+                            "X-Real-IP": "192.0.2.1",
+                            "X-Forwarded-For": "192.0.2.2",
+                            "X-Forwarded-Proto": "http",
+                        },
+                    )
+                    response = conn.getresponse()
+                    assert response.status == 200, (method, path)
+                    delivered = json.loads(response.read())
+                    conn.close()
+                    assert delivered == {
+                        "method": method,
+                        "path": original_path,
+                        "body": body,
+                        "version": "HTTP/1.1",
+                        "host": "firedash.example.org",
+                        "real_ip": "127.0.0.1",
+                        "forwarded_for": "127.0.0.1",
+                        "forwarded_proto": "https",
+                    }
             for path, limit in boundaries:
                 assert admission(path, limit) == 100, path
                 assert admission(path, limit + 1) == 413, path
@@ -1259,7 +1339,7 @@ def test_native_nginx_generated_routing(tree, certificate, tmp_path, monkeypatch
                 statuses.append(response.status)
                 response.read()
                 conn.close()
-            assert statuses[0] != 429 and 429 in statuses
+            assert statuses[0] == 200 and 429 in statuses
             for path in (
                 "/accounts/setup/disposable-token/",
                 "/api/v1/adoption/preview",

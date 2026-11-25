@@ -1,5 +1,17 @@
 # Permanent beta baseline: Phase 2
 
+## Approved forward extensions
+
+The 16 accepted consolidated migrations and their historical evidence below remain
+immutable. Phase I explicitly extends that baseline with
+`tablets.0010_installation_credential_index`. Historical-schema tests target the
+accepted nodes rather than current graph leaves: the baseline retains 296 indexes;
+the current schema adds exactly the ordinary B-tree and `varchar_pattern_ops`
+indexes on `tablets_appinstallation.credential_hash`. Tests separately verify the
+historical schema, the forward upgrade, and fresh-current equivalence. The Phase 2
+no-op statements below describe the original baseline finalization; an installation
+at that historical baseline now has this approved forward migration pending.
+
 Phase 1 commit `4ce840e376c5e0ac29f293f82f1168d3a27ab05a` is the accepted release. The user confirmed its successful Debian 13 / PostgreSQL 17 test-server deployment, all 16 replacement entries, removal of the hydrant preview table, successful deployment verification and readiness checks, and zero failed units. Those are acceptance facts supplied by the user; Phase 2 performs no server access or deployment.
 
 ## Files and permanent graph
