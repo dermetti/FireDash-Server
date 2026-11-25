@@ -4,6 +4,7 @@ Call verify_document_set() from the main thread with the trusted release's legal
 directory. Only a complete, immutable in-memory result escapes the private scratch
 directory. Transport injection is for controlled tests, not operator configuration.
 Requires Debian-packaged curl >= 8.4 and minisign; never discovers signing keys.
+assemble_agreement_set() consumes that result without any I/O or normalization.
 """
 
 import base64
@@ -21,7 +22,7 @@ import subprocess  # nosec B404
 import tempfile
 import threading
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Protocol
@@ -82,6 +83,175 @@ class VerifiedDocumentSet:
     manifest_sha256: str
     public_key_sha256: str
     documents: tuple[VerifiedDocument, ...]
+
+
+@dataclass(frozen=True)
+class AssembledAgreement:
+    language: str
+    content: bytes = field(repr=False)
+    sha256: str
+
+
+@dataclass(frozen=True)
+class AssembledAgreementSet:
+    german: AssembledAgreement
+    english: AssembledAgreement
+    agreement_set_sha256: str
+    canonical_bytes: bytes
+    agreement_version: str
+    agreement_revision: int
+    provider_revision: int
+    effective_date: str
+    authoritative_language: str
+    provenance: VerifiedDocumentSet = field(repr=False)
+
+
+# Exact UTF-8 release markers. These are syntax, not replacement legal wording.
+_NOTICES = {
+    "de": (
+        "> Öffentliche Vorlage ohne Anbieteridentifikation — nicht zur Annahme bestimmt. "
+        "Anlage B ist vor Annahme vollständig einzufügen.\n\n"
+    ).encode(),
+    "en": (
+        "> Public template without Provider identification — not intended for acceptance. "
+        "Annex B must be inserted in full before acceptance.\n\n"
+    ).encode(),
+}
+_HEADINGS = {
+    "de": "## Anlage B — Anbieteridentifikation".encode(),
+    "en": "## Annex B — Provider identification".encode(),
+}
+_PLACEHOLDERS = {
+    "de": "[Extern bereitzustellen; vor Zustimmung vollständig einzufügen.]\n".encode(),
+    "en": b"[To be supplied externally; insert in full before acceptance.]\n",
+}
+_ANNEX_B = re.compile(rb"(?m)^ {0,3}#{1,6}[ \t]+(?:Anlage|Annex)[ \t]+B\b[^\n]*", re.IGNORECASE)
+
+
+def _no_assembly_markers(content: bytes, label: str) -> None:
+    # Catch duplicate, cross-language and altered residual reserved markers while
+    # leaving Annex A's intentional [einzutragen]/[to be entered] fields alone.
+    text = content.decode("utf-8").casefold()
+    require(
+        not any(
+            marker in text
+            for marker in (
+                "öffentliche vorlage",
+                "public template",
+                "ohne anbieteridentifikation",
+                "without provider identification",
+                "extern bereitzustellen",
+                "to be supplied externally",
+            )
+        ),
+        f"{label}: unexpected or remaining assembly marker",
+    )
+
+
+def _one_annex_b(content: bytes, heading: bytes, label: str) -> None:
+    require(
+        all(content.count(marker) == int(marker == heading) for marker in _HEADINGS.values())
+        and _ANNEX_B.findall(content) == [heading],
+        f"{label}: incorrect or duplicated Annex B heading",
+    )
+
+
+def _assemble_language(document: VerifiedDocument) -> AssembledAgreement:
+    language = document.language  # Already restricted to de/en by the caller.
+    label = f"Agreement assembly ({language})"
+    template, provider = document.template, document.provider
+    _text(template, label)
+    _text(provider, label)
+    notice, heading = _NOTICES[language], _HEADINGS[language]
+    block = heading + b"\n\n" + _PLACEHOLDERS[language]
+    require(
+        template.count(notice) == 1 and (b"\n" + template).count(b"\n" + notice) == 1,
+        f"{label}: expected exactly one complete public-template notice",
+    )
+    require(
+        template.count(block) == 1 and template.endswith(block),
+        f"{label}: expected exactly one terminal Annex B placeholder block",
+    )
+    _one_annex_b(template, heading, label)
+    require(provider.startswith(heading + b"\n"), f"{label}: incorrect provider language heading")
+    _one_annex_b(provider, heading, label)
+    _no_assembly_markers(provider, label)
+    prefix = template[: -len(block)].replace(notice, b"", 1)
+    _no_assembly_markers(prefix, label)
+    assembled = prefix + provider
+    _text(assembled, label)
+    _one_annex_b(assembled, heading, label)
+    _no_assembly_markers(assembled, label)
+    return AssembledAgreement(language, assembled, sha256(assembled))
+
+
+def assemble_agreement_set(verified_document_set: VerifiedDocumentSet) -> AssembledAgreementSet:
+    """Pure byte assembly of the complete, trusted Stage E.2 result only.
+
+    No file, network, subprocess, rendering or acceptance operations occur here.
+    The caller must pass verify_document_set()'s result; Python objects are an
+    internal trust boundary, not a substitute for cryptographic verification.
+    Hash consistency checks defend against accidental input mix-ups, but do not
+    authenticate caller-constructed objects. No alternative raw-document API is
+    provided. Provider signatures authenticate providers, not assembled contracts
+    or an accepting representative. Failures never return a partial set.
+    """
+    require(type(verified_document_set) is VerifiedDocumentSet, "Expected a verified document set")
+    manifest = verified_document_set.manifest
+    require(type(manifest) is Manifest, "Invalid verified manifest")
+    _positive_revision(manifest.agreement_revision)
+    _positive_revision(manifest.provider_revision)
+    documents = verified_document_set.documents
+    require(
+        type(documents) is tuple
+        and len(documents) == 2
+        and all(type(doc) is VerifiedDocument and doc.language in LANGUAGES for doc in documents)
+        and {doc.language for doc in documents} == set(LANGUAGES),
+        "Verified document set must contain exactly German and English",
+    )
+    require(
+        type(manifest.languages) is tuple
+        and len(manifest.languages) == 2
+        and all(type(record) is LanguageRecord for record in manifest.languages)
+        and {record.language for record in manifest.languages} == set(LANGUAGES),
+        "Verified manifest must contain exactly German and English",
+    )
+    records = {record.language: record for record in manifest.languages}
+    by_language = {doc.language: doc for doc in documents}
+    agreements = []
+    for language in LANGUAGES:
+        doc, record = by_language[language], records[language]
+        require(
+            type(doc.template) is bytes
+            and type(doc.provider) is bytes
+            and sha256(doc.template) == record.template_sha256
+            and sha256(doc.provider) == record.provider_sha256,
+            f"Agreement assembly ({language}): verified input hash mismatch",
+        )
+        agreements.append(_assemble_language(doc))
+    german, english = agreements
+    identity = {
+        "schema_version": 1,
+        "agreement_version": manifest.agreement_version,
+        "agreement_revision": manifest.agreement_revision,
+        "provider_revision": manifest.provider_revision,
+        "assembled_sha256": {"de": german.sha256, "en": english.sha256},
+    }
+    canonical_bytes = json.dumps(
+        identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return AssembledAgreementSet(
+        german=german,
+        english=english,
+        agreement_set_sha256=sha256(canonical_bytes),
+        canonical_bytes=canonical_bytes,
+        agreement_version=manifest.agreement_version,
+        agreement_revision=manifest.agreement_revision,
+        provider_revision=manifest.provider_revision,
+        effective_date=manifest.effective_date,
+        authoritative_language=manifest.authoritative_language,
+        provenance=verified_document_set,
+    )
 
 
 class Transport(Protocol):

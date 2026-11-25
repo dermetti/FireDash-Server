@@ -119,6 +119,37 @@ def verify(case):
     return e.verify_document_set(case.legal, transport=case.transport, minisign=Path("synthetic"))
 
 
+def test_verified_result_flows_into_bilingual_assembly(release):
+    # Real public templates, synthetic providers and mocked signature verification.
+    # No production provider access and no complete real agreement is constructed.
+    headings = {
+        "de": "## Anlage B — Anbieteridentifikation",
+        "en": "## Annex B — Provider identification",
+    }
+    for language, record in release.manifest["languages"].items():
+        template = record["template"]
+        content = (ROOT / "legal" / template).read_bytes()
+        (release.legal / template).write_bytes(content)
+        record["template_sha256"] = e.sha256(content)
+        provider = (headings[language] + "\n\nSynthetic Test Provider.\n").encode()
+        signature = release.transport.payloads[record["signature_url"]]
+        release.transport.payloads[record["provider_url"]] = provider
+        record["provider_sha256"] = e.sha256(provider)
+        release.authentic.add((provider, signature, release.key))
+    release.save()
+    source = verify(release)
+    result = e.assemble_agreement_set(source)
+    assert result.provenance is source
+    assert len(release.verified) == 2
+    assert len(release.transport.calls) == 4
+    for agreement, document in zip((result.german, result.english), source.documents, strict=True):
+        assert agreement.content.endswith(document.provider)
+        assert agreement.sha256 == e.sha256(agreement.content)
+        assert agreement.content.count(headings[document.language].encode()) == 1
+    assert result.agreement_revision == source.manifest.agreement_revision
+    assert result.agreement_set_sha256 == e.sha256(result.canonical_bytes)
+
+
 def test_both_languages_are_verified_and_return_original_immutable_bytes(release):
     before = {path.name: path.read_bytes() for path in release.legal.iterdir()}
     result = verify(release)
