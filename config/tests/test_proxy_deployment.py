@@ -1,5 +1,6 @@
 """Keep the deployment boundary used for client-IP attribution explicit."""
 
+import re
 from pathlib import Path
 
 
@@ -8,7 +9,30 @@ def test_nginx_replaces_forwarded_address_on_every_proxy_location():
     nginx = (root / "deploy/nginx/fire-backend.conf").read_text()
     proxy_count = nginx.count("proxy_pass http://fire_backend;")
     assert proxy_count > 0
-    assert nginx.count("proxy_set_header X-Forwarded-For $remote_addr;") == proxy_count
+    # Match this template's four-space outer locations, including their children.
+    # Nginx inherits proxy_set_header as a set only when a child defines none.
+    # Each outer proxy location must replace client headers; its nested proxy
+    # locations must inherit the complete set without introducing overrides.
+    proxy_locations = [
+        match.group(1)
+        for match in re.finditer(r"^    location [^\n]+\{\n(.*?)^    \}", nginx, re.M | re.S)
+        if "proxy_pass" in match.group(1)
+    ]
+    assert sum(block.count("proxy_pass http://fire_backend;") for block in proxy_locations) == (
+        proxy_count
+    )
+    for block in proxy_locations:
+        headers = [line for line in block.splitlines() if "proxy_set_header" in line]
+        assert headers
+        assert all(line.startswith("        proxy_set_header ") for line in headers)
+        for header in (
+            "Host $host",
+            "X-Real-IP $remote_addr",
+            "X-Forwarded-For $remote_addr",
+            "X-Forwarded-Proto $scheme",
+        ):
+            assert headers.count(f"        proxy_set_header {header};") == 1
+    assert nginx.count("proxy_set_header X-Forwarded-For $remote_addr;") == len(proxy_locations)
     assert "$proxy_add_x_forwarded_for" not in nginx
     socket = (root / "deploy/systemd/fire-backend.socket").read_text()
     assert "ListenStream=/run/fire-backend/gunicorn.sock" in socket
