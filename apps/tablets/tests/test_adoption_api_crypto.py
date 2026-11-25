@@ -23,7 +23,7 @@ from apps.assignments.models import TabletVehicleAssignment
 from apps.authorization.models import DepartmentMembership
 from apps.organizations.models import Department, Station, Vehicle
 from apps.publications.hpke import HPKE_CIPHERSUITE, hpke_open, serialize_p256_public_key
-from apps.tablets.models import AdoptionRequest, AppInstallation, Tablet
+from apps.tablets.models import AdoptionInvitation, AdoptionRequest, AppInstallation, Tablet
 from apps.tablets.services import create_adoption_invitation
 
 ADOPTION_PREVIEW = "/api/v1/adoption/preview"
@@ -143,6 +143,39 @@ def test_adoption_preview_wire_timestamp_matches_hpke_context(crypto_api_context
 
     request = AdoptionRequest.objects.get(pk=preview["adoption_request_id"])
     assert hashlib.sha256(info).hexdigest() == request.canonical_context_hash
+
+
+def test_unknown_adoption_request_returns_safe_problem_without_state_changes(crypto_api_context):
+    ctx = crypto_api_context
+    _, token = create_adoption_invitation(actor=ctx.user, tablet=ctx.tablet)
+    models = (AdoptionInvitation, AdoptionRequest, AppInstallation)
+    before = [list(model.objects.values()) for model in models]
+    unknown_id = uuid.uuid4()
+    proof = base64.b64encode(b"disposable-proof" * 2).decode("ascii")
+
+    response = Client().post(
+        ADOPTION_COMPLETE,
+        data=json.dumps(
+            {
+                "adoption_request_id": str(unknown_id),
+                "challenge_response": proof,
+                "confirmed": True,
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 403
+    assert response["Content-Type"].startswith("application/problem+json")
+    problem = response.json()
+    assert set(problem) == {"type", "title", "status", "code", "detail", "request_id"}
+    assert problem["status"] == 403
+    assert problem["code"] == "invalid_request"
+    assert problem["detail"] == "Adoption request is invalid."
+    assert problem["request_id"] == response["X-Request-ID"]
+    for sensitive in (token, proof, str(unknown_id), ctx.installation.credential_hash):
+        assert sensitive not in response.content.decode()
+    assert [list(model.objects.values()) for model in models] == before
 
 
 def test_completion_replay_rotates_only_the_original_installation_and_rejects_new_preview(

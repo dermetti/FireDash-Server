@@ -10,6 +10,7 @@ import importlib.util
 import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -1051,6 +1052,45 @@ def test_fresh_dns01_uses_no_public_address_or_inbound_probe(
     assert not tls.WEBROOT.exists()
 
 
+def _isolated_nginx_routing_config(text, *, port, https_port, access_log):
+    # Preserve listener options (especially default_server) from the real template.
+    text = re.sub(
+        r"(?m)^([ \t]*)listen (80|443)([^;\r\n]*);",
+        lambda match: (
+            f"{match[1]}listen 127.0.0.1:{port if match[2] == '80' else https_port}{match[3]};"
+        ),
+        text,
+    )
+    text = re.sub(r"(?m)^[ \t]*listen \[::\]:(?:80|443)[^;\r\n]*;", "", text)
+    return text.replace("/var/log/nginx/fire-backend-access.log", access_log.as_posix())
+
+
+@pytest.mark.parametrize("final", [False, True])
+def test_native_nginx_routing_config_is_isolated(tree, tmp_path, final):
+    text = (
+        (ROOT / "deploy/nginx/fire-backend.conf").read_text()
+        if final
+        else tls.challenge_config("firedash.example.org")
+    )
+    access_log = tmp_path / "access.log"
+    rendered = _isolated_nginx_routing_config(
+        text, port=18080, https_port=18443, access_log=access_log
+    )
+    listeners = re.findall(r"\blisten ([^;]+);", rendered)
+    assert listeners == (
+        ["127.0.0.1:18080 default_server", "127.0.0.1:18443 ssl default_server"]
+        if final
+        else ["127.0.0.1:18080"]
+    )
+    assert "/var/log/" not in rendered
+    assert rendered.count("error_log /dev/null crit;") == text.count("error_log /dev/null crit;")
+    assert rendered.count("access_log off;") == text.count("access_log off;")
+    if final:
+        assert f"access_log {access_log.as_posix()} fire_backend_safe;" in rendered
+        assert "location ^~ /accounts/setup" in rendered
+        assert "location ^~ /reports/access/" in rendered
+
+
 @LINUX
 @pytest.mark.skipif(not shutil.which("nginx"), reason="native Nginx binary required")
 @pytest.mark.parametrize("final", [False, True])
@@ -1076,11 +1116,8 @@ def test_native_nginx_generated_routing(tree, certificate, tmp_path, final):
         )
     else:
         text = tls.challenge_config("firedash.example.org")
-    text = (
-        text.replace("listen 80;", f"listen 127.0.0.1:{port};")
-        .replace("listen [::]:80;", "")
-        .replace("listen 443 ssl;", f"listen 127.0.0.1:{https_port} ssl;")
-        .replace("listen [::]:443 ssl;", "")
+    text = _isolated_nginx_routing_config(
+        text, port=port, https_port=https_port, access_log=tmp_path / "access.log"
     )
     conf = tmp_path / "nginx.conf"
     (tmp_path / "logs").mkdir()
@@ -1090,9 +1127,10 @@ def test_native_nginx_generated_routing(tree, certificate, tmp_path, final):
     )
     nginx = shutil.which("nginx")
     assert nginx
-    subprocess.run(
-        [nginx, "-p", str(tmp_path), "-c", str(conf), "-t"], check=True, capture_output=True
+    checked = subprocess.run(
+        [nginx, "-p", str(tmp_path), "-c", str(conf), "-t"], capture_output=True, text=True
     )
+    assert checked.returncode == 0, f"nginx -t failed:\n{checked.stdout}\n{checked.stderr}"
     process = subprocess.Popen(
         [nginx, "-p", str(tmp_path), "-c", str(conf), "-g", "daemon off;"],
         stdout=subprocess.DEVNULL,
@@ -1104,7 +1142,14 @@ def test_native_nginx_generated_routing(tree, certificate, tmp_path, final):
                 with socket.create_connection(("127.0.0.1", port), timeout=0.1):
                     break
             except OSError:
+                if process.poll() is not None:
+                    _, stderr = process.communicate(timeout=10)
+                    pytest.fail(f"Nginx exited with {process.returncode}:\n{stderr.decode()}")
                 time.sleep(0.05)
+        else:
+            process.terminate()
+            _, stderr = process.communicate(timeout=10)
+            pytest.fail(f"Nginx did not listen on disposable port {port}:\n{stderr.decode()}")
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request(
             "GET", "/.well-known/acme-challenge/probe", headers={"Host": "firedash.example.org"}

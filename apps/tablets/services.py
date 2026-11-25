@@ -607,6 +607,8 @@ def _complete_successful_adoption(*, request_id: UUID) -> tuple[AppInstallation,
         raise TabletError("Invitation has already been used.", code="invitation_invalid")
     if invitation.revoked_at:
         raise TabletError("Invitation has been revoked.", code="invitation_invalid")
+    if invitation.expires_at <= now:
+        raise TabletError("Invitation is expired.", code="invitation_invalid")
     tablet = invitation.tablet
     _require_operational_tablet(tablet)
     # A client that lost its locally persisted credential must replay its
@@ -726,9 +728,12 @@ def complete_adoption(
 ) -> tuple[AppInstallation, str]:
     if not confirmed:
         raise TabletError("Adoption was not confirmed.", code="invalid_request")
-    request = AdoptionRequest.objects.select_related("invitation__tablet__department").get(
-        pk=request_id
-    )
+    try:
+        request = AdoptionRequest.objects.select_related("invitation__tablet__department").get(
+            pk=request_id
+        )
+    except AdoptionRequest.DoesNotExist as error:
+        raise TabletError("Adoption request is invalid.", code="invalid_request") from error
     invitation = request.invitation
     now = timezone.now()
     if request.completed_at:

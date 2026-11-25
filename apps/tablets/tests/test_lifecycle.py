@@ -96,6 +96,90 @@ def test_adoption_request_replay_is_rejected(operational_tablet):
         )
 
 
+@pytest.mark.parametrize("existing_installation", [False, True])
+def test_initial_completion_rechecks_invitation_expiry_before_challenge_expiry(
+    operational_tablet, monkeypatch, existing_installation
+):
+    user, tablet = operational_tablet
+    if existing_installation:
+        _adopt(user, tablet)
+    installations_before = list(AppInstallation.objects.values())
+    now = timezone.now()
+    invitation, token = create_adoption_invitation(
+        actor=user, tablet=tablet, expires_at=now + timedelta(minutes=1)
+    )
+    challenge = create_adoption_request(
+        token=token,
+        installation_uuid=uuid.uuid4(),
+        app_version="1.0.0",
+        hpke_public_key=_p256_public_key(),
+        hpke_ciphersuite=HPKE_CIPHERSUITE,
+    )
+    completion_time = invitation.expires_at + timedelta(seconds=1)
+    assert completion_time < challenge.request.expires_at
+    monkeypatch.setattr(timezone, "now", lambda: completion_time)
+
+    with pytest.raises(TabletError, match="Invitation is expired") as rejected:
+        complete_adoption(
+            request_id=challenge.request.id,
+            challenge_response=challenge.request.expected_hmac_digest,
+            confirmed=True,
+        )
+
+    assert rejected.value.code == "invitation_invalid"
+    assert list(AppInstallation.objects.values()) == installations_before
+    invitation.refresh_from_db()
+    challenge.request.refresh_from_db()
+    assert invitation.used_at is None
+    assert invitation.revoked_at is None
+    assert invitation.failed_attempt_count == 0
+    assert challenge.request.completed_at is None
+    assert challenge.request.completion_replay_valid_until is None
+    assert challenge.request.failed_attempt_count == 0
+
+
+def test_completion_recovery_remains_valid_after_invitation_and_challenge_expiry(
+    operational_tablet, monkeypatch
+):
+    user, tablet = operational_tablet
+    invitation, token = create_adoption_invitation(
+        actor=user, tablet=tablet, expires_at=timezone.now() + timedelta(minutes=1)
+    )
+    challenge = create_adoption_request(
+        token=token,
+        installation_uuid=uuid.uuid4(),
+        app_version="1.0.0",
+        hpke_public_key=_p256_public_key(),
+        hpke_ciphersuite=HPKE_CIPHERSUITE,
+    )
+    installation, first_credential = complete_adoption(
+        request_id=challenge.request.id,
+        challenge_response=challenge.request.expected_hmac_digest,
+        confirmed=True,
+    )
+    challenge.request.refresh_from_db()
+    deadline = challenge.request.completion_replay_valid_until
+    assert deadline is not None
+    recovery_time = challenge.request.expires_at + timedelta(seconds=1)
+    assert invitation.expires_at < recovery_time < deadline
+    monkeypatch.setattr(timezone, "now", lambda: recovery_time)
+
+    recovered, credential = complete_adoption(
+        request_id=challenge.request.id,
+        challenge_response=challenge.request.expected_hmac_digest,
+        confirmed=True,
+    )
+
+    assert recovered.pk == installation.pk
+    assert AppInstallation.objects.count() == 1
+    assert credential != first_credential
+    installation.refresh_from_db()
+    challenge.request.refresh_from_db()
+    assert verify_credential(installation=installation, credential=credential)
+    assert not verify_credential(installation=installation, credential=first_credential)
+    assert challenge.request.completion_replay_valid_until == deadline
+
+
 def test_adoption_proof_is_verified_before_creation(operational_tablet):
     user, tablet = operational_tablet
     _, token = create_adoption_invitation(actor=user, tablet=tablet)
